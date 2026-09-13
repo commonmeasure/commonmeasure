@@ -1,0 +1,116 @@
+{
+  "probe": "firecrawl-scrape",
+  "note": "fetch capability on a public EU page. Public-sector page chosen deliberately so no licensed body text is recorded.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.firecrawl.dev/v2/scrape",
+    "headers": {
+      "Authorization": "Bearer «REDACTED: value of $FIRECRAWL_API_KEY, never recorded»",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+      "formats": [
+        "markdown"
+      ],
+      "onlyMainContent": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 611,
+    "headers": {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Length": "10380",
+      "Content-Type": "application/json; charset=utf-8",
+      "Date": "Sat, 01 Aug 2026 12:28:14 GMT",
+      "Etag": "W/\"288c-iNjdbbb6l1DomsUs6fnolX7Pdcs\"",
+      "X-Response-Time": "332.423ms",
+      "Connection": "close"
+    },
+    "body": {
+      "success": true,
+      "data": {
+        "markdown": "[Skip to main content](https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai#main-content)  ![](https://w […elided, 8256 chars total; shape recorded, text not committed]",
+        "metadata": {
+          "Generator": "Drupal 10 (https://www.drupal.org)",
+          "og:title": "The General-Purpose AI Code of Practice",
+          "title": "The General-Purpose AI Code of Practice | Shaping Europe’s digital future",
+          "google-site-verification": "GN5SSGzUMCqwnX9gCdnErtIz1NFmyq3xI80rJiEp48w",
+          "ogTitle": "The General-Purpose AI Code of Practice",
+          "description": "The code of practice helps industry comply with the AI Act legal obligations on safety, transparency and copyright of ge […elided, 144 chars total; shape recorded, text not committed]",
+          "MobileOptimized": "width",
+          "og:site_name": "Shaping Europe’s digital future",
+          "og:description": "The code of practice helps industry comply with the AI Act legal obligations on safety, transparency and copyright of general-purpose AI models.",
+          "ogLocaleAlternate": [
+            "bg_BG",
+            "es_ES",
+            "cs_CZ",
+            "da_DK",
+            "de_DE",
+            "et_EE",
+            "el_GR",
+            "fr_FR",
+            "ga_IE",
+            "hr_HR",
+            "it_IT",
+            "lv_LV",
+            "lt_LT",
+            "hu_HU",
+            "mt_MT",
+            "nl_NL",
+            "pl_PL",
+            "pt_PT",
+            "ro_RO",
+            "sk_SK",
+            "sl_SI",
+            "fi_FI",
+            "sv_SE"
+          ],
+          "language": "en",
+          "og:locale:alternate": [
+            "bg_BG",
+            "es_ES",
+            "cs_CZ",
+            "da_DK",
+            "de_DE",
+            "et_EE",
+            "el_GR",
+            "fr_FR",
+            "ga_IE",
+            "hr_HR",
+            "it_IT",
+            "lv_LV",
+            "lt_LT",
+            "hu_HU",
+            "mt_MT",
+            "nl_NL",
+            "pl_PL",
+            "pt_PT",
+            "ro_RO",
+            "sk_SK",
+            "sl_SI",
+            "fi_FI",
+            "sv_SE"
+          ],
+          "og:type": "Policy",
+          "ogSiteName": "Shaping Europe’s digital future",
+          "ogDescription": "The code of practice helps industry comply with the AI Act legal obligations on safety, transparency and copyright of general-purpose AI models.",
+          "HandheldFriendly": "true",
+          "viewport": "width=device-width, initial-scale=1.0",
+          "favicon": "https://digital-strategy.ec.europa.eu/themes/custom/cnt_theme/images/favicons/ec/favicon.ico",
+          "scrapeId": "019fbd4b-dee4-7516-92f7-26568f8d3bce",
+          "sourceURL": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "statusCode": 200,
+          "contentType": "text/html; charset=UTF-8",
+          "proxyUsed": "basic",
+          "cacheState": "hit",
+          "cachedAt": "2026-08-01T03:18:25.618Z",
+          "creditsUsed": 1,
+          "concurrencyLimited": false
+        }
+      }
+    }
+  }
+}

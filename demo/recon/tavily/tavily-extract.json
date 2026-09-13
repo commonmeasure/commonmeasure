@@ -1,0 +1,35 @@
+{
+  "probe": "tavily-extract",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-fetch.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. Page arrives as `raw_content`; no cost field.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.tavily.com/extract",
+    "headers": {
+      "Authorization": "«REDACTED: value of $TAVILY_API_KEY, never recorded» (Bearer)",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "urls": [
+        "https://www.w3.org/TR/prov-dm/"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 808,
+    "body": {
+      "results": [
+        {
+          "url": "https://www.w3.org/TR/prov-dm/",
+          "title": "PROV-DM: The PROV Data Model",
+          "raw_content": "[![W3C](https://www.w3.org/Icons/w3c_home)](https://www.w3.org/)\n\n![W3C](https://www.w3.org/Icons/w3c_home)\n\n# PROV-DM: […elided, 97304 chars total; shape recorded, text not committed]",
+          "images": []
+        }
+      ],
+      "failed_results": [],
+      "response_time": 0.01,
+      "request_id": "ff106d26-d1a3-450f-9349-c971f4f1050a"
+    }
+  }
+}

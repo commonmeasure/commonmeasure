@@ -1,0 +1,15 @@
+# Secret-scanning configuration. Two strings gitleaks flags are not secrets:
+# the committed demonstration signing identity, which authorises nothing and
+# is on no trust list (demo/provenance/README.md), and a fixture in the
+# relay's test for stripping embedded credentials from a projected URL.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Committed material that is not a credential"
+paths = [
+  '''demo/provenance/signer-key\.pem$''',
+]
+regexes = [
+  '''sk-live-SECRET123''',
+]

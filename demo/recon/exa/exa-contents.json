@@ -1,0 +1,80 @@
+{
+  "probe": "exa-contents",
+  "note": "Isolates the contents charge, which the combined search call did not itemise. Public-sector page.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.exa.ai/contents",
+    "headers": {
+      "x-api-key": "«REDACTED: value of $EXA_API_KEY, never recorded»",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "urls": [
+        "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai"
+      ],
+      "text": {
+        "maxCharacters": 300
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 217,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:28:14 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": "1062",
+      "Connection": "close",
+      "content-security-policy": "frame-ancestors 'self'",
+      "cross-origin-opener-policy": "same-origin",
+      "cross-origin-resource-policy": "same-origin",
+      "origin-agent-cluster": "?1",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+      "x-content-type-options": "nosniff",
+      "x-dns-prefetch-control": "off",
+      "x-download-options": "noopen",
+      "x-frame-options": "DENY",
+      "x-permitted-cross-domain-policies": "none",
+      "x-xss-protection": "0",
+      "vary": "Origin",
+      "access-control-allow-credentials": "true",
+      "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt",
+      "x-exa-queued": "false",
+      "x-exa-queue-ms": "0",
+      "etag": "W/\"426-bLNc7n/g7w5/0aGKQ7qwb1x/bxE\"",
+      "cf-cache-status": "DYNAMIC",
+      "Server-Timing": "cfCacheStatus;desc=\"DYNAMIC\"",
+      "Server": "cloudflare",
+      "CF-RAY": "a244d76cbff246d0-LHR"
+    },
+    "body": {
+      "requestId": "c4dd531ca906e5dca00db99b3c5ea86a",
+      "results": [
+        {
+          "id": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "title": "The General-Purpose AI Code of Practice | Shaping Europe’s digital future",
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "author": null,
+          "text": "The General-Purpose AI Code of Practice | Shaping Europe’s digital future Skip to main content  # The General-Purpose AI […elided, 300 chars total; shape recorded, text not committed]",
+          "image": "https://digital-strategy.ec.europa.eu/themes/contrib/oe_theme/dist/ec/images/logo/logo-ec--mute.svg",
+          "favicon": "https://digital-strategy.ec.europa.eu/themes/custom/cnt_theme/images/favicons/ec/favicon.ico"
+        }
+      ],
+      "statuses": [
+        {
+          "id": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "status": "success",
+          "source": "cached"
+        }
+      ],
+      "costDollars": {
+        "total": 0.001,
+        "contents": {
+          "text": 0.001
+        }
+      },
+      "searchTime": 8.16119599994272
+    }
+  }
+}

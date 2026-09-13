@@ -1,0 +1,48 @@
+{
+  "input": "demo/skills/geo-lookup",
+  "invocation": {
+    "argv": [
+      "/usr/bin/python3",
+      "/home/alexs/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py",
+      "demo/skills/geo-lookup"
+    ],
+    "argv_source": [
+      "operator",
+      "operator",
+      "job"
+    ],
+    "catalogue": "demo/skills/catalogue.json",
+    "catalogue_name": "plugin-creator",
+    "cwd": "/home/alexs/common-measure/contextops",
+    "declared_licence": null,
+    "declared_name": "plugin-creator",
+    "declared_version": null,
+    "duration_ms": 51,
+    "entrypoint": "/home/alexs/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py",
+    "entrypoint_sha256": "sha256:ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228",
+    "environment": "cleared: the child is spawned with an empty environment, so it cannot read the operator's provider credentials",
+    "exit_code": 1,
+    "interpreter": "/usr/bin/python3",
+    "maximum_output_bytes": 262144,
+    "root": "file:///home/alexs/.codex/skills/.system/plugin-creator",
+    "skill_md_sha256": "sha256:8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e",
+    "stderr_bytes": 0,
+    "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_bytes": 64,
+    "stdout_sha256": "sha256:5842a70ddb801fe02b1732555d49355511c6b87a2d0f3de54367c1d7dbb0a4b2",
+    "termination": "exited",
+    "timeout_ms": 30000
+  },
+  "provider": "skill:plugin-creator",
+  "result": {
+    "content_hash": "sha256:5842a70ddb801fe02b1732555d49355511c6b87a2d0f3de54367c1d7dbb0a4b2",
+    "exit_code": 1,
+    "stream": "stdout",
+    "termination": "exited",
+    "text": "Plugin validation failed:\n- missing `.codex-plugin/plugin.json`\n",
+    "title": "plugin-creator",
+    "url": "file:///home/alexs/.codex/skills/.system/plugin-creator"
+  },
+  "stderr": "",
+  "stdout": "Plugin validation failed:\n- missing `.codex-plugin/plugin.json`\n"
+}

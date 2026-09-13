@@ -1,0 +1,220 @@
+{
+  "hash": "sha256:1039beac9bc073d609df878f2584d7c98964099733105cc5092a38ad58eb4258",
+  "manifest": {
+    "acquisition_mode": "no-external-acquisition",
+    "adapter_version": "ctx-supply/0.1",
+    "as_of": {
+      "date": "2026-08-13",
+      "maximum_age_days": 180
+    },
+    "cache_control": "not controlled. Providers may serve from their own caches: Exa returned source \"cached\" and Firecrawl cacheState \"hit\" during reconnaissance on 1 August 2026.",
+    "coverage_rubric": {
+      "items": [
+        {
+          "any_of": [
+            "grinder firmware 2.1 pre-installed"
+          ],
+          "name": "firmware-preinstalled"
+        },
+        {
+          "any_of": [
+            "dose adapter ring DR-2"
+          ],
+          "name": "adapter-ring"
+        },
+        {
+          "any_of": [
+            "£15.00"
+          ],
+          "name": "ring-price"
+        }
+      ],
+      "name": "commerce-g4-out-of-box",
+      "version": "1"
+    },
+    "evaluators": [
+      {
+        "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+        "name": "grounding",
+        "version": "0.4.0"
+      },
+      {
+        "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7",
+        "name": "coverage",
+        "version": "0.1.0"
+      },
+      {
+        "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103",
+        "name": "freshness",
+        "version": "0.2.0"
+      }
+    ],
+    "governance": null,
+    "inference_gateway": null,
+    "job": {
+      "constraints": [
+        {
+          "kind": "maximum_context_tokens",
+          "tokens": 4000
+        }
+      ],
+      "evidence_requirements": [],
+      "id": "ea09f171-9b18-4478-ba53-09a5b6575d10",
+      "kind": "research.answer",
+      "objective": {
+        "cost": 0.0,
+        "coverage": 1.0,
+        "freshness": 0.5,
+        "kind": "weighted",
+        "latency": 0.0,
+        "policy_risk": 0.0,
+        "quality": 0.0
+      },
+      "policy_mode": "observe",
+      "prompt": "Is a Northglade G4 bought new from Fictive Retail today ready to feed the Aurelio Presto 300's auto-dose tray out of the box?"
+    },
+    "label": "Commerce routing experiment, compatibility question 'g4-out-of-box': all three source classes together",
+    "manifest_version": "contextops-manifest/v4",
+    "model_plan": {
+      "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+      "name": "operator-pinned-answer-model",
+      "version": "2"
+    },
+    "processors": [
+      {
+        "capability": "pii-detection",
+        "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_closed"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over the text, no supervisor timeout",
+        "name": "pii-detector",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "admit",
+        "version": "1"
+      },
+      {
+        "capability": "injection-screening",
+        "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_closed"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one lower-cased pass over the text, no supervisor timeout",
+        "name": "injection-screen",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "admit",
+        "version": "1"
+      },
+      {
+        "capability": "support-status-governance",
+        "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_closed"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over the declared metadata, no supervisor timeout",
+        "name": "support-governor",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "admit",
+        "version": "1"
+      },
+      {
+        "capability": "context-deduplication",
+        "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_open"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over each source, no supervisor timeout",
+        "name": "context-optimiser",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "transform",
+        "version": "2"
+      }
+    ],
+    "replay_recordings": null,
+    "result_limit": 10,
+    "retry_policy": "none; a failed acquisition is recorded, not retried",
+    "suite_version": "commerce-routing-mixed-g4-out-of-box/v1",
+    "supply_plans": [
+      {
+        "name": "internal-only",
+        "steps": [
+          {
+            "capability": "query",
+            "limit": 10,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "query"
+              ],
+              "name": "internal"
+            }
+          }
+        ],
+        "version": "1"
+      }
+    ],
+    "system_prompt": "Answer only from the supplied context. State plainly what the supplied context cannot establish. Do not use knowledge that is not in the supplied context.\n\nAfter your answer, cite the context you used: one line per citation, in exactly this form, quoting the supplied source verbatim:\nCITATION: CITED_URL :: \"the exact quote from that source\"\nReplace CITED_URL with the source's URL alone, without the SOURCE label or the bracketed hash beside it. Cite only sources named SOURCE in the supplied context.",
+    "token_basis": "whitespace-words",
+    "transport_timeout_seconds": 30
+  }
+}

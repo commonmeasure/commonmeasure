@@ -1,0 +1,42 @@
+## 1. An owner mints an enrolment token through the hub's API
+POST /api/v1/enrolment/tokens -> 201 name="real-hub-run" expires_at="2026-09-06T12:35:02.151727Z" value=et_<redacted>
+
+## 2. Before connect, the relay refuses: no receiver
+commonmeasure: no telemetry receiver is configured: pass --receiver or set one in <home>/relay.json; nothing was projected and nothing was sent
+
+## 3. commonmeasure connect <hub-url> --token <token>
+enrolled with http://127.0.0.1:8087 in Org A Media as real-hub-run
+  key id   VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4
+  receiver http://127.0.0.1:8087/api/v1/telemetry
+  written  <home>/edge-key.json, <home>/enrolment.json and <home>/relay.json
+first relay run:
+  edge key VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4: enrolled
+  projected 0 of 0 sessions and 0 runs; 0 events newly spooled
+  delivered 0 events in 0 batches to http://127.0.0.1:8087/api/v1/telemetry (0 new at the receiver)
+
+## 4. The key is in the hub's signed directory and in the owner's listing
+directory kids: ["VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4", "IjsZaD0gyR2HsNdex1NhtJF4AwhmDJH84pkXWebHIMA"]
+GET /api/v1/enrolment/keys -> name="real-hub-run" api_key_name="real-hub-run" revoked_at=null
+
+## 5. A session names the key id; a cleared crossing relays under the ingest key
+{"event":"edge_identity","payload":{"host":"claude-code","hub":"http://127.0.0.1:8087","key_id":"VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4","revocation":null,"revoked_at":null,"session_id":"real-1","standing":"enrolled","timestamp":"2026-09-06T12:20:02.204Z"},"seq":2,"timestamp":"2026-09-06T12:20:02.204Z"}
+edge key VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4: enrolled
+projected 1 of 1 sessions and 0 runs; 2 events newly spooled
+delivered 2 events in 1 batches to http://127.0.0.1:8087/api/v1/telemetry (0 new at the receiver)
+  2 under governing engagement personal
+
+## 6. The owner revokes the key at the hub; the next relay run learns it
+DELETE /api/v1/enrolment/keys/<key_id> -> 204
+directory kids: ["IjsZaD0gyR2HsNdex1NhtJF4AwhmDJH84pkXWebHIMA"]
+edge key VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4: revoked at 2026-09-06T12:20:02.220233Z by the owner; it is out of the key directory
+projected 1 of 1 sessions and 0 runs; 0 events newly spooled
+delivered 0 events in 0 batches to http://127.0.0.1:8087/api/v1/telemetry (0 new at the receiver)
+{"event":"edge_identity","payload":{"host":"claude-code","hub":"http://127.0.0.1:8087","key_id":"VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4","revocation":"owner","revoked_at":"2026-09-06T12:20:02.220233Z","session_id":"real-2","standing":"revoked","timestamp":"2026-09-06T12:20:02.238Z"},"seq":2,"timestamp":"2026-09-06T12:20:02.238Z"}
+
+## 7. commonmeasure disconnect
+revoked edge key VUDCHQ_0iFwRCrPyLZfPq2Lk5wtHcPe_xcNlLuklLZ4 and its ingest key at http://127.0.0.1:8087
+removed <home>/relay.json
+removed <home>/edge-key.json
+removed <home>/enrolment.json
+GET /api/v1/enrolment/keys -> revocation="owner" api_key_revoked_at="2026-09-06T12:20:02.243141Z"
+

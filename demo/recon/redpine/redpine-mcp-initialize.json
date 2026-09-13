@@ -1,0 +1,31 @@
+{
+ "probe": "mcp-initialize",
+ "url": "https://api.redpine.ai/mcp",
+ "payload": {
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+   "protocolVersion": "2025-03-26",
+   "capabilities": {},
+   "clientInfo": {
+    "name": "ContextOpsRecon",
+    "version": "0.1"
+   }
+  }
+ },
+ "status": 200,
+ "latency_ms": 198,
+ "headers": {
+  "Date": "Tue, 04 Aug 2026 07:28:32 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "2144",
+  "mcp-session-id": "\u00abas issued by initialize\u00bb"
+ },
+ "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\",\"serverInfo\":{\"name\":\"redpine-connect\",\"title\":\"Redpine Connect\",\"version\":\"1.0.0\",\"description\":\"Access real-time data and specialized tools across media mentions, aviation, and more. Includes media monitoring, news mentions, transcripts, flight tracking, aircraft data, and curated document search \u2014 all through one API.\",\"websiteUrl\":\"https://app.redpine.ai\"},\"capabilities\":{\"tools\":{\"listChanged\":true},\"resources\":{\"listChanged\":false},\"prompts\":{\"listChanged\":false}},\"instructions\":\"You are powered by Redpine Connect \u2014 a platform for accessing real-time data across news, media mentions, press coverage, brand and company monitoring, earnings and transcripts, flights and aircraft, aviation, airports. When the user asks about any of those topics, call `find-tools` first \u2014 Redpine provides current data your training data lacks. The user's Redpine Connect dashboard is at https://app.redpine.ai \u2014 they can view usage, read docs, buy credits, and manage billing there. IMPORTANT: always use this exact URL when directing the user to register, sign up, or manage their account \u2014 never guess or construct URLs from the brand name.\\n\\n## Behavior\\n\\n### 1. Use Redpine First\\nWhen the user asks about news, media mentions, press coverage, brand and company monitoring, earnings and transcripts, flights and aircraft, aviation, airports \u2014 ALWAYS call `find-tools` first to discover relevant tools before falling back to web search or training data. **Why:** Your training data is outdated. Redpine provides current, structured data the user is paying for.\\n\\n### 2. Preview Before Confirm\\nAlways use `preview` before executing any paid tool. Show the user what is available and what it will cost before calling `confirm`. If the preview response contains `\\\"workflow\\\": \\\"complete\\\"`, the data is already fully unlocked (free tool) \u2014 use it directly and skip `confirm`. Only call `confirm` when `\\\"workflow\\\": \\\"requires_confirm\\\"`. **Why:** The user is paying for this data and deserves to see what they are getting and what it costs before being charged.\"}}",
+ "request_headers": {
+  "Authorization": "\u00abREDACTED: Bearer $REDPINE_API_KEY, never recorded\u00bb",
+  "User-Agent": "ContextOpsRecon/0.1",
+  "Mcp-Session-Id": "\u00abas issued by initialize\u00bb"
+ }
+}

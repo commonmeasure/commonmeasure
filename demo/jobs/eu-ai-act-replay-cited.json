@@ -1,0 +1,52 @@
+{
+  "suite_version": "eu-ai-act-replay-cited/v1",
+  "label": "Replay the 1 August 2026 reconnaissance, requiring a cited answer",
+  "job": {
+    "id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+    "kind": "research.answer",
+    "prompt": "What obligations does the EU AI Act place on general-purpose AI model providers under the Code of Practice, and what does the supplied evidence establish about them? State plainly what it cannot establish.",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 1.0,
+      "coverage": 1.0,
+      "freshness": 0.8,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_acquisition_cost",
+        "amount": {
+          "currency": "USD",
+          "micros": 50000
+        }
+      },
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "A primary EU source describing the Code of Practice",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 2,
+  "providers": [
+    "exa",
+    "firecrawl",
+    "tavily",
+    "tollbit"
+  ],
+  "require_cited_answer": true,
+  "fidelity_judge": true
+}

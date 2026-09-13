@@ -1,0 +1,176 @@
+{
+  "manifest_version": "contextops-replay/v1",
+  "derived_from": "Provider reconnaissance captures of 1 August 2026 (open web), 4 August 2026 (Redpine, the first licensed fetch) and the re-verification captures of 5 September 2026 (Parallel, Linkup, Keenable, You.com, Nimble and Tavily fetch, made by the committed `demo/jobs/recon-w3c-prov-*.json` jobs) — see README.md. This manifest is derived from those captures and names which of them a --replay run serves; the captures themselves are unchanged evidence. Redpine's acquisition is five recorded legs behind one routed origin, named by the capability column.",
+  "recordings": [
+    {
+      "provider": "exa",
+      "capability": "search",
+      "source": "exa/exa-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.exa.ai/search",
+      "response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "redactions": "The credential request header is replaced with a visible redaction naming $EXA_API_KEY; every result's `text` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "firecrawl",
+      "capability": "search",
+      "source": "firecrawl/firecrawl-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+      "response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "redactions": "The credential request header is replaced with a visible redaction naming $FIRECRAWL_API_KEY; every result's `description` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "tavily",
+      "capability": "search",
+      "source": "tavily/tavily-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.tavily.com/search",
+      "response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TAVILY_API_KEY; every result's `content` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "initialize",
+      "source": "redpine/redpine-mcp-initialize.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:cdf946ee5da568d690d80fe894202e07d25372b5218d1c8200462c80949330f2",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; the mcp-session-id issued by the server is replaced on both sides with the issued-by marker the replay origin re-serves.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "balance",
+      "source": "redpine/redpine-balance-before.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:ec2aa47232a1d39071606cd808deb3f76e77e7ed940a48b2e6ddafeacdb95520",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "inspect",
+      "source": "redpine/redpine-inspect-sample-2.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:a0da52d25131e9bff98a1b3196366d2b10ec873e9c1c5f8f1cc0ee7b09c9cb97",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "quote",
+      "source": "redpine/redpine-preview-sample.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:845a5e3cdd5bc5a2036146c4cdff1de0f76eb6c00da46451cdd8d2aeceef3941",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides. The teaser's truncation is the provider's own.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "confirm",
+      "source": "redpine/redpine-confirm-sample.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides. Every mention's licensed transcript text is truncated to a short lead plus a marker, in both the content and structuredContent carriers; full bytes are retained locally and are not in this repository.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence — the licensed transcript text is truncated out — not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "tollbit",
+      "capability": "search",
+      "source": "tollbit/tollbit-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+      "response_sha256": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TOLLBIT_API_KEY. The response carried no page text to elide: TollBit's v2 search returns candidates without excerpts.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "parallel",
+      "capability": "search",
+      "source": "parallel/parallel-search.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.parallel.ai/v1/search",
+      "response_sha256": "sha256:e94fa8651eb767a5b57b3d0cc6cd01fbd80411ae1113b22f92ebe28852c7b09d",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`description`, `excerpts`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "parallel",
+      "capability": "fetch",
+      "source": "parallel/parallel-extract.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.parallel.ai/v1/extract",
+      "response_sha256": "sha256:b884cf89abd0878d59c78b2a6e3a32019e6ffe14046f06dfb3a5908225b93019",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `content`, `description`, `excerpts`, `full_content`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "linkup",
+      "capability": "search",
+      "source": "linkup/linkup-search.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.linkup.so/v1/search",
+      "response_sha256": "sha256:a489b0b30b3115a11425fbe83982051069ae7313ba5e05f57e9203d437d6e176",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `content`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "linkup",
+      "capability": "fetch",
+      "source": "linkup/linkup-fetch.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.linkup.so/v1/fetch",
+      "response_sha256": "sha256:3689e600ffa0e3b9d426d6fd59b94d09b8097271067f663bba220d48fcb9ba8d",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `content`, `markdown`, `description`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "keenable",
+      "capability": "search",
+      "source": "keenable/keenable-search.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.keenable.ai/v1/search",
+      "response_sha256": "sha256:01b4ba6f8c22d0a25d12982f24b02be3b0959477fb357125878a34f15ada8253",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`content`, `description`, `snippet`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "you",
+      "capability": "search",
+      "source": "you/you-search.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://ydc-index.io/v1/search",
+      "response_sha256": "sha256:917f8029d56c23201dba404acb5147cdc23bc24c17360e3ce9a915adf1b863a5",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `description`, `snippet`, `snippets`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "nimble",
+      "capability": "search",
+      "source": "nimble/nimble-search.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://sdk.nimbleway.com/v2/search",
+      "response_sha256": "sha256:0fa2e1c7b248f4db3073e96af4311f4ab86b63efd749c2a138dcfd1403182d75",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `content`, `description`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "tavily",
+      "capability": "fetch",
+      "source": "tavily/tavily-extract.json",
+      "captured_at": "2026-09-05",
+      "recorded_endpoint": "https://api.tavily.com/extract",
+      "response_sha256": "sha256:6c5d290e1c23054551c6457156fb4d878dc387198ec4b7a4029bc564d27a13a6",
+      "redactions": "The credential request header is replaced with a visible redaction naming the variable; every page-text field (`text`, `content`, `raw_content`, `description`) is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained re-verification evidence, not licensed content for redistribution or reuse."
+    }
+  ]
+}

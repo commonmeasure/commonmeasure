@@ -1,0 +1,39 @@
+{
+  "probe": "tollbit-token-content",
+  "note": "Ceiling of 10000 micros (USD 0.01), inside the per-request cap. Distinguishes an account without publisher agreements from a page-level refusal. No content fetch follows.",
+  "request": {
+    "method": "POST",
+    "url": "https://gateway.tollbit.com/dev/v2/tokens/content",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "url": "https://bakercityherald.com/2026/07/18/guest-commentary-understanding-our-changing-climate/",
+      "userAgent": "ContextOpsRecon/0.1",
+      "maxPriceMicros": 10000,
+      "currency": "USD",
+      "licenseType": "ON_DEMAND_LICENSE",
+      "licenseCuid": ""
+    }
+  },
+  "response": {
+    "status": 500,
+    "latency_ms": 363,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:30:03 GMT",
+      "Content-Type": "application/problem+json; charset=utf-8",
+      "Content-Length": "104",
+      "Connection": "close",
+      "Vary": "Origin"
+    },
+    "body": {
+      "instance": "/dev/v2/tokens/content",
+      "status": 500,
+      "title": "Internal Server Error",
+      "type": "about:blank"
+    }
+  }
+}

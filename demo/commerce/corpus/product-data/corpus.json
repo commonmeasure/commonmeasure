@@ -1,0 +1,12 @@
+{
+  "name": "Fictive Retail product data (synthetic)",
+  "licence": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+  "dates": {
+    "presto-300-listing.md": "2026-08-01",
+    "presto-200-listing.md": "2026-08-01",
+    "compatibility-matrix.md": "2026-08-01",
+    "northglade-g4-listing.md": "2026-08-01",
+    "accessories-listing.md": "2026-08-01",
+    "brewlink-hub-listing.md": "2026-08-01"
+  }
+}

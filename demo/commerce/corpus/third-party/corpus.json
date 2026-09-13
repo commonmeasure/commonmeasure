@@ -1,0 +1,16 @@
+{
+  "name": "Fictive Retail third-party editorial and reviews (synthetic)",
+  "dates": {
+    "crema-courier-roundup.md": "2026-06-20",
+    "brewprint-g4-review.md": "2025-09-30",
+    "gadgetgrove-presto-300-review.md": "2026-07-18",
+    "crema-courier-grinder-guide.md": "2026-07-25",
+    "brewprint-steam-tip-review.md": "2026-07-20"
+  },
+  "licences": {
+    "crema-courier-roundup.md": { "state": "declared", "reference": "crema-courier/syndication-licence-v1" },
+    "brewprint-g4-review.md": { "state": "declared", "reference": "brewprint/syndication-licence-v1" },
+    "crema-courier-grinder-guide.md": { "state": "declared", "reference": "crema-courier/syndication-licence-v1" },
+    "brewprint-steam-tip-review.md": { "state": "declared", "reference": "brewprint/syndication-licence-v1" }
+  }
+}

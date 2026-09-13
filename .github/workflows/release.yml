@@ -1,0 +1,195 @@
+# The release pipeline. A pushed tag `v<version>` builds every supported
+# platform, publishes the binaries with checksums to a public release of this
+# repository under the notes committed for that tag, and packages the plugin
+# archive from the same bytes. The last job installs the release the way a
+# person does, anonymously and with no toolchain.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # The tag, the workspace manifest, the binary and the plugin manifest must
+  # name one version, and the release notes for that version must exist.
+  # Nothing is built for release until they do.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.reported.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The binary reports the tagged version
+        id: reported
+        run: |
+          cargo build --locked -p commonmeasure-cli
+          reported=$(target/debug/commonmeasure --version)
+          version=${reported#commonmeasure }
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "the tag is $GITHUB_REF_NAME but the binary reports $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: The plugin manifest carries the same version
+        run: cargo test --locked -p commonmeasure-cli --test version_identity
+      - name: The release notes for this tag are committed
+        run: |
+          notes=".github/release-notes/$GITHUB_REF_NAME.md"
+          [ -s "$notes" ] || { echo "$notes is missing; a release is not cut without its notes" >&2; exit 1; }
+          head -n 1 "$notes" | grep -q '^# ' || { echo "$notes must open with a heading; it is the release title" >&2; exit 1; }
+
+  # One binary per platform the release supports, named as the plugin's
+  # launcher expects. Linux and Windows are cross-compiled with zig on one
+  # Linux runner, as plugin/build.sh does; both macOS binaries are built on
+  # one Apple Silicon runner, where Apple's SDK links either architecture.
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            asset: commonmeasure-linux-x64
+            os: ubuntu-latest
+            zig: true
+            runnable: true
+          - target: aarch64-unknown-linux-musl
+            asset: commonmeasure-linux-arm64
+            os: ubuntu-latest
+            zig: true
+            runnable: false
+          - target: x86_64-pc-windows-gnu
+            asset: commonmeasure-win-x64.exe
+            os: ubuntu-latest
+            zig: true
+            runnable: false
+          - target: aarch64-apple-darwin
+            asset: commonmeasure-darwin-arm64
+            os: macos-latest
+            zig: false
+            runnable: true
+          - target: x86_64-apple-darwin
+            asset: commonmeasure-darwin-x64
+            os: macos-latest
+            zig: false
+            runnable: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.zig
+        uses: astral-sh/setup-uv@v7
+      # cargo-zigbuild finds its zig in the environment uvx runs it from.
+      - if: matrix.zig
+        run: uvx --from cargo-zigbuild==0.23.4 --with ziglang==0.15.2 cargo-zigbuild zigbuild --release --locked -p commonmeasure-cli --target ${{ matrix.target }}
+      - if: ${{ !matrix.zig }}
+        run: cargo build --release --locked -p commonmeasure-cli --target ${{ matrix.target }}
+      - name: Name the binary for the launcher
+        run: |
+          mkdir -p out
+          src=target/${{ matrix.target }}/release/commonmeasure
+          [ -f "$src" ] || src="$src.exe"
+          cp "$src" "out/${{ matrix.asset }}"
+      # Where the runner can execute what it built, the built binary must
+      # report the tagged version too; a binary the runner cannot execute is
+      # checked by the verify job where a machine can run it, or by the
+      # installer on the first machine of that platform.
+      - if: matrix.runnable
+        run: |
+          reported=$(out/${{ matrix.asset }} --version)
+          [ "$reported" = "commonmeasure ${{ needs.version.outputs.version }}" ] || {
+            echo "built binary reports '$reported'" >&2
+            exit 1
+          }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          if-no-files-found: error
+
+  # The release holds the binaries, the installer, SHA256SUMS over every
+  # asset, and the plugin archive packaged from those same binaries. Its
+  # title is the first heading of the committed notes and its body the rest.
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
+        with:
+          path: plugin/bin
+          merge-multiple: true
+      - name: Package the plugin archive from the built binaries
+        run: |
+          chmod +x plugin/bin/commonmeasure-*
+          sh plugin/package.sh
+      - name: Assemble and checksum the release assets
+        run: |
+          mkdir -p release
+          cp plugin/bin/commonmeasure-linux-x64 plugin/bin/commonmeasure-linux-arm64 \
+             plugin/bin/commonmeasure-win-x64.exe \
+             plugin/bin/commonmeasure-darwin-arm64 plugin/bin/commonmeasure-darwin-x64 \
+             dist/commonmeasure-plugin-${{ needs.version.outputs.version }}.tar.gz \
+             install.sh release/
+          cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Create the release from the committed notes
+        run: |
+          notes=".github/release-notes/$GITHUB_REF_NAME.md"
+          title=$(head -n 1 "$notes" | sed 's/^# *//')
+          tail -n +2 "$notes" | sed '1{/^$/d;}' > body.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "$title" \
+            --notes-file body.md release/*
+
+  # The acceptance check for the release, the same check docs/RELEASE.md
+  # records: a container with no toolchain and no credential installs the
+  # binary through the installer downloaded from the public release with the
+  # checksum verified, the installed binary reports the tag, the plugin
+  # archive installs into Claude Code, and the repository itself installs
+  # as a Claude Code marketplace.
+  verify:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          mkdir -p release
+          curl -fsSL -o release/install.sh \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh"
+      - run: |
+          docker run --rm -e TAG="$GITHUB_REF_NAME" -e REPOSITORY="$GITHUB_REPOSITORY" \
+            -e VERSION="${{ needs.version.outputs.version }}" \
+            -v "$PWD/release/install.sh:/install.sh:ro" \
+            docker.io/library/debian:bookworm-slim sh -c '
+          set -e
+          apt-get update -qq >/dev/null && apt-get install -y -qq curl ca-certificates git >/dev/null 2>&1
+          if command -v cargo || command -v rustc || command -v cc; then
+            echo "a toolchain is present; this check needs a machine without one" >&2
+            exit 1
+          fi
+          sh /install.sh --tag "$TAG" --plugin /opt/commonmeasure
+          export PATH="$HOME/.local/bin:$PATH"
+          reported=$(commonmeasure --version)
+          [ "$reported" = "commonmeasure $VERSION" ] || { echo "installed binary reports $reported" >&2; exit 1; }
+          curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1
+          cd /opt/commonmeasure/commonmeasure-plugin
+          claude plugin marketplace add ./
+          claude plugin install commonmeasure@commonmeasure
+          claude plugin list | tee plugins.txt
+          grep -q "Version: $VERSION" plugins.txt
+          "$HOME/.claude/plugins/cache/commonmeasure/commonmeasure/$VERSION/bin/commonmeasure-launch" --version
+          claude plugin uninstall commonmeasure@commonmeasure
+          claude plugin marketplace remove commonmeasure
+          claude plugin marketplace add "$REPOSITORY"
+          claude plugin install commonmeasure@commonmeasure
+          claude plugin list | tee plugins.txt
+          grep -q "Version: $VERSION" plugins.txt
+          "$HOME/.claude/plugins/cache/commonmeasure/commonmeasure/$VERSION/bin/commonmeasure-launch" --version
+          '

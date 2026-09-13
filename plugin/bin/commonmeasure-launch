@@ -1,0 +1,66 @@
+#!/bin/sh
+# Find the `commonmeasure` binary and exec it, forwarding all arguments and
+# stdin. The plugin's hooks and its MCP server entry call this shim, so the
+# plugin itself carries no binary: the binary on the machine is the product,
+# and the plugin is a registration that names it.
+#
+# Resolution order:
+#   1. a prebuilt binary beside this shim, which only the standalone archive
+#      bundles (plugin/package.sh), for installs with no binary on the machine;
+#   2. `commonmeasure` on PATH;
+#   3. ~/.local/bin/commonmeasure, where install.sh places the binary, because
+#      a host's hook environment does not always share the login shell's PATH.
+#
+# `commonmeasure install claude` writes the binary's absolute path into the
+# host's own settings instead and needs no shim; this shim is for the plugin
+# route only.
+#
+# Claude Code runs hook commands through sh on macOS and Linux, and through Git
+# Bash on Windows (which also provides sh and uname, and can exec a .exe), so
+# one POSIX script covers macOS, Linux, WSL and Windows-with-Git-Bash. A pure
+# PowerShell setup with no Git Bash is not covered; there the hook does not run,
+# which is harmless because capture is best-effort.
+#
+# A missing binary must not break the agent. The hook path exits 0 after a note
+# on stderr rather than failing the tool call. The MCP path exits non-zero: a
+# mediator that silently is not there would leave the agent believing its
+# crossings were governed when nothing was watching.
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+os=$(uname -s)
+arch=$(uname -m)
+
+case "$os" in
+  Darwin)
+    case "$arch" in
+      arm64)            bundled="$dir/commonmeasure-darwin-arm64" ;;
+      x86_64)           bundled="$dir/commonmeasure-darwin-x64" ;;
+    esac ;;
+  Linux)
+    case "$arch" in
+      x86_64)           bundled="$dir/commonmeasure-linux-x64" ;;
+      aarch64|arm64)    bundled="$dir/commonmeasure-linux-arm64" ;;
+    esac ;;
+  MINGW*|MSYS*|CYGWIN*)
+    bundled="$dir/commonmeasure-win-x64.exe" ;;
+esac
+
+bin=""
+if [ -n "$bundled" ] && [ -x "$bundled" ]; then
+  bin="$bundled"
+elif command -v commonmeasure >/dev/null 2>&1; then
+  bin=$(command -v commonmeasure)
+elif [ -x "$HOME/.local/bin/commonmeasure" ]; then
+  bin="$HOME/.local/bin/commonmeasure"
+fi
+
+if [ -z "$bin" ]; then
+  echo "commonmeasure: no binary found: nothing bundled for $os/$arch in $dir, none on PATH, none at ~/.local/bin." >&2
+  echo "            Install one with install.sh from a release (docs/RELEASE.md) or cargo install --path crates/commonmeasure-cli." >&2
+  case "$1" in
+    hook) exit 0 ;;
+    *)    exit 1 ;;
+  esac
+fi
+
+exec "$bin" "$@"

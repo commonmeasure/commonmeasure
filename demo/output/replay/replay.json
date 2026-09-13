@@ -1,0 +1,92 @@
+{
+  "bindings": [
+    {
+      "captured_at": "2026-08-01",
+      "matches_recorded_input": true,
+      "plan": "exa-only",
+      "provider": "exa",
+      "recorded_endpoint": "https://api.exa.ai/search",
+      "recorded_response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "sealed_response_hash": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "sealed_response_ref": "responses/exa-only.json",
+      "source": "exa/exa-search.json"
+    },
+    {
+      "captured_at": "2026-08-01",
+      "matches_recorded_input": true,
+      "plan": "firecrawl-only",
+      "provider": "firecrawl",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+      "recorded_response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "sealed_response_hash": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "sealed_response_ref": "responses/firecrawl-only.json",
+      "source": "firecrawl/firecrawl-search.json"
+    },
+    {
+      "captured_at": "2026-08-01",
+      "matches_recorded_input": true,
+      "plan": "tavily-only",
+      "provider": "tavily",
+      "recorded_endpoint": "https://api.tavily.com/search",
+      "recorded_response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "sealed_response_hash": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "sealed_response_ref": "responses/tavily-only.json",
+      "source": "tavily/tavily-search.json"
+    },
+    {
+      "captured_at": "2026-08-01",
+      "matches_recorded_input": true,
+      "plan": "tollbit-only",
+      "provider": "tollbit",
+      "recorded_endpoint": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+      "recorded_response_sha256": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+      "sealed_response_hash": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+      "sealed_response_ref": "responses/tollbit-only.json",
+      "source": "tollbit/tollbit-search.json"
+    }
+  ],
+  "manifest": "demo/recon/replay-manifest.json",
+  "recordings": [
+    {
+      "capability": "search",
+      "captured_at": "2026-08-01",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse.",
+      "provider": "exa",
+      "recorded_endpoint": "https://api.exa.ai/search",
+      "redactions": "The credential request header is replaced with a visible redaction naming $EXA_API_KEY; every result's `text` is elided to a 120-character lead plus a marker recording its true length.",
+      "response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "source": "exa/exa-search.json"
+    },
+    {
+      "capability": "search",
+      "captured_at": "2026-08-01",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse.",
+      "provider": "firecrawl",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+      "redactions": "The credential request header is replaced with a visible redaction naming $FIRECRAWL_API_KEY; every result's `description` is elided to a 120-character lead plus a marker recording its true length.",
+      "response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "source": "firecrawl/firecrawl-search.json"
+    },
+    {
+      "capability": "search",
+      "captured_at": "2026-08-01",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse.",
+      "provider": "tavily",
+      "recorded_endpoint": "https://api.tavily.com/search",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TAVILY_API_KEY; every result's `content` is elided to a 120-character lead plus a marker recording its true length.",
+      "response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "source": "tavily/tavily-search.json"
+    },
+    {
+      "capability": "search",
+      "captured_at": "2026-08-01",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse.",
+      "provider": "tollbit",
+      "recorded_endpoint": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TOLLBIT_API_KEY. The response carried no page text to elide: TollBit's v2 search returns candidates without excerpts.",
+      "response_sha256": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+      "source": "tollbit/tollbit-search.json"
+    }
+  ],
+  "replay_version": "contextops-replay-run/v1"
+}

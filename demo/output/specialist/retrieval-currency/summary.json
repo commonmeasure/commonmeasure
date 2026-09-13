@@ -1,0 +1,979 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "specialist-retrieval-currency/v1",
+  "run": {
+    "id": "e2407196-e834-4395-9946-c2d9f9546627",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-09-07T19:17:42Z",
+    "manifest_hash": "sha256:c9ddf6d9c6ee5c473f2f98c17b1faf7754759ef16da6c27fa3a3c36261e15604",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true
+  },
+  "evidence_log": {
+    "records": 13,
+    "sha256": "sha256:44f9ed4b921c797cefa476148c38c494d292ae07c01d1bffb93d40d7e8f56848"
+  },
+  "job": {
+    "id": "6da15340-b19a-4485-afb9-0b0de5f77ddb",
+    "label": "Specialist comparison, currency prompt: query selection only, no rule evaluation and no entitlement scope",
+    "kind": "research.answer",
+    "prompt": "Which integration path should a new external data source use on Orchestrator 4.x, and since when does that guidance apply?",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": {
+      "enforcement_mode": "observe",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": []
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": "tensorzero",
+    "endpoint": "http://127.0.0.1:3000/openai/v1/chat/completions",
+    "configured": true
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": 674,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x or since when that guidance applies.",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 674,
+        "input_tokens": 73,
+        "output_tokens": 29,
+        "provider_request_id": "01a07d4e-0e1f-7f81-a920-66ca86d333c8",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x or since when that guidance applies."
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:43.234Z",
+          "started_at": "2026-09-07T19:17:43.234Z",
+          "finished_at": "2026-09-07T19:17:43.234Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:bd41f000fe8f124cbab83abe8ce89f92ad62ecf3136c151f4d48fc068af3f790"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 155,
+                "text": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x or since when that guidance applies.",
+                "words": 24,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:bd41f000fe8f124cbab83abe8ce89f92ad62ecf3136c151f4d48fc068af3f790"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [],
+          "unevaluated": "the suite did not require a cited answer, and citation checks need one (set require_cited_answer)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "specialist-currency",
+            "version": "1"
+          },
+          "inputs": [],
+          "items": [
+            {
+              "item": "effective-from",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "replacement",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "prohibition",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 365
+          },
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "internal-only",
+      "provider": "internal",
+      "capability": "query",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "live-verified",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus",
+        "http_status": null,
+        "latency_ms": 2,
+        "provider_request_id": null,
+        "charge": {},
+        "response_ref": "responses/internal-only.json",
+        "response_hash": "sha256:6cd7f1e5ef7e2f77b6229f549a6ef4c5b9b0ed8f10dba9f67b8dabc2bdd5fb41",
+        "response_bytes": 5184,
+        "result_count": 3
+      },
+      "latency_ms": 1658,
+      "sources": [
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+          "host": "",
+          "title": "Connecting data sources in Orchestrator 3.x",
+          "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 1,
+          "tokens": 132,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "connecting-data-sources-3x.md",
+            "distinct_terms": 9,
+            "occurrences": 18,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "3.x",
+              "integration_path": "flux-connector",
+              "support_status": "supported",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+          "host": "",
+          "title": "Connecting data sources in Orchestrator 4.x",
+          "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 2,
+          "tokens": 107,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "connecting-data-sources-4x.md",
+            "distinct_terms": 8,
+            "occurrences": 18,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+          "host": "",
+          "title": "Fictive Systems Orchestrator — product overview",
+          "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 3,
+          "tokens": 125,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "orchestrator-overview.md",
+            "distinct_terms": 7,
+            "occurrences": 14,
+            "governance": null
+          }
+        }
+      ],
+      "source_count": 3,
+      "context_tokens_admitted": 364,
+      "answer": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x prior to the effective date of 1 March 2026.",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1656,
+        "input_tokens": 803,
+        "output_tokens": 35,
+        "provider_request_id": "01a07d4e-10de-7d21-95d2-e2c9ace42315",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x prior to the effective date of 1 March 2026."
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.247Z",
+          "started_at": "2026-09-07T19:17:43.247Z",
+          "finished_at": "2026-09-07T19:17:43.247Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.249Z",
+          "started_at": "2026-09-07T19:17:43.249Z",
+          "finished_at": "2026-09-07T19:17:43.249Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.251Z",
+          "started_at": "2026-09-07T19:17:43.251Z",
+          "finished_at": "2026-09-07T19:17:43.251Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.252Z",
+          "started_at": "2026-09-07T19:17:43.252Z",
+          "finished_at": "2026-09-07T19:17:43.252Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.254Z",
+          "started_at": "2026-09-07T19:17:43.254Z",
+          "finished_at": "2026-09-07T19:17:43.254Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+              "tokens": 125
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:43.256Z",
+          "started_at": "2026-09-07T19:17:43.256Z",
+          "finished_at": "2026-09-07T19:17:43.256Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+              "tokens": 125
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:17:43.260Z",
+          "started_at": "2026-09-07T19:17:43.257Z",
+          "finished_at": "2026-09-07T19:17:43.260Z",
+          "latency_ms": 2,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 4 repeated phrases",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+              "tokens": 125
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+              "tokens": 107
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+              "tokens": 125
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 388,
+            "tokens_out": 364,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "input_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+                "output_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+                "spans": [
+                  {
+                    "start": 0,
+                    "end": 41,
+                    "words": 6,
+                    "content_hash": "sha256:a81bd9ebb4403ef035464c646656a944f0af7d068530573a4b50f638a3183430",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                      "start": 0,
+                      "end": 41
+                    }
+                  },
+                  {
+                    "start": 45,
+                    "end": 101,
+                    "words": 7,
+                    "content_hash": "sha256:a2945c93538861701b95c7c9f8c614002fabf5e38d11a23611af0d67b5e1d235",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                      "start": 47,
+                      "end": 101
+                    }
+                  },
+                  {
+                    "start": 259,
+                    "end": 294,
+                    "words": 7,
+                    "content_hash": "sha256:208c9cbb80c66d60e93ab2bb5521ecf5ab3b2eaafb1f46d6df8de2e2306366a1",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                      "start": 263,
+                      "end": 297
+                    }
+                  },
+                  {
+                    "start": 459,
+                    "end": 482,
+                    "words": 4,
+                    "content_hash": "sha256:ca42beb2bc0776c2b16d7aafe4c147accf72e1aae4a2ae4e97eebec89a3f3147",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                      "start": 320,
+                      "end": 341
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md"
+              ],
+              "output": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:44.923Z",
+          "started_at": "2026-09-07T19:17:44.920Z",
+          "finished_at": "2026-09-07T19:17:44.923Z",
+          "latency_ms": 3,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:b1f05219d62a5d5a3b01593d34575207542d50a11ec3758612ff682a7c61a8c3"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 163,
+                "text": "The supplied context cannot establish which integration path a new external data source should use on Orchestrator 4.x prior to the effective date of 1 March 2026.",
+                "words": 27,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:b1f05219d62a5d5a3b01593d34575207542d50a11ec3758612ff682a7c61a8c3"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [],
+          "unevaluated": "the suite did not require a cited answer, and citation checks need one (set require_cited_answer)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "specialist-currency",
+            "version": "1"
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04"
+            }
+          ],
+          "items": [
+            {
+              "item": "effective-from",
+              "covered": true,
+              "matched": {
+                "phrase": "From 1 March 2026",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+                "start": 125,
+                "end": 143
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "item": "replacement",
+              "covered": true,
+              "matched": {
+                "phrase": "replaces the Flux Connector",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+                "start": 208,
+                "end": 236
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "item": "prohibition",
+              "covered": true,
+              "matched": {
+                "phrase": "do not build new 4.x integrations",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+                "start": 271,
+                "end": 304
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            }
+          ],
+          "covered_count": 3,
+          "item_count": 3,
+          "fraction": 1.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 365
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "declared_date": "2025-04-15",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 478,
+              "within_maximum_age": false
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:16b65d92bcbc634fd09108d7fb20107503aa4f8f8ad2df9a3d0eb58d04fe07de",
+              "declared_date": "2026-03-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 158,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+              "declared_date": "2026-02-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 186,
+              "within_maximum_age": true
+            }
+          ],
+          "fresh_count": 2,
+          "part_count": 3,
+          "fraction": 0.6666666666666666,
+          "unmeasured": null,
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": "internal-only",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric specialist-currency/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 1.33 (coverage 1.00, freshness 0.67). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "unavailable_inputs": []
+  }
+}

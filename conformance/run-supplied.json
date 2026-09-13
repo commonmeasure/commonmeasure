@@ -1,0 +1,32 @@
+{
+  "agent_id": "commonmeasure",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "content_url": "https://www.publisher.example/news/candidates-on-transport",
+      "data": {
+        "commonmeasure-supplier": "ozone"
+      },
+      "id": "91b51fcc-d560-5190-a839-c44062f68b04",
+      "source_role": "agent",
+      "timestamp": "2026-09-09T20:29:28.000Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://www.publisher.example/news/candidates-on-transport",
+      "data": {
+        "commonmeasure-supplier": "ozone",
+        "content_hash": "sha256:551e74964f4a499d5c16850a6d62afe1f807d15c8ab93f3a30cdd33e2ba411e3",
+        "scope": "session",
+        "tokens_ingested": 176
+      },
+      "id": "cb538c77-4587-5c34-bd15-d472dd86b41c",
+      "source_role": "agent",
+      "timestamp": "2026-09-09T20:29:28.000Z",
+      "type": "content_grounded"
+    }
+  ],
+  "schema_version": "1.0",
+  "session_id": "0f6e0f55-5a6f-4a7c-9d3e-2c1b8a7e6d50",
+  "started_at": "2026-09-09T20:29:28.000Z"
+}

@@ -1,0 +1,58 @@
+{
+  "registered": "2026-08-13",
+  "registration_digest": "68c6b1169701556aac4d38e881c2a868f460f72091f0aab2c3eeecdc88b5433a",
+  "registration_digest_basis": "sha256 over json.dumps({population, split_rule, split}, sort_keys=True, separators=(\",\", \":\"))",
+  "population": {
+    "availability": [
+      "brewlink-hub-availability",
+      "g4-price-today",
+      "milk-wand-availability",
+      "presto200-filter-availability"
+    ],
+    "compatibility": [
+      "accessory-carryover",
+      "app-without-hub",
+      "g4-out-of-box",
+      "g4-presto200"
+    ],
+    "recommendation": [
+      "grinder-choice",
+      "milk-accessory-choice",
+      "narrow-counter-setup",
+      "presto200-replacement"
+    ]
+  },
+  "split_rule": "Within each class, question ids sort alphabetically; the first and third are the fitting set, the second and fourth the holdout set. Declared before any run of any suite in this directory.",
+  "split": {
+    "availability": {
+      "fitting": [
+        "brewlink-hub-availability",
+        "milk-wand-availability"
+      ],
+      "holdout": [
+        "g4-price-today",
+        "presto200-filter-availability"
+      ]
+    },
+    "compatibility": {
+      "fitting": [
+        "accessory-carryover",
+        "g4-out-of-box"
+      ],
+      "holdout": [
+        "app-without-hub",
+        "g4-presto200"
+      ]
+    },
+    "recommendation": {
+      "fitting": [
+        "grinder-choice",
+        "narrow-counter-setup"
+      ],
+      "holdout": [
+        "milk-accessory-choice",
+        "presto200-replacement"
+      ]
+    }
+  }
+}

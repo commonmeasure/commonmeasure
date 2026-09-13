@@ -1,0 +1,48 @@
+{
+  "method": "regex removal of script/style/noscript/svg, comments, tags and entities",
+  "caveat": "removes HTML machinery only; navigation, footers and related-article text survive",
+  "tokeniser": "tiktoken o200k_base",
+  "date": "2026-08-04",
+  "pages": [
+    {
+      "page": "arxiv-abstract",
+      "url": "https://arxiv.org/abs/2307.03172",
+      "fetched": "2026-08-04",
+      "sha256_of_fetched_html": "17c0e4eb2ef37828cd18b2c313ccc0ab82c3c17875bc61a9b395881fe2ce6e4d",
+      "bytes": 42247,
+      "raw_tokens": 12321,
+      "stripped_tokens": 1210,
+      "tokens_removed_pct": 90.2
+    },
+    {
+      "page": "bbc-news-index",
+      "url": "https://www.bbc.co.uk/news",
+      "fetched": "2026-08-04",
+      "sha256_of_fetched_html": "c4dddc770478acd5f67ad485bae25b169cd1b3616fd5b5f1647848e991c9fb32",
+      "bytes": 990896,
+      "raw_tokens": 363439,
+      "stripped_tokens": 3945,
+      "tokens_removed_pct": 98.9
+    },
+    {
+      "page": "vllm-prefix-caching",
+      "url": "https://docs.vllm.ai/en/latest/design/prefix_caching.html",
+      "fetched": "2026-08-04",
+      "sha256_of_fetched_html": "e3ba9371283676cdcab3e33f409aeac1a3013f0f5c9288645101dd1e4b3f3995",
+      "bytes": 594204,
+      "raw_tokens": 205908,
+      "stripped_tokens": 10867,
+      "tokens_removed_pct": 94.7
+    },
+    {
+      "page": "wikipedia-attention",
+      "url": "https://en.wikipedia.org/wiki/Attention_(machine_learning)",
+      "fetched": "2026-08-04",
+      "sha256_of_fetched_html": "fe11be57f4df35ea4335f0ab03a89fa501cab0c6829ea28529183caeee6d5460",
+      "bytes": 462873,
+      "raw_tokens": 145535,
+      "stripped_tokens": 18760,
+      "tokens_removed_pct": 87.1
+    }
+  ]
+}

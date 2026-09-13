@@ -1,0 +1,110 @@
+{
+  "suite_version": "specialist-governed-restraint/v1",
+  "label": "Specialist comparison, restraint prompt: admission policy, sealed rule set, entitlement scope and citation requirements",
+  "job": {
+    "id": "aa8dd620-b61f-45e9-820d-39c0e244f0c6",
+    "kind": "research.answer",
+    "prompt": "How do I keep an existing Flux Connector pipeline running on Orchestrator 4.x, and what configuration does that need?",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "coverage_rubric": {
+    "name": "specialist-restraint",
+    "version": "1",
+    "items": [
+      {
+        "name": "compat-mode",
+        "any_of": [
+          "still ships in Orchestrator 4.x for compatibility"
+        ]
+      },
+      {
+        "name": "no-fixes",
+        "any_of": [
+          "receives no fixes"
+        ]
+      },
+      {
+        "name": "replacement-named",
+        "any_of": [
+          "Stream Gateway"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 365
+  },
+  "require_cited_answer": true,
+  "governance": {
+    "name": "fictive-support-rules",
+    "version": "2",
+    "entitlement_tiers": [
+      "standard",
+      "premier"
+    ],
+    "granted_entitlement": "standard",
+    "rules": [
+      {
+        "edition": "orchestrator",
+        "version_range": "3.x",
+        "integration_path": "flux-connector",
+        "support_status": "supported",
+        "effective_date": "2025-04-15"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "stream-gateway",
+        "support_status": "supported",
+        "effective_date": "2026-03-01"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "flux-connector",
+        "support_status": "deprecated",
+        "effective_date": "2026-03-01"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "bulk-export",
+        "support_status": "supported",
+        "effective_date": "2026-04-10"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "pulse-metrics",
+        "support_status": "experimental",
+        "effective_date": "2026-06-15"
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "suite_version": "nvidia-redpine-replay/v1",
+  "label": "Replay the 4 August 2026 licensed fetch: Redpine quote-then-buy through the run contract",
+  "job": {
+    "id": "ffb01267-a785-4c0e-a7d5-2ea8b1c41efb",
+    "kind": "research.answer",
+    "prompt": "NVIDIA",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 0.0,
+      "freshness": 1.0,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_acquisition_cost",
+        "amount": {
+          "currency": "USD",
+          "micros": 50000
+        }
+      },
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "Licensed media mentions of the monitored keyword, each with a supplier-declared date and its observed charge",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 3,
+  "providers": [
+    "redpine"
+  ],
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 7
+  }
+}

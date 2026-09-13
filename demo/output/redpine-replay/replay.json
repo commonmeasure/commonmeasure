@@ -1,0 +1,87 @@
+{
+  "replay_version": "contextops-replay-run/v1",
+  "manifest": "demo/recon/replay-manifest.json",
+  "recordings": [
+    {
+      "provider": "redpine",
+      "capability": "initialize",
+      "source": "redpine/redpine-mcp-initialize.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:cdf946ee5da568d690d80fe894202e07d25372b5218d1c8200462c80949330f2",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; the mcp-session-id issued by the server is replaced on both sides with the issued-by marker the replay origin re-serves.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "balance",
+      "source": "redpine/redpine-balance-before.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:ec2aa47232a1d39071606cd808deb3f76e77e7ed940a48b2e6ddafeacdb95520",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "inspect",
+      "source": "redpine/redpine-inspect-sample-2.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:a0da52d25131e9bff98a1b3196366d2b10ec873e9c1c5f8f1cc0ee7b09c9cb97",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "quote",
+      "source": "redpine/redpine-preview-sample.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:845a5e3cdd5bc5a2036146c4cdff1de0f76eb6c00da46451cdd8d2aeceef3941",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides. The teaser's truncation is the provider's own.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "redpine",
+      "capability": "confirm",
+      "source": "redpine/redpine-confirm-sample.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "response_sha256": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+      "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides. Every mention's licensed transcript text is truncated to a short lead plus a marker, in both the content and structuredContent carriers; full bytes are retained locally and are not in this repository.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence — the licensed transcript text is truncated out — not licensed content for redistribution or reuse."
+    }
+  ],
+  "bindings": [
+    {
+      "plan": "redpine-only",
+      "provider": "redpine",
+      "source": "redpine/redpine-confirm-sample.json",
+      "captured_at": "2026-08-04",
+      "recorded_endpoint": "https://api.redpine.ai/mcp",
+      "recorded_response_sha256": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+      "sealed_response_ref": "responses/redpine-only.json",
+      "sealed_response_hash": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+      "matches_recorded_input": true,
+      "quote_bindings": [
+        {
+          "leg": "inspect",
+          "source": "redpine/redpine-inspect-sample-2.json",
+          "recorded_response_sha256": "sha256:a0da52d25131e9bff98a1b3196366d2b10ec873e9c1c5f8f1cc0ee7b09c9cb97",
+          "sealed_response_ref": "responses/redpine-only-inspect.json",
+          "sealed_response_hash": "sha256:a0da52d25131e9bff98a1b3196366d2b10ec873e9c1c5f8f1cc0ee7b09c9cb97",
+          "matches_recorded_input": true
+        },
+        {
+          "leg": "quote",
+          "source": "redpine/redpine-preview-sample.json",
+          "recorded_response_sha256": "sha256:845a5e3cdd5bc5a2036146c4cdff1de0f76eb6c00da46451cdd8d2aeceef3941",
+          "sealed_response_ref": "responses/redpine-only-quote.json",
+          "sealed_response_hash": "sha256:845a5e3cdd5bc5a2036146c4cdff1de0f76eb6c00da46451cdd8d2aeceef3941",
+          "matches_recorded_input": true
+        }
+      ]
+    }
+  ]
+}

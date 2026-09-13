@@ -1,0 +1,302 @@
+{
+  "hash": "sha256:9f6b7e682a2481613a11279bcbe4436927e785fef00de4e2952556293dbe44c1",
+  "manifest": {
+    "manifest_version": "contextops-manifest/v4",
+    "suite_version": "commerce-editorial-availability/v1",
+    "label": "Commerce comparison, availability question: third-party editorial and review pages alone",
+    "job": {
+      "id": "095837a6-ab58-4053-9fd2-8f3d25843721",
+      "kind": "research.answer",
+      "prompt": "Is the Aurelio Presto 200 espresso machine still available from Fictive Retail, and what should a buyer choose instead?",
+      "policy_mode": "observe",
+      "objective": {
+        "kind": "weighted",
+        "quality": 0.0,
+        "coverage": 1.0,
+        "freshness": 0.5,
+        "cost": 0.0,
+        "latency": 0.0,
+        "policy_risk": 0.0
+      },
+      "constraints": [
+        {
+          "kind": "maximum_context_tokens",
+          "tokens": 4000
+        }
+      ],
+      "evidence_requirements": []
+    },
+    "supply_plans": [
+      {
+        "name": "internal-only",
+        "version": "1",
+        "steps": [
+          {
+            "provider": {
+              "name": "internal",
+              "adapter_version": "commonmeasure-supply/0.1",
+              "capabilities": [
+                "query"
+              ]
+            },
+            "capability": "query",
+            "limit": 10
+          }
+        ]
+      }
+    ],
+    "model_plan": {
+      "name": "operator-pinned-answer-model",
+      "version": "2",
+      "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+    },
+    "result_limit": 10,
+    "system_prompt": "Answer only from the supplied context. State plainly what the supplied context cannot establish. Do not use knowledge that is not in the supplied context.\n\nAfter your answer, cite the context you used: one line per citation, in exactly this form, quoting the supplied source verbatim:\nCITATION: CITED_URL :: \"the exact quote from that source\"\nReplace CITED_URL with the source's URL alone, without the SOURCE label or the bracketed hash beside it. Cite only sources named SOURCE in the supplied context.",
+    "coverage_rubric": {
+      "name": "commerce-availability",
+      "version": "1",
+      "items": [
+        {
+          "name": "discontinuation",
+          "any_of": [
+            "discontinued on 15 July 2026"
+          ]
+        },
+        {
+          "name": "replacement",
+          "any_of": [
+            "replaced by the Aurelio Presto 300"
+          ]
+        },
+        {
+          "name": "current-availability",
+          "any_of": [
+            "in stock at £329.00"
+          ]
+        }
+      ]
+    },
+    "as_of": {
+      "date": "2026-08-08",
+      "maximum_age_days": 180
+    },
+    "governance": null,
+    "adapter_version": "commonmeasure-supply/0.1",
+    "processors": [
+      {
+        "name": "pii-detector",
+        "version": "1",
+        "stage": "admit",
+        "capability": "pii-detection",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "deterministic",
+        "limits": "in-process and synchronous; one pass over the text, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_closed",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "injection-screen",
+        "version": "1",
+        "stage": "admit",
+        "capability": "injection-screening",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "deterministic",
+        "limits": "in-process and synchronous; one lower-cased pass over the text, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_closed",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "support-governor",
+        "version": "1",
+        "stage": "admit",
+        "capability": "support-status-governance",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "deterministic",
+        "limits": "in-process and synchronous; one pass over the declared metadata, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_closed",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "context-optimiser",
+        "version": "2",
+        "stage": "transform",
+        "capability": "context-deduplication",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "deterministic",
+        "limits": "in-process and synchronous; one pass over each source, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_open",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "fidelity-verifier",
+        "version": "1",
+        "stage": "verify",
+        "capability": "claim-support",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "deterministic",
+        "limits": "in-process and synchronous; one pass over the answer against each window part, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_open",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "fidelity-judge",
+        "version": "1",
+        "stage": "verify",
+        "capability": "claim-support-judgement",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:67d5ec72614310aee0f740fca4571c3decd25881c70477397b6357e75f547afc",
+        "permissions": {
+          "network": true,
+          "filesystem": false,
+          "model": true,
+          "credentials": false,
+          "raw_content": true
+        },
+        "determinism": "non_deterministic",
+        "limits": "one gateway exchange per plan, bounded by the transport timeout; no retry",
+        "failure_by_mode": {
+          "strict": "fail_open",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      },
+      {
+        "name": "output-provenance",
+        "version": "1",
+        "stage": "attest",
+        "capability": "output-provenance-label",
+        "implementation": {
+          "kind": "in-process",
+          "crate_name": "commonmeasure-runtime",
+          "crate_version": "0.2.0"
+        },
+        "configuration_digest": "sha256:0f4ca09153cdc60ffa0e26896bc633c08a5edd5bc99f636b44ad643aff067627",
+        "permissions": {
+          "network": false,
+          "filesystem": false,
+          "model": false,
+          "credentials": true,
+          "raw_content": true
+        },
+        "determinism": "non_deterministic",
+        "limits": "in-process and synchronous; one signing pass, no supervisor timeout",
+        "failure_by_mode": {
+          "strict": "fail_open",
+          "prefer": "fail_open",
+          "observe": "fail_open"
+        },
+        "evidence_format": "contextops-processor-invocation/v1"
+      }
+    ],
+    "evaluators": [
+      {
+        "name": "grounding",
+        "version": "0.4.0",
+        "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+      },
+      {
+        "name": "coverage",
+        "version": "0.1.0",
+        "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+      },
+      {
+        "name": "freshness",
+        "version": "0.2.0",
+        "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+      }
+    ],
+    "token_basis": "whitespace-words",
+    "acquisition_mode": "no-external-acquisition",
+    "replay_recordings": null,
+    "inference_gateway": "tensorzero",
+    "inference_request_shape": "sha256:69b7c1b68cb95b6742039de389a5e87a152fdfc9bc937939ecd1b24dde3ee466",
+    "transport_timeout_seconds": 30,
+    "retry_policy": "none; a failed acquisition is recorded, not retried",
+    "cache_control": "not controlled. Providers may serve from their own caches: Exa returned source \"cached\" and Firecrawl cacheState \"hit\" during reconnaissance on 1 August 2026."
+  }
+}

@@ -1,0 +1,549 @@
+## 1. An owner of the operator organisation mints an enrolment token through the hub's API
+POST /api/v1/enrolment/tokens {"name":"ozone-pilot-edge"} -> 201 expires_at=2026-09-10T02:11:43.920725Z value=et_<redacted>
+
+## 2. commonmeasure connect http://127.0.0.1:8087 --token et_<redacted>  (fresh COMMONMEASURE_HOME, nothing else in it)
+enrolled with http://127.0.0.1:8087 in Pilot Operator as ozone-pilot-edge
+  key id   OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto
+  receiver http://127.0.0.1:8087/api/v1/telemetry
+  written  <home>/edge-key.json, <home>/enrolment.json and <home>/relay.json
+first relay run:
+  edge key OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto: enrolled
+  projected 0 of 0 sessions and 0 runs; 0 events newly spooled
+  delivered 0 events in 0 batches to http://127.0.0.1:8087/api/v1/telemetry (0 new at the receiver)
+exit 0
+
+## 3. policy.json written in <home>: one scope matching the working directory, engagement ozone-pilot, allow_telemetry_egress true
+{
+  "policy_mode": "observe",
+  "scopes": [
+    {
+      "match": "<cwd>",
+      "engagement": "ozone-pilot",
+      "allow_telemetry_egress": true
+    }
+  ]
+}
+
+## 4. commonmeasure status
+contract          contextops-fleet-status/v1
+edge              OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto
+deployment mode   local
+desired revision  none (local mode accepts no remote policy)
+policy digest     sha256:7f08288627789440d03a83fdc61ebf7541565f16e11006aa972d3a144d83c061
+policy identity   sha256:91a21607ee2c8beb140d611e356e8be0b1439f2e6ca91f88e84dd7ffb42665fe  (contextops-policy-identity/v1, resolver 1)
+principal         os-user:501 (basis os_user)
+last enforcement  unknown (no mediated crossing has been recorded)
+allowances        none declared
+
+The identity and digest are drift evidence, not proof that this edge enforced the policy; `commonmeasure status --json` prints the document.
+
+## 5. GET https://api.ozone.live/v1/publishers (the ownership map), tried once
+GET https://api.ozone.live/v1/publishers -> HTTP 503 in 0.710633s, 147 bytes
+{"error":{"code":"upstream_unavailable","message":"Publisher ownership data has not been synced yet. Run the cron sync or POST /v1/admin/resync."}}
+
+## 6. One live Ozone search through the mediated tool: commonmeasure mcp --host claude-code --session ozone-pilot, run from the scoped working directory, OZONE_LIVE_API_KEY exported into that process only
+tools/call context_search {"query":"What have local election candidates said about bus services and public transport?","provider":"ozone","limit":3}
+Result (passage text withheld: the passages are licensed publisher content):
+isError: False
+{
+ "provider": "ozone",
+ "results": [
+  {
+   "url": "https://www.coventrytelegraph.net/news/coventry-news/general-election-candidates-qa-coventry-17317459",
+   "title": "General Election 2019: We quiz the candidates from Coventry South",
+   "text": "<passage text withheld, 1000 chars>",
+   "content_hash": "sha256:551e74964f4a499d5c16850a6d62afe1f807d15c8ab93f3a30cdd33e2ba411e3",
+   "licence": {
+    "state": "unknown"
+   },
+   "declared_date": {
+    "date": "2026-04-29",
+    "provenance": "supplier-declared: published_date on the Ozone Live search result"
+   }
+  },
+  {
+   "url": "https://www.theguardian.com/uk-news/2026/apr/21/what-happens-when-beautiful-village-loses-bus-route-mousehole-cornwall",
+   "title": "\u2018It\u2019s a big loss\u2019: what happens when a beautiful village loses its bus stop?",
+   "text": "<passage text withheld, 1000 chars>",
+   "content_hash": "sha256:66b223f9abcab23a7c6faeba517b03c2da33c2b1300fbd89d86c18c8b08cf142",
+   "licence": {
+    "state": "unknown"
+   },
+   "declared_date": {
+    "date": "2026-04-21",
+    "provenance": "supplier-declared: published_date on the Ozone Live search result"
+   }
+  },
+  {
+   "url": "https://www.chroniclelive.co.uk/news/north-east-news/zack-polanski-says-greens-would-33846640",
+   "title": "Zack Polanski says Greens would act faster on buses and give under-22s free travel",
+   "text": "<passage text withheld, 1000 chars>",
+   "content_hash": "sha256:40505d811239512808a21c7be91382b9962bb44ec0bc1aecb16c794fa89f47bc",
+   "licence": {
+    "state": "unknown"
+   },
+   "declared_date": {
+    "date": "2026-04-27",
+    "provenance": "supplier-declared: published_date on the Ozone Live search result"
+   }
+  }
+ ],
+ "refused": 0,
+ "charge": {},
+ "latency_ms": 1490,
+}
+
+## 7. The session record: three crossing_mediated records, each with supplier=ozone, policy_scope=<cwd>; charge unknown
+{"key_id": "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto", "standing": "enrolled", "hub": "http://127.0.0.1:8087"}
+{"url": "https://www.coventrytelegraph.net/news/coventry-news/general-election-candidates-qa-coventry-17317459", "host_name": "www.coventrytelegraph.net", "supplier": "ozone", "grounded": false, "estimated_tokens": 250, "licence": {"state": "unknown"}, "policy_scope": "<cwd>", "content_hash": "sha256:551e74964f4a499d5c16850a6d62afe1f807d15c8ab93f3a30cdd33e2ba411e3"}
+{"url": "https://www.theguardian.com/uk-news/2026/apr/21/what-happens-when-beautiful-village-loses-bus-route-mousehole-cornwall", "host_name": "www.theguardian.com", "supplier": "ozone", "grounded": false, "estimated_tokens": 250, "licence": {"state": "unknown"}, "policy_scope": "<cwd>", "content_hash": "sha256:66b223f9abcab23a7c6faeba517b03c2da33c2b1300fbd89d86c18c8b08cf142"}
+{"url": "https://www.chroniclelive.co.uk/news/north-east-news/zack-polanski-says-greens-would-33846640", "host_name": "www.chroniclelive.co.uk", "supplier": "ozone", "grounded": false, "estimated_tokens": 250, "licence": {"state": "unknown"}, "policy_scope": "<cwd>", "content_hash": "sha256:40505d811239512808a21c7be91382b9962bb44ec0bc1aecb16c794fa89f47bc"}
+
+## 8. commonmeasure relay
+edge key OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto: enrolled
+projected 1 of 1 sessions and 0 runs; 3 events newly spooled
+delivered 3 events in 1 batches to http://127.0.0.1:8087/api/v1/telemetry (3 new at the receiver)
+  3 under governing engagement ozone-pilot
+exit 0
+
+## 9. The hub, as the operator organisation's owner: GET /api/v1/telemetry/hosts
+[
+    {
+        "content_grounded": 0,
+        "content_host": "www.chroniclelive.co.uk",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.951Z"
+    },
+    {
+        "content_grounded": 0,
+        "content_host": "www.coventrytelegraph.net",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.925Z"
+    },
+    {
+        "content_grounded": 0,
+        "content_host": "www.theguardian.com",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.938Z"
+    }
+]
+
+## 10. Each stored event's data carries commonmeasure-supplier (read from the hub's database, operator organisation, before onward delivery)
+pilot-operator: content_retrieved www.chroniclelive.co.uk parent=chroniclelive.co.uk supplier=ozone agent=<none> content_telemetry_id=<none>
+pilot-operator: content_retrieved www.coventrytelegraph.net parent=coventrytelegraph.net supplier=ozone agent=<none> content_telemetry_id=<none>
+pilot-operator: content_retrieved www.theguardian.com parent=theguardian.com supplier=ozone agent=<none> content_telemetry_id=<none>
+
+## 11. Import the network ozone with the consumer as destination (an https URL is required by the API), as the operator's owner: POST /api/v1/owners/import
+{"network":"ozone",
+ "basis":"designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain",
+ "destination":{"url":"https://consumer.example/api/v1/telemetry/events","credential":"ak_<redacted: the consumer organisation's telemetry:ingest key>"},
+ "owners":[
+  {"external_id":"coventrytelegraph.net","name":"Coventry Telegraph","hosts":["coventrytelegraph.net"]},
+  {"external_id":"theguardian.com","name":"The Guardian","hosts":["theguardian.com"]},
+  {"external_id":"chroniclelive.co.uk","name":"Chronicle Live","hosts":["chroniclelive.co.uk"]}
+ ]}
+->
+{"network":"ozone","results":[{"destination_set":true,"external_id":"coventrytelegraph.net","host_conflicts":[],"hosts_added":["coventrytelegraph.net"],"name":"Coventry Telegraph","owner_id":"c895c520-82bc-4075-9652-bf31c59487ec","queued":1,"status":"created"},{"destination_set":true,"external_id":"theguardian.com","host_conflicts":[],"hosts_added":["theguardian.com"],"name":"The Guardian","owner_id":"9104db79-8450-43d4-ae11-1eb0c2ceb1e3","queued":1,"status":"created"},{"destination_set":true,"external_id":"chroniclelive.co.uk","host_conflicts":[],"hosts_added":["chroniclelive.co.uk"],"name":"Chronicle Live","owner_id":"db4491b9-a83b-4830-8775-f2db656b3ec6","queued":1,"status":"created"}],"summary":{"conflict":0,"created":3,"error":0,"existing":0}}
+HTTP 200
+
+## 12. Redirect the stored destination to the loopback consumer by SQL (the API accepts https only; this is what the hub's own onward test does). The consumer is this same hub under the second organisation's ingest key.
+Coventry Telegraph -> http://127.0.0.1:8087/api/v1/telemetry/events
+The Guardian -> http://127.0.0.1:8087/api/v1/telemetry/events
+Chronicle Live -> http://127.0.0.1:8087/api/v1/telemetry/events
+UPDATE 3
+
+## 13. After the worker's tick: GET /api/v1/networks
+[
+    {
+        "hosts": 3,
+        "network": "ozone",
+        "owners": 3,
+        "with_destination": 3
+    }
+]
+
+## 14. GET /api/v1/networks/ozone/report?supplier=ozone
+{
+    "basis": "designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain",
+    "content_grounded": 0,
+    "content_retrieved": 3,
+    "network": "ozone",
+    "owners": [
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "chroniclelive.co.uk",
+            "first_event_at": "2026-09-10T01:58:09.951Z",
+            "last_event_at": "2026-09-10T01:58:09.951Z",
+            "name": "Chronicle Live",
+            "owner_id": "db4491b9-a83b-4830-8775-f2db656b3ec6",
+            "sessions": 1
+        },
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "coventrytelegraph.net",
+            "first_event_at": "2026-09-10T01:58:09.925Z",
+            "last_event_at": "2026-09-10T01:58:09.925Z",
+            "name": "Coventry Telegraph",
+            "owner_id": "c895c520-82bc-4075-9652-bf31c59487ec",
+            "sessions": 1
+        },
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "theguardian.com",
+            "first_event_at": "2026-09-10T01:58:09.938Z",
+            "last_event_at": "2026-09-10T01:58:09.938Z",
+            "name": "The Guardian",
+            "owner_id": "9104db79-8450-43d4-ae11-1eb0c2ceb1e3",
+            "sessions": 1
+        }
+    ],
+    "resolution": "registered content_url host, exact match; else the registered parent of the host (its first label removed) where no exact registration claims the host",
+    "since": null,
+    "supplier": "ozone",
+    "supplier_field": "commonmeasure-supplier",
+    "until": null
+}
+
+## 15. GET /api/v1/networks/ozone/report (unfiltered, for comparison)
+{
+    "basis": "designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain",
+    "content_grounded": 0,
+    "content_retrieved": 3,
+    "network": "ozone",
+    "owners": [
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "chroniclelive.co.uk",
+            "first_event_at": "2026-09-10T01:58:09.951Z",
+            "last_event_at": "2026-09-10T01:58:09.951Z",
+            "name": "Chronicle Live",
+            "owner_id": "db4491b9-a83b-4830-8775-f2db656b3ec6",
+            "sessions": 1
+        },
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "coventrytelegraph.net",
+            "first_event_at": "2026-09-10T01:58:09.925Z",
+            "last_event_at": "2026-09-10T01:58:09.925Z",
+            "name": "Coventry Telegraph",
+            "owner_id": "c895c520-82bc-4075-9652-bf31c59487ec",
+            "sessions": 1
+        },
+        {
+            "agent_ids": [
+                "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+            ],
+            "by_supplier": [
+                {
+                    "content_grounded": 0,
+                    "content_retrieved": 1,
+                    "supplier": "ozone"
+                }
+            ],
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "delivery": {
+                "dead": 0,
+                "delivered": 1,
+                "queued": 0
+            },
+            "destination": true,
+            "external_id": "theguardian.com",
+            "first_event_at": "2026-09-10T01:58:09.938Z",
+            "last_event_at": "2026-09-10T01:58:09.938Z",
+            "name": "The Guardian",
+            "owner_id": "9104db79-8450-43d4-ae11-1eb0c2ceb1e3",
+            "sessions": 1
+        }
+    ],
+    "resolution": "registered content_url host, exact match; else the registered parent of the host (its first label removed) where no exact registration claims the host",
+    "since": null,
+    "supplier": null,
+    "supplier_field": "commonmeasure-supplier",
+    "until": null
+}
+
+## 16. GET /api/v1/owners/db4491b9-a83b-4830-8775-f2db656b3ec6/report  (Chronicle_Live)
+{
+    "agent_ids": [
+        "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+    ],
+    "content_grounded": 0,
+    "content_retrieved": 1,
+    "first_event_at": "2026-09-10T01:58:09.951Z",
+    "hosts": [
+        {
+            "basis": "designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain; ozone chroniclelive.co.uk",
+            "host": "chroniclelive.co.uk"
+        }
+    ],
+    "last_event_at": "2026-09-10T01:58:09.951Z",
+    "license_refs": [
+        {
+            "events": 1,
+            "license_ref": null
+        }
+    ],
+    "owner": "Chronicle Live",
+    "resolution": "registered content_url host, exact match; else the registered parent of the host (its first label removed) where no exact registration claims the host",
+    "sessions": 1,
+    "url_limit": 200,
+    "urls": [
+        {
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "content_url": "https://www.chroniclelive.co.uk/news/north-east-news/zack-polanski-says-greens-would-33846640",
+            "last_seen_at": "2026-09-10T01:58:09.951Z"
+        }
+    ]
+}
+
+## 17. GET /api/v1/owners/db4491b9-a83b-4830-8775-f2db656b3ec6/delivery  (Chronicle_Live)
+{
+    "dead": 0,
+    "dead_letter_limit": 50,
+    "dead_letters": [],
+    "delivered": 1,
+    "destination": {
+        "credential": true,
+        "set_at": "2026-09-10T01:59:27.130614Z",
+        "source": "operator",
+        "url": "http://127.0.0.1:8087/api/v1/telemetry/events"
+    },
+    "discovery": null,
+    "last_delivered_at": "2026-09-10T01:59:38.634793Z",
+    "last_error": null,
+    "next_attempt_at": null,
+    "queued": 0
+}
+
+## 16. GET /api/v1/owners/c895c520-82bc-4075-9652-bf31c59487ec/report  (Coventry_Telegraph)
+{
+    "agent_ids": [
+        "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+    ],
+    "content_grounded": 0,
+    "content_retrieved": 1,
+    "first_event_at": "2026-09-10T01:58:09.925Z",
+    "hosts": [
+        {
+            "basis": "designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain; ozone coventrytelegraph.net",
+            "host": "coventrytelegraph.net"
+        }
+    ],
+    "last_event_at": "2026-09-10T01:58:09.925Z",
+    "license_refs": [
+        {
+            "events": 1,
+            "license_ref": null
+        }
+    ],
+    "owner": "Coventry Telegraph",
+    "resolution": "registered content_url host, exact match; else the registered parent of the host (its first label removed) where no exact registration claims the host",
+    "sessions": 1,
+    "url_limit": 200,
+    "urls": [
+        {
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "content_url": "https://www.coventrytelegraph.net/news/coventry-news/general-election-candidates-qa-coventry-17317459",
+            "last_seen_at": "2026-09-10T01:58:09.925Z"
+        }
+    ]
+}
+
+## 17. GET /api/v1/owners/c895c520-82bc-4075-9652-bf31c59487ec/delivery  (Coventry_Telegraph)
+{
+    "dead": 0,
+    "dead_letter_limit": 50,
+    "dead_letters": [],
+    "delivered": 1,
+    "destination": {
+        "credential": true,
+        "set_at": "2026-09-10T01:59:27.117519Z",
+        "source": "operator",
+        "url": "http://127.0.0.1:8087/api/v1/telemetry/events"
+    },
+    "discovery": null,
+    "last_delivered_at": "2026-09-10T01:59:38.627752Z",
+    "last_error": null,
+    "next_attempt_at": null,
+    "queued": 0
+}
+
+## 16. GET /api/v1/owners/9104db79-8450-43d4-ae11-1eb0c2ceb1e3/report  (The_Guardian)
+{
+    "agent_ids": [
+        "OG3DUvkG8cNDuFqdyLllR8LjvSNdsTI-oThJjIhxZto"
+    ],
+    "content_grounded": 0,
+    "content_retrieved": 1,
+    "first_event_at": "2026-09-10T01:58:09.938Z",
+    "hosts": [
+        {
+            "basis": "designated by hand for the pilot run: Ozone's ownership map (GET /v1/publishers) answered 503 not synced, so the three publishers are the hosts the live search returned, keyed by apex domain; ozone theguardian.com",
+            "host": "theguardian.com"
+        }
+    ],
+    "last_event_at": "2026-09-10T01:58:09.938Z",
+    "license_refs": [
+        {
+            "events": 1,
+            "license_ref": null
+        }
+    ],
+    "owner": "The Guardian",
+    "resolution": "registered content_url host, exact match; else the registered parent of the host (its first label removed) where no exact registration claims the host",
+    "sessions": 1,
+    "url_limit": 200,
+    "urls": [
+        {
+            "content_grounded": 0,
+            "content_retrieved": 1,
+            "content_url": "https://www.theguardian.com/uk-news/2026/apr/21/what-happens-when-beautiful-village-loses-bus-route-mousehole-cornwall",
+            "last_seen_at": "2026-09-10T01:58:09.938Z"
+        }
+    ]
+}
+
+## 17. GET /api/v1/owners/9104db79-8450-43d4-ae11-1eb0c2ceb1e3/delivery  (The_Guardian)
+{
+    "dead": 0,
+    "dead_letter_limit": 50,
+    "dead_letters": [],
+    "delivered": 1,
+    "destination": {
+        "credential": true,
+        "set_at": "2026-09-10T01:59:27.127774Z",
+        "source": "operator",
+        "url": "http://127.0.0.1:8087/api/v1/telemetry/events"
+    },
+    "discovery": null,
+    "last_delivered_at": "2026-09-10T01:59:38.615427Z",
+    "last_error": null,
+    "next_attempt_at": null,
+    "queued": 0
+}
+
+## 18. The consumer organisation, as its owner: GET /api/v1/telemetry/hosts
+[
+    {
+        "content_grounded": 0,
+        "content_host": "www.chroniclelive.co.uk",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.951Z"
+    },
+    {
+        "content_grounded": 0,
+        "content_host": "www.coventrytelegraph.net",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.925Z"
+    },
+    {
+        "content_grounded": 0,
+        "content_host": "www.theguardian.com",
+        "content_retrieved": 1,
+        "last_seen_at": "2026-09-10T01:58:09.938Z"
+    }
+]
+
+## 19. The consumer's stored events carry the supplier field and the same event ids (read from the hub's database)
+ozone-consumer: content_retrieved www.chroniclelive.co.uk supplier=ozone event_id=55b6cbcf-d3e2-5789-aa3d-41d289eed349
+pilot-operator: content_retrieved www.chroniclelive.co.uk supplier=ozone event_id=55b6cbcf-d3e2-5789-aa3d-41d289eed349
+ozone-consumer: content_retrieved www.coventrytelegraph.net supplier=ozone event_id=95e86ac8-d77d-5c80-8b0e-d8dab4a39b1d
+pilot-operator: content_retrieved www.coventrytelegraph.net supplier=ozone event_id=95e86ac8-d77d-5c80-8b0e-d8dab4a39b1d
+ozone-consumer: content_retrieved www.theguardian.com supplier=ozone event_id=9d28aa83-97e8-5a33-9173-b91c0cbc752d
+pilot-operator: content_retrieved www.theguardian.com supplier=ozone event_id=9d28aa83-97e8-5a33-9173-b91c0cbc752d
+
+## 20. onward_deliveries
+Chronicle Live: delivered attempts=1 delivered_at=2026-09-10 02:59:38.634793+01 last_error=<none>
+Coventry Telegraph: delivered attempts=1 delivered_at=2026-09-10 02:59:38.627752+01 last_error=<none>
+The Guardian: delivered attempts=1 delivered_at=2026-09-10 02:59:38.615427+01 last_error=<none>
+
+## 21. The hub server's log for the tick that delivered
+  2026-09-10T01:59:38.636103Z  INFO commonmeasure_hub_server::onward: onward delivery tick, batches_delivered: 3, batches_failed: 0, events_delivered: 3

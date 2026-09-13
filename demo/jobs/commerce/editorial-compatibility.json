@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-editorial-compatibility/v1",
+  "label": "Commerce comparison, compatibility question: third-party editorial and review pages alone",
+  "job": {
+    "id": "dde783e4-4378-44b7-8f3b-7f1a5a064978",
+    "kind": "research.answer",
+    "prompt": "Does the Northglade G4 burr grinder work with the Aurelio Presto 300's auto-dose tray, and what does that require?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-compatibility",
+    "version": "1",
+    "items": [
+      {
+        "name": "adapter",
+        "any_of": [
+          "dose adapter ring DR-2"
+        ]
+      },
+      {
+        "name": "firmware",
+        "any_of": [
+          "grinder firmware 2.1"
+        ]
+      },
+      {
+        "name": "effective-from",
+        "any_of": [
+          "From 28 March 2026"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-08",
+    "maximum_age_days": 180
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "probe": "you-search",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-search.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. Text in `results.web[].snippets`; no cost field; the adapter quotes the published per-call price.",
+  "request": {
+    "method": "POST",
+    "url": "https://ydc-index.io/v1/search",
+    "headers": {
+      "X-API-Key": "«REDACTED: value of $YOU_API_KEY, never recorded»",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "query": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+      "count": 3,
+      "include_domains": [
+        "www.w3.org"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 839,
+    "body": {
+      "results": {
+        "web": [
+          {
+            "url": "https://www.w3.org/TR/prov-dm/",
+            "title": "PROV-DM: The PROV Data Model",
+            "description": "This section describes the status ... time of its publication. Other documents may supersede this document. A list of cu[…elided, 368 chars total; shape recorded, text not committed]",
+            "page_age": "2013-04-30T00:00:00",
+            "favicon_url": "https://you.com/favicon?domain=www.w3.org&size=128",
+            "snippets": [
+              "This section describes the status of this document at the time of its publication. Other documents may supersede this do[…elided, 528 chars total; shape recorded, text not committed]",
+              "PROV-LINKS (Note) introduces a mechanism to link across bundles [PROV-LINKS]. This document has been reviewed by W3C Mem[…elided, 348 chars total; shape recorded, text not committed]",
+              "W3C's role in making the Recommendation is to draw attention to the specification and to promote its widespread deployme[…elided, 269 chars total; shape recorded, text not committed]",
+              "Please refer to the errata for this document, which may include some normative corrections. The English version of this […elided, 528 chars total; shape recorded, text not committed]"
+            ]
+          },
+          {
+            "url": "https://www.w3.org/TR/prov-overview/",
+            "title": "PROV-Overview",
+            "description": "Luc Moreau; Paolo Missier; eds. PROV-DM: The PROV Data Model. 30 April 2013, W3C Recommendation.[…elided, 96 chars total; shape recorded, text not committed]",
+            "page_age": "2013-04-30T00:00:00",
+            "favicon_url": "https://you.com/favicon?domain=www.w3.org&size=128",
+            "snippets": [
+              "PROV supports all eight of the recommendations either directly or through extensibility points. Figure 1 shows the organ[…elided, 365 chars total; shape recorded, text not committed]",
+              "James Cheney; Paolo Missier; Luc Moreau; eds. Constraints of the PROV Data Model. 30 April 2013, W3C Recommendation.[…elided, 116 chars total; shape recorded, text not committed]",
+              "Please see the group's implementation report [PROV-IMPLEMENTATIONS] that highlights reported software, usage in datasets[…elided, 426 chars total; shape recorded, text not committed]",
+              "Advanced - this audience aims to create validators, new PROV serializations, or other advanced provenance-based systems.[…elided, 296 chars total; shape recorded, text not committed]"
+            ]
+          },
+          {
+            "url": "https://www.w3.org/TR/prov-o/",
+            "title": "PROV-O: The PROV Ontology",
+            "description": "An individual who has actual knowledge ... 6 of the W3C Patent Policy. ... A. PROV-O OWL Profile · B. Names of inverse p[…elided, 422 chars total; shape recorded, text not committed]",
+            "page_age": "2013-04-30T00:00:00",
+            "favicon_url": "https://you.com/favicon?domain=www.w3.org&size=128",
+            "snippets": [
+              "An individual who has actual knowledge of a patent which the individual believes contains Essential Claim(s) must disclo[…elided, 625 chars total; shape recorded, text not committed]",
+              "PROV-SEM (Note), a declarative specification in terms of first-order logic of the PROV data model [PROV-SEM]; PROV-LINKS[…elided, 364 chars total; shape recorded, text not committed]",
+              "W3C's role in making the Recommendation is to draw attention to the specification and to promote its widespread deployme[…elided, 269 chars total; shape recorded, text not committed]",
+              "Please refer to the errata for this document, which may include some normative corrections. The English version of this […elided, 531 chars total; shape recorded, text not committed]"
+            ]
+          }
+        ]
+      },
+      "metadata": {
+        "query": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+        "search_uuid": "643928ce-8d86-493d-b481-29cd01c58345",
+        "latency": 0.4938702199724503
+      }
+    }
+  }
+}

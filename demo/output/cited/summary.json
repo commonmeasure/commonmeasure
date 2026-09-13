@@ -1,0 +1,2578 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "eu-ai-act-replay-cited/v1",
+  "run": {
+    "id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+    "mode": "replay",
+    "started_at": "2026-09-07T19:17:49Z",
+    "manifest_hash": "sha256:b4dd41a555660c7aa78757df31d82e2e006c2d600ee165297e9fba93ca1dc23c",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true,
+    "replay_manifest": "demo/recon/replay-manifest.json"
+  },
+  "evidence_log": {
+    "records": 30,
+    "sha256": "sha256:f61ae795b7f02cb9562076c39e37a9c711cd4fe48a3fe40eae5bedc353105778"
+  },
+  "job": {
+    "id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+    "label": "Replay the 1 August 2026 reconnaissance, requiring a cited answer",
+    "kind": "research.answer",
+    "prompt": "What obligations does the EU AI Act place on general-purpose AI model providers under the Code of Practice, and what does the supplied evidence establish about them? State plainly what it cannot establish.",
+    "objective": {
+      "kind": "weighted",
+      "quality": 1.0,
+      "coverage": 1.0,
+      "freshness": 0.8,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1.0
+    },
+    "constraints": {
+      "enforcement_mode": "strict",
+      "max_acquisition_cost": {
+        "currency": "USD",
+        "micros": 50000
+      },
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": [
+      {
+        "description": "A primary EU source describing the Code of Practice",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": "tensorzero",
+    "endpoint": "http://127.0.0.1:3000/openai/v1/chat/completions",
+    "configured": true
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": 722,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": "The supplied context cannot establish any obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice, nor does it provide any evidence regarding these obligations.\n\nCITATION: None :: \"none\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 722,
+        "input_tokens": 160,
+        "output_tokens": 44,
+        "provider_request_id": "01a07d4e-2b17-7020-9d7a-ac08744c5e86",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish any obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice, nor does it provide any evidence regarding these obligations.\n\nCITATION: None :: \"none\""
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:50.698Z",
+          "started_at": "2026-09-07T19:17:50.697Z",
+          "finished_at": "2026-09-07T19:17:50.698Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:407bce3ba20874265fc3dc52062afee1b459792f263582afe101cc0acece1959"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 207,
+                "text": "The supplied context cannot establish any obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice, nor does it provide any evidence regarding these obligations.",
+                "words": 32,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-judge",
+            "version": "1",
+            "configuration_digest": "sha256:67d5ec72614310aee0f740fca4571c3decd25881c70477397b6357e75f547afc"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:50.704Z",
+          "started_at": "2026-09-07T19:17:50.704Z",
+          "finished_at": "2026-09-07T19:17:50.704Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "not judged",
+          "inputs": [
+            {
+              "reference": "claims",
+              "content_hash": "sha256:4e6c639b3d153644628eeb0301c3441632c6b6d7750b90173241bc1f04581e47"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "judged": false,
+            "reason": "The window is empty, so there is no supplied context to judge the claims against."
+          },
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "The window is empty, so there is no supplied context to judge the claims against."
+            }
+          ],
+          "assurance": "declared",
+          "blind_spots": [
+            "The judge's verdict is a model's statement about the window text, recorded as declared; it is measured against the deterministic verifier and is never ground truth.",
+            "Disagreement on claims the verifier found unsupported is expected where the claim paraphrases the window: the verifier cannot see paraphrase and the judge can claim to.",
+            "The judge may be wrong in either direction, and nothing here detects it: the agreement figure measures consistency between two checks, not the truth of either.",
+            "The exchange's charge in currency is unknown: the gateway reports tokens and no price."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:407bce3ba20874265fc3dc52062afee1b459792f263582afe101cc0acece1959"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 1,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "None",
+              "quote": "none",
+              "verdict": "uncovered",
+              "matched": null,
+              "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": null,
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no as_of reference date, and freshness is measured only against one (set as_of)",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "exa-only",
+      "provider": "exa",
+      "capability": "search",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "replay-tested",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "https://api.exa.ai/search",
+        "http_status": 200,
+        "latency_ms": 0,
+        "provider_request_id": "414c17b47f628c776e84b6a16b11e717",
+        "charge": {
+          "money": {
+            "currency": "USD",
+            "micros": 7000
+          },
+          "native": {
+            "unit": "USD",
+            "amount": 0.007,
+            "basis": "observed"
+          }
+        },
+        "response_ref": "responses/exa-only.json",
+        "response_hash": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+        "response_bytes": 1404,
+        "result_count": 2,
+        "allowance": {
+          "consulted": false,
+          "reason": "the run holds no principal allowance context: it was started without principal policy, or in replay, where no money moves"
+        },
+        "replay": {
+          "source": "exa/exa-search.json",
+          "captured_at": "2026-08-01",
+          "recorded_endpoint": "https://api.exa.ai/search",
+          "recorded_response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+          "matches_recorded_input": true,
+          "redactions": "The credential request header is replaced with a visible redaction naming $EXA_API_KEY; every result's `text` is elided to a 120-character lead plus a marker recording its true length.",
+          "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+        }
+      },
+      "latency_ms": 2515,
+      "sources": [
+        {
+          "url": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+          "host": "ai-act-service-desk.ec.europa.eu",
+          "title": "Article 53: Obligations for providers of general-purpose AI models | AI Act Service Desk",
+          "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 1,
+          "tokens": 30,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "favicon": "https://ai-act-service-desk.ec.europa.eu/themes/contrib/oe_theme/images/favicons/ec/favicon.ico",
+            "id": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+            "image": "https://ai-act-service-desk.ec.europa.eu/themes/custom/sip_theme/logo.svg"
+          }
+        },
+        {
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "host": "digital-strategy.ec.europa.eu",
+          "title": "The General-Purpose AI Code of Practice",
+          "content_hash": "sha256:2fc782014737b90b819a3f02189193e8cf293abf44228099c0abd56060751881",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 2,
+          "tokens": 15,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "favicon": "https://digital-strategy.ec.europa.eu/themes/custom/cnt_theme/images/favicons/ec/favicon.ico",
+            "id": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+            "image": "https://digital-strategy.ec.europa.eu/themes/contrib/oe_theme/dist/ec/images/logo/logo-ec--mute.svg"
+          }
+        }
+      ],
+      "source_count": 2,
+      "context_tokens_admitted": 45,
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the content of Article 53 or the General-Purpose AI Code of Practice.\n\nCITATION: https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53 :: \"Obligations for providers of general-purpose AI models\"\nCITATION: https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai :: \"The General-Purpose AI Code of Practice\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 2515,
+        "input_tokens": 348,
+        "output_tokens": 116,
+        "provider_request_id": "01a07d4e-2e00-7601-b818-a3d44bd5cc6a",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the content of Article 53 or the General-Purpose AI Code of Practice.\n\nCITATION: https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53 :: \"Obligations for providers of general-purpose AI models\"\nCITATION: https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai :: \"The General-Purpose AI Code of Practice\""
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:50.711Z",
+          "started_at": "2026-09-07T19:17:50.711Z",
+          "finished_at": "2026-09-07T19:17:50.711Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+              "tokens": 30
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:50.713Z",
+          "started_at": "2026-09-07T19:17:50.713Z",
+          "finished_at": "2026-09-07T19:17:50.713Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+              "tokens": 30
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:50.714Z",
+          "started_at": "2026-09-07T19:17:50.714Z",
+          "finished_at": "2026-09-07T19:17:50.714Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:2fc782014737b90b819a3f02189193e8cf293abf44228099c0abd56060751881",
+              "tokens": 28
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:50.716Z",
+          "started_at": "2026-09-07T19:17:50.716Z",
+          "finished_at": "2026-09-07T19:17:50.716Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:2fc782014737b90b819a3f02189193e8cf293abf44228099c0abd56060751881",
+              "tokens": 28
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:17:50.717Z",
+          "started_at": "2026-09-07T19:17:50.717Z",
+          "finished_at": "2026-09-07T19:17:50.717Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 2 repeated phrases",
+          "inputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+              "tokens": 30
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:2fc782014737b90b819a3f02189193e8cf293abf44228099c0abd56060751881",
+              "tokens": 28
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+              "tokens": 30
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+              "tokens": 15
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 58,
+            "tokens_out": 45,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                "input_hash": "sha256:2fc782014737b90b819a3f02189193e8cf293abf44228099c0abd56060751881",
+                "output_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+                "spans": [
+                  {
+                    "start": 75,
+                    "end": 96,
+                    "words": 4,
+                    "content_hash": "sha256:c792c5fe94137b11ce0a9daee696502c08a2e30da13a81fd2b9ab6c29df367ad",
+                    "first_kept": {
+                      "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+                      "start": 89,
+                      "end": 109
+                    }
+                  },
+                  {
+                    "start": 122,
+                    "end": 187,
+                    "words": 9,
+                    "content_hash": "sha256:ea02deec640e0782df040c3c94a49e141c4d729a340b04dba3cd712e275fe188",
+                    "first_kept": {
+                      "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+                      "start": 121,
+                      "end": 185
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+                "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai"
+              ],
+              "output": [
+                "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+                "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:53.236Z",
+          "started_at": "2026-09-07T19:17:53.235Z",
+          "finished_at": "2026-09-07T19:17:53.236Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:48c60479d509b7d92dd7cccc111055798bd3b7a049a7976cdead10be49e5040a"
+            },
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 2,
+            "claim_counts": {
+              "supported": 1,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.5,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 154,
+                "text": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice.",
+                "words": 24,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              },
+              {
+                "index": 1,
+                "start": 155,
+                "end": 271,
+                "text": "It does not provide detailed information about the content of Article 53 or the General-Purpose AI Code of Practice.",
+                "words": 19,
+                "verdict": "supported",
+                "basis": "citation",
+                "citation": 1,
+                "evidence": {
+                  "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                  "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+                  "start": 0,
+                  "end": 39,
+                  "claim_start": 231,
+                  "claim_end": 271,
+                  "words": 6
+                },
+                "reason": "the claim contains the quote of citation #2, which the grounding evaluator found in the retained text of https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai at the recorded span"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-judge",
+            "version": "1",
+            "configuration_digest": "sha256:67d5ec72614310aee0f740fca4571c3decd25881c70477397b6357e75f547afc"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:54.137Z",
+          "started_at": "2026-09-07T19:17:53.242Z",
+          "finished_at": "2026-09-07T19:17:54.137Z",
+          "latency_ms": 894,
+          "decision": "abstain",
+          "method": "one gateway exchange asking the suite's model for a verdict per claim over the same window the answer model received, parsed deterministically and compared with the verifier's verdicts",
+          "inputs": [
+            {
+              "reference": "claims",
+              "content_hash": "sha256:ac3e4b3b78506aa8483156d3957996c1e7e263e91fd00ef91047f1c7f50d90ef"
+            },
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e"
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "judge-response",
+              "content_hash": "sha256:4b4ce7306793df3c6cb9ffda7237b08a058ae85c6daf0b05b343c9632dd305d9",
+              "tokens": 63
+            }
+          ],
+          "detail": {
+            "judged": true,
+            "judge": {
+              "gateway": "tensorzero",
+              "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_provider": null,
+              "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+              "latency_ms": 894,
+              "input_tokens": 378,
+              "output_tokens": 63,
+              "provider_request_id": "01a07d4e-37db-7d52-94bc-825e30f09079",
+              "unavailable_fields": [
+                "executed_provider"
+              ],
+              "unreadable_fields": []
+            },
+            "cost": {
+              "money": null,
+              "note": "the gateway reports tokens and no price; the charge in currency is unknown"
+            },
+            "response": "CLAIM 1: supported :: \"Article 53 outlines obligations for providers of general-purpose AI models, but the context does not detail these obligations.\"  \nCLAIM 2: supported :: \"The context does not provide detailed information about the content of Article 53 or the General-Purpose AI Code of Practice.\"",
+            "verdicts": [
+              {
+                "claim": 0,
+                "verifier": "unsupported",
+                "judge": "supported",
+                "agrees": false,
+                "reason": "Article 53 outlines obligations for providers of general-purpose AI models, but the context does not detail these obligations."
+              },
+              {
+                "claim": 1,
+                "verifier": "supported",
+                "judge": "supported",
+                "agrees": true,
+                "reason": "The context does not provide detailed information about the content of Article 53 or the General-Purpose AI Code of Practice."
+              }
+            ],
+            "agreement": {
+              "compared": 2,
+              "agreed": 1,
+              "fraction": 0.5,
+              "matrix": {
+                "supported": {
+                  "supported": 1,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "contradicted": {
+                  "supported": 0,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "unsupported": {
+                  "supported": 1,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                }
+              }
+            }
+          },
+          "gaps": [],
+          "assurance": "declared",
+          "blind_spots": [
+            "The judge's verdict is a model's statement about the window text, recorded as declared; it is measured against the deterministic verifier and is never ground truth.",
+            "Disagreement on claims the verifier found unsupported is expected where the claim paraphrases the window: the verifier cannot see paraphrase and the judge can claim to.",
+            "The judge may be wrong in either direction, and nothing here detects it: the agreement figure measures consistency between two checks, not the truth of either.",
+            "The exchange's charge in currency is unknown: the gateway reports tokens and no price."
+          ]
+        }
+      ],
+      "gaps": [],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:48c60479d509b7d92dd7cccc111055798bd3b7a049a7976cdead10be49e5040a"
+            },
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 2,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "quote": "Obligations for providers of general-purpose AI models",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+                "start": 12,
+                "end": 66
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "quote": "The General-Purpose AI Code of Practice",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+                "start": 0,
+                "end": 39
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e"
+            }
+          ],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": null,
+          "inputs": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+              "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for exa/exa-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for exa/exa-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            }
+          ],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no as_of reference date, and freshness is measured only against one (set as_of)",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "firecrawl-only",
+      "provider": "firecrawl",
+      "capability": "search",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "replay-tested",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The provider disclosed 2 credits, which this runtime could not express at micro precision, so the acquisition cost cap could not be enforced."
+      },
+      "acquisition": {
+        "endpoint": "https://api.firecrawl.dev/v2/search",
+        "http_status": 200,
+        "latency_ms": 0,
+        "provider_request_id": "019fbd4a-6618-71ac-b746-02653a7dccb2",
+        "charge": {
+          "native": {
+            "unit": "credits",
+            "amount": 2,
+            "basis": "observed"
+          }
+        },
+        "response_ref": "responses/firecrawl-only.json",
+        "response_hash": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+        "response_bytes": 802,
+        "result_count": 2,
+        "allowance": {
+          "consulted": false,
+          "reason": "the run holds no principal allowance context: it was started without principal policy, or in replay, where no money moves"
+        },
+        "replay": {
+          "source": "firecrawl/firecrawl-search.json",
+          "captured_at": "2026-08-01",
+          "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+          "recorded_response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+          "matches_recorded_input": true,
+          "redactions": "The credential request header is replaced with a visible redaction naming $FIRECRAWL_API_KEY; every result's `description` is elided to a 120-character lead plus a marker recording its true length.",
+          "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+        }
+      },
+      "latency_ms": 1083,
+      "sources": [
+        {
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "host": "digital-strategy.ec.europa.eu",
+          "title": "The General-Purpose AI Code of Practice",
+          "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 1,
+          "tokens": 30,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "position": 1
+          }
+        },
+        {
+          "url": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+          "host": "artificialintelligenceact.eu",
+          "title": "An Introduction to the Code of Practice for General ...",
+          "content_hash": "sha256:89134ab7b89fb96d4aa9caf1c749ec998243365c5e6d61038d5efb54265a795e",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 2,
+          "tokens": 20,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "position": 2
+          }
+        }
+      ],
+      "source_count": 2,
+      "context_tokens_admitted": 50,
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the legal obligations or requirements that these providers must comply with.\n\nCITATION: https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai :: \"the code of practice helps industry comply with the AI Act legal obligations o\"\nCITATION: https://artificialintelligenceact.eu/introduction-to-code-of-practice/ :: \"A quick summary on the Code of Practice: - **Purpo\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1083,
+        "input_tokens": 346,
+        "output_tokens": 120,
+        "provider_request_id": "01a07d4e-3b71-7552-9e50-faac5b937779",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the legal obligations or requirements that these providers must comply with.\n\nCITATION: https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai :: \"the code of practice helps industry comply with the AI Act legal obligations o\"\nCITATION: https://artificialintelligenceact.eu/introduction-to-code-of-practice/ :: \"A quick summary on the Code of Practice: - **Purpo\""
+      },
+      "policy_decisions": [
+        {
+          "id": "5d48c5db-0cac-4ad2-bf7b-0c3f3defdbb4",
+          "job_id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+          "run_id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+          "timestamp": "2026-09-07T19:17:54.151301443Z",
+          "decision": "admit",
+          "reason": "The provider disclosed 2 credits, which this runtime could not express at micro precision, so the acquisition cost cap could not be enforced.",
+          "assurance": "observed",
+          "plan": "firecrawl-only",
+          "provider": "firecrawl",
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "2 credits was disclosed but no comparable amount was derived, so the cap of 0.050000 USD was not enforceable for this plan."
+            }
+          ]
+        }
+      ],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:54.151Z",
+          "started_at": "2026-09-07T19:17:54.151Z",
+          "finished_at": "2026-09-07T19:17:54.151Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+              "tokens": 30
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:54.153Z",
+          "started_at": "2026-09-07T19:17:54.153Z",
+          "finished_at": "2026-09-07T19:17:54.153Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+              "tokens": 30
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:54.154Z",
+          "started_at": "2026-09-07T19:17:54.154Z",
+          "finished_at": "2026-09-07T19:17:54.154Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:89134ab7b89fb96d4aa9caf1c749ec998243365c5e6d61038d5efb54265a795e",
+              "tokens": 31
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:54.156Z",
+          "started_at": "2026-09-07T19:17:54.156Z",
+          "finished_at": "2026-09-07T19:17:54.156Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:89134ab7b89fb96d4aa9caf1c749ec998243365c5e6d61038d5efb54265a795e",
+              "tokens": 31
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:17:54.158Z",
+          "started_at": "2026-09-07T19:17:54.158Z",
+          "finished_at": "2026-09-07T19:17:54.158Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 2 repeated phrases",
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+              "tokens": 30
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:89134ab7b89fb96d4aa9caf1c749ec998243365c5e6d61038d5efb54265a795e",
+              "tokens": 31
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+              "tokens": 30
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840",
+              "tokens": 20
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 61,
+            "tokens_out": 50,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+                "input_hash": "sha256:89134ab7b89fb96d4aa9caf1c749ec998243365c5e6d61038d5efb54265a795e",
+                "output_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840",
+                "spans": [
+                  {
+                    "start": 20,
+                    "end": 41,
+                    "words": 4,
+                    "content_hash": "sha256:a60a53c58d0fb7be4b60e9fbde29dd809212ba969f58e757e0a5d4718730bcd0",
+                    "first_kept": {
+                      "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                      "start": 42,
+                      "end": 62
+                    }
+                  },
+                  {
+                    "start": 137,
+                    "end": 186,
+                    "words": 7,
+                    "content_hash": "sha256:3a46b7f18268d1b1a9718d1308d376d045f8a2f175fa9c821e7ca7333c83d5fb",
+                    "first_kept": {
+                      "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                      "start": 139,
+                      "end": 187
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                "https://artificialintelligenceact.eu/introduction-to-code-of-practice/"
+              ],
+              "output": [
+                "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+                "https://artificialintelligenceact.eu/introduction-to-code-of-practice/"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:55.245Z",
+          "started_at": "2026-09-07T19:17:55.244Z",
+          "finished_at": "2026-09-07T19:17:55.245Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:02b25b39b9ca84cbe408e5601fc49a4113aa28e7ce4ff591369ef68ed7f3c725"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 2,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 2
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 154,
+                "text": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice.",
+                "words": 24,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              },
+              {
+                "index": 1,
+                "start": 155,
+                "end": 278,
+                "text": "It does not provide detailed information about the legal obligations or requirements that these providers must comply with.",
+                "words": 18,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-judge",
+            "version": "1",
+            "configuration_digest": "sha256:67d5ec72614310aee0f740fca4571c3decd25881c70477397b6357e75f547afc"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:56.083Z",
+          "started_at": "2026-09-07T19:17:55.252Z",
+          "finished_at": "2026-09-07T19:17:56.083Z",
+          "latency_ms": 830,
+          "decision": "abstain",
+          "method": "one gateway exchange asking the suite's model for a verdict per claim over the same window the answer model received, parsed deterministically and compared with the verifier's verdicts",
+          "inputs": [
+            {
+              "reference": "claims",
+              "content_hash": "sha256:972c790e4f4a51e5022e1b83421077be36c32ef4d94f7422c6bd7505c1705400"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840"
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "judge-response",
+              "content_hash": "sha256:b496947f7507df5fffd5d2702869a85cae0f446e41d8e9049b405008fd33c059",
+              "tokens": 45
+            }
+          ],
+          "detail": {
+            "judged": true,
+            "judge": {
+              "gateway": "tensorzero",
+              "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_provider": null,
+              "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+              "latency_ms": 830,
+              "input_tokens": 372,
+              "output_tokens": 45,
+              "provider_request_id": "01a07d4e-3fb4-7e02-9c2d-312319a05f7b",
+              "unavailable_fields": [
+                "executed_provider"
+              ],
+              "unreadable_fields": []
+            },
+            "cost": {
+              "money": null,
+              "note": "the gateway reports tokens and no price; the charge in currency is unknown"
+            },
+            "response": "CLAIM 1: supported :: \"The code of practice helps industry comply with the AI Act legal obligations.\"  \nCLAIM 2: supported :: \"The code of practice helps industry comply with the AI Act legal obligations.\"",
+            "verdicts": [
+              {
+                "claim": 0,
+                "verifier": "unsupported",
+                "judge": "supported",
+                "agrees": false,
+                "reason": "The code of practice helps industry comply with the AI Act legal obligations."
+              },
+              {
+                "claim": 1,
+                "verifier": "unsupported",
+                "judge": "supported",
+                "agrees": false,
+                "reason": "The code of practice helps industry comply with the AI Act legal obligations."
+              }
+            ],
+            "agreement": {
+              "compared": 2,
+              "agreed": 0,
+              "fraction": 0.0,
+              "matrix": {
+                "supported": {
+                  "supported": 0,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "contradicted": {
+                  "supported": 0,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "unsupported": {
+                  "supported": 2,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                }
+              }
+            }
+          },
+          "gaps": [],
+          "assurance": "declared",
+          "blind_spots": [
+            "The judge's verdict is a model's statement about the window text, recorded as declared; it is measured against the deterministic verifier and is never ground truth.",
+            "Disagreement on claims the verifier found unsupported is expected where the claim paraphrases the window: the verifier cannot see paraphrase and the judge can claim to.",
+            "The judge may be wrong in either direction, and nothing here detects it: the agreement figure measures consistency between two checks, not the truth of either.",
+            "The exchange's charge in currency is unknown: the gateway reports tokens and no price."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "2 credits was disclosed but no comparable amount was derived, so the cap of 0.050000 USD was not enforceable for this plan."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:02b25b39b9ca84cbe408e5601fc49a4113aa28e7ce4ff591369ef68ed7f3c725"
+            },
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 2,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "quote": "the code of practice helps industry comply with the AI Act legal obligations o",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+                "start": 42,
+                "end": 122
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "quote": "A quick summary on the Code of Practice: - **Purpo",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840",
+                "start": 49,
+                "end": 99
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840"
+            }
+          ],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": null,
+          "inputs": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+              "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for firecrawl/firecrawl-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+              "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for firecrawl/firecrawl-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            }
+          ],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no as_of reference date, and freshness is measured only against one (set as_of)",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "tavily-only",
+      "provider": "tavily",
+      "capability": "search",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "replay-tested",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The provider disclosed 1 credits, which this runtime could not express at micro precision, so the acquisition cost cap could not be enforced."
+      },
+      "acquisition": {
+        "endpoint": "https://api.tavily.com/search",
+        "http_status": 200,
+        "latency_ms": 0,
+        "provider_request_id": "299af699-9a7e-45ba-b521-ab26e93535ea",
+        "charge": {
+          "native": {
+            "unit": "credits",
+            "amount": 1,
+            "basis": "quoted",
+            "note": "Tavily reports no cost on the search response and its usage counters did not move across a billed search; quoted from the published basic-search price."
+          }
+        },
+        "response_ref": "responses/tavily-only.json",
+        "response_hash": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+        "response_bytes": 1034,
+        "result_count": 2,
+        "allowance": {
+          "consulted": false,
+          "reason": "the run holds no principal allowance context: it was started without principal policy, or in replay, where no money moves"
+        },
+        "replay": {
+          "source": "tavily/tavily-search.json",
+          "captured_at": "2026-08-01",
+          "recorded_endpoint": "https://api.tavily.com/search",
+          "recorded_response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+          "matches_recorded_input": true,
+          "redactions": "The credential request header is replaced with a visible redaction naming $TAVILY_API_KEY; every result's `content` is elided to a 120-character lead plus a marker recording its true length.",
+          "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+        }
+      },
+      "latency_ms": 1650,
+      "sources": [
+        {
+          "url": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+          "host": "artificialintelligenceact.eu",
+          "title": "An Introduction to the Code of Practice for General-Purpose AI",
+          "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 1,
+          "tokens": 32,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "score": 0.94475573,
+            "raw_content": null
+          }
+        },
+        {
+          "url": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+          "host": "www.akingump.com",
+          "title": "EU AI Act in Action: First Draft General-Purpose AI Code of Practice",
+          "content_hash": "sha256:e14c6787a37e380b8325f2001f3c5a93cfbc4ed14b3924b5502541cfa44cdd70",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 2,
+          "tokens": 21,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "score": 0.93191636,
+            "raw_content": null
+          }
+        }
+      ],
+      "source_count": 2,
+      "context_tokens_admitted": 53,
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the requirements or guidelines that these providers must follow.\n\nCITATION: https://artificialintelligenceact.eu/introduction-to-code-of-practice :: \"The AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act.\"\nCITATION: https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice :: \"The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply.\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1650,
+        "input_tokens": 359,
+        "output_tokens": 152,
+        "provider_request_id": "01a07d4e-4326-79c0-9bb1-950df5159685",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the requirements or guidelines that these providers must follow.\n\nCITATION: https://artificialintelligenceact.eu/introduction-to-code-of-practice :: \"The AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act.\"\nCITATION: https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice :: \"The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply.\""
+      },
+      "policy_decisions": [
+        {
+          "id": "6317f29d-d0b5-41f6-b2df-f0a97097ca66",
+          "job_id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+          "run_id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+          "timestamp": "2026-09-07T19:17:56.095151938Z",
+          "decision": "admit",
+          "reason": "The provider disclosed 1 credits, which this runtime could not express at micro precision, so the acquisition cost cap could not be enforced.",
+          "assurance": "observed",
+          "plan": "tavily-only",
+          "provider": "tavily",
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "1 credits was disclosed but no comparable amount was derived (Tavily reports no cost on the search response and its usage counters did not move across a billed search; quoted from the published basic-search price.), so the cap of 0.050000 USD was not enforceable for this plan."
+            }
+          ]
+        }
+      ],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:56.095Z",
+          "started_at": "2026-09-07T19:17:56.095Z",
+          "finished_at": "2026-09-07T19:17:56.095Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+              "tokens": 32
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:56.097Z",
+          "started_at": "2026-09-07T19:17:56.096Z",
+          "finished_at": "2026-09-07T19:17:56.097Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+              "tokens": 32
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:56.098Z",
+          "started_at": "2026-09-07T19:17:56.098Z",
+          "finished_at": "2026-09-07T19:17:56.098Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:e14c6787a37e380b8325f2001f3c5a93cfbc4ed14b3924b5502541cfa44cdd70",
+              "tokens": 28
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:17:56.100Z",
+          "started_at": "2026-09-07T19:17:56.100Z",
+          "finished_at": "2026-09-07T19:17:56.100Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:e14c6787a37e380b8325f2001f3c5a93cfbc4ed14b3924b5502541cfa44cdd70",
+              "tokens": 28
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:17:56.131Z",
+          "started_at": "2026-09-07T19:17:56.131Z",
+          "finished_at": "2026-09-07T19:17:56.131Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 1 repeated phrase",
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+              "tokens": 32
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:e14c6787a37e380b8325f2001f3c5a93cfbc4ed14b3924b5502541cfa44cdd70",
+              "tokens": 28
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+              "tokens": 32
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75",
+              "tokens": 21
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 60,
+            "tokens_out": 53,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+                "input_hash": "sha256:e14c6787a37e380b8325f2001f3c5a93cfbc4ed14b3924b5502541cfa44cdd70",
+                "output_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75",
+                "spans": [
+                  {
+                    "start": 137,
+                    "end": 186,
+                    "words": 7,
+                    "content_hash": "sha256:3a46b7f18268d1b1a9718d1308d376d045f8a2f175fa9c821e7ca7333c83d5fb",
+                    "first_kept": {
+                      "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+                      "start": 137,
+                      "end": 185
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+                "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice"
+              ],
+              "output": [
+                "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+                "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:57.785Z",
+          "started_at": "2026-09-07T19:17:57.785Z",
+          "finished_at": "2026-09-07T19:17:57.785Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:388e6fc2498a954365c349b62302459e4f76a64b8e1bde68cfee2ea8b907f04a"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0"
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 2,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 2
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 154,
+                "text": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice.",
+                "words": 24,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              },
+              {
+                "index": 1,
+                "start": 155,
+                "end": 266,
+                "text": "It does not provide detailed information about the requirements or guidelines that these providers must follow.",
+                "words": 16,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-judge",
+            "version": "1",
+            "configuration_digest": "sha256:67d5ec72614310aee0f740fca4571c3decd25881c70477397b6357e75f547afc"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:17:58.667Z",
+          "started_at": "2026-09-07T19:17:57.788Z",
+          "finished_at": "2026-09-07T19:17:58.667Z",
+          "latency_ms": 878,
+          "decision": "abstain",
+          "method": "one gateway exchange asking the suite's model for a verdict per claim over the same window the answer model received, parsed deterministically and compared with the verifier's verdicts",
+          "inputs": [
+            {
+              "reference": "claims",
+              "content_hash": "sha256:feb647d21cb070aedfa2d27be0172e8e9579a852cb01ef86b69f74bcb2722c19"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0"
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75"
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "judge-response",
+              "content_hash": "sha256:0548a7047b94df659f93f22c56429818f71eaa16ab9177b8eea011fb8af30f53",
+              "tokens": 48
+            }
+          ],
+          "detail": {
+            "judged": true,
+            "judge": {
+              "gateway": "tensorzero",
+              "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+              "executed_provider": null,
+              "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+              "latency_ms": 878,
+              "input_tokens": 383,
+              "output_tokens": 48,
+              "provider_request_id": "01a07d4e-499d-7c42-9c49-0754f0d9cac4",
+              "unavailable_fields": [
+                "executed_provider"
+              ],
+              "unreadable_fields": []
+            },
+            "cost": {
+              "money": null,
+              "note": "the gateway reports tokens and no price; the charge in currency is unknown"
+            },
+            "response": "CLAIM 1: supported :: \"The AI Act Code of Practice is a set of guidelines for compliance with the AI Act.\"  \nCLAIM 2: supported :: \"The purpose of the Code is to help providers... effectively comply.\"",
+            "verdicts": [
+              {
+                "claim": 0,
+                "verifier": "unsupported",
+                "judge": "supported",
+                "agrees": false,
+                "reason": "The AI Act Code of Practice is a set of guidelines for compliance with the AI Act."
+              },
+              {
+                "claim": 1,
+                "verifier": "unsupported",
+                "judge": "supported",
+                "agrees": false,
+                "reason": "The purpose of the Code is to help providers... effectively comply."
+              }
+            ],
+            "agreement": {
+              "compared": 2,
+              "agreed": 0,
+              "fraction": 0.0,
+              "matrix": {
+                "supported": {
+                  "supported": 0,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "contradicted": {
+                  "supported": 0,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                },
+                "unsupported": {
+                  "supported": 2,
+                  "contradicted": 0,
+                  "unsupported": 0,
+                  "unavailable": 0
+                }
+              }
+            }
+          },
+          "gaps": [],
+          "assurance": "declared",
+          "blind_spots": [
+            "The judge's verdict is a model's statement about the window text, recorded as declared; it is measured against the deterministic verifier and is never ground truth.",
+            "Disagreement on claims the verifier found unsupported is expected where the claim paraphrases the window: the verifier cannot see paraphrase and the judge can claim to.",
+            "The judge may be wrong in either direction, and nothing here detects it: the agreement figure measures consistency between two checks, not the truth of either.",
+            "The exchange's charge in currency is unknown: the gateway reports tokens and no price."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "1 credits was disclosed but no comparable amount was derived (Tavily reports no cost on the search response and its usage counters did not move across a billed search; quoted from the published basic-search price.), so the cap of 0.050000 USD was not enforceable for this plan."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:388e6fc2498a954365c349b62302459e4f76a64b8e1bde68cfee2ea8b907f04a"
+            },
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0"
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 2,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "quote": "The AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+                "start": 9,
+                "end": 118
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "quote": "The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75",
+                "start": 2,
+                "end": 120
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0"
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75"
+            }
+          ],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": null,
+          "inputs": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0"
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+              "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for tavily/tavily-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            },
+            {
+              "reference": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+              "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75",
+              "declared_date": "2026-08-01",
+              "date_provenance": "replay recording capture date, declared by the replay manifest for tavily/tavily-search.json",
+              "age_days": null,
+              "within_maximum_age": null
+            }
+          ],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no as_of reference date, and freshness is measured only against one (set as_of)",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "tollbit-only",
+      "provider": "tollbit",
+      "capability": "search",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "replay-tested",
+      "status": "unavailable",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The provider disclosed no charge, so the acquisition cost cap could not be enforced."
+      },
+      "acquisition": {
+        "endpoint": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+        "http_status": 200,
+        "latency_ms": 0,
+        "provider_request_id": null,
+        "charge": {},
+        "response_ref": "responses/tollbit-only.json",
+        "response_hash": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+        "response_bytes": 750,
+        "result_count": 2,
+        "allowance": {
+          "consulted": false,
+          "reason": "the run holds no principal allowance context: it was started without principal policy, or in replay, where no money moves"
+        },
+        "replay": {
+          "source": "tollbit/tollbit-search.json",
+          "captured_at": "2026-08-01",
+          "recorded_endpoint": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+          "recorded_response_sha256": "sha256:a8a55be0a913c8c69dfa4a400693ab6212aa465d90786533bbecf7f948a9c818",
+          "matches_recorded_input": true,
+          "redactions": "The credential request header is replaced with a visible redaction naming $TOLLBIT_API_KEY. The response carried no page text to elide: TollBit's v2 search returns candidates without excerpts.",
+          "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+        }
+      },
+      "latency_ms": 0,
+      "sources": [
+        {
+          "url": "https://natlawreview.com/article/ai-generated-content-european-union-what-adherence-code-practice-means-article-50",
+          "host": "natlawreview.com",
+          "title": "EU AI Act Transparency Code Finalized Ahead of 2026 Deadline",
+          "content_hash": null,
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 1,
+          "tokens": 0,
+          "admitted": false,
+          "admission_reason": "The provider returned no excerpt for this result.",
+          "native_metadata": {
+            "availability": {
+              "discoverable": true,
+              "readyToLicense": false
+            },
+            "publisher": {
+              "domain": "www.natlawreview.com",
+              "name": "National Law Review"
+            }
+          }
+        },
+        {
+          "url": "https://natlawreview.com/article/european-commission-publishes-general-purpose-ai-code-practice",
+          "host": "natlawreview.com",
+          "title": "EU Finalizes AI Code—Transparency, Copyright & Safety Rules",
+          "content_hash": null,
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 2,
+          "tokens": 0,
+          "admitted": false,
+          "admission_reason": "The provider returned no excerpt for this result.",
+          "native_metadata": {
+            "availability": {
+              "discoverable": true,
+              "readyToLicense": false
+            },
+            "publisher": {
+              "domain": "www.natlawreview.com",
+              "name": "National Law Review"
+            }
+          }
+        }
+      ],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": null,
+      "inference": null,
+      "policy_decisions": [
+        {
+          "id": "7c8832b8-1e6c-4277-97a2-7f58893b7650",
+          "job_id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+          "run_id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+          "timestamp": "2026-09-07T19:17:58.679640209Z",
+          "decision": "admit",
+          "reason": "The provider disclosed no charge, so the acquisition cost cap could not be enforced.",
+          "assurance": "observed",
+          "plan": "tollbit-only",
+          "provider": "tollbit",
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "No charge was disclosed, so the cap of 0.050000 USD was not enforceable for this plan."
+            }
+          ]
+        },
+        {
+          "id": "4368529d-fd35-442c-ae12-5cb1e413c8a5",
+          "job_id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+          "run_id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+          "timestamp": "2026-09-07T19:17:58.679680426Z",
+          "decision": "refuse",
+          "reason": "The provider returned no excerpt for this result.",
+          "assurance": "observed",
+          "plan": "tollbit-only",
+          "provider": "tollbit",
+          "source_url": "https://natlawreview.com/article/ai-generated-content-european-union-what-adherence-code-practice-means-article-50",
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "https://natlawreview.com/article/ai-generated-content-european-union-what-adherence-code-practice-means-article-50 was discovered but carried no text, so it could not ground anything."
+            }
+          ]
+        },
+        {
+          "id": "0e01bc9e-c777-4a2a-b597-c14bc95ac39f",
+          "job_id": "9b1f7a1e-4c2d-4e56-9d3a-2f8c1e6b7a90",
+          "run_id": "d330560a-7ff8-427d-9f5a-0fb90482896e",
+          "timestamp": "2026-09-07T19:17:58.679713338Z",
+          "decision": "refuse",
+          "reason": "The provider returned no excerpt for this result.",
+          "assurance": "observed",
+          "plan": "tollbit-only",
+          "provider": "tollbit",
+          "source_url": "https://natlawreview.com/article/european-commission-publishes-general-purpose-ai-code-practice",
+          "gaps": [
+            {
+              "reason": "evidence_missing",
+              "detail": "https://natlawreview.com/article/european-commission-publishes-general-purpose-ai-code-practice was discovered but carried no text, so it could not ground anything."
+            }
+          ]
+        }
+      ],
+      "processors": [],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "No charge was disclosed, so the cap of 0.050000 USD was not enforceable for this plan."
+        },
+        {
+          "reason": "evidence_missing",
+          "detail": "https://natlawreview.com/article/ai-generated-content-european-union-what-adherence-code-practice-means-article-50 was discovered but carried no text, so it could not ground anything."
+        },
+        {
+          "reason": "evidence_missing",
+          "detail": "https://natlawreview.com/article/european-commission-publishes-general-purpose-ai-code-practice was discovered but carried no text, so it could not ground anything."
+        },
+        {
+          "reason": "evidence_missing",
+          "detail": "No source from this provider was admitted, so inference was not attempted."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [],
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": null,
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no as_of reference date, and freshness is measured only against one (set as_of)",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": null,
+    "objective": {
+      "kind": "weighted",
+      "quality": 1.0,
+      "coverage": 1.0,
+      "freshness": 0.8,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1.0
+    },
+    "method": "weighted utility",
+    "explanation": "The objective puts weight on measurements this run did not obtain: quality is a judgment that needs a judge, and this runtime seals none (the installed evaluators measure citation support, rubric coverage and declared-date freshness, none of which is quality); exa-only, firecrawl-only, tavily-only carry no measured coverage (coverage is measured only against a suite-declared coverage_rubric, over an assembled window); exa-only, firecrawl-only, tavily-only carry no measured freshness (freshness is measured only against a suite-declared as_of date, over dated window parts); policy risk has no measure beyond the recorded gaps. Substituting the terms the run does have would publish a verdict it did not measure. tollbit-only was not a candidate: it neither ran to an answer nor carries a measured window fraction; the reason is in the plan's own status and gaps.",
+    "unavailable_inputs": [
+      "quality",
+      "coverage",
+      "freshness",
+      "policy_risk"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "commonmeasure-http"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Blocking HTTP/1.1 client and loopback server over std::net. The real transport boundary for provider and inference calls."
+
+[dependencies]
+anyhow.workspace = true
+url.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true

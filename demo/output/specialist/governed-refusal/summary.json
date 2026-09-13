@@ -1,0 +1,1673 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "specialist-governed-refusal/v1",
+  "run": {
+    "id": "d9645126-2102-4109-8d87-65738ecac97a",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-09-07T19:14:08Z",
+    "manifest_hash": "sha256:ac8788287b374854e3ed1d19c4fb90dbef82e9eaa9fd0c1b22230392aa04ea33",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true
+  },
+  "evidence_log": {
+    "records": 22,
+    "sha256": "sha256:d840b94543bf077acf7ea566c29b00e0798bfdc071950f842e036da033e5f3d6"
+  },
+  "job": {
+    "id": "3b39aa41-86b7-43a9-9afe-65399c44d66a",
+    "label": "Specialist comparison, refusal prompt: admission policy, sealed rule set, entitlement scope and citation requirements",
+    "kind": "research.answer",
+    "prompt": "What operational limits apply to Bulk Export jobs in an Orchestrator 4.x workspace?",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": {
+      "enforcement_mode": "strict",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": []
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": "tensorzero",
+    "endpoint": "http://127.0.0.1:3000/openai/v1/chat/completions",
+    "configured": true
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": 727,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": "The supplied context cannot establish any operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace. \n\nCITATION: ",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 727,
+        "input_tokens": 141,
+        "output_tokens": 30,
+        "provider_request_id": "01a07d4a-c9be-7851-83c4-9421bc6359d6",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish any operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace. \n\nCITATION: "
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:14:09.173Z",
+          "started_at": "2026-09-07T19:14:09.173Z",
+          "finished_at": "2026-09-07T19:14:09.173Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:8a52327d9034c437c3a2cd06852374d99d5dc1ac61fa13a99f2824d0eb65b769"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 125,
+                "text": "The supplied context cannot establish any operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace.",
+                "words": 19,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:8a52327d9034c437c3a2cd06852374d99d5dc1ac61fa13a99f2824d0eb65b769"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 1
+          },
+          "citations": [
+            {
+              "url": null,
+              "quote": null,
+              "line": "CITATION:",
+              "verdict": "unavailable",
+              "matched": null,
+              "reason": "the citation line does not parse (no `::` separates the URL from the quote), so nothing is checkable"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "specialist-refusal",
+            "version": "1"
+          },
+          "inputs": [],
+          "items": [
+            {
+              "item": "premier-only",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "concurrency",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "partitions",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 365
+          },
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "internal-only",
+      "provider": "internal",
+      "capability": "query",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "live-verified",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus",
+        "http_status": null,
+        "latency_ms": 2,
+        "provider_request_id": null,
+        "charge": {},
+        "response_ref": "responses/internal-only.json",
+        "response_hash": "sha256:bc72c5ebc014788d48e64939e2683fea96b9f94e9ac5ee02786dc34c571647e4",
+        "response_bytes": 11830,
+        "result_count": 7
+      },
+      "latency_ms": 1637,
+      "sources": [
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md",
+          "host": "",
+          "title": "Bulk Export operations in Orchestrator 4.x (Premier)",
+          "content_hash": "sha256:35240c22eb01f2e6b5ab84afe5b8f98bf4c4a021853bf402310f856bee191d82",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 1,
+          "tokens": 119,
+          "admitted": false,
+          "admission_reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md requires entitlement tier \"premier\" and this run is granted \"standard\" under rule set fictive-support-rules/2.",
+          "native_metadata": {
+            "path": "bulk-export-operations.md",
+            "distinct_terms": 9,
+            "occurrences": 23,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "bulk-export",
+              "support_status": "supported",
+              "entitlement": "premier"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+          "host": "",
+          "title": "Orchestrator 4.2 release notes",
+          "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 2,
+          "tokens": 154,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "release-notes-4-2.md",
+            "distinct_terms": 3,
+            "occurrences": 5,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "pulse-metrics",
+              "support_status": "experimental",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md",
+          "host": "",
+          "title": "Running the Flux Connector on Orchestrator 4.x (deprecated)",
+          "content_hash": "sha256:88c3db8a8773416e9bf0fa441fdb4b63cad8c7d24ef18cb04320d7670d099cc7",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 3,
+          "tokens": 130,
+          "admitted": false,
+          "admission_reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md is on a deprecated path: rule set fictive-support-rules/2 deprecates (orchestrator, 4.x, flux-connector) effective 2026-03-01, on or before the suite's as_of 2026-08-06.",
+          "native_metadata": {
+            "path": "flux-connector-4x-migration.md",
+            "distinct_terms": 2,
+            "occurrences": 12,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "flux-connector",
+              "support_status": "deprecated",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+          "host": "",
+          "title": "Connecting data sources in Orchestrator 4.x",
+          "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 4,
+          "tokens": 123,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "connecting-data-sources-4x.md",
+            "distinct_terms": 2,
+            "occurrences": 8,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+          "host": "",
+          "title": "Connecting data sources in Orchestrator 3.x",
+          "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 5,
+          "tokens": 108,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "connecting-data-sources-3x.md",
+            "distinct_terms": 2,
+            "occurrences": 5,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "3.x",
+              "integration_path": "flux-connector",
+              "support_status": "supported",
+              "entitlement": "standard"
+            }
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+          "host": "",
+          "title": "Fictive Systems Orchestrator — product overview",
+          "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 6,
+          "tokens": 125,
+          "admitted": false,
+          "admission_reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md declares no governance metadata, and under governed rule set fictive-support-rules/2 unknown is not supported.",
+          "native_metadata": {
+            "path": "orchestrator-overview.md",
+            "distinct_terms": 2,
+            "occurrences": 5,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+          "host": "",
+          "title": "Tuning Stream Gateway throughput in Orchestrator 4.x",
+          "content_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-systems/doc-licence-v1"
+          },
+          "retrieval_rank": 7,
+          "tokens": 139,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "stream-gateway-tuning.md",
+            "distinct_terms": 2,
+            "occurrences": 4,
+            "governance": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "entitlement": "standard"
+            }
+          }
+        }
+      ],
+      "source_count": 4,
+      "context_tokens_admitted": 524,
+      "answer": "The supplied context cannot establish specific operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md :: \"Orchestrator 4.2 introduces Pulse Metrics, an experimental integration path that publishes per-pipeline delivery metrics to an external monitoring system.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md :: \"From 1 March 2026, the Stream Gateway is the supported way to connect an external data source to Orchestrator 4.x.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md :: \"The Stream Gateway's default settings favour delivery order over throughput.\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1635,
+        "input_tokens": 1210,
+        "output_tokens": 192,
+        "provider_request_id": "01a07d4a-ccc0-7791-b11a-17594c08d3b8",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish specific operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md :: \"Orchestrator 4.2 introduces Pulse Metrics, an experimental integration path that publishes per-pipeline delivery metrics to an external monitoring system.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md :: \"From 1 March 2026, the Stream Gateway is the supported way to connect an external data source to Orchestrator 4.x.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md :: \"The Stream Gateway's default settings favour delivery order over throughput.\""
+      },
+      "policy_decisions": [
+        {
+          "id": "15a5a87a-726b-4944-8a56-3b731894f7ce",
+          "job_id": "3b39aa41-86b7-43a9-9afe-65399c44d66a",
+          "run_id": "d9645126-2102-4109-8d87-65738ecac97a",
+          "timestamp": "2026-09-07T19:14:09.188679379Z",
+          "decision": "refuse",
+          "reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md requires entitlement tier \"premier\" and this run is granted \"standard\" under rule set fictive-support-rules/2.",
+          "assurance": "observed",
+          "plan": "internal-only",
+          "provider": "internal",
+          "source_url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md",
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md requires entitlement tier \"premier\" and this run is granted \"standard\" under rule set fictive-support-rules/2."
+            }
+          ]
+        },
+        {
+          "id": "f2089bd9-c293-4b1a-9adc-6858d52ad21e",
+          "job_id": "3b39aa41-86b7-43a9-9afe-65399c44d66a",
+          "run_id": "d9645126-2102-4109-8d87-65738ecac97a",
+          "timestamp": "2026-09-07T19:14:09.191914404Z",
+          "decision": "refuse",
+          "reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md is on a deprecated path: rule set fictive-support-rules/2 deprecates (orchestrator, 4.x, flux-connector) effective 2026-03-01, on or before the suite's as_of 2026-08-06.",
+          "assurance": "observed",
+          "plan": "internal-only",
+          "provider": "internal",
+          "source_url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md",
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md is on a deprecated path: rule set fictive-support-rules/2 deprecates (orchestrator, 4.x, flux-connector) effective 2026-03-01, on or before the suite's as_of 2026-08-06."
+            }
+          ]
+        },
+        {
+          "id": "a39120cb-d022-4db4-a987-95bff8382e1a",
+          "job_id": "3b39aa41-86b7-43a9-9afe-65399c44d66a",
+          "run_id": "d9645126-2102-4109-8d87-65738ecac97a",
+          "timestamp": "2026-09-07T19:14:09.196521215Z",
+          "decision": "refuse",
+          "reason": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md declares no governance metadata, and under governed rule set fictive-support-rules/2 unknown is not supported.",
+          "assurance": "observed",
+          "plan": "internal-only",
+          "provider": "internal",
+          "source_url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md declares no governance metadata, and under governed rule set fictive-support-rules/2 unknown is not supported."
+            }
+          ]
+        }
+      ],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.187Z",
+          "started_at": "2026-09-07T19:14:09.187Z",
+          "finished_at": "2026-09-07T19:14:09.187Z",
+          "latency_ms": 0,
+          "decision": "refuse",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md",
+              "content_hash": "sha256:35240c22eb01f2e6b5ab84afe5b8f98bf4c4a021853bf402310f856bee191d82"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "bulk-export",
+              "support_status": "supported",
+              "entitlement": "premier"
+            },
+            "matched_rule": null,
+            "note": null
+          },
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md requires entitlement tier \"premier\" and this run is granted \"standard\" under rule set fictive-support-rules/2."
+            }
+          ],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.188Z",
+          "started_at": "2026-09-07T19:14:09.188Z",
+          "finished_at": "2026-09-07T19:14:09.188Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "pulse-metrics",
+              "support_status": "experimental",
+              "entitlement": "standard"
+            },
+            "matched_rule": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "pulse-metrics",
+              "support_status": "experimental",
+              "effective_date": "2026-06-15"
+            },
+            "note": null
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.190Z",
+          "started_at": "2026-09-07T19:14:09.190Z",
+          "finished_at": "2026-09-07T19:14:09.190Z",
+          "latency_ms": 0,
+          "decision": "refuse",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md",
+              "content_hash": "sha256:88c3db8a8773416e9bf0fa441fdb4b63cad8c7d24ef18cb04320d7670d099cc7"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "flux-connector",
+              "support_status": "deprecated",
+              "entitlement": "standard"
+            },
+            "matched_rule": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "flux-connector",
+              "support_status": "deprecated",
+              "effective_date": "2026-03-01"
+            },
+            "note": null
+          },
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md is on a deprecated path: rule set fictive-support-rules/2 deprecates (orchestrator, 4.x, flux-connector) effective 2026-03-01, on or before the suite's as_of 2026-08-06."
+            }
+          ],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.191Z",
+          "started_at": "2026-09-07T19:14:09.191Z",
+          "finished_at": "2026-09-07T19:14:09.191Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "entitlement": "standard"
+            },
+            "matched_rule": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "effective_date": "2026-03-01"
+            },
+            "note": null
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.193Z",
+          "started_at": "2026-09-07T19:14:09.193Z",
+          "finished_at": "2026-09-07T19:14:09.193Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "3.x",
+              "integration_path": "flux-connector",
+              "support_status": "supported",
+              "entitlement": "standard"
+            },
+            "matched_rule": {
+              "edition": "orchestrator",
+              "version_range": "3.x",
+              "integration_path": "flux-connector",
+              "support_status": "supported",
+              "effective_date": "2025-04-15"
+            },
+            "note": null
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.195Z",
+          "started_at": "2026-09-07T19:14:09.195Z",
+          "finished_at": "2026-09-07T19:14:09.195Z",
+          "latency_ms": 0,
+          "decision": "refuse",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md",
+              "content_hash": "sha256:0b7c5c0cf40342a3854216afe0fa4f846294397c1a3716345271db563c13dc04"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": null,
+            "matched_rule": null,
+            "note": null
+          },
+          "gaps": [
+            {
+              "reason": "policy_refused",
+              "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md declares no governance metadata, and under governed rule set fictive-support-rules/2 unknown is not supported."
+            }
+          ],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "support-governor",
+            "version": "1",
+            "configuration_digest": "sha256:84d519e215f8c9f8dfac4d993539968134808e7beb39fa32c6a1f71f09c4507d"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.196Z",
+          "started_at": "2026-09-07T19:14:09.196Z",
+          "finished_at": "2026-09-07T19:14:09.196Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic evaluation of the suite's sealed rule set against the source's declared metadata",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "rule_set": "fictive-support-rules/2",
+            "granted_entitlement": "standard",
+            "as_of": "2026-08-06",
+            "declared": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "entitlement": "standard"
+            },
+            "matched_rule": {
+              "edition": "orchestrator",
+              "version_range": "4.x",
+              "integration_path": "stream-gateway",
+              "support_status": "supported",
+              "effective_date": "2026-03-01"
+            },
+            "note": null
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Rules match the operator's declared metadata; nothing verifies that a document's prose agrees with its declaration, so a document may describe the very path its metadata disowns, or disown the one it describes.",
+            "Effective dates are measured against the suite's declared as_of, never a clock; a stale as_of governs by a stale calendar and this processor cannot tell.",
+            "Only sources this runtime carries are governed; an observed crossing has already happened and is recorded, not governed."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.198Z",
+          "started_at": "2026-09-07T19:14:09.198Z",
+          "finished_at": "2026-09-07T19:14:09.198Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+              "tokens": 154
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.199Z",
+          "started_at": "2026-09-07T19:14:09.199Z",
+          "finished_at": "2026-09-07T19:14:09.199Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+              "tokens": 154
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.201Z",
+          "started_at": "2026-09-07T19:14:09.201Z",
+          "finished_at": "2026-09-07T19:14:09.201Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.202Z",
+          "started_at": "2026-09-07T19:14:09.202Z",
+          "finished_at": "2026-09-07T19:14:09.202Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.204Z",
+          "started_at": "2026-09-07T19:14:09.204Z",
+          "finished_at": "2026-09-07T19:14:09.204Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.205Z",
+          "started_at": "2026-09-07T19:14:09.205Z",
+          "finished_at": "2026-09-07T19:14:09.205Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.207Z",
+          "started_at": "2026-09-07T19:14:09.207Z",
+          "finished_at": "2026-09-07T19:14:09.207Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc",
+              "tokens": 154
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:14:09.209Z",
+          "started_at": "2026-09-07T19:14:09.209Z",
+          "finished_at": "2026-09-07T19:14:09.209Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc",
+              "tokens": 154
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:14:09.213Z",
+          "started_at": "2026-09-07T19:14:09.210Z",
+          "finished_at": "2026-09-07T19:14:09.213Z",
+          "latency_ms": 3,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 7 repeated phrases",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+              "tokens": 154
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+              "tokens": 131
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+              "tokens": 132
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc",
+              "tokens": 154
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+              "tokens": 154
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b",
+              "tokens": 123
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c",
+              "tokens": 108
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1",
+              "tokens": 139
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 571,
+            "tokens_out": 524,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "input_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+                "output_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b",
+                "spans": [
+                  {
+                    "start": 45,
+                    "end": 106,
+                    "words": 8,
+                    "content_hash": "sha256:2a9ea38cbe374e66de444452a83080f7dc2464aaa30afc33b9efa679b421a4ef",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+                      "start": 34,
+                      "end": 93
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                "input_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+                "output_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c",
+                "spans": [
+                  {
+                    "start": 0,
+                    "end": 41,
+                    "words": 6,
+                    "content_hash": "sha256:a81bd9ebb4403ef035464c646656a944f0af7d068530573a4b50f638a3183430",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                      "start": 0,
+                      "end": 41
+                    }
+                  },
+                  {
+                    "start": 45,
+                    "end": 101,
+                    "words": 7,
+                    "content_hash": "sha256:a2945c93538861701b95c7c9f8c614002fabf5e38d11a23611af0d67b5e1d235",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+                      "start": 34,
+                      "end": 88
+                    }
+                  },
+                  {
+                    "start": 262,
+                    "end": 297,
+                    "words": 7,
+                    "content_hash": "sha256:208c9cbb80c66d60e93ab2bb5521ecf5ab3b2eaafb1f46d6df8de2e2306366a1",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                      "start": 260,
+                      "end": 294
+                    }
+                  },
+                  {
+                    "start": 319,
+                    "end": 341,
+                    "words": 4,
+                    "content_hash": "sha256:418a583f6427baa6ba8eaeb3d6cf68b5591047ea84e1642bf849f1cb9dd48530",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                      "start": 461,
+                      "end": 482
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+                "input_hash": "sha256:e97f48ecb3868ff63a32073715bf64057b9b0f0311b96fe78a969cbc4e610dbc",
+                "output_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1",
+                "spans": [
+                  {
+                    "start": 54,
+                    "end": 115,
+                    "words": 8,
+                    "content_hash": "sha256:2a9ea38cbe374e66de444452a83080f7dc2464aaa30afc33b9efa679b421a4ef",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+                      "start": 34,
+                      "end": 93
+                    }
+                  },
+                  {
+                    "start": 115,
+                    "end": 176,
+                    "words": 7,
+                    "content_hash": "sha256:7f34168ab808dd3cd2923ccf478a5413bc8179614c6035d0240e5d574208df46",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                      "start": 107,
+                      "end": 167
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md"
+              ],
+              "output": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:14:10.856Z",
+          "started_at": "2026-09-07T19:14:10.853Z",
+          "finished_at": "2026-09-07T19:14:10.856Z",
+          "latency_ms": 3,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:726dfaaa253255c473a27fa3a70a5017a9f898a88c5e4e6188e924e438674a6d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 130,
+                "text": "The supplied context cannot establish specific operational limits that apply to Bulk Export jobs in an Orchestrator 4.x workspace.",
+                "words": 19,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "coverage_gap",
+          "detail": "The corpus held 7 document(s) matching this job against the 10 requested; the sealed query response names every document scanned."
+        },
+        {
+          "reason": "policy_refused",
+          "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/bulk-export-operations.md requires entitlement tier \"premier\" and this run is granted \"standard\" under rule set fictive-support-rules/2."
+        },
+        {
+          "reason": "policy_refused",
+          "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md is on a deprecated path: rule set fictive-support-rules/2 deprecates (orchestrator, 4.x, flux-connector) effective 2026-03-01, on or before the suite's as_of 2026-08-06."
+        },
+        {
+          "reason": "policy_refused",
+          "detail": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/orchestrator-overview.md declares no governance metadata, and under governed rule set fictive-support-rules/2 unknown is not supported."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:726dfaaa253255c473a27fa3a70a5017a9f898a88c5e4e6188e924e438674a6d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 3,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "quote": "Orchestrator 4.2 introduces Pulse Metrics, an experimental integration path that publishes per-pipeline delivery metrics to an external monitoring system.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+                "start": 211,
+                "end": 365
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "quote": "From 1 March 2026, the Stream Gateway is the supported way to connect an external data source to Orchestrator 4.x.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b",
+                "start": 161,
+                "end": 275
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "quote": "The Stream Gateway's default settings favour delivery order over throughput.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1",
+                "start": 108,
+                "end": 184
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "specialist-refusal",
+            "version": "1"
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1"
+            }
+          ],
+          "items": [
+            {
+              "item": "premier-only",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "concurrency",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "partitions",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 365
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/release-notes-4-2.md",
+              "content_hash": "sha256:9e331ce1866f5a5ef534d16be94f0d52ab900a34a5a918719587ab55e5877bca",
+              "declared_date": "2026-06-15",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 52,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+              "content_hash": "sha256:2e75b363f386a413ab5f9c425f18e56c604f055c418a270d96937124504be63b",
+              "declared_date": "2026-03-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 158,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+              "content_hash": "sha256:c3b86d44585a91f96baba69fd094d19f12b88b09d175571f9de74d1311c9329c",
+              "declared_date": "2025-04-15",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 478,
+              "within_maximum_age": false
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/stream-gateway-tuning.md",
+              "content_hash": "sha256:6b812ff89063b1108cf8cce1c0b8ec999dc54bded57c1edd40324fc573da12d1",
+              "declared_date": "2026-05-20",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 78,
+              "within_maximum_age": true
+            }
+          ],
+          "fresh_count": 3,
+          "part_count": 4,
+          "fraction": 0.75,
+          "unmeasured": null,
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": "internal-only",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric specialist-refusal/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 0.38 (coverage 0.00, freshness 0.75). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "unavailable_inputs": []
+  }
+}

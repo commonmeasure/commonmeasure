@@ -1,0 +1,9 @@
+{
+  "policy_mode": "strict",
+  "constraints": [
+    {"kind": "access_rule", "host": "www.gov.uk", "action": "allow"},
+    {"kind": "access_rule", "host": "*.people.com", "action": "allow"},
+    {"kind": "access_rule", "host": "*.theguardian.com", "action": "allow"},
+    {"kind": "access_rule", "host": "*", "action": "refuse"}
+  ]
+}

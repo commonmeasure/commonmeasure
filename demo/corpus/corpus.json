@@ -1,0 +1,9 @@
+{
+  "name": "demo operator knowledge base",
+  "licence": { "state": "declared", "reference": "operator-owned/demo-corpus-v1" },
+  "dates": {
+    "customer-comms-guidance.md": "2026-08-02",
+    "office-onboarding.md": "2026-08-02",
+    "price-cap-briefing.md": "2026-08-02"
+  }
+}

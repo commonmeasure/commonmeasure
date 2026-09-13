@@ -1,0 +1,100 @@
+{
+  "corpus": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content",
+  "corpus_name": "Fictive Retail brand content (synthetic)",
+  "query": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+  "terms": [
+    "buyer",
+    "choose",
+    "espresso",
+    "fictive",
+    "kitchen",
+    "machine",
+    "range",
+    "retail's",
+    "small"
+  ],
+  "documents_discovered": 5,
+  "documents_scanned": 5,
+  "requested": 10,
+  "licence": {
+    "state": "unknown"
+  },
+  "matches": [
+    {
+      "path": "northglade-g4-guide.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+      "title": "Northglade G4: using the G4 with auto-dose espresso machines",
+      "text": "# Northglade G4: using the G4 with auto-dose espresso machines\n\nBrand content supplied by Northglade (a fictional brand of the Fictive\nRetail bundle). Guide as published 2 April 2026.\n\nThe Northglade G4 burr grinder can feed an auto-dose espresso machine such\nas the Aurelio Presto 300 directly. Fitting requires two things: the dose\nadapter ring DR-2, which seats the G4's spout on the machine's tray collar,\nand grinder firmware 2.1, which adds the dose-complete signal the tray\nwaits for.\n\nCheck your firmware version in the G4's settings menu and update over USB\nwith the Northglade desktop tool. Without the DR-2 ring the spout does not\nseal, and without firmware 2.1 the tray times out and discards the dose.\n",
+      "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+      "declared_date": "2026-04-02",
+      "licence": {
+        "state": "declared",
+        "reference": "northglade/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 6
+    },
+    {
+      "path": "aurelio-presto-200-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+      "title": "Aurelio Presto 200 — the heart of the home bar",
+      "text": "# Aurelio Presto 200 — the heart of the home bar\n\nBrand content supplied by Aurelio (a fictional brand of the Fictive Retail\nbundle). Page as published 12 November 2025.\n\nThe Presto 200 is Aurelio's flagship espresso machine: a 15-bar pump, a\nwarming rack for two cups, and the dose dial our baristas tune by hand.\nAvailable in three finishes — slate, oat and copper — the Presto 200 brings\ncafé texture to the home counter.\n\nPair it with the Aurelio milk wand accessory for microfoam, and register\nyour machine with Aurelio to extend the warranty to three years. The Presto\n200 carries the classic tamper-first workflow; it has no auto-dose tray and\nwe think purists prefer it that way.\n",
+      "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+      "declared_date": "2025-11-12",
+      "licence": {
+        "state": "declared",
+        "reference": "aurelio/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 4
+    },
+    {
+      "path": "aurelio-presto-300-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+      "title": "Aurelio Presto 300 — small footprint, full crema",
+      "text": "# Aurelio Presto 300 — small footprint, full crema\n\nBrand content supplied by Aurelio (a fictional brand of the Fictive Retail\nbundle). Page as published 4 May 2026.\n\nThe Presto 300 is the newest machine in the Presto line, built for tight\ncounters: a slimmer chassis than any Presto before it, a quieter pump, and\nthe new auto-dose tray that meters ground coffee without a tamper. The\ntray accepts Aurelio's own hopper or a compatible third-party grinder.\n\nThe Presto 300 pairs with the Aurelio Home app over the BrewLink Hub for\nshot timing and descale reminders. Register your machine with Aurelio to\nextend the warranty to three years.\n",
+      "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+      "declared_date": "2026-05-04",
+      "licence": {
+        "state": "declared",
+        "reference": "aurelio/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 4
+    },
+    {
+      "path": "northglade-g4-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+      "title": "Northglade G4 burr grinder — forty settings, zero fuss",
+      "text": "# Northglade G4 burr grinder — forty settings, zero fuss\n\nBrand content supplied by Northglade (a fictional brand of the Fictive\nRetail bundle). Page as published 30 March 2026.\n\nThe Northglade G4 is our flagship burr grinder: forty grind settings, a\nlow-retention chute, and burrs you can swap without tools. RRP £159.00.\n\nTo feed an auto-dose espresso machine such as the Aurelio Presto 300, fit\nthe dose adapter ring DR-2 and update to grinder firmware 2.1 over USB\nwith the Northglade desktop tool; without both, the machine's tray cannot\ntake a dose from the G4. For manual workflows the G4 works out of the box.\n",
+      "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+      "declared_date": "2026-03-30",
+      "licence": {
+        "state": "declared",
+        "reference": "northglade/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 4
+    },
+    {
+      "path": "aurelio-brewlink-hub-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+      "title": "Aurelio BrewLink Hub — your Presto, connected",
+      "text": "# Aurelio BrewLink Hub — your Presto, connected\n\nBrand content supplied by Aurelio (a fictional brand of the Fictive Retail\nbundle). Page as published 10 February 2026.\n\nThe BrewLink Hub is how a Presto talks to the Aurelio Home app: plug the\nHub into your router, pair it with your machine, and the app tracks shot\ntiming and descale reminders wherever you are.\n\nThe Hub is required for app features on every Presto machine; without it\nthe app cannot see your machine. One Hub serves every Aurelio machine in\nthe home.\n",
+      "content_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+      "declared_date": "2026-02-10",
+      "licence": {
+        "state": "declared",
+        "reference": "aurelio/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 2,
+      "occurrences": 5
+    }
+  ],
+  "skipped": []
+}

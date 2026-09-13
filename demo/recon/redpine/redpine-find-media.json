@@ -1,0 +1,28 @@
+{
+ "probe": "find-media",
+ "payload": {
+  "jsonrpc": "2.0",
+  "id": 32,
+  "method": "tools/call",
+  "params": {
+   "name": "find-tools",
+   "arguments": {
+    "query": "news media mentions press coverage documents"
+   }
+  }
+ },
+ "status": 200,
+ "latency_ms": 188,
+ "headers": {
+  "Date": "Tue, 04 Aug 2026 07:30:46 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "2428",
+  "mcp-session-id": "\u00abas issued by initialize\u00bb"
+ },
+ "body": "{\"jsonrpc\":\"2.0\",\"id\":32,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"**Free trial: 5 of 5 queries remaining** \u2014 everything is free right now. No costs, no charges, no balance needed.\\n**Dashboard:** https://app.redpine.ai\\n\\n\u26a0\ufe0f IMPORTANT: You MUST call `inspect-tool` before calling any tool for the first time. Do NOT guess parameters \u2014 always get the schema first.\\n\\nFound 16 tool(s) matching 'news media mentions press coverage documents':\\n\\n  - media--daily_briefing: Executive daily briefing: headline stats, highest-impact mentions, volume spikes, sentiment alerts, new channels, keyword movers, and suggested next actions.\\n  - media--cluster_themes: Extract narrative themes from mentions via keyword co-occurrence analysis.\\n  - media--compare_brands: Compare multiple brands side-by-side: mention volume, sentiment, reach, source mix, weekly trend, and leaderboard.\\n  - media--count: Count mentions matching a filter.\\n  - media--diff: Compare two filtered subsets of mentions side-by-side.\\n  - media--explain_spike: Deep-dive a specific spike date: sentiment breakdown, source breakdown, narrative themes, top mentions, and comparison to the previous day.\\n  - media--group: Group mentions by a field.\\n  - media--sample: Returns individual mentions (not rankings or aggregations).\\n  - media--trending: Find keywords with the biggest surge or drop in mentions by comparing two consecutive time periods.\\n  - media--detect_spikes: Find days where mention volume is significantly above the rolling average using z-score anomaly detection.\\n  - media--get_mention: Get full details for a single mention by ID.\\n  - media--list_keywords: List all enabled keywords (brands/companies) being monitored.\\n  - media--sentiment_distribution: Positive/neutral/negative percentage breakdown plus average sentiment score.\\n  - media--timeseries: Mention counts bucketed by time with trend direction (increasing/decreasing/stable).\\n  - media--top_channels: Channels ranked by mention count, reach, or sentiment.\\n  - aviation--gps_jamming_finder: Detect GPS jamming / spoofing by aggregating aircraft-reported NACp (Navigation Accuracy Category for Position) over an area and time window.\\n\\n\\n\u26a0\ufe0f ALWAYS call `inspect-tool` with the tool name before calling any tool. Never skip this step \u2014 incorrect parameters will cause errors.\\n\\nFree trial: 5/5 queries remaining \u2014 everything is free\"}],\"isError\":false}}",
+ "request_headers": {
+  "Authorization": "\u00abREDACTED: Bearer $REDPINE_API_KEY, never recorded\u00bb",
+  "User-Agent": "ContextOpsRecon/0.1",
+  "Mcp-Session-Id": "\u00abas issued by initialize\u00bb"
+ }
+}

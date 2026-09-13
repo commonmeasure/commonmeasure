@@ -1,0 +1,172 @@
+{
+  "hash": "sha256:71238fdc11f4ca7a836d48a568ef6ac0a503ea6e30d6fb20afe466fbaff28954",
+  "manifest": {
+    "acquisition_mode": "no-external-acquisition",
+    "adapter_version": "ctx-supply/0.1",
+    "cache_control": "not controlled. Providers may serve from their own caches: Exa returned source \"cached\" and Firecrawl cacheState \"hit\" during reconnaissance on 1 August 2026.",
+    "evaluators": [
+      {
+        "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+        "name": "grounding",
+        "version": "0.4.0"
+      }
+    ],
+    "inference_gateway": "tensorzero",
+    "job": {
+      "constraints": [
+        {
+          "amount": {
+            "currency": "USD",
+            "micros": 50000
+          },
+          "kind": "maximum_acquisition_cost"
+        },
+        {
+          "kind": "maximum_context_tokens",
+          "tokens": 4000
+        },
+        {
+          "kind": "maximum_latency_ms",
+          "milliseconds": 5000
+        }
+      ],
+      "evidence_requirements": [
+        {
+          "description": "A current primary Ofgem source",
+          "required": true
+        },
+        {
+          "description": "The cap period and headline annualised figure",
+          "required": true
+        }
+      ],
+      "id": "8a4f6f6e-51f8-45f9-9d2f-4f4be14c1a02",
+      "kind": "research.answer",
+      "objective": {
+        "cost": 0.4,
+        "coverage": 1.0,
+        "freshness": 0.8,
+        "kind": "weighted",
+        "latency": 0.2,
+        "policy_risk": 1.0,
+        "quality": 1.0
+      },
+      "policy_mode": "observe",
+      "prompt": "What is the current Ofgem household energy price cap, when does it apply, and what primary evidence supports the answer? Identify anything the supplied evidence cannot establish."
+    },
+    "label": "Internal corpus and open web compared on the price-cap job",
+    "manifest_version": "contextops-manifest/v2",
+    "model_plan": {
+      "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+      "name": "operator-pinned-answer-model",
+      "version": "2"
+    },
+    "processors": [
+      {
+        "capability": "pii-detection",
+        "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_closed"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over the text, no supervisor timeout",
+        "name": "pii-detector",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "admit",
+        "version": "1"
+      },
+      {
+        "capability": "context-deduplication",
+        "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_open"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over each source, no supervisor timeout",
+        "name": "context-optimiser",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "transform",
+        "version": "2"
+      }
+    ],
+    "replay_recordings": null,
+    "result_limit": 3,
+    "retry_policy": "none; a failed acquisition is recorded, not retried",
+    "suite_version": "energy-price-cap-internal/v1",
+    "supply_plans": [
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "internal-only",
+        "steps": [
+          {
+            "capability": "query",
+            "limit": 3,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "query"
+              ],
+              "name": "internal"
+            }
+          }
+        ],
+        "version": "1"
+      },
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "tavily-only",
+        "steps": [
+          {
+            "capability": "search",
+            "limit": 3,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "search"
+              ],
+              "name": "tavily"
+            }
+          }
+        ],
+        "version": "1"
+      }
+    ],
+    "system_prompt": "Answer only from the supplied context. State plainly what the supplied context cannot establish. Do not use knowledge that is not in the supplied context.",
+    "token_basis": "whitespace-words",
+    "transport_timeout_seconds": 30
+  }
+}

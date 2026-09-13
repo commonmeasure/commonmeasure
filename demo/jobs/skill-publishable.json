@@ -1,0 +1,67 @@
+{
+  "suite_version": "skill-publishable/v1",
+  "label": "Two local skills and the operator's own corpus, ranked on one job",
+  "job": {
+    "id": "6b2a91d4-3f77-4c0e-9a15-8d3c7e40b6f2",
+    "kind": "review.verdict",
+    "prompt": "demo/skills/geo-lookup",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.0,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "pinned",
+    "version": "1",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 4,
+  "providers": [
+    "skill:skill-creator",
+    "skill:plugin-creator",
+    "internal"
+  ],
+  "coverage_rubric": {
+    "name": "skill-publishable",
+    "version": "1",
+    "items": [
+      {
+        "name": "frontmatter-examined",
+        "any_of": ["SKILL.md frontmatter", "frontmatter"]
+      },
+      {
+        "name": "offending-key-named",
+        "any_of": ["version"]
+      },
+      {
+        "name": "allowed-keys-stated",
+        "any_of": ["Allowed properties are", "allowed-tools"]
+      },
+      {
+        "name": "packaging-examined",
+        "any_of": ["Plugin validation", "plugin manifest", "codex-plugin"]
+      },
+      {
+        "name": "remedy-stated",
+        "any_of": ["remove the key", "must be removed", "should be removed"]
+      },
+      {
+        "name": "verdict-on-publishability",
+        "any_of": ["is publishable", "not publishable", "Skill is valid"]
+      }
+    ]
+  }
+}

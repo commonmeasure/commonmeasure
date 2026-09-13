@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-mixed-recommendation/v1",
+  "label": "Commerce comparison, recommendation question: all three source classes together",
+  "job": {
+    "id": "ef1bd555-5fb5-4331-b422-b6360f0fda49",
+    "kind": "research.answer",
+    "prompt": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-recommendation",
+    "version": "1",
+    "items": [
+      {
+        "name": "editorial-pick",
+        "any_of": [
+          "pick for small kitchens"
+        ]
+      },
+      {
+        "name": "fits-narrow-counters",
+        "any_of": [
+          "21 cm wide"
+        ]
+      },
+      {
+        "name": "current-availability",
+        "any_of": [
+          "in stock at £329.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-08",
+    "maximum_age_days": 180
+  }
+}

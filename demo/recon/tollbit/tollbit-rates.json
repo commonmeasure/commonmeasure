@@ -1,0 +1,32 @@
+{
+  "probe": "tollbit-rates",
+  "note": "Quote only, no token and no content purchased. readyToLicense=true for this URL.",
+  "request": {
+    "method": "GET",
+    "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Fbakercityherald.com%2F2026%2F07%2F18%2Fguest-commentary-understanding-our-changing-climate%2F",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 403,
+    "latency_ms": 362,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:27:36 GMT",
+      "Content-Type": "application/problem+json; charset=utf-8",
+      "Content-Length": "243",
+      "Connection": "close",
+      "Vary": "Origin"
+    },
+    "body": {
+      "detail": "The content provider has disallowed access to this page.",
+      "instance": "/dev/v2/rates/https://bakercityherald.com/2026/07/18/guest-commentary-understanding-our-changing-climate/",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    }
+  }
+}

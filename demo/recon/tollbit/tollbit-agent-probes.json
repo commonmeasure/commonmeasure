@@ -1,0 +1,135 @@
+{
+ "probe": "tollbit-agent-probes",
+ "note": "4 August 2026, after AgentID common-measure-tbcli-catb was registered. Rates still 403 on the demo publisher (both URL forms) and on bakercityherald; token creation still a bodyless 500 in three forms. Quote and token attempts only; nothing was purchased.",
+ "requests": [
+  {
+   "probe": "rates-demo-agent",
+   "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Ftollbit.pioneervalleygazette.com%2Fdaydream",
+   "status": 403,
+   "latency_ms": 373,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:15 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "201",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"detail\":\"The content provider has disallowed access to this page.\",\"instance\":\"/dev/v2/rates/https://tollbit.pioneervalleygazette.com/daydream\",\"status\":403,\"title\":\"Forbidden\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  },
+  {
+   "probe": "rates-demo-agent-bare",
+   "url": "https://gateway.tollbit.com/dev/v2/rates/pioneervalleygazette.com%2Fdaydream",
+   "status": 403,
+   "latency_ms": 357,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:15 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "185",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"detail\":\"The content provider has disallowed access to this page.\",\"instance\":\"/dev/v2/rates/pioneervalleygazette.com/daydream\",\"status\":403,\"title\":\"Forbidden\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  },
+  {
+   "probe": "rates-bakercity-agent",
+   "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Fwww.bakercityherald.com%2F",
+   "status": 403,
+   "latency_ms": 344,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:16 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "184",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"detail\":\"The content provider has disallowed access to this page.\",\"instance\":\"/dev/v2/rates/https://www.bakercityherald.com/\",\"status\":403,\"title\":\"Forbidden\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  },
+  {
+   "probe": "token-demo-agent",
+   "url": "https://gateway.tollbit.com/dev/v2/tokens/content",
+   "payload": {
+    "url": "pioneervalleygazette.com/daydream",
+    "userAgent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)",
+    "maxPriceMicros": 50000,
+    "currency": "USD",
+    "licenseType": "ON_DEMAND_LICENSE"
+   },
+   "status": 500,
+   "latency_ms": 347,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:39 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "104",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"instance\":\"/dev/v2/tokens/content\",\"status\":500,\"title\":\"Internal Server Error\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  },
+  {
+   "probe": "token-demo-quickstart-path",
+   "url": "https://gateway.tollbit.com/tollbit/dev/v2/tokens/content",
+   "payload": {
+    "url": "pioneervalleygazette.com/daydream",
+    "userAgent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)",
+    "maxPriceMicros": 50000,
+    "currency": "USD",
+    "licenseType": "ON_DEMAND_LICENSE"
+   },
+   "status": 500,
+   "latency_ms": 338,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:51 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "112",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"instance\":\"/tollbit/dev/v2/tokens/content\",\"status\":500,\"title\":\"Internal Server Error\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  },
+  {
+   "probe": "token-demo-subdomain-url",
+   "url": "https://gateway.tollbit.com/dev/v2/tokens/content",
+   "payload": {
+    "url": "https://tollbit.pioneervalleygazette.com/daydream",
+    "userAgent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)",
+    "maxPriceMicros": 50000,
+    "currency": "USD",
+    "licenseType": "ON_DEMAND_LICENSE"
+   },
+   "status": 500,
+   "latency_ms": 340,
+   "headers": {
+    "Date": "Tue, 04 Aug 2026 07:29:51 GMT",
+    "Content-Type": "application/problem+json; charset=utf-8",
+    "Content-Length": "104",
+    "Connection": "close",
+    "Vary": "Origin"
+   },
+   "body": "{\"instance\":\"/dev/v2/tokens/content\",\"status\":500,\"title\":\"Internal Server Error\",\"type\":\"about:blank\"}\n",
+   "request_headers": {
+    "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+    "User-Agent": "common-measure-tbcli-catb/1.0 (compatible; +https://tollbit.com)"
+   }
+  }
+ ]
+}

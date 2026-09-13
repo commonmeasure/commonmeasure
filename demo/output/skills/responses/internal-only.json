@@ -1,0 +1,17 @@
+{
+  "corpus": "file:///home/alexs/common-measure/contextops/demo/corpus",
+  "corpus_name": "demo operator knowledge base",
+  "documents_discovered": 3,
+  "documents_scanned": 3,
+  "licence": {
+    "reference": "operator-owned/demo-corpus-v1",
+    "state": "declared"
+  },
+  "matches": [],
+  "query": "demo/skills/geo-lookup",
+  "requested": 4,
+  "skipped": [],
+  "terms": [
+    "demo/skills/geo-lookup"
+  ]
+}

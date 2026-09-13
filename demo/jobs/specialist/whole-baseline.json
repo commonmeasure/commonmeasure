@@ -1,0 +1,69 @@
+{
+  "suite_version": "specialist-whole-baseline/v1",
+  "label": "Specialist comparison, baseline prompt: the whole bundle admitted under a permissive policy, no rules consulted",
+  "job": {
+    "id": "0a072667-07c2-4df7-8525-86570b62b8ea",
+    "kind": "research.answer",
+    "prompt": "How should Stream Gateway throughput be tuned for a high-volume source on Orchestrator 4.x?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "coverage_rubric": {
+    "name": "specialist-baseline",
+    "version": "1",
+    "items": [
+      {
+        "name": "trade-off",
+        "any_of": [
+          "favour delivery order over throughput"
+        ]
+      },
+      {
+        "name": "ordering",
+        "any_of": [
+          "order is always preserved"
+        ]
+      },
+      {
+        "name": "backpressure",
+        "any_of": [
+          "stops reading from the source"
+        ]
+      },
+      {
+        "name": "measured-tuning",
+        "any_of": [
+          "Measure before and after"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 365
+  }
+}

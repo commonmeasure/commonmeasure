@@ -1,0 +1,67 @@
+{
+  "probe": "nimble-search",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-search.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. The first call with the longer query timed out at the 30 s budget; this shorter query answered. No cost, credit or usage field.",
+  "request": {
+    "method": "POST",
+    "url": "https://sdk.nimbleway.com/v2/search",
+    "headers": {
+      "Authorization": "«REDACTED: value of $NIMBLE_API_KEY, never recorded» (Bearer)",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "query": "W3C PROV data model PROV-DM Recommendation",
+      "max_results": 3,
+      "search_depth": "fast",
+      "include_domains": [
+        "www.w3.org"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 1128,
+    "body": {
+      "total_results": 3,
+      "results": [
+        {
+          "title": "PROV-DM: The PROV Data Model",
+          "description": "PROV-LINKS (Note) introduces a mechanism to link across bundles [PROV-LINKS]. This document has been reviewed by W3C Mem[…elided, 1320 chars total; shape recorded, text not committed]",
+          "url": "https://www.w3.org/TR/prov-dm/",
+          "content": "",
+          "metadata": {
+            "position": 1,
+            "entity_type": "SearchResult",
+            "country": "US",
+            "locale": "en"
+          }
+        },
+        {
+          "title": "PROV-Overview",
+          "description": "James Cheney; Paolo Missier; Luc Moreau; eds. Constraints of the PROV Data Model. 30 April 2013, W3C Recommendation. PRO[…elided, 1362 chars total; shape recorded, text not committed]",
+          "url": "https://www.w3.org/TR/prov-overview/",
+          "content": "",
+          "metadata": {
+            "position": 2,
+            "entity_type": "SearchResult",
+            "country": "US",
+            "locale": "en"
+          }
+        },
+        {
+          "title": "PROV-O: The PROV Ontology",
+          "description": "An individual who has actual knowledge of a patent which the individual believes contains Essential Claim(s) must disclo[…elided, 1577 chars total; shape recorded, text not committed]",
+          "url": "https://www.w3.org/TR/prov-o/",
+          "content": "",
+          "metadata": {
+            "position": 3,
+            "entity_type": "SearchResult",
+            "country": "US",
+            "locale": "en"
+          }
+        }
+      ],
+      "request_id": "fd247ba0-d27d-42ae-85bc-23146d443cd8"
+    }
+  }
+}

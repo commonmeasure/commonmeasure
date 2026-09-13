@@ -1,0 +1,48 @@
+{
+  "input": "demo/skills/geo-lookup",
+  "invocation": {
+    "argv": [
+      "/usr/bin/python3",
+      "/home/alexs/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+      "demo/skills/geo-lookup"
+    ],
+    "argv_source": [
+      "operator",
+      "operator",
+      "job"
+    ],
+    "catalogue": "demo/skills/catalogue.json",
+    "catalogue_name": "skill-creator",
+    "cwd": "/home/alexs/common-measure/contextops",
+    "declared_licence": null,
+    "declared_name": "skill-creator",
+    "declared_version": null,
+    "duration_ms": 31,
+    "entrypoint": "/home/alexs/.codex/skills/.system/skill-creator/scripts/quick_validate.py",
+    "entrypoint_sha256": "sha256:6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51",
+    "environment": "cleared: the child is spawned with an empty environment, so it cannot read the operator's provider credentials",
+    "exit_code": 1,
+    "interpreter": "/usr/bin/python3",
+    "maximum_output_bytes": 262144,
+    "root": "file:///home/alexs/.codex/skills/.system/skill-creator",
+    "skill_md_sha256": "sha256:da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c",
+    "stderr_bytes": 0,
+    "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_bytes": 128,
+    "stdout_sha256": "sha256:da16daa01965ee2f379fa57bb7f58f3c3b094d3574fba2beeaf68f8858db226e",
+    "termination": "exited",
+    "timeout_ms": 30000
+  },
+  "provider": "skill:skill-creator",
+  "result": {
+    "content_hash": "sha256:da16daa01965ee2f379fa57bb7f58f3c3b094d3574fba2beeaf68f8858db226e",
+    "exit_code": 1,
+    "stream": "stdout",
+    "termination": "exited",
+    "text": "Unexpected key(s) in SKILL.md frontmatter: version. Allowed properties are: allowed-tools, description, license, metadata, name\n",
+    "title": "skill-creator",
+    "url": "file:///home/alexs/.codex/skills/.system/skill-creator"
+  },
+  "stderr": "",
+  "stdout": "Unexpected key(s) in SKILL.md frontmatter: version. Allowed properties are: allowed-tools, description, license, metadata, name\n"
+}

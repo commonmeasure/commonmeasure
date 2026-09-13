@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-product-app-without-hub/v1",
+  "label": "Commerce routing experiment, compatibility question 'app-without-hub': structured product data alone",
+  "job": {
+    "id": "e65eb452-009b-4e33-a0d6-767eecf56d76",
+    "kind": "research.answer",
+    "prompt": "Does the Aurelio Home app need the BrewLink Hub to control a Presto 300?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-app-without-hub",
+    "version": "1",
+    "items": [
+      {
+        "name": "direct-connection",
+        "any_of": [
+          "connects directly over Wi-Fi"
+        ]
+      },
+      {
+        "name": "firmware-condition",
+        "any_of": [
+          "machine firmware 3.0"
+        ]
+      },
+      {
+        "name": "change-date",
+        "any_of": [
+          "10 July 2026"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

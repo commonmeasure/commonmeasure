@@ -1,0 +1,123 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/commonmeasure-types",
+    "crates/commonmeasure-http",
+    "crates/commonmeasure-supply",
+    "crates/commonmeasure-inference",
+    "crates/commonmeasure-runtime",
+    "crates/commonmeasure-harness",
+    "crates/commonmeasure-relay",
+    "crates/commonmeasure-console",
+    "crates/commonmeasure-cli",
+]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license-file = "LICENSE.md"
+rust-version = "1.97"
+
+[workspace.dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+# IANA timezone data for allowance period boundaries. An allowance is declared
+# per calendar day or month in an explicit zone, and an operator's day is a
+# wall-clock day: a fixed offset would misplace an hour of spend at every DST
+# transition, silently (`crates/commonmeasure-types/src/allowance.rs`).
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip` makes the parser correctly rounded, so the double a
+# document's decimal text names is the one every conforming reader gets.
+# Without it serde_json takes a fast path that lands a unit in the last place
+# away on some inputs, and a sealed hash over a re-serialised document would
+# then depend on which parser wrote it. The feature is also stated here rather
+# than left to whichever dependency happens to ask for it, because cargo
+# unifies features across the build and a seal must not move when one does
+# (`crates/commonmeasure-types/src/canonical.rs`).
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# Renders the working guide from its Markdown sources (`crates/commonmeasure-console/src/guide.rs`).
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+# Compile-time HTML templates for the operator console. Structured markup in
+# Rust rather than format! strings: the console renders server-side into one
+# binary with no build step, and the macro checks tag nesting at compile time.
+maud = "0.26"
+sha2 = "0.10.9"
+# The shortest decimal digits that read back as the same double, with
+# ECMAScript's tie rule, for the canonical number form
+# (`crates/commonmeasure-types/src/canonical.rs`). The crate serde_json
+# already uses to print floats; `f64`'s own `Display` breaks ties the other
+# way.
+ryu = "1"
+url = "2"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+# Temporary directories for the tests that run the real binary into one.
+tempfile = "3"
+anyhow = "1"
+
+# The edge's signing identity, minted at enrolment (`crates/commonmeasure-relay/src/enrolment.rs`):
+# Ed25519 key generation and the proof of possession the hub verifies. The
+# secret comes from the operating system through `getrandom`; base64url
+# carries the JWK members and the proof on the wire.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+getrandom = "0.3"
+base64 = "0.22"
+
+# Offline validation of projected documents against the pinned Content
+# Telemetry schemas (dev-dependency use only; the runtime emits from types).
+jsonschema = "0.18"
+
+# TLS for the client side of commonmeasure-http. `ring` rather than the default
+# `aws-lc-rs` backend: it needs no C toolchain at build time, which keeps the
+# supply chain small and the build reproducible.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
+# Ed25519 verification of the signed policy envelope
+# (`crates/commonmeasure-harness/src/managed.rs`). The same crate rustls
+# already pulls in, so no second cryptography dependency enters the tree.
+ring = "0.17"
+
+# Bundled so the telemetry index needs no system SQLite: one binary, one file
+# database, no service to install.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# One call, for one reason: signalling a skill invocation's whole process
+# group. `Child::kill` signals the child alone, so a skill that spawned a
+# helper leaves that helper holding the output pipe and the declared timeout
+# stops being enforced — the observation that put this dependency here
+# (`crates/commonmeasure-supply/src/skill.rs`).
+libc = "0.2"
+
+# Edits a host's TOML configuration in place, keeping every other table,
+# key and comment as the operator wrote it: the Codex registration is one
+# table in `~/.codex/config.toml` and the binary owns only that table
+# (`crates/commonmeasure-harness/src/registration.rs`).
+toml_edit = "0.22"
+# Reads RSL licence documents, the XML form of a source's terms
+# (`crates/commonmeasure-harness/src/declarations.rs`). Default features only:
+# no async runtime, no encoding tables.
+quick-xml = "0.41"
+
+# The C2PA SDK signs and reads the output provenance manifest
+# (`crates/commonmeasure-runtime/src/processor/provenance.rs`) and reads the
+# manifest a user pastes with a prompt
+# (`crates/commonmeasure-harness/src/prompt.rs`). Pure-Rust crypto rather
+# than the default OpenSSL binding, for the reason `rustls` above uses
+# `ring`: no C toolchain at build time. No HTTP feature: neither reader
+# fetches a remote manifest or a timestamp.
+c2pa = { version = "0.90.20", default-features = false, features = ["rust_native_crypto"] }
+# Embeds and extracts manifest bytes in text under C2PA Annex A.8 and
+# extracts them from HTML under A.7.
+c2pa-text = "3.0.0"
+# The text a manifest is bound to is hashed in NFC, as Annex A.8 requires.
+unicode-normalization = "0.1"
+
+commonmeasure-types = { path = "crates/commonmeasure-types" }
+commonmeasure-http = { path = "crates/commonmeasure-http" }
+commonmeasure-supply = { path = "crates/commonmeasure-supply" }
+commonmeasure-inference = { path = "crates/commonmeasure-inference" }
+commonmeasure-runtime = { path = "crates/commonmeasure-runtime" }
+commonmeasure-harness = { path = "crates/commonmeasure-harness" }
+commonmeasure-relay = { path = "crates/commonmeasure-relay" }
+commonmeasure-console = { path = "crates/commonmeasure-console" }

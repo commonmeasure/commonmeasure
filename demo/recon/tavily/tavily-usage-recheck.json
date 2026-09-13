@@ -1,0 +1,46 @@
+{
+  "probe": "tavily-usage-recheck",
+  "note": "Re-read after one billed search, to test whether the counter lags.",
+  "request": {
+    "method": "GET",
+    "url": "https://api.tavily.com/usage",
+    "headers": {
+      "Authorization": "Bearer «REDACTED: value of $TAVILY_API_KEY, never recorded»"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 757,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:28:13 GMT",
+      "Content-Type": "application/json",
+      "Content-Length": "308",
+      "Connection": "close",
+      "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;"
+    },
+    "body": {
+      "key": {
+        "usage": 0,
+        "limit": 1000,
+        "search_usage": 0,
+        "crawl_usage": 0,
+        "extract_usage": 0,
+        "map_usage": 0,
+        "research_usage": 0
+      },
+      "account": {
+        "current_plan": "Researcher",
+        "plan_usage": 0,
+        "plan_limit": 1000,
+        "search_usage": 0,
+        "crawl_usage": 0,
+        "extract_usage": 0,
+        "map_usage": 0,
+        "research_usage": 0,
+        "paygo_usage": 0,
+        "paygo_limit": null
+      }
+    }
+  }
+}

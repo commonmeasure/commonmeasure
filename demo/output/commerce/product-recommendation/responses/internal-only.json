@@ -1,0 +1,98 @@
+{
+  "corpus": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data",
+  "corpus_name": "Fictive Retail product data (synthetic)",
+  "query": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+  "terms": [
+    "buyer",
+    "choose",
+    "espresso",
+    "fictive",
+    "kitchen",
+    "machine",
+    "range",
+    "retail's",
+    "small"
+  ],
+  "documents_discovered": 6,
+  "documents_scanned": 6,
+  "requested": 10,
+  "licence": {
+    "state": "declared",
+    "reference": "fictive-retail/product-data-licence-v1"
+  },
+  "matches": [
+    {
+      "path": "presto-300-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio Presto 300 espresso machine",
+      "text": "# Fictive Retail catalogue: Aurelio Presto 300 espresso machine\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-P300 |\n| Brand | Aurelio |\n| Product | Presto 300 espresso machine |\n| Price | £329.00 |\n| Stock | In stock |\n| Width | 21 cm |\n| Depth | 33 cm |\n| Reservoir | 1.4 litres |\n\nThe Aurelio Presto 300 is in stock at £329.00. At 21 cm wide, it is the\nnarrowest machine in the Aurelio range and the current model in the Presto\nline. The auto-dose tray accepts ground coffee directly or a compatible\ngrinder fitted per the Fictive Retail compatibility matrix.\n",
+      "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 4,
+      "occurrences": 9
+    },
+    {
+      "path": "presto-200-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio Presto 200 espresso machine",
+      "text": "# Fictive Retail catalogue: Aurelio Presto 200 espresso machine\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-P200 |\n| Brand | Aurelio |\n| Product | Presto 200 espresso machine |\n| Price | not sold |\n| Stock | none — discontinued |\n\nThe Aurelio Presto 200 was discontinued on 15 July 2026 and is no longer\nstocked by Fictive Retail. It is replaced by the Aurelio Presto 300, which\nuses the same portafilter size; Presto 200 water filters remain available\nwhile remaining warehouse stock lasts.\n",
+      "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 7
+    },
+    {
+      "path": "compatibility-matrix.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+      "title": "Fictive Retail compatibility matrix: grinders and espresso machines",
+      "text": "# Fictive Retail compatibility matrix: grinders and espresso machines\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Grinder | Machine | Compatible | Requires |\n|---|---|---|---|\n| Northglade G4 | Aurelio Presto 300 | yes | dose adapter ring DR-2, grinder firmware 2.1 |\n| Northglade G4 | Aurelio Presto 200 | no | — |\n\nFrom 28 March 2026, the Northglade G4 burr grinder is compatible with the\nAurelio Presto 300 auto-dose tray when fitted with the dose adapter ring\nDR-2 and running grinder firmware 2.1 or later. Earlier G4 firmware does not\nsignal dose completion to the tray, and no adapter is made for the\ndiscontinued Presto 200.\n",
+      "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 5
+    },
+    {
+      "path": "brewlink-hub-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio BrewLink Hub",
+      "text": "# Fictive Retail catalogue: Aurelio BrewLink Hub\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-BLH |\n| Brand | Aurelio |\n| Product | BrewLink Hub |\n| Price | not sold |\n| Stock | none — discontinued |\n\nThe Aurelio BrewLink Hub was discontinued on 5 July 2026 and has no\nreplacement product. Since the Aurelio Home app update of 10 July 2026, a\nPresto 300 running machine firmware 3.0 or later connects directly over\nWi-Fi with no hub hardware; a machine on earlier firmware updates from\nits settings menu.\n",
+      "content_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 2,
+      "occurrences": 4
+    },
+    {
+      "path": "accessories-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/accessories-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio espresso accessories",
+      "text": "# Fictive Retail catalogue: Aurelio espresso accessories\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-ST1 |\n| Brand | Aurelio |\n| Product | Steam tip set ST-1 |\n| Price | £39.00 |\n| Stock | In stock |\n\nThe Aurelio milk wand (SKU AUR-MW) was discontinued on 2 July 2026 and is\nreplaced by the steam tip set ST-1, in stock at £39.00; the ST-1 fits the\nsteam arm of both the Presto 200 and the Presto 300. The WF-30 water\nfilter for the Presto 300 (SKU AUR-WF30, £12.00) is in stock. Presto 200\nWF-20 water filters are sold from remaining warehouse stock with no\nfurther production, and WF-20 filters do not fit the Presto 300 reservoir.\n",
+      "content_hash": "sha256:9d271b1a0e3f09941ee35d9783a54a9b4fc9b4fd83b1d2bd5aadc0849fe005c7",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 2,
+      "occurrences": 3
+    },
+    {
+      "path": "northglade-g4-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+      "title": "Fictive Retail catalogue: Northglade G4 burr grinder",
+      "text": "# Fictive Retail catalogue: Northglade G4 burr grinder\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | NG-G4 |\n| Brand | Northglade |\n| Product | G4 burr grinder |\n| Price | £129.00 |\n| Stock | In stock |\n\nThe Northglade G4 is in stock at £129.00, reduced from £159.00 on\n18 July 2026. Units sold by Fictive Retail after 1 May 2026 ship with\ngrinder firmware 2.1 pre-installed; the dose adapter ring DR-2 (SKU\nNG-DR2, £15.00, in stock) is sold separately and is required to feed the\nAurelio Presto 300 auto-dose tray. The replacement burr set BS-40 (SKU\nNG-BS40, £24.00) is in stock.\n",
+      "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+      "declared_date": "2026-08-01",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 1,
+      "occurrences": 3
+    }
+  ],
+  "skipped": []
+}

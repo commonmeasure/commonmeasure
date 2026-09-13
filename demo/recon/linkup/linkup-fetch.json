@@ -1,0 +1,24 @@
+{
+  "probe": "linkup-fetch",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-fetch.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. Page arrives as `markdown`; no cost field.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.linkup.so/v1/fetch",
+    "headers": {
+      "Authorization": "«REDACTED: value of $LINKUP_API_KEY, never recorded» (Bearer)",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "url": "https://www.w3.org/TR/prov-dm/"
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 508,
+    "body": {
+      "favicon": "https://favicons.linkup.so?domain=www.w3.org",
+      "markdown": "[![W3C](https://www.w3.org/Icons/w3c_home)](https://www.w3.org/)\n\n# PROV-DM: The PROV Data Model\n\n## W3C Recommendation […elided, 154923 chars total; shape recorded, text not committed]"
+    }
+  }
+}

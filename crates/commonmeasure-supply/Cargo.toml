@@ -1,0 +1,20 @@
+[package]
+name = "commonmeasure-supply"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Content supply adapters implementing docs/contracts/provider.md over the real transport boundary."
+
+[dependencies]
+commonmeasure-types.workspace = true
+commonmeasure-http.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true

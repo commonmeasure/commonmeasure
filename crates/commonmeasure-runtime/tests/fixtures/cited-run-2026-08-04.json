@@ -1,0 +1,214 @@
+{
+  "_provenance": [
+    "Lifted verbatim from the 4 August 2026 cited run: demo/output/cited at commit",
+    "4b617e5 ('Land the gateway regenerations, the first cited-run example, and the",
+    "latency test'). That run directory is the only witness of the two evaluator",
+    "defects (the SOURCE prefix collision between the",
+    "citation directive and the window header) and W2 (case-sensitive quote",
+    "matching); `just cited-example` overwrites it, and its responses/ directory is",
+    "gitignored (.gitignore: sealed provider bytes never commit). This fixture is",
+    "the durable copy. Do not regenerate it from a",
+    "rerun; a rerun of a fixed evaluator cannot reproduce this evidence.",
+    "",
+    "Each plan carries: the live model's answer, verbatim; the window parts exactly",
+    "as they entered evaluation (source_ref, content_hash, text — the fields of",
+    "commonmeasure_inference::ContextPart); and the evaluation verdicts published under",
+    "grounding 0.3.0. Every hash was re-verified at lift time: sha256(text) equals",
+    "the recorded window-part hash, sha256(answer) equals the evaluation record's",
+    "answer input hash. Window texts are the recon capture's deliberately bounded",
+    "retained leads (about 120 characters plus a disclosed elision marker), with",
+    "the context-optimiser's recorded spans excised where the run excised them; no",
+    "fuller licensed text exists in the run and none is committed here.",
+    "",
+    "tavily-only is the W2 witness: citation 0's quote differs from window[0].text",
+    "only in the case of its first word ('the AI Act Code of Practice…' quoting a",
+    "sentence that begins 'The'). All four answers are the W1 witness: the model",
+    "copied the 'SOURCE ' label (or the directive's SOURCE_URL placeholder) into",
+    "its citation lines, and every published verdict below mis-resolved the URL."
+  ],
+  "run": {
+    "directory": "demo/output/cited",
+    "commit": "4b617e5",
+    "date": "2026-08-04",
+    "job_prompt": "What obligations does the EU AI Act place on general-purpose AI model providers under the Code of Practice, and what does the supplied evidence establish about them? State plainly what it cannot establish.",
+    "evaluator": {
+      "configuration_digest": "sha256:771836f46ccf6c368da12f1a7c7ca1d6e85884a3ef548c8b42e5c89ebb0d8975",
+      "name": "grounding",
+      "version": "0.3.0"
+    }
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "answer": "The supplied context cannot establish any obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice, nor does it provide any evidence regarding these obligations.\n\nCITATION: SOURCE_URL :: \"the exact quote from that source\"",
+      "answer_sha256": "sha256:b5cf96891d2b5614e54932168e51060badae3c5b306b58913417685a442adfca",
+      "window": [],
+      "published_evaluation": {
+        "evaluator": {
+          "configuration_digest": "sha256:771836f46ccf6c368da12f1a7c7ca1d6e85884a3ef548c8b42e5c89ebb0d8975",
+          "name": "grounding",
+          "version": "0.3.0"
+        },
+        "verdict_counts": {
+          "contradicted": 0,
+          "supported": 0,
+          "unavailable": 0,
+          "uncovered": 1
+        },
+        "citations": [
+          {
+            "matched": null,
+            "quote": "the exact quote from that source",
+            "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation",
+            "url": "SOURCE_URL",
+            "verdict": "uncovered"
+          }
+        ]
+      }
+    },
+    {
+      "id": "exa-only",
+      "provider": "exa",
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It does not provide detailed information about the content or requirements of the obligations.\n\nCITATION: SOURCE https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53 [sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c]  \nCITATION: SOURCE https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai [sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e]",
+      "answer_sha256": "sha256:e427c66c68b3f8d9c3877331f0d264b5630adc96e9de236c8214406f99d55cb9",
+      "window": [
+        {
+          "source_ref": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+          "content_hash": "sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c",
+          "text": "Article 53: Obligations for providers of general-purpose AI models | AI Act Service Desk Skip to main content  # AI Act  […elided, 400 chars total; shape recorded, text not committed]"
+        },
+        {
+          "source_ref": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "content_hash": "sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e",
+          "text": "The General-Purpose AI Code of Practice | Shaping Europe’s digital future  # The General-Purpose AI"
+        }
+      ],
+      "published_evaluation": {
+        "evaluator": {
+          "configuration_digest": "sha256:771836f46ccf6c368da12f1a7c7ca1d6e85884a3ef548c8b42e5c89ebb0d8975",
+          "name": "grounding",
+          "version": "0.3.0"
+        },
+        "verdict_counts": {
+          "contradicted": 0,
+          "supported": 0,
+          "unavailable": 2,
+          "uncovered": 0
+        },
+        "citations": [
+          {
+            "line": "CITATION: SOURCE https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53 [sha256:d32e90d30bb4e42670c8d811a118f99c47118543d0e8f2bd869e57718b302b4c]",
+            "matched": null,
+            "quote": null,
+            "reason": "the citation line does not parse (no `::` separates the URL from the quote), so nothing is checkable",
+            "url": null,
+            "verdict": "unavailable"
+          },
+          {
+            "line": "CITATION: SOURCE https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai [sha256:b02b99b49f5995f1f0ca767e5e8a1160b70b3c29a23c971c5c454d265010df4e]",
+            "matched": null,
+            "quote": null,
+            "reason": "the citation line does not parse (no `::` separates the URL from the quote), so nothing is checkable",
+            "url": null,
+            "verdict": "unavailable"
+          }
+        ]
+      }
+    },
+    {
+      "id": "firecrawl-only",
+      "provider": "firecrawl",
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. \n\nCITATION: SOURCE https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai :: \"the exact quote from that source\"  \nCITATION: SOURCE https://artificialintelligenceact.eu/introduction-to-code-of-practice/ :: \"the exact quote from that source\"",
+      "answer_sha256": "sha256:7c3ccb8a640bcb911660107ec058a8a0ceb53825cac960f9e2c486e5f2268b45",
+      "window": [
+        {
+          "source_ref": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "content_hash": "sha256:c3fc9a801c389ab2b91c90f89763fefbf6e74818906ee2e21d484033e5e7e0d2",
+          "text": "# The General-Purpose AI Code of Practice The code of practice helps industry comply with the AI Act legal obligations o […elided, 186 chars total; shape recorded, text not committed]"
+        },
+        {
+          "source_ref": "https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+          "content_hash": "sha256:892cecad991b5fb6668f484755754345c9e0e4a7f9950858b7cd4718911d0840",
+          "text": "# An Introduction to for General-Purpose AI #### A quick summary on the Code of Practice: - **Purpo […elided, 3284"
+        }
+      ],
+      "published_evaluation": {
+        "evaluator": {
+          "configuration_digest": "sha256:771836f46ccf6c368da12f1a7c7ca1d6e85884a3ef548c8b42e5c89ebb0d8975",
+          "name": "grounding",
+          "version": "0.3.0"
+        },
+        "verdict_counts": {
+          "contradicted": 0,
+          "supported": 0,
+          "unavailable": 0,
+          "uncovered": 2
+        },
+        "citations": [
+          {
+            "matched": null,
+            "quote": "the exact quote from that source",
+            "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation",
+            "url": "SOURCE https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+            "verdict": "uncovered"
+          },
+          {
+            "matched": null,
+            "quote": "the exact quote from that source",
+            "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation",
+            "url": "SOURCE https://artificialintelligenceact.eu/introduction-to-code-of-practice/",
+            "verdict": "uncovered"
+          }
+        ]
+      }
+    },
+    {
+      "id": "tavily-only",
+      "provider": "tavily",
+      "answer": "The supplied context cannot establish the specific obligations that the EU AI Act places on general-purpose AI model providers under the Code of Practice. It only mentions that the Code is a set of guidelines for compliance and aims to help providers effectively comply, but does not detail what those obligations are.\n\nCITATION: SOURCE https://artificialintelligenceact.eu/introduction-to-code-of-practice :: \"the AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act.\"\nCITATION: SOURCE https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice :: \"The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply.\"",
+      "answer_sha256": "sha256:a26a40cb997196e4ab258eaab0c57cc96a1acb32e995216b86928ac08a5eedca",
+      "window": [
+        {
+          "source_ref": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+          "content_hash": "sha256:fc138009d938973820ec0a57ea9bec54949ae680c65610fb4131ace33b329da0",
+          "text": "Purpose: The AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act. I […elided, 864 chars total; shape recorded, text not committed]"
+        },
+        {
+          "source_ref": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+          "content_hash": "sha256:cbab50938727405a46645e1120c4e69b3a6f6e8cbe85846788e986ac77d9bc75",
+          "text": ". The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply […elided, 1462"
+        }
+      ],
+      "published_evaluation": {
+        "evaluator": {
+          "configuration_digest": "sha256:771836f46ccf6c368da12f1a7c7ca1d6e85884a3ef548c8b42e5c89ebb0d8975",
+          "name": "grounding",
+          "version": "0.3.0"
+        },
+        "verdict_counts": {
+          "contradicted": 0,
+          "supported": 0,
+          "unavailable": 0,
+          "uncovered": 2
+        },
+        "citations": [
+          {
+            "matched": null,
+            "quote": "the AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act.",
+            "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation",
+            "url": "SOURCE https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+            "verdict": "uncovered"
+          },
+          {
+            "matched": null,
+            "quote": "The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply.",
+            "reason": "the cited URL is not among the sources that entered this plan's window, so the supplied context cannot back this citation",
+            "url": "SOURCE https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+            "verdict": "uncovered"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+ "probe": "balance-after",
+ "payload": {
+  "jsonrpc": "2.0",
+  "id": 81,
+  "method": "tools/call",
+  "params": {
+   "name": "get_balance",
+   "arguments": {}
+  }
+ },
+ "status": 200,
+ "latency_ms": 155,
+ "headers": {
+  "Date": "Tue, 04 Aug 2026 07:32:56 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "495",
+  "mcp-session-id": "\u00abas issued by initialize\u00bb"
+ },
+ "body": "{\"jsonrpc\":\"2.0\",\"id\":81,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"**Free trial:** 4 of 5 queries remaining\\nEverything is free right now \u2014 no costs or charges apply.\\n\\n**Dashboard:** https://app.redpine.ai\\n\\nFree trial: 4/5 queries remaining \u2014 everything is free\"}],\"isError\":false,\"structuredContent\":{\"balance\":\"0.00\",\"billing_exempt\":false,\"trial_active\":true,\"trial_remaining\":4,\"trial_total\":5,\"trial_queries_used\":1,\"dashboard_url\":\"https://app.redpine.ai\",\"is_hackathon\":false}}}",
+ "request_headers": {
+  "Authorization": "\u00abREDACTED: Bearer $REDPINE_API_KEY, never recorded\u00bb",
+  "User-Agent": "ContextOpsRecon/0.1",
+  "Mcp-Session-Id": "\u00abas issued by initialize\u00bb"
+ }
+}

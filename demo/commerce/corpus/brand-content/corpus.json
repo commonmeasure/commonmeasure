@@ -1,0 +1,17 @@
+{
+  "name": "Fictive Retail brand content (synthetic)",
+  "dates": {
+    "aurelio-presto-200-page.md": "2025-11-12",
+    "aurelio-presto-300-page.md": "2026-05-04",
+    "northglade-g4-guide.md": "2026-04-02",
+    "northglade-g4-page.md": "2026-03-30",
+    "aurelio-brewlink-hub-page.md": "2026-02-10"
+  },
+  "licences": {
+    "aurelio-presto-200-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" },
+    "aurelio-presto-300-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" },
+    "northglade-g4-guide.md": { "state": "declared", "reference": "northglade/brand-content-licence-v1" },
+    "northglade-g4-page.md": { "state": "declared", "reference": "northglade/brand-content-licence-v1" },
+    "aurelio-brewlink-hub-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" }
+  }
+}

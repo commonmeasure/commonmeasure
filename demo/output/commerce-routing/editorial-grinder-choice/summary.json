@@ -1,0 +1,1184 @@
+{
+  "evidence_log": {
+    "records": 15,
+    "sha256": "sha256:adeac3c8897e9bede779cb7f62be1fc9b9c9574b68823150cca8935e3ce63157"
+  },
+  "job": {
+    "constraints": {
+      "allowed_providers": [],
+      "allowed_source_hosts": [],
+      "denied_providers": [],
+      "denied_source_hosts": [],
+      "enforcement_mode": "observe",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "required_licences": []
+    },
+    "id": "91ba0b84-4de8-4486-bda5-9108ed9d9f09",
+    "kind": "research.answer",
+    "label": "Commerce routing experiment, recommendation question 'grinder-choice': third-party editorial alone",
+    "objective": {
+      "cost": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "kind": "weighted",
+      "latency": 0.0,
+      "policy_risk": 0.0,
+      "quality": 0.0
+    },
+    "prompt": "Which burr grinder should an Aurelio Presto 300 owner buy from Fictive Retail, and what does fitting it require?",
+    "requirements": []
+  },
+  "model_plan": {
+    "configured": false,
+    "endpoint": null,
+    "gateway": null,
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "plans": [
+    {
+      "acquisition": null,
+      "adapter_version": null,
+      "answer": null,
+      "capability": null,
+      "context_tokens_admitted": 0,
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "evaluation": {
+        "coverage": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ],
+          "covered_count": 0,
+          "evaluator": {
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7",
+            "name": "coverage",
+            "version": "0.1.0"
+          },
+          "fraction": 0.0,
+          "inputs": [],
+          "item_count": 3,
+          "items": [
+            {
+              "covered": false,
+              "item": "editorial-pick",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "covered": false,
+              "item": "fitting-kit",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "covered": false,
+              "item": "current-price",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "rubric": {
+            "name": "commerce-grinder-choice",
+            "version": "1"
+          },
+          "unmeasured": null
+        },
+        "freshness": {
+          "as_of": {
+            "date": "2026-08-13",
+            "maximum_age_days": 180
+          },
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ],
+          "evaluator": {
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103",
+            "name": "freshness",
+            "version": "0.2.0"
+          },
+          "fraction": null,
+          "fresh_count": null,
+          "inputs": [],
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "part_count": null,
+          "parts": [],
+          "record_version": "contextops-evaluation/v1",
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date"
+        },
+        "grounding": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ],
+          "citations": [],
+          "evaluator": {
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+            "name": "grounding",
+            "version": "0.4.0"
+          },
+          "inputs": [],
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "verdict_counts": {
+            "contradicted": 0,
+            "supported": 0,
+            "unavailable": 0,
+            "uncovered": 0
+          }
+        }
+      },
+      "gaps": [
+        {
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer.",
+          "reason": "evidence_missing"
+        },
+        {
+          "detail": "No inference gateway is configured. Set CONTEXTOPS_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint.",
+          "reason": "inference_unavailable"
+        }
+      ],
+      "id": "no-context",
+      "inference": null,
+      "latency_ms": null,
+      "policy_decisions": [],
+      "processors": [],
+      "provider": "none",
+      "source_count": 0,
+      "sources": [],
+      "status": "unavailable",
+      "verification_state": "planned"
+    },
+    {
+      "acquisition": {
+        "charge": {},
+        "endpoint": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party",
+        "http_status": null,
+        "latency_ms": 0,
+        "provider_request_id": null,
+        "response_bytes": 7279,
+        "response_hash": "sha256:97a71742836544859d5df8bb62ba9122c9726e2accdcba7469f5adb6bb51eb6e",
+        "response_ref": "responses/internal-only.json",
+        "result_count": 5
+      },
+      "adapter_version": "ctx-supply/0.1",
+      "answer": null,
+      "capability": "query",
+      "context_tokens_admitted": 537,
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "evaluation": {
+        "coverage": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ],
+          "covered_count": 2,
+          "evaluator": {
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7",
+            "name": "coverage",
+            "version": "0.1.0"
+          },
+          "fraction": 0.6666666666666666,
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md"
+            },
+            {
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+            },
+            {
+              "content_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+            }
+          ],
+          "item_count": 3,
+          "items": [
+            {
+              "covered": true,
+              "item": "editorial-pick",
+              "matched": {
+                "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+                "end": 263,
+                "phrase": "grinder pick for auto-dose machines",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "start": 227
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "covered": false,
+              "item": "fitting-kit",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "covered": true,
+              "item": "current-price",
+              "matched": {
+                "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+                "end": 456,
+                "phrase": "£129.00",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "start": 448
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            }
+          ],
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "rubric": {
+            "name": "commerce-grinder-choice",
+            "version": "1"
+          },
+          "unmeasured": null
+        },
+        "freshness": {
+          "as_of": {
+            "date": "2026-08-13",
+            "maximum_age_days": 180
+          },
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ],
+          "evaluator": {
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103",
+            "name": "freshness",
+            "version": "0.2.0"
+          },
+          "fraction": 0.8,
+          "fresh_count": 4,
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md"
+            },
+            {
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+            },
+            {
+              "content_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+            }
+          ],
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "part_count": 5,
+          "parts": [
+            {
+              "age_days": 317,
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2025-09-30",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "within_maximum_age": false
+            },
+            {
+              "age_days": 19,
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-07-25",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 54,
+              "content_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-06-20",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 26,
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-07-18",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 24,
+              "content_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-07-20",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+              "within_maximum_age": true
+            }
+          ],
+          "record_version": "contextops-evaluation/v1",
+          "unmeasured": null
+        },
+        "grounding": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ],
+          "citations": [],
+          "evaluator": {
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+            "name": "grounding",
+            "version": "0.4.0"
+          },
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md"
+            },
+            {
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+            },
+            {
+              "content_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+            }
+          ],
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "verdict_counts": {
+            "contradicted": 0,
+            "supported": 0,
+            "unavailable": 0,
+            "uncovered": 0
+          }
+        }
+      },
+      "gaps": [
+        {
+          "detail": "The corpus held 5 document(s) matching this job against the 10 requested; the sealed query response names every document scanned.",
+          "reason": "coverage_gap"
+        },
+        {
+          "detail": "No inference gateway is configured. Set CONTEXTOPS_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint.",
+          "reason": "inference_unavailable"
+        }
+      ],
+      "id": "internal-only",
+      "inference": null,
+      "latency_ms": 0,
+      "policy_decisions": [],
+      "processors": [
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:03:23.103Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.103Z",
+          "timestamp": "2026-08-13T10:03:23.103Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:03:23.104Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.104Z",
+          "timestamp": "2026-08-13T10:03:23.104Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:03:23.104Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.104Z",
+          "timestamp": "2026-08-13T10:03:23.104Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:03:23.105Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.105Z",
+          "timestamp": "2026-08-13T10:03:23.105Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:03:23.105Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.105Z",
+          "timestamp": "2026-08-13T10:03:23.105Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:03:23.106Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.106Z",
+          "timestamp": "2026-08-13T10:03:23.106Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:03:23.107Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "tokens": 125
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.107Z",
+          "timestamp": "2026-08-13T10:03:23.107Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:03:23.107Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "tokens": 125
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.107Z",
+          "timestamp": "2026-08-13T10:03:23.107Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:03:23.108Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+              "tokens": 108
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.108Z",
+          "timestamp": "2026-08-13T10:03:23.108Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:03:23.108Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+              "tokens": 108
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:03:23.108Z",
+          "timestamp": "2026-08-13T10:03:23.108Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ],
+          "decision": "admit",
+          "detail": {
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+              ],
+              "output": [
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+              ]
+            },
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "input_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+                "output_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:62ecc4e4fbb6a7b9288ba5e4eb7a8a1555801c906079f6f8097ba727767abca8",
+                    "end": 115,
+                    "first_kept": {
+                      "end": 91,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 52
+                    },
+                    "start": 74,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:0c202d21d2fd74e887aff4b5537d96b9946ba9a73baed6433743d2b822209b17",
+                    "end": 199,
+                    "first_kept": {
+                      "end": 167,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 127
+                    },
+                    "start": 158,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:92bc1e507807cd73c086b29ebe4541990d46e02d57d1e713da1af9a2adc98fef",
+                    "end": 325,
+                    "first_kept": {
+                      "end": 208,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 188
+                    },
+                    "start": 304,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+                "output_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:0293574e7baac7e04b0ba653acb92498905cfcb7723cdbbe8ba26946a8d0cf99",
+                    "end": 20,
+                    "first_kept": {
+                      "end": 20,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                      "start": 0
+                    },
+                    "start": 0,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:62ecc4e4fbb6a7b9288ba5e4eb7a8a1555801c906079f6f8097ba727767abca8",
+                    "end": 111,
+                    "first_kept": {
+                      "end": 91,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 52
+                    },
+                    "start": 70,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:a8eccdc8480beddaa0051dedfc75a2fb8ba53f8653882e09450a0baad9e14665",
+                    "end": 142,
+                    "first_kept": {
+                      "end": 146,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                      "start": 116
+                    },
+                    "start": 111,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:0c202d21d2fd74e887aff4b5537d96b9946ba9a73baed6433743d2b822209b17",
+                    "end": 195,
+                    "first_kept": {
+                      "end": 167,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 127
+                    },
+                    "start": 154,
+                    "words": 6
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+                "output_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:a7448803d1f51b225430d162a91e8def7fc19c0697fb89c8da04e5dad0855aa1",
+                    "end": 652,
+                    "first_kept": {
+                      "end": 752,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 735
+                    },
+                    "start": 634,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:b594af6c1f5dc858317a3a24b5e8c027925fd0276a0bc14569d711b08a6bb706",
+                    "end": 708,
+                    "first_kept": {
+                      "end": 769,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 753
+                    },
+                    "start": 691,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+                "output_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:11f07820c1c90f6243b185eaf8cbfa9dbd308076365e8ff0595e025ba46db08c",
+                    "end": 23,
+                    "first_kept": {
+                      "end": 23,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 0
+                    },
+                    "start": 0,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:263731e67365205c372d6d2f5c99947b7dcf2760f88098bd99acc7be303b9400",
+                    "end": 126,
+                    "first_kept": {
+                      "end": 126,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 52
+                    },
+                    "start": 50,
+                    "words": 9
+                  },
+                  {
+                    "content_hash": "sha256:0cac035d6c8d0dfcc62ebf6c20538cf10c7de71bc456d02f1e9022def97ffd38",
+                    "end": 167,
+                    "first_kept": {
+                      "end": 167,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 127
+                    },
+                    "start": 126,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:141d86a07522c20d75e1371805ea0d8d8a66a212e8a045661f0b46fa0cd05d46",
+                    "end": 211,
+                    "first_kept": {
+                      "end": 50,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+                      "start": 32
+                    },
+                    "start": 192,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:4911525e3b8924f3097463d27f05dfcf93011a7e8f081039205cf12e19136b49",
+                    "end": 512,
+                    "first_kept": {
+                      "end": 333,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 318
+                    },
+                    "start": 496,
+                    "words": 4
+                  }
+                ]
+              }
+            ],
+            "token_basis": "whitespace-words",
+            "tokens_in": 607,
+            "tokens_out": 537
+          },
+          "finished_at": "2026-08-13T10:03:23.111Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            },
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            },
+            {
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "tokens": 128
+            },
+            {
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "tokens": 125
+            },
+            {
+              "content_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+              "tokens": 108
+            }
+          ],
+          "latency_ms": 2,
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 14 repeated phrases",
+          "outputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 113
+            },
+            {
+              "content_hash": "sha256:a6010eee2d55c8142c5e34fa5e7a2df2ca0887ecc4464948e58596164dc52ffb",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "tokens": 108
+            },
+            {
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "tokens": 117
+            },
+            {
+              "content_hash": "sha256:a41d560e9c0d001d8f2aa1db1df96f755f5ba8b8207af929ba3232c7fd8438f6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+              "tokens": 81
+            }
+          ],
+          "processor": {
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+            "name": "context-optimiser",
+            "version": "2"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "transform",
+          "started_at": "2026-08-13T10:03:23.109Z",
+          "timestamp": "2026-08-13T10:03:23.111Z"
+        }
+      ],
+      "provider": "internal",
+      "source_count": 5,
+      "sources": [
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+          "host": "",
+          "licence": {
+            "reference": "brewprint/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 7,
+            "governance": null,
+            "occurrences": 11,
+            "path": "brewprint-g4-review.md"
+          },
+          "retrieval_rank": 1,
+          "title": "BrewPrint reviews the Northglade G4 burr grinder",
+          "tokens": 118,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+          "host": "",
+          "licence": {
+            "reference": "crema-courier/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 7,
+            "governance": null,
+            "occurrences": 11,
+            "path": "crema-courier-grinder-guide.md"
+          },
+          "retrieval_rank": 2,
+          "title": "The Crema Courier: grinders for auto-dose espresso machines, summer 2026",
+          "tokens": 113,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+          "host": "",
+          "licence": {
+            "reference": "crema-courier/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 10,
+            "path": "crema-courier-roundup.md"
+          },
+          "retrieval_rank": 3,
+          "title": "The Crema Courier: espresso machines for small kitchens, summer 2026",
+          "tokens": 108,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-roundup.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+          "host": "",
+          "licence": {
+            "state": "unknown"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 10,
+            "path": "gadgetgrove-presto-300-review.md"
+          },
+          "retrieval_rank": 4,
+          "title": "GadgetGrove hands-on: Aurelio Presto 300",
+          "tokens": 117,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+          "host": "",
+          "licence": {
+            "reference": "brewprint/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 9,
+            "path": "brewprint-steam-tip-review.md"
+          },
+          "retrieval_rank": 5,
+          "title": "BrewPrint reviews the Aurelio steam tip set ST-1",
+          "tokens": 81,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md"
+        }
+      ],
+      "status": "unavailable",
+      "verification_state": "live-verified"
+    }
+  ],
+  "run": {
+    "evidence_complete": true,
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "id": "60bfc764-80c4-4994-92cd-461eea32f7d4",
+    "manifest_hash": "sha256:577be5166e5d355de0102b894d46dada8a77f57df0417fbad8c240f7744bff13",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-08-13T10:03:23Z",
+    "token_basis": "whitespace-words"
+  },
+  "schema_version": "contextops-run/v6",
+  "selection": {
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric commerce-grinder-choice/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 1.07 (coverage 0.67, freshness 0.80). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "objective": {
+      "cost": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "kind": "weighted",
+      "latency": 0.0,
+      "policy_risk": 0.0,
+      "quality": 0.0
+    },
+    "plan_id": "internal-only",
+    "unavailable_inputs": []
+  },
+  "suite_version": "commerce-routing-editorial-grinder-choice/v1"
+}

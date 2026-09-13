@@ -1,0 +1,13 @@
+Common Measure
+Copyright 2026 Common Measure Ltd
+
+Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+(FSL-1.1-ALv2, also written FSL-1.1-Apache-2.0). See LICENSE.md. Each release
+becomes available under the Apache License, Version 2.0 two years after the
+date it is made available.
+
+The protocol contracts and evidence format specifications under
+docs/contracts/ are licensed separately under the Creative Commons
+Attribution 4.0 International licence (CC-BY-4.0); see docs/contracts/LICENSE.
+
+Third-party code and standards retain their own notices.

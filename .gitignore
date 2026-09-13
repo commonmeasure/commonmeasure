@@ -1,0 +1,93 @@
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Emacs autosave, lock and backup files. `#.env#` is not covered by `.env.*`
+# and can hold live provider keys.
+\#*\#
+.\#*
+*~
+target/
+node_modules/
+dist/
+.DS_Store
+*.log
+tmp/
+fixtures/private/
+data/
+
+# Run artefacts that must not enter git.
+# `responses/` holds unredacted provider bodies, which may contain licensed
+# content. `*.staging`/`*.previous` are the atomic-publication working
+# directories (docs/FAIL-POLICY.md clause 4). `demo/output/live/` is the
+# local live-run convention: it exists only on machines with credentials,
+# and the committed example stays the no-credential run in `latest/`.
+demo/output/**/responses/
+# The demonstration evidence home is regenerated from scripted sessions
+# by `just demo-arc` (demo/arc/regenerate.sh); its session ids and timestamps
+# are volatile and the store is reviewed locally before every screen share,
+# so it stays out of git like any other operator store.
+demo/arc/home/
+# The internal-corpus response is derived wholly from the committed,
+# operator-owned demo corpus and is retained as acceptance evidence.
+!demo/output/tensorzero/responses/
+!demo/output/tensorzero/responses/internal-only.json
+# The specialist comparison runs query only the committed synthetic
+# bundle (demo/specialist/), so their sealed responses carry no licensed
+# bytes and are retained as the comparison's acceptance evidence.
+!demo/output/specialist/*/responses/
+!demo/output/specialist/*/responses/*.json
+# The commerce comparison runs query only the committed synthetic
+# bundle (demo/commerce/), so their sealed responses carry no licensed
+# bytes and are retained as the comparison's acceptance evidence.
+!demo/output/commerce/*/responses/
+!demo/output/commerce/*/responses/*.json
+# The replay example seals byte-identical copies of the committed,
+# redacted recon captures, nothing unredacted, and is retained as the
+# replay mode's committed example (docs/contracts/run-output.md).
+!demo/output/replay/responses/
+!demo/output/replay/responses/*.json
+# The cited example replays the same four committed recordings, so its
+# sealed responses are equally redacted; committing them keeps the run's
+# strongest checks (the dossier's rechecked-from-bytes citations and the
+# excision half of tests/cited_artefact.rs) alive in a fresh clone.
+!demo/output/cited/responses/
+!demo/output/cited/responses/*.json
+# The rankable-evaluation example replays three of the same
+# committed recordings offline; its sealed responses are the same redacted
+# bytes, and committing them keeps the dossier's coverage-span rechecks
+# alive in a fresh clone.
+!demo/output/latest/responses/
+!demo/output/latest/responses/*.json
+# The licensed replay example replays the five redacted Redpine captures;
+# its sealed exchanges (inspect, preview and the confirm whose transcript
+# text is truncated in both carriers) are those
+# same redacted bytes, and committing them keeps the quote-and-settlement
+# hash bindings recheckable in a fresh clone. No licensed words are inside.
+!demo/output/redpine-replay/responses/
+!demo/output/redpine-replay/responses/*.json
+# The skill run seals what two local programs printed about a bundle
+# committed in this repository. No provider bytes, no licensed content and no
+# credential can be in them, because the child is spawned with an empty
+# environment, and those sealed results are the whole of what the run
+# proves, so they are retained.
+!demo/output/skills/responses/
+!demo/output/skills/responses/*.json
+demo/output/live/
+# Sibling live runs follow the same convention: local only, unredacted
+# licensed bytes never enter git (e.g. live-rubric, a live validation of
+# the rankable evaluation).
+demo/output/live-*/
+*.staging/
+*.previous/
+
+# Binaries for the standalone plugin archive are build outputs: one per
+# platform, several megabytes each, built by plugin/build.sh. The checkout's
+# plugin carries none; the launcher beside them is source and is committed.
+plugin/bin/*
+!plugin/bin/commonmeasure-launch
+
+# Python bytecode from docs/guide/build.py
+__pycache__/
+*.pyc

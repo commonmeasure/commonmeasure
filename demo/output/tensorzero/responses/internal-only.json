@@ -1,0 +1,49 @@
+{
+  "corpus": "file:///home/alexs/common-measure/contextops/demo/corpus",
+  "corpus_name": "demo operator knowledge base",
+  "documents_discovered": 3,
+  "documents_scanned": 3,
+  "licence": {
+    "reference": "operator-owned/demo-corpus-v1",
+    "state": "declared"
+  },
+  "matches": [
+    {
+      "content_hash": "sha256:e271873a5f21254bac0a776aae72895c85922ad2deaf533afdb21e94587547dd",
+      "distinct_terms": 8,
+      "occurrences": 20,
+      "path": "price-cap-briefing.md",
+      "text": "# Price cap briefing\n\nInternal briefing note for teams answering questions about the Ofgem energy\nprice cap.\n\nThe price cap limits what suppliers may charge per unit of energy and per day\nin standing charges for customers on default (standard variable) tariffs. It\ndoes not cap a household's total bill: a household that uses more energy pays\nmore.\n\nOfgem reviews the cap quarterly. The widely reported headline figure is the\nannualised cost for a household with typical consumption, which is an\nillustration rather than a guarantee.\n\nThe current headline figure is **not** kept in this corpus. Always take it\nfrom Ofgem's own quarterly announcement, which is the primary source.\n",
+      "title": "Price cap briefing",
+      "url": "file:///home/alexs/common-measure/contextops/demo/corpus/price-cap-briefing.md"
+    },
+    {
+      "content_hash": "sha256:545c3e594f66867d8f9870aa6088036f756ff1910f68ee6b00289005a49fab7c",
+      "distinct_terms": 7,
+      "occurrences": 14,
+      "path": "customer-comms-guidance.md",
+      "text": "# Customer communications guidance\n\nWhen communicating about the energy price cap:\n\n- Say \"the cap limits unit rates and standing charges\", never \"the cap caps\n  your bill\".\n- Name the cap period explicitly (for example \"1 July to 30 September\"),\n  because the figure changes quarterly and undated statements go stale.\n- Link the current Ofgem announcement rather than restating its figure, so\n  the primary evidence travels with the claim.\n- Do not compare the cap to fixed-tariff prices without saying which cap\n  period the comparison uses.\n",
+      "title": "Customer communications guidance",
+      "url": "file:///home/alexs/common-measure/contextops/demo/corpus/customer-comms-guidance.md"
+    }
+  ],
+  "query": "What is the current Ofgem household energy price cap, when does it apply, and what primary evidence supports the answer? Identify anything the supplied evidence cannot establish.",
+  "requested": 3,
+  "skipped": [],
+  "terms": [
+    "answer",
+    "apply",
+    "cap",
+    "current",
+    "energy",
+    "establish",
+    "evidence",
+    "household",
+    "identify",
+    "ofgem",
+    "price",
+    "primary",
+    "supplied",
+    "supports"
+  ]
+}

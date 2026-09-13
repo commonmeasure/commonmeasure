@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-brand-g4-presto200/v1",
+  "label": "Commerce routing experiment, compatibility question 'g4-presto200': brand content alone",
+  "job": {
+    "id": "0ed11c8f-e6a5-45a4-b241-3d558134a166",
+    "kind": "research.answer",
+    "prompt": "Does the Northglade G4 grinder work with the Aurelio Presto 200?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-g4-presto200",
+    "version": "1",
+    "items": [
+      {
+        "name": "matrix-verdict",
+        "any_of": [
+          "no adapter is made for the discontinued Presto 200"
+        ]
+      },
+      {
+        "name": "machine-design",
+        "any_of": [
+          "has no auto-dose tray"
+        ]
+      },
+      {
+        "name": "manual-workflow",
+        "any_of": [
+          "dose by hand"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

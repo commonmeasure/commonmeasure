@@ -1,0 +1,55 @@
+{
+  "probe": "parallel-extract",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-fetch.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. `full_content` and `excerpts` carry the page; `sku_extract_excerpts` usage is disclosed, no currency.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.parallel.ai/v1/extract",
+    "headers": {
+      "x-api-key": "«REDACTED: value of $PARALLEL_API_KEY, never recorded»",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "urls": [
+        "https://www.w3.org/TR/prov-dm/"
+      ],
+      "advanced_settings": {
+        "full_content": true
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 404,
+    "body": {
+      "extract_id": "extract_3c2b54d57ab2ff30f590d034976acda9",
+      "results": [
+        {
+          "url": "https://www.w3.org/TR/prov-dm/",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "[W3C](https://www.w3.org/)\n\n# PROV-DM: The PROV Data Model\n\n## W3C Recommendation 30 April 2013\n\nThis version:\n    [http[…elided, 131368 chars total; shape recorded, text not committed]"
+          ],
+          "full_content": "[W3C](https://www.w3.org/)\n\n# PROV-DM: The PROV Data Model\n\n## W3C Recommendation 30 April 2013\n\nThis version:\n    [http[…elided, 131368 chars total; shape recorded, text not committed]"
+        }
+      ],
+      "errors": [],
+      "warnings": [
+        {
+          "type": "warning",
+          "message": "Neither objective nor search_queries were provided, provide at least one to increase the relevance of excerpts.",
+          "detail": null
+        }
+      ],
+      "usage": [
+        {
+          "name": "sku_extract_excerpts",
+          "count": 1
+        }
+      ],
+      "metadata": null,
+      "session_id": "session_3c2b54d57ab2ff30f590d034976acda9"
+    }
+  }
+}

@@ -1,0 +1,2256 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "commerce-mixed-recommendation/v1",
+  "run": {
+    "id": "daed6b87-3d5f-4588-97ef-5a56f44b24ff",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-09-07T19:13:52Z",
+    "manifest_hash": "sha256:746613906fff73eabe986ed69fab86f77416547e095f4becbac7e19d14f023e9",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true
+  },
+  "evidence_log": {
+    "records": 27,
+    "sha256": "sha256:8947811370a6df0e563e540cb367cae5343ec4050d487e87fbbade36a9db3ea8"
+  },
+  "job": {
+    "id": "ef1bd555-5fb5-4331-b422-b6360f0fda49",
+    "label": "Commerce comparison, recommendation question: all three source classes together",
+    "kind": "research.answer",
+    "prompt": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": {
+      "enforcement_mode": "observe",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": []
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": "tensorzero",
+    "endpoint": "http://127.0.0.1:3000/openai/v1/chat/completions",
+    "configured": true
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": 763,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": "The supplied context cannot establish which espresso machine a buyer with a small kitchen should choose from Fictive Retail's range or the reasons for that choice. \n\nCITATION: None",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 763,
+        "input_tokens": 144,
+        "output_tokens": 35,
+        "provider_request_id": "01a07d4a-8cac-7cf1-8d52-8de906e6d00f",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish which espresso machine a buyer with a small kitchen should choose from Fictive Retail's range or the reasons for that choice. \n\nCITATION: None"
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:13:53.576Z",
+          "started_at": "2026-09-07T19:13:53.576Z",
+          "finished_at": "2026-09-07T19:13:53.576Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:1a230fef64e076dbb4dc485b84ac45b0ccdffd94021adcd9c143f80d01d266b3"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 163,
+                "text": "The supplied context cannot establish which espresso machine a buyer with a small kitchen should choose from Fictive Retail's range or the reasons for that choice.",
+                "words": 26,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:1a230fef64e076dbb4dc485b84ac45b0ccdffd94021adcd9c143f80d01d266b3"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 1
+          },
+          "citations": [
+            {
+              "url": null,
+              "quote": null,
+              "line": "CITATION: None",
+              "verdict": "unavailable",
+              "matched": null,
+              "reason": "the citation line does not parse (no `::` separates the URL from the quote), so nothing is checkable"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "commerce-recommendation",
+            "version": "1"
+          },
+          "inputs": [],
+          "items": [
+            {
+              "item": "editorial-pick",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "fits-narrow-counters",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "current-availability",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-08",
+            "maximum_age_days": 180
+          },
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "internal-only",
+      "provider": "internal",
+      "capability": "query",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "live-verified",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus",
+        "http_status": null,
+        "latency_ms": 3,
+        "provider_request_id": null,
+        "charge": {},
+        "response_ref": "responses/internal-only.json",
+        "response_hash": "sha256:4213b13ff38b4587546d20fa5e5c02ef01d1c10c50185533a7a1febcb7144ffa",
+        "response_bytes": 13819,
+        "result_count": 10
+      },
+      "latency_ms": 1215,
+      "sources": [
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+          "host": "",
+          "title": "The Crema Courier: espresso machines for small kitchens, summer 2026",
+          "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+          "licence": {
+            "state": "declared",
+            "reference": "crema-courier/syndication-licence-v1"
+          },
+          "retrieval_rank": 1,
+          "tokens": 128,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "third-party/crema-courier-roundup.md",
+            "distinct_terms": 5,
+            "occurrences": 14,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+          "host": "",
+          "title": "Fictive Retail catalogue: Aurelio Presto 300 espresso machine",
+          "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-retail/product-data-licence-v1"
+          },
+          "retrieval_rank": 2,
+          "tokens": 115,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "product-data/presto-300-listing.md",
+            "distinct_terms": 4,
+            "occurrences": 9,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+          "host": "",
+          "title": "Fictive Retail catalogue: Aurelio Presto 200 espresso machine",
+          "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-retail/product-data-licence-v1"
+          },
+          "retrieval_rank": 3,
+          "tokens": 73,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "product-data/presto-200-listing.md",
+            "distinct_terms": 3,
+            "occurrences": 7,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+          "host": "",
+          "title": "Northglade G4: using the G4 with auto-dose espresso machines",
+          "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+          "licence": {
+            "state": "declared",
+            "reference": "northglade/brand-content-licence-v1"
+          },
+          "retrieval_rank": 4,
+          "tokens": 114,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "brand-content/northglade-g4-guide.md",
+            "distinct_terms": 3,
+            "occurrences": 6,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+          "host": "",
+          "title": "The Crema Courier: grinders for auto-dose espresso machines, summer 2026",
+          "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+          "licence": {
+            "state": "declared",
+            "reference": "crema-courier/syndication-licence-v1"
+          },
+          "retrieval_rank": 5,
+          "tokens": 107,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "third-party/crema-courier-grinder-guide.md",
+            "distinct_terms": 3,
+            "occurrences": 6,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+          "host": "",
+          "title": "Fictive Retail compatibility matrix: grinders and espresso machines",
+          "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+          "licence": {
+            "state": "declared",
+            "reference": "fictive-retail/product-data-licence-v1"
+          },
+          "retrieval_rank": 6,
+          "tokens": 92,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "product-data/compatibility-matrix.md",
+            "distinct_terms": 3,
+            "occurrences": 5,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+          "host": "",
+          "title": "Aurelio Presto 200 — the heart of the home bar",
+          "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+          "licence": {
+            "state": "declared",
+            "reference": "aurelio/brand-content-licence-v1"
+          },
+          "retrieval_rank": 7,
+          "tokens": 110,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "brand-content/aurelio-presto-200-page.md",
+            "distinct_terms": 3,
+            "occurrences": 4,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+          "host": "",
+          "title": "Aurelio Presto 300 — small footprint, full crema",
+          "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+          "licence": {
+            "state": "declared",
+            "reference": "aurelio/brand-content-licence-v1"
+          },
+          "retrieval_rank": 8,
+          "tokens": 78,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "brand-content/aurelio-presto-300-page.md",
+            "distinct_terms": 3,
+            "occurrences": 4,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+          "host": "",
+          "title": "Northglade G4 burr grinder — forty settings, zero fuss",
+          "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+          "licence": {
+            "state": "declared",
+            "reference": "northglade/brand-content-licence-v1"
+          },
+          "retrieval_rank": 9,
+          "tokens": 63,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "brand-content/northglade-g4-page.md",
+            "distinct_terms": 3,
+            "occurrences": 4,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+          "host": "",
+          "title": "GadgetGrove hands-on: Aurelio Presto 300",
+          "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 10,
+          "tokens": 117,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "third-party/gadgetgrove-presto-300-review.md",
+            "distinct_terms": 3,
+            "occurrences": 3,
+            "governance": null
+          }
+        }
+      ],
+      "source_count": 10,
+      "context_tokens_admitted": 997,
+      "answer": "The supplied context cannot establish which other espresso machines from Fictive Retail's range might be suitable for a buyer with a small kitchen, aside from the Aurelio Presto 300. It does not provide information on any other models that may fit the criteria or their features.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md :: \"the Aurelio Presto 300 is our pick for small kitchens: the slimmest chassis we measured, the auto-dose tray genuinely reduces bench mess, and the pump is noticeably quieter than the Presto 200 it replaces.\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1212,
+        "input_tokens": 2297,
+        "output_tokens": 135,
+        "provider_request_id": "01a07d4a-8fdf-7f60-97dd-94671a4abda2",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish which other espresso machines from Fictive Retail's range might be suitable for a buyer with a small kitchen, aside from the Aurelio Presto 300. It does not provide information on any other models that may fit the criteria or their features.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md :: \"the Aurelio Presto 300 is our pick for small kitchens: the slimmest chassis we measured, the auto-dose tray genuinely reduces bench mess, and the pump is noticeably quieter than the Presto 200 it replaces.\""
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.592Z",
+          "started_at": "2026-09-07T19:13:53.592Z",
+          "finished_at": "2026-09-07T19:13:53.592Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "tokens": 128
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.593Z",
+          "started_at": "2026-09-07T19:13:53.593Z",
+          "finished_at": "2026-09-07T19:13:53.593Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "tokens": 128
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.595Z",
+          "started_at": "2026-09-07T19:13:53.595Z",
+          "finished_at": "2026-09-07T19:13:53.595Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "tokens": 124
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.596Z",
+          "started_at": "2026-09-07T19:13:53.596Z",
+          "finished_at": "2026-09-07T19:13:53.596Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "tokens": 124
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.598Z",
+          "started_at": "2026-09-07T19:13:53.598Z",
+          "finished_at": "2026-09-07T19:13:53.598Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "tokens": 103
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.599Z",
+          "started_at": "2026-09-07T19:13:53.599Z",
+          "finished_at": "2026-09-07T19:13:53.599Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "tokens": 103
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.601Z",
+          "started_at": "2026-09-07T19:13:53.601Z",
+          "finished_at": "2026-09-07T19:13:53.601Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.602Z",
+          "started_at": "2026-09-07T19:13:53.602Z",
+          "finished_at": "2026-09-07T19:13:53.602Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.604Z",
+          "started_at": "2026-09-07T19:13:53.604Z",
+          "finished_at": "2026-09-07T19:13:53.604Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "tokens": 128
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.605Z",
+          "started_at": "2026-09-07T19:13:53.605Z",
+          "finished_at": "2026-09-07T19:13:53.605Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "tokens": 128
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.607Z",
+          "started_at": "2026-09-07T19:13:53.607Z",
+          "finished_at": "2026-09-07T19:13:53.607Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "tokens": 117
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.608Z",
+          "started_at": "2026-09-07T19:13:53.608Z",
+          "finished_at": "2026-09-07T19:13:53.608Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "tokens": 117
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.610Z",
+          "started_at": "2026-09-07T19:13:53.610Z",
+          "finished_at": "2026-09-07T19:13:53.610Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.611Z",
+          "started_at": "2026-09-07T19:13:53.611Z",
+          "finished_at": "2026-09-07T19:13:53.611Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.612Z",
+          "started_at": "2026-09-07T19:13:53.612Z",
+          "finished_at": "2026-09-07T19:13:53.612Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.614Z",
+          "started_at": "2026-09-07T19:13:53.614Z",
+          "finished_at": "2026-09-07T19:13:53.614Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.615Z",
+          "started_at": "2026-09-07T19:13:53.615Z",
+          "finished_at": "2026-09-07T19:13:53.615Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.617Z",
+          "started_at": "2026-09-07T19:13:53.617Z",
+          "finished_at": "2026-09-07T19:13:53.617Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.618Z",
+          "started_at": "2026-09-07T19:13:53.618Z",
+          "finished_at": "2026-09-07T19:13:53.618Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "tokens": 125
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:13:53.620Z",
+          "started_at": "2026-09-07T19:13:53.620Z",
+          "finished_at": "2026-09-07T19:13:53.620Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "tokens": 125
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:13:53.627Z",
+          "started_at": "2026-09-07T19:13:53.621Z",
+          "finished_at": "2026-09-07T19:13:53.627Z",
+          "latency_ms": 5,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 33 repeated phrases",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "tokens": 128
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "tokens": 124
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "tokens": 103
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "tokens": 128
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "tokens": 117
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+              "tokens": 125
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "tokens": 128
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc",
+              "tokens": 115
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6",
+              "tokens": 73
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb",
+              "tokens": 114
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7",
+              "tokens": 107
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f",
+              "tokens": 92
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea",
+              "tokens": 110
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35",
+              "tokens": 78
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07",
+              "tokens": 63
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "tokens": 117
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 1176,
+            "tokens_out": 997,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "input_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+                "output_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc",
+                "spans": [
+                  {
+                    "start": 245,
+                    "end": 273,
+                    "words": 4,
+                    "content_hash": "sha256:318256404f88d835ae423325246b91c7e8b806c2a620dc2727c8a19f4d17d88c",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 36,
+                      "end": 63
+                    }
+                  },
+                  {
+                    "start": 380,
+                    "end": 407,
+                    "words": 5,
+                    "content_hash": "sha256:674ff86712cc51c0c3552786c1e00fcbec9836302022ea16e40e49e64dcb2d2d",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 295,
+                      "end": 320
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "input_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+                "output_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6",
+                "spans": [
+                  {
+                    "start": 0,
+                    "end": 42,
+                    "words": 6,
+                    "content_hash": "sha256:d1f5ae69bc248097452bed0ca081aec6c595c304b06b367a595b088fd8dccbec",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 0,
+                      "end": 42
+                    }
+                  },
+                  {
+                    "start": 63,
+                    "end": 134,
+                    "words": 9,
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 65,
+                      "end": 134
+                    }
+                  },
+                  {
+                    "start": 134,
+                    "end": 165,
+                    "words": 5,
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 135,
+                      "end": 165
+                    }
+                  },
+                  {
+                    "start": 165,
+                    "end": 184,
+                    "words": 5,
+                    "content_hash": "sha256:d132d7ff6d046fdf5458ae8b371a0380ce400efdb3d1bfeb8899c4f616137d41",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 167,
+                      "end": 184
+                    }
+                  },
+                  {
+                    "start": 213,
+                    "end": 233,
+                    "words": 5,
+                    "content_hash": "sha256:9641925aa6286aa39f7ee5141b15a5aa61e4c21b974d9dd82886974f4bf3da51",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 214,
+                      "end": 233
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "input_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+                "output_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb",
+                "spans": [
+                  {
+                    "start": 262,
+                    "end": 285,
+                    "words": 4,
+                    "content_hash": "sha256:03212f4bb3bfaea69db6d40af1a59a2a7f3225e2413d90053c45f9ae6625167a",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 295,
+                      "end": 317
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "input_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+                "output_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7",
+                "spans": [
+                  {
+                    "start": 0,
+                    "end": 20,
+                    "words": 4,
+                    "content_hash": "sha256:0293574e7baac7e04b0ba653acb92498905cfcb7723cdbbe8ba26946a8d0cf99",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 0,
+                      "end": 20
+                    }
+                  },
+                  {
+                    "start": 74,
+                    "end": 146,
+                    "words": 10,
+                    "content_hash": "sha256:e82b758a9c47b8438625bfcdadc336f84d65d90660685c12012acd4b0683d2ba",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 72,
+                      "end": 142
+                    }
+                  },
+                  {
+                    "start": 146,
+                    "end": 199,
+                    "words": 7,
+                    "content_hash": "sha256:9e3cc0734af0662a84590634143faf1c389d35e159566e15ee42a999a4bf15fe",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 143,
+                      "end": 195
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "input_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+                "output_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f",
+                "spans": [
+                  {
+                    "start": 69,
+                    "end": 140,
+                    "words": 9,
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 65,
+                      "end": 134
+                    }
+                  },
+                  {
+                    "start": 140,
+                    "end": 171,
+                    "words": 5,
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 135,
+                      "end": 165
+                    }
+                  },
+                  {
+                    "start": 328,
+                    "end": 361,
+                    "words": 6,
+                    "content_hash": "sha256:3de679b9475b3f6d01ce34566875a639f4725bd4cb45793cd9608486f49c05fe",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                      "start": 237,
+                      "end": 269
+                    }
+                  },
+                  {
+                    "start": 399,
+                    "end": 430,
+                    "words": 5,
+                    "content_hash": "sha256:95164d66a15b8b8365b4dbfda97394ec691ec5a14562a80a122339f1c7f64415",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 185,
+                      "end": 215
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "input_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+                "output_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea",
+                "spans": [
+                  {
+                    "start": 50,
+                    "end": 77,
+                    "words": 4,
+                    "content_hash": "sha256:61b4bd471a613a7f0e0cf5938dab8317fdbe761ec167bbc85b9858d9b4c509b2",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 64,
+                      "end": 89
+                    }
+                  },
+                  {
+                    "start": 85,
+                    "end": 119,
+                    "words": 6,
+                    "content_hash": "sha256:1a8850ed65de2167bc7b0b4864f102ffd3333ce52b9129bfb887629aebbed04b",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 101,
+                      "end": 134
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "input_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+                "output_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35",
+                "spans": [
+                  {
+                    "start": 52,
+                    "end": 79,
+                    "words": 4,
+                    "content_hash": "sha256:61b4bd471a613a7f0e0cf5938dab8317fdbe761ec167bbc85b9858d9b4c509b2",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 64,
+                      "end": 89
+                    }
+                  },
+                  {
+                    "start": 87,
+                    "end": 121,
+                    "words": 6,
+                    "content_hash": "sha256:1a8850ed65de2167bc7b0b4864f102ffd3333ce52b9129bfb887629aebbed04b",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 101,
+                      "end": 134
+                    }
+                  },
+                  {
+                    "start": 128,
+                    "end": 155,
+                    "words": 4,
+                    "content_hash": "sha256:bab38877b9e5d6b7b9daf091cc1791d74098b647048643ea36535837b393026a",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 127,
+                      "end": 153
+                    }
+                  },
+                  {
+                    "start": 167,
+                    "end": 190,
+                    "words": 5,
+                    "content_hash": "sha256:4a8bfcc32705ec018fbdc7450b94a03a42ecae4a7a189f923e43412b690b55f0",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 735,
+                      "end": 756
+                    }
+                  },
+                  {
+                    "start": 576,
+                    "end": 605,
+                    "words": 5,
+                    "content_hash": "sha256:88f25708638a556f08e08abe3fb86fdc7eb69fb4c09145cdc7b9ac1cf5dd8827",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 506,
+                      "end": 534
+                    }
+                  },
+                  {
+                    "start": 605,
+                    "end": 641,
+                    "words": 6,
+                    "content_hash": "sha256:c89d51c995af05f6f2122176e38320a41bc59f9412804c4be6612abf7c977d10",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 535,
+                      "end": 570
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "input_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+                "output_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07",
+                "spans": [
+                  {
+                    "start": 1,
+                    "end": 28,
+                    "words": 4,
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 189,
+                      "end": 215
+                    }
+                  },
+                  {
+                    "start": 58,
+                    "end": 130,
+                    "words": 11,
+                    "content_hash": "sha256:1a64a430e3af78a18c7d3a64cdf5aa2f2ddb367cd0f6946d00af65bf29e34a9c",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 64,
+                      "end": 134
+                    }
+                  },
+                  {
+                    "start": 137,
+                    "end": 164,
+                    "words": 4,
+                    "content_hash": "sha256:5217ee0338ca03278165ad3c5b0a78dee9c1413794a80faf2c79b02c4f8aaa2d",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 127,
+                      "end": 153
+                    }
+                  },
+                  {
+                    "start": 179,
+                    "end": 205,
+                    "words": 5,
+                    "content_hash": "sha256:0dfe762ede87b6a40281279e9dd566ec69896282806a97860a21c48a4bc57455",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                      "start": 305,
+                      "end": 329
+                    }
+                  },
+                  {
+                    "start": 329,
+                    "end": 369,
+                    "words": 6,
+                    "content_hash": "sha256:5d1cd6006c6a428739c4895d452dc223cf53c805a5212331ec6cf72076b666b6",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 220,
+                      "end": 259
+                    }
+                  },
+                  {
+                    "start": 372,
+                    "end": 396,
+                    "words": 4,
+                    "content_hash": "sha256:0a4b5db8bf67a80533adf119581edc6d70ea0b7ccc0ef98b77006a40b9608cfa",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 450,
+                      "end": 473
+                    }
+                  },
+                  {
+                    "start": 400,
+                    "end": 422,
+                    "words": 4,
+                    "content_hash": "sha256:c84e602c5f57eab0126c4498ffbab5d8feedef21ec67295f8ff645ee740df7b3",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                      "start": 505,
+                      "end": 526
+                    }
+                  },
+                  {
+                    "start": 471,
+                    "end": 499,
+                    "words": 4,
+                    "content_hash": "sha256:88d6113bf5aaff7f44e3db48bae339f1d69ea16f910309f404af0dc214e83407",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 567,
+                      "end": 594
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+                "input_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+                "output_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+                "spans": [
+                  {
+                    "start": 634,
+                    "end": 652,
+                    "words": 4,
+                    "content_hash": "sha256:a7448803d1f51b225430d162a91e8def7fc19c0697fb89c8da04e5dad0855aa1",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 735,
+                      "end": 752
+                    }
+                  },
+                  {
+                    "start": 691,
+                    "end": 708,
+                    "words": 4,
+                    "content_hash": "sha256:b594af6c1f5dc858317a3a24b5e8c027925fd0276a0bc14569d711b08a6bb706",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                      "start": 753,
+                      "end": 769
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+              ],
+              "output": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:13:54.857Z",
+          "started_at": "2026-09-07T19:13:54.845Z",
+          "finished_at": "2026-09-07T19:13:54.857Z",
+          "latency_ms": 12,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:e0d1313b31dd78de3f5292d9c52e270a3208b46ed8431b371c5889b1057d6675"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 2,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 2
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 182,
+                "text": "The supplied context cannot establish which other espresso machines from Fictive Retail's range might be suitable for a buyer with a small kitchen, aside from the Aurelio Presto 300.",
+                "words": 29,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              },
+              {
+                "index": 1,
+                "start": 183,
+                "end": 279,
+                "text": "It does not provide information on any other models that may fit the criteria or their features.",
+                "words": 17,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:e0d1313b31dd78de3f5292d9c52e270a3208b46ed8431b371c5889b1057d6675"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 1,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "quote": "the Aurelio Presto 300 is our pick for small kitchens: the slimmest chassis we measured, the auto-dose tray genuinely reduces bench mess, and the pump is noticeably quieter than the Presto 200 it replaces.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+                "start": 295,
+                "end": 500
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "commerce-recommendation",
+            "version": "1"
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c"
+            }
+          ],
+          "items": [
+            {
+              "item": "editorial-pick",
+              "covered": true,
+              "matched": {
+                "phrase": "pick for small kitchens",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+                "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+                "start": 325,
+                "end": 349
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "item": "fits-narrow-counters",
+              "covered": true,
+              "matched": {
+                "phrase": "21 cm wide",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc",
+                "start": 378,
+                "end": 389
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "item": "current-availability",
+              "covered": true,
+              "matched": {
+                "phrase": "in stock at £329.00",
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc",
+                "start": 353,
+                "end": 374
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            }
+          ],
+          "covered_count": 3,
+          "item_count": 3,
+          "fraction": 1.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-08",
+            "maximum_age_days": 180
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+              "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+              "declared_date": "2026-06-20",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 49,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "content_hash": "sha256:ab72834bf6294fae2ed967ecf934925c4d53255e50f4f7d08ce0366dfcd3c1dc",
+              "declared_date": "2026-08-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 7,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "content_hash": "sha256:9b9f78328d10c0f2f0da9a11124a79e4a144ec118d1c9720cb0ea9612b40e5b6",
+              "declared_date": "2026-08-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 7,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:8e4883bb19349db07dba3825180e8ed92a662d9afc2691884359944cc9483efb",
+              "declared_date": "2026-04-02",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 128,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "content_hash": "sha256:e2836f907b27cb7d5bf95445bca2ad91efaff2c83f890da76eabbeab24f5e6a7",
+              "declared_date": "2026-07-25",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 14,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "content_hash": "sha256:4509f66c63b075d0328ff5dee78ac06f092e4301723405fbc68670c5762c503f",
+              "declared_date": "2026-08-01",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 7,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:9bb4b6427af30b73a4649ddf41a1c5f725b6d1b2c99ba4fe3893bba6079659ea",
+              "declared_date": "2025-11-12",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 269,
+              "within_maximum_age": false
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:a2157eebbe16c1c4972e08e41c93f8322bdc48df68ad80f337c29c16b1c2fb35",
+              "declared_date": "2026-05-04",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 96,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:869a9323e9db4a8c40c29387c8c6c3469b4c473062e48c5c814ea885427dde07",
+              "declared_date": "2026-03-30",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 131,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+              "content_hash": "sha256:f48f2923b1fbb1727acfbf1bf2ce257ada14da8fcb7367f2140acffb0f0c503c",
+              "declared_date": "2026-07-18",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 21,
+              "within_maximum_age": true
+            }
+          ],
+          "fresh_count": 9,
+          "part_count": 10,
+          "fraction": 0.9,
+          "unmeasured": null,
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": "internal-only",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric commerce-recommendation/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 1.45 (coverage 1.00, freshness 0.90). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "unavailable_inputs": []
+  }
+}

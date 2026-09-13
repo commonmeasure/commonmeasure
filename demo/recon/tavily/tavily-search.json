@@ -1,0 +1,52 @@
+{
+  "probe": "tavily-search",
+  "note": "Basic depth is the cheapest tier (1 credit).",
+  "request": {
+    "method": "POST",
+    "url": "https://api.tavily.com/search",
+    "headers": {
+      "Authorization": "Bearer «REDACTED: value of $TAVILY_API_KEY, never recorded»",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "query": "EU AI Act general purpose AI code of practice obligations",
+      "max_results": 2,
+      "search_depth": "basic"
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 1326,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:26:36 GMT",
+      "Content-Type": "application/json",
+      "Content-Length": "2993",
+      "Connection": "close",
+      "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self';base-uri 'self';form-action 'self'; require-trusted-types-for 'script'; upgrade-insecure-requests;"
+    },
+    "body": {
+      "query": "EU AI Act general purpose AI code of practice obligations",
+      "follow_up_questions": null,
+      "answer": null,
+      "images": [],
+      "results": [
+        {
+          "url": "https://artificialintelligenceact.eu/introduction-to-code-of-practice",
+          "title": "An Introduction to the Code of Practice for General-Purpose AI",
+          "content": "Purpose: The AI Act Code of Practice (introduced in Article 56) is a set of guidelines for compliance with the AI Act. I […elided, 864 chars total; shape recorded, text not committed]",
+          "score": 0.94475573,
+          "raw_content": null
+        },
+        {
+          "url": "https://www.akingump.com/en/insights/alerts/eu-ai-act-in-action-first-draft-general-purpose-ai-code-of-practice",
+          "title": "EU AI Act in Action: First Draft General-Purpose AI Code of Practice",
+          "content": ". The purpose of the Code is to help providers (i.e., developers) of general-purpose AI models (GPAI) effectively comply […elided, 1462 chars total; shape recorded, text not committed]",
+          "score": 0.93191636,
+          "raw_content": null
+        }
+      ],
+      "response_time": 0.98,
+      "request_id": "299af699-9a7e-45ba-b521-ab26e93535ea"
+    }
+  }
+}

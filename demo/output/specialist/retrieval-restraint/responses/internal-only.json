@@ -1,0 +1,81 @@
+{
+  "corpus": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus",
+  "corpus_name": "Fictive Systems Orchestrator documentation (synthetic)",
+  "query": "How do I keep an existing Flux Connector pipeline running on Orchestrator 4.x, and what configuration does that need?",
+  "terms": [
+    "4.x",
+    "configuration",
+    "connector",
+    "existing",
+    "flux",
+    "keep",
+    "need",
+    "orchestrator",
+    "pipeline",
+    "running"
+  ],
+  "documents_discovered": 7,
+  "documents_scanned": 7,
+  "requested": 3,
+  "licence": {
+    "state": "declared",
+    "reference": "fictive-systems/doc-licence-v1"
+  },
+  "matches": [
+    {
+      "path": "flux-connector-4x-migration.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/flux-connector-4x-migration.md",
+      "title": "Running the Flux Connector on Orchestrator 4.x (deprecated)",
+      "text": "# Running the Flux Connector on Orchestrator 4.x (deprecated)\n\nApplies to: Fictive Systems Orchestrator, release line 4.x.\nIntegration path: Flux Connector. Support status: deprecated.\nEffective date: 1 March 2026. Entitlement: Standard.\n\nThe Flux Connector still ships in Orchestrator 4.x for compatibility, and it\nis deprecated on that line effective 1 March 2026. Existing 4.x pipelines\nbuilt on it keep running, but the path receives no fixes and will be removed\nin Orchestrator 5.\n\nTo keep a Flux Connector pipeline running on 4.x while you migrate: enable\nthe `compat.flux` feature flag, keep `flux.toml` beside the pipeline plan,\nand pin the connector's poll interval explicitly, because the 4.x scheduler\nno longer supplies a default.\n\nThe supported replacement on 4.x is the Stream Gateway; see the 4.x\nconnectivity guidance for the migration steps.\n",
+      "content_hash": "sha256:88c3db8a8773416e9bf0fa441fdb4b63cad8c7d24ef18cb04320d7670d099cc7",
+      "declared_date": "2026-03-01",
+      "licence": null,
+      "governance": {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "flux-connector",
+        "support_status": "deprecated",
+        "entitlement": "standard"
+      },
+      "distinct_terms": 8,
+      "occurrences": 33
+    },
+    {
+      "path": "connecting-data-sources-3x.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-3x.md",
+      "title": "Connecting data sources in Orchestrator 3.x",
+      "text": "# Connecting data sources in Orchestrator 3.x\n\nApplies to: Fictive Systems Orchestrator, release line 3.x.\nIntegration path: Flux Connector. Support status: supported.\nEffective date: 15 April 2025. Entitlement: Standard.\n\nIn Orchestrator 3.x, the Flux Connector is the supported way to connect an\nexternal data source. Declare the source in `flux.toml`, grant the pipeline\nthe `flux:read` capability, and the connector polls the source on the\npipeline's schedule.\n\nThe Flux Connector on the 3.x line handles credential rotation itself:\nrotate the secret in the source system and the connector picks it up on the\nnext poll without a pipeline restart.\n\nFictive Systems supports the Flux Connector for the life of the 3.x\nlong-term support line. Customers planning a move to 4.x should read the\n4.x connectivity guidance before migrating, because the recommended path\ndiffers.\n",
+      "content_hash": "sha256:df61d647c12d34569a660659381317cd3e7dd47e64f8bd4d748fd8d82c5a2be0",
+      "declared_date": "2025-04-15",
+      "licence": null,
+      "governance": {
+        "edition": "orchestrator",
+        "version_range": "3.x",
+        "integration_path": "flux-connector",
+        "support_status": "supported",
+        "entitlement": "standard"
+      },
+      "distinct_terms": 5,
+      "occurrences": 20
+    },
+    {
+      "path": "connecting-data-sources-4x.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/specialist/corpus/connecting-data-sources-4x.md",
+      "title": "Connecting data sources in Orchestrator 4.x",
+      "text": "# Connecting data sources in Orchestrator 4.x\n\nApplies to: Fictive Systems Orchestrator, release line 4.x.\nIntegration path: Stream Gateway. Support status: supported.\nEffective date: 1 March 2026. Entitlement: Standard.\n\nFrom 1 March 2026, the Stream Gateway is the supported way to connect an\nexternal data source to Orchestrator 4.x. It replaces the Flux Connector,\nwhich is retired on the 4.x line: do not build new 4.x integrations on the\nFlux Connector.\n\nDeclare the source in `gateway.yaml`, grant the pipeline the `gateway:ingest`\ncapability, and the Stream Gateway delivers change events as they occur —\nthere is no polling schedule to configure.\n\nUnlike the Flux Connector, the Stream Gateway does not rotate credentials\nitself: rotation is handled by the platform secret store, and a rotated\nsecret takes effect at the next pipeline restart.\n",
+      "content_hash": "sha256:3e396a5e1542ab60b9463fa944729a29ddc1e041e444d802df4748929d1014fc",
+      "declared_date": "2026-03-01",
+      "licence": null,
+      "governance": {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "stream-gateway",
+        "support_status": "supported",
+        "entitlement": "standard"
+      },
+      "distinct_terms": 5,
+      "occurrences": 16
+    }
+  ],
+  "skipped": []
+}

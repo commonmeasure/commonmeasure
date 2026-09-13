@@ -1,0 +1,116 @@
+{
+  "suite_version": "specialist-governed-baseline/v1",
+  "label": "Specialist comparison, baseline prompt: admission policy, sealed rule set, entitlement scope and citation requirements",
+  "job": {
+    "id": "0be1e80d-8518-445c-875a-5d7c50a8c704",
+    "kind": "research.answer",
+    "prompt": "How should Stream Gateway throughput be tuned for a high-volume source on Orchestrator 4.x?",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "coverage_rubric": {
+    "name": "specialist-baseline",
+    "version": "1",
+    "items": [
+      {
+        "name": "trade-off",
+        "any_of": [
+          "favour delivery order over throughput"
+        ]
+      },
+      {
+        "name": "ordering",
+        "any_of": [
+          "order is always preserved"
+        ]
+      },
+      {
+        "name": "backpressure",
+        "any_of": [
+          "stops reading from the source"
+        ]
+      },
+      {
+        "name": "measured-tuning",
+        "any_of": [
+          "Measure before and after"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 365
+  },
+  "require_cited_answer": true,
+  "governance": {
+    "name": "fictive-support-rules",
+    "version": "2",
+    "entitlement_tiers": [
+      "standard",
+      "premier"
+    ],
+    "granted_entitlement": "standard",
+    "rules": [
+      {
+        "edition": "orchestrator",
+        "version_range": "3.x",
+        "integration_path": "flux-connector",
+        "support_status": "supported",
+        "effective_date": "2025-04-15"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "stream-gateway",
+        "support_status": "supported",
+        "effective_date": "2026-03-01"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "flux-connector",
+        "support_status": "deprecated",
+        "effective_date": "2026-03-01"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "bulk-export",
+        "support_status": "supported",
+        "effective_date": "2026-04-10"
+      },
+      {
+        "edition": "orchestrator",
+        "version_range": "4.x",
+        "integration_path": "pulse-metrics",
+        "support_status": "experimental",
+        "effective_date": "2026-06-15"
+      }
+    ]
+  }
+}

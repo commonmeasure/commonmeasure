@@ -1,0 +1,37 @@
+[package]
+name = "commonmeasure-harness"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Host integration: observed hook capture and the mediated MCP surface, over one session evidence log."
+
+[dependencies]
+commonmeasure-types.workspace = true
+commonmeasure-http.workspace = true
+commonmeasure-supply.workspace = true
+commonmeasure-runtime.workspace = true
+base64.workspace = true
+chrono.workspace = true
+# The edge's own signing key: it mints the pair at enrolment and signs every
+# request it makes with it (`src/identity.rs`). `ring` beside it verifies the
+# hub's policy envelope, which is a different key and a different direction.
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true
+uuid.workspace = true
+toml_edit.workspace = true
+quick-xml.workspace = true
+c2pa.workspace = true
+c2pa-text.workspace = true
+
+# Only the unix principal basis needs it (`src/policy.rs`).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

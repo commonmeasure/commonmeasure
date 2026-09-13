@@ -1,0 +1,206 @@
+{
+  "hash": "sha256:85168bc6b80f0bd9a3d407a31b4d73b6c9ed04c9459073375fde964f5f2d0703",
+  "manifest": {
+    "acquisition_mode": "replay",
+    "adapter_version": "ctx-supply/0.1",
+    "cache_control": "not controlled. Providers may serve from their own caches: Exa returned source \"cached\" and Firecrawl cacheState \"hit\" during reconnaissance on 1 August 2026.",
+    "evaluators": [
+      {
+        "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+        "name": "grounding",
+        "version": "0.4.0"
+      }
+    ],
+    "inference_gateway": "tensorzero",
+    "job": {
+      "constraints": [
+        {
+          "amount": {
+            "currency": "USD",
+            "micros": 50000
+          },
+          "kind": "maximum_acquisition_cost"
+        },
+        {
+          "kind": "maximum_context_tokens",
+          "tokens": 4000
+        }
+      ],
+      "evidence_requirements": [
+        {
+          "description": "A primary EU source describing the Code of Practice",
+          "required": true
+        }
+      ],
+      "id": "72a5f622-cf6a-4310-a22f-27f589b3f7fb",
+      "kind": "research.answer",
+      "objective": {
+        "cost": 0.4,
+        "coverage": 1.0,
+        "freshness": 0.8,
+        "kind": "weighted",
+        "latency": 0.2,
+        "policy_risk": 1.0,
+        "quality": 1.0
+      },
+      "policy_mode": "strict",
+      "prompt": "What obligations does the EU AI Act place on general-purpose AI model providers under the Code of Practice, and what does the supplied evidence establish about them? State plainly what it cannot establish."
+    },
+    "label": "Replay the 1 August 2026 reconnaissance as a fixed-supply comparison",
+    "manifest_version": "contextops-manifest/v2",
+    "model_plan": {
+      "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+      "name": "operator-pinned-answer-model",
+      "version": "2"
+    },
+    "processors": [
+      {
+        "capability": "pii-detection",
+        "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_closed"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over the text, no supervisor timeout",
+        "name": "pii-detector",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "admit",
+        "version": "1"
+      },
+      {
+        "capability": "context-deduplication",
+        "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+        "determinism": "deterministic",
+        "evidence_format": "contextops-processor-invocation/v1",
+        "failure_by_mode": {
+          "observe": "fail_open",
+          "prefer": "fail_open",
+          "strict": "fail_open"
+        },
+        "implementation": {
+          "crate_name": "ctx-runtime",
+          "crate_version": "0.0.0",
+          "kind": "in-process"
+        },
+        "limits": "in-process and synchronous; one pass over each source, no supervisor timeout",
+        "name": "context-optimiser",
+        "permissions": {
+          "credentials": false,
+          "filesystem": false,
+          "model": false,
+          "network": false,
+          "raw_content": true
+        },
+        "stage": "transform",
+        "version": "2"
+      }
+    ],
+    "replay_recordings": "sha256:7d28623e3d4d9c91cf8ebb5935f399dc99b55b92529d43fdf8dfca62754173c6",
+    "result_limit": 2,
+    "retry_policy": "none; a failed acquisition is recorded, not retried",
+    "suite_version": "eu-ai-act-replay/v1",
+    "supply_plans": [
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "exa-only",
+        "steps": [
+          {
+            "capability": "search",
+            "limit": 2,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "search"
+              ],
+              "name": "exa"
+            }
+          }
+        ],
+        "version": "1"
+      },
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "firecrawl-only",
+        "steps": [
+          {
+            "capability": "search",
+            "limit": 2,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "search"
+              ],
+              "name": "firecrawl"
+            }
+          }
+        ],
+        "version": "1"
+      },
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "tavily-only",
+        "steps": [
+          {
+            "capability": "search",
+            "limit": 2,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "search"
+              ],
+              "name": "tavily"
+            }
+          }
+        ],
+        "version": "1"
+      },
+      {
+        "maximum_cost": {
+          "currency": "USD",
+          "micros": 50000
+        },
+        "name": "tollbit-only",
+        "steps": [
+          {
+            "capability": "search",
+            "limit": 2,
+            "provider": {
+              "adapter_version": "ctx-supply/0.1",
+              "capabilities": [
+                "search"
+              ],
+              "name": "tollbit"
+            }
+          }
+        ],
+        "version": "1"
+      }
+    ],
+    "system_prompt": "Answer only from the supplied context. State plainly what the supplied context cannot establish. Do not use knowledge that is not in the supplied context.",
+    "token_basis": "whitespace-words",
+    "transport_timeout_seconds": 30
+  }
+}

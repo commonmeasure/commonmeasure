@@ -1,0 +1,175 @@
+{
+  "corpus": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus",
+  "corpus_name": "Fictive Retail mixed corpus (synthetic): product data, brand content, third-party editorial",
+  "query": "Is the Aurelio Presto 200 espresso machine still available from Fictive Retail, and what should a buyer choose instead?",
+  "terms": [
+    "200",
+    "aurelio",
+    "available",
+    "buyer",
+    "choose",
+    "espresso",
+    "fictive",
+    "instead",
+    "machine",
+    "presto",
+    "retail",
+    "still"
+  ],
+  "documents_discovered": 16,
+  "documents_scanned": 16,
+  "requested": 10,
+  "licence": {
+    "state": "unknown"
+  },
+  "matches": [
+    {
+      "path": "product-data/presto-200-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-200-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio Presto 200 espresso machine",
+      "text": "# Fictive Retail catalogue: Aurelio Presto 200 espresso machine\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-P200 |\n| Brand | Aurelio |\n| Product | Presto 200 espresso machine |\n| Price | not sold |\n| Stock | none — discontinued |\n\nThe Aurelio Presto 200 was discontinued on 15 July 2026 and is no longer\nstocked by Fictive Retail. It is replaced by the Aurelio Presto 300, which\nuses the same portafilter size; Presto 200 water filters remain available\nwhile remaining warehouse stock lasts.\n",
+      "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+      "declared_date": "2026-08-01",
+      "licence": {
+        "state": "declared",
+        "reference": "fictive-retail/product-data-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 8,
+      "occurrences": 25
+    },
+    {
+      "path": "brand-content/aurelio-presto-200-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+      "title": "Aurelio Presto 200 — the heart of the home bar",
+      "text": "# Aurelio Presto 200 — the heart of the home bar\n\nBrand content supplied by Aurelio (a fictional brand of the Fictive Retail\nbundle). Page as published 12 November 2025.\n\nThe Presto 200 is Aurelio's flagship espresso machine: a 15-bar pump, a\nwarming rack for two cups, and the dose dial our baristas tune by hand.\nAvailable in three finishes — slate, oat and copper — the Presto 200 brings\ncafé texture to the home counter.\n\nPair it with the Aurelio milk wand accessory for microfoam, and register\nyour machine with Aurelio to extend the warranty to three years. The Presto\n200 carries the classic tamper-first workflow; it has no auto-dose tray and\nwe think purists prefer it that way.\n",
+      "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+      "declared_date": "2025-11-12",
+      "licence": {
+        "state": "declared",
+        "reference": "aurelio/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 8,
+      "occurrences": 19
+    },
+    {
+      "path": "third-party/crema-courier-roundup.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+      "title": "The Crema Courier: espresso machines for small kitchens, summer 2026",
+      "text": "# The Crema Courier: espresso machines for small kitchens, summer 2026\n\nEditorial supplied under syndication by The Crema Courier (a fictional\npublication of the Fictive Retail bundle). Published 20 June 2026.\n\nWe spent six weeks pulling shots on the machines a small kitchen can\nactually hold. The Aurelio Presto 300 is our pick for small kitchens: the\nslimmest chassis we measured, the auto-dose tray genuinely reduces bench\nmess, and the pump is noticeably quieter than the Presto 200 it replaces.\n\nIf counter depth is the constraint rather than width, the tamper-first\nmachines still win on repairability, and refurbished Presto 200 units\nremain a fine manual machine while parts last — but as a new purchase for\na small kitchen the Presto 300 is the one we would buy.\n",
+      "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+      "declared_date": "2026-06-20",
+      "licence": {
+        "state": "declared",
+        "reference": "crema-courier/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 8,
+      "occurrences": 15
+    },
+    {
+      "path": "product-data/compatibility-matrix.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/compatibility-matrix.md",
+      "title": "Fictive Retail compatibility matrix: grinders and espresso machines",
+      "text": "# Fictive Retail compatibility matrix: grinders and espresso machines\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Grinder | Machine | Compatible | Requires |\n|---|---|---|---|\n| Northglade G4 | Aurelio Presto 300 | yes | dose adapter ring DR-2, grinder firmware 2.1 |\n| Northglade G4 | Aurelio Presto 200 | no | — |\n\nFrom 28 March 2026, the Northglade G4 burr grinder is compatible with the\nAurelio Presto 300 auto-dose tray when fitted with the dose adapter ring\nDR-2 and running grinder firmware 2.1 or later. Earlier G4 firmware does not\nsignal dose completion to the tray, and no adapter is made for the\ndiscontinued Presto 200.\n",
+      "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+      "declared_date": "2026-08-01",
+      "licence": {
+        "state": "declared",
+        "reference": "fictive-retail/product-data-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 7,
+      "occurrences": 16
+    },
+    {
+      "path": "product-data/presto-300-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/presto-300-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio Presto 300 espresso machine",
+      "text": "# Fictive Retail catalogue: Aurelio Presto 300 espresso machine\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-P300 |\n| Brand | Aurelio |\n| Product | Presto 300 espresso machine |\n| Price | £329.00 |\n| Stock | In stock |\n| Width | 21 cm |\n| Depth | 33 cm |\n| Reservoir | 1.4 litres |\n\nThe Aurelio Presto 300 is in stock at £329.00. At 21 cm wide, it is the\nnarrowest machine in the Aurelio range and the current model in the Presto\nline. The auto-dose tray accepts ground coffee directly or a compatible\ngrinder fitted per the Fictive Retail compatibility matrix.\n",
+      "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+      "declared_date": "2026-08-01",
+      "licence": {
+        "state": "declared",
+        "reference": "fictive-retail/product-data-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 19
+    },
+    {
+      "path": "product-data/accessories-listing.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/product-data/accessories-listing.md",
+      "title": "Fictive Retail catalogue: Aurelio espresso accessories",
+      "text": "# Fictive Retail catalogue: Aurelio espresso accessories\n\nStructured product data from the Fictive Retail merchandising system.\nRecord updated: 1 August 2026.\n\n| Field | Value |\n|---|---|\n| SKU | AUR-ST1 |\n| Brand | Aurelio |\n| Product | Steam tip set ST-1 |\n| Price | £39.00 |\n| Stock | In stock |\n\nThe Aurelio milk wand (SKU AUR-MW) was discontinued on 2 July 2026 and is\nreplaced by the steam tip set ST-1, in stock at £39.00; the ST-1 fits the\nsteam arm of both the Presto 200 and the Presto 300. The WF-30 water\nfilter for the Presto 300 (SKU AUR-WF30, £12.00) is in stock. Presto 200\nWF-20 water filters are sold from remaining warehouse stock with no\nfurther production, and WF-20 filters do not fit the Presto 300 reservoir.\n",
+      "content_hash": "sha256:9d271b1a0e3f09941ee35d9783a54a9b4fc9b4fd83b1d2bd5aadc0849fe005c7",
+      "declared_date": "2026-08-01",
+      "licence": {
+        "state": "declared",
+        "reference": "fictive-retail/product-data-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 15
+    },
+    {
+      "path": "third-party/crema-courier-grinder-guide.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+      "title": "The Crema Courier: grinders for auto-dose espresso machines, summer 2026",
+      "text": "# The Crema Courier: grinders for auto-dose espresso machines, summer 2026\n\nEditorial supplied under syndication by The Crema Courier (a fictional\npublication of the Fictive Retail bundle). Published 25 July 2026.\n\nAuto-dose trays are fussy about what feeds them, so we tested the grinders\nthat claim to. The Northglade G4 is our grinder pick for auto-dose\nmachines: it seats cleanly on the Aurelio Presto 300's tray collar once\nthe DR-2 adapter ring is fitted, and units sold this summer arrive with\nthe dose-complete firmware already installed.\n\nAt £129.00 from Fictive Retail after July's price cut it undercuts\neverything else we tested, though budget for the adapter ring on top. For\nmanual machines the G4 was already the value pick; the price cut settles\nit for auto-dose owners too.\n",
+      "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+      "declared_date": "2026-07-25",
+      "licence": {
+        "state": "declared",
+        "reference": "crema-courier/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 10
+    },
+    {
+      "path": "brand-content/northglade-g4-guide.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+      "title": "Northglade G4: using the G4 with auto-dose espresso machines",
+      "text": "# Northglade G4: using the G4 with auto-dose espresso machines\n\nBrand content supplied by Northglade (a fictional brand of the Fictive\nRetail bundle). Guide as published 2 April 2026.\n\nThe Northglade G4 burr grinder can feed an auto-dose espresso machine such\nas the Aurelio Presto 300 directly. Fitting requires two things: the dose\nadapter ring DR-2, which seats the G4's spout on the machine's tray collar,\nand grinder firmware 2.1, which adds the dose-complete signal the tray\nwaits for.\n\nCheck your firmware version in the G4's settings menu and update over USB\nwith the Northglade desktop tool. Without the DR-2 ring the spout does not\nseal, and without firmware 2.1 the tray times out and discards the dose.\n",
+      "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+      "declared_date": "2026-04-02",
+      "licence": {
+        "state": "declared",
+        "reference": "northglade/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 9
+    },
+    {
+      "path": "third-party/gadgetgrove-presto-300-review.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+      "title": "GadgetGrove hands-on: Aurelio Presto 300",
+      "text": "# GadgetGrove hands-on: Aurelio Presto 300\n\nReview page captured from GadgetGrove (a fictional site of the Fictive\nRetail bundle). GadgetGrove granted no licence for this capture; the\ncorpus manifest deliberately declares none. Published 18 July 2026.\n\nThree weeks with the Presto 300 and the auto-dose tray has changed our\nmorning routine: no tamper, no scale, no bench mess. Shots are consistent\nonce the dose dial settles, and the slim chassis leaves room for a grinder\nbeside it on a narrow counter.\n\nDownsides: the drip tray fills fast, and the app nags about descaling on\na schedule our water hardness does not justify. Even so, the Presto 300 is\nthe espresso machine we reach for, and the one we would recommend to\nanyone short on space.\n",
+      "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+      "declared_date": "2026-07-18",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 8
+    },
+    {
+      "path": "brand-content/northglade-g4-page.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+      "title": "Northglade G4 burr grinder — forty settings, zero fuss",
+      "text": "# Northglade G4 burr grinder — forty settings, zero fuss\n\nBrand content supplied by Northglade (a fictional brand of the Fictive\nRetail bundle). Page as published 30 March 2026.\n\nThe Northglade G4 is our flagship burr grinder: forty grind settings, a\nlow-retention chute, and burrs you can swap without tools. RRP £159.00.\n\nTo feed an auto-dose espresso machine such as the Aurelio Presto 300, fit\nthe dose adapter ring DR-2 and update to grinder firmware 2.1 over USB\nwith the Northglade desktop tool; without both, the machine's tray cannot\ntake a dose from the G4. For manual workflows the G4 works out of the box.\n",
+      "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+      "declared_date": "2026-03-30",
+      "licence": {
+        "state": "declared",
+        "reference": "northglade/brand-content-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 6,
+      "occurrences": 7
+    }
+  ],
+  "skipped": []
+}

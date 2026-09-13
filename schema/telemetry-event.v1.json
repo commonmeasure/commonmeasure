@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contenttelemetry.org/schema/v1/telemetry-event.json",
+  "title": "Content Telemetry Standalone Event",
+  "description": "Schema for standalone Content Telemetry events delivered outside a session document",
+  "type": "object",
+  "required": ["document_type", "schema_version", "event"],
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "const": "event",
+      "description": "Document type discriminator. MUST be 'event' for standalone events."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Content Telemetry schema version"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Session identifier. MAY be omitted by origin-side emitters with no session context. REQUIRED for emitters at Grounding conformance or above (unless ctx_token is carried instead - see section 7.1)."
+    },
+    "parent_session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Optional identifier of the immediate parent session that delegated work to this session. See section 5.1."
+    },
+    "ctx_token": {
+      "type": "string",
+      "pattern": "^ct_[A-Za-z0-9_-]{16,240}$",
+      "description": "Opaque click token issued by the originating agent, carried on content_engaged events emitted from a landing page after a click-out in place of session_id. Resolved by the telemetry consumer to the click context (section 7.4). An event MUST carry either session_id or ctx_token at Grounding conformance and above."
+    },
+    "agent_id": {
+      "type": ["string", "null"],
+      "description": "Responding agent identifier. REQUIRED for emitters at Grounding conformance or above when using standalone event delivery. Mirrors the session-level agent_id field."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Session start timestamp (UTC). Mirrors the session-level started_at field. REQUIRED for emitters at Grounding conformance or above when using standalone event delivery."
+    },
+    "manifest_ref": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "Manifest reference - the URL of a manifest at /.well-known/content-telemetry.json identifying the emitter. Mirrors the session-level manifest_ref field. RECOMMENDED on standalone events supporting settlement or audit obligations under governing terms. See sections 7.1 and 8."
+    },
+    "event": {
+      "$ref": "telemetry-session.json#/$defs/TelemetryEvent",
+      "description": "The telemetry event"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["event"],
+        "properties": {
+          "event": {
+            "properties": { "type": { "const": "content_engaged" } },
+            "required": ["type"]
+          }
+        },
+        "not": { "required": ["ctx_token"] }
+      },
+      "then": {
+        "properties": {
+          "event": { "required": ["presentation_id"] }
+        }
+      }
+    }
+  ]
+}

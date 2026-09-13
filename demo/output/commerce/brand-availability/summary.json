@@ -1,0 +1,1392 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "commerce-brand-availability/v1",
+  "run": {
+    "id": "a9006f14-6b8c-4c43-b83d-65dc9985487d",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-09-07T19:12:54Z",
+    "manifest_hash": "sha256:c2d3d2cb3614d76c4eaac3eb432fa4802c75a75a0197c341c98adfef92acfd1b",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true
+  },
+  "evidence_log": {
+    "records": 17,
+    "sha256": "sha256:e0d5703bc4c9cb3f4df5748e4b673959365ad2e96c0377fd90c318943a6c18c4"
+  },
+  "job": {
+    "id": "095837a6-ab58-4053-9fd2-8f3d25843721",
+    "label": "Commerce comparison, availability question: the brand's own content alone",
+    "kind": "research.answer",
+    "prompt": "Is the Aurelio Presto 200 espresso machine still available from Fictive Retail, and what should a buyer choose instead?",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": {
+      "enforcement_mode": "observe",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": []
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": "tensorzero",
+    "endpoint": "http://127.0.0.1:3000/openai/v1/chat/completions",
+    "configured": true
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": 986,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail or what a buyer should choose instead. \n\nCITATION: ",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 986,
+        "input_tokens": 148,
+        "output_tokens": 36,
+        "provider_request_id": "01a07d49-a93c-7b32-b5ac-6cd54bd21639",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail or what a buyer should choose instead. \n\nCITATION: "
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:12:55.574Z",
+          "started_at": "2026-09-07T19:12:55.574Z",
+          "finished_at": "2026-09-07T19:12:55.574Z",
+          "latency_ms": 0,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:376f42364326e550ad0d4c9833c0687d7c79d80bb07646d2e835d532a94284e2"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 1,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 1
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 163,
+                "text": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail or what a buyer should choose instead.",
+                "words": 25,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:376f42364326e550ad0d4c9833c0687d7c79d80bb07646d2e835d532a94284e2"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 1
+          },
+          "citations": [
+            {
+              "url": null,
+              "quote": null,
+              "line": "CITATION:",
+              "verdict": "unavailable",
+              "matched": null,
+              "reason": "the citation line does not parse (no `::` separates the URL from the quote), so nothing is checkable"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "commerce-availability",
+            "version": "1"
+          },
+          "inputs": [],
+          "items": [
+            {
+              "item": "discontinuation",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "replacement",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "current-availability",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-08",
+            "maximum_age_days": 180
+          },
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "internal-only",
+      "provider": "internal",
+      "capability": "query",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "live-verified",
+      "status": "completed",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content",
+        "http_status": null,
+        "latency_ms": 1,
+        "provider_request_id": null,
+        "charge": {},
+        "response_ref": "responses/internal-only.json",
+        "response_hash": "sha256:009965b3feb05b1ffcfbd949a0991ab8c89d6abe6086ce3f73a6e0e56715409d",
+        "response_bytes": 6904,
+        "result_count": 5
+      },
+      "latency_ms": 1842,
+      "sources": [
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+          "host": "",
+          "title": "Aurelio Presto 200 — the heart of the home bar",
+          "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+          "licence": {
+            "state": "declared",
+            "reference": "aurelio/brand-content-licence-v1"
+          },
+          "retrieval_rank": 1,
+          "tokens": 120,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "aurelio-presto-200-page.md",
+            "distinct_terms": 8,
+            "occurrences": 19,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+          "host": "",
+          "title": "Northglade G4: using the G4 with auto-dose espresso machines",
+          "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+          "licence": {
+            "state": "declared",
+            "reference": "northglade/brand-content-licence-v1"
+          },
+          "retrieval_rank": 2,
+          "tokens": 108,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "northglade-g4-guide.md",
+            "distinct_terms": 6,
+            "occurrences": 9,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+          "host": "",
+          "title": "Northglade G4 burr grinder — forty settings, zero fuss",
+          "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+          "licence": {
+            "state": "declared",
+            "reference": "northglade/brand-content-licence-v1"
+          },
+          "retrieval_rank": 3,
+          "tokens": 73,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "northglade-g4-page.md",
+            "distinct_terms": 6,
+            "occurrences": 7,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+          "host": "",
+          "title": "Aurelio Presto 300 — small footprint, full crema",
+          "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+          "licence": {
+            "state": "declared",
+            "reference": "aurelio/brand-content-licence-v1"
+          },
+          "retrieval_rank": 4,
+          "tokens": 81,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "aurelio-presto-300-page.md",
+            "distinct_terms": 5,
+            "occurrences": 14,
+            "governance": null
+          }
+        },
+        {
+          "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+          "host": "",
+          "title": "Aurelio BrewLink Hub — your Presto, connected",
+          "content_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+          "licence": {
+            "state": "declared",
+            "reference": "aurelio/brand-content-licence-v1"
+          },
+          "retrieval_rank": 5,
+          "tokens": 75,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "path": "aurelio-brewlink-hub-page.md",
+            "distinct_terms": 5,
+            "occurrences": 13,
+            "governance": null
+          }
+        }
+      ],
+      "source_count": 5,
+      "context_tokens_admitted": 457,
+      "answer": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail. Additionally, it does not provide specific recommendations for alternative products a buyer should choose instead.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md :: \"The Presto 200 is Aurelio's flagship espresso machine: a 15-bar pump, a warming rack for two cups, and the dose dial our baristas tune by hand.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md :: \"The Presto 300 is the newest machine in the Presto line, built for tight counters: a slimmer chassis than any Presto before it, a quieter pump, and the new auto-dose tray that meters ground coffee without a tamper.\"",
+      "inference": {
+        "status": "completed",
+        "gateway": "tensorzero",
+        "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+        "executed_provider": null,
+        "route_reason": "pinned by the job's model plan; no gateway fallback requested",
+        "latency_ms": 1841,
+        "input_tokens": 1169,
+        "output_tokens": 197,
+        "provider_request_id": "01a07d49-ad34-72e2-95d6-3a8e3504f140",
+        "unavailable_fields": [
+          "executed_provider"
+        ],
+        "unreadable_fields": [],
+        "answer": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail. Additionally, it does not provide specific recommendations for alternative products a buyer should choose instead.\n\nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md :: \"The Presto 200 is Aurelio's flagship espresso machine: a 15-bar pump, a warming rack for two cups, and the dose dial our baristas tune by hand.\"  \nCITATION: file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md :: \"The Presto 300 is the newest machine in the Presto line, built for tight counters: a slimmer chassis than any Presto before it, a quieter pump, and the new auto-dose tray that meters ground coffee without a tamper.\""
+      },
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.582Z",
+          "started_at": "2026-09-07T19:12:55.582Z",
+          "finished_at": "2026-09-07T19:12:55.582Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.584Z",
+          "started_at": "2026-09-07T19:12:55.584Z",
+          "finished_at": "2026-09-07T19:12:55.584Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.585Z",
+          "started_at": "2026-09-07T19:12:55.585Z",
+          "finished_at": "2026-09-07T19:12:55.585Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.587Z",
+          "started_at": "2026-09-07T19:12:55.587Z",
+          "finished_at": "2026-09-07T19:12:55.587Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.589Z",
+          "started_at": "2026-09-07T19:12:55.589Z",
+          "finished_at": "2026-09-07T19:12:55.589Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.590Z",
+          "started_at": "2026-09-07T19:12:55.590Z",
+          "finished_at": "2026-09-07T19:12:55.590Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.592Z",
+          "started_at": "2026-09-07T19:12:55.592Z",
+          "finished_at": "2026-09-07T19:12:55.592Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.593Z",
+          "started_at": "2026-09-07T19:12:55.593Z",
+          "finished_at": "2026-09-07T19:12:55.593Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.595Z",
+          "started_at": "2026-09-07T19:12:55.595Z",
+          "finished_at": "2026-09-07T19:12:55.595Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+              "tokens": 91
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-07T19:12:55.597Z",
+          "started_at": "2026-09-07T19:12:55.596Z",
+          "finished_at": "2026-09-07T19:12:55.597Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+              "tokens": 91
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-07T19:12:55.601Z",
+          "started_at": "2026-09-07T19:12:55.598Z",
+          "finished_at": "2026-09-07T19:12:55.601Z",
+          "latency_ms": 2,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 15 repeated phrases",
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "tokens": 118
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "tokens": 105
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+              "tokens": 108
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+              "tokens": 91
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "tokens": 120
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a",
+              "tokens": 108
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54",
+              "tokens": 73
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7",
+              "tokens": 81
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf",
+              "tokens": 75
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 542,
+            "tokens_out": 457,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "input_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+                "output_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a",
+                "spans": [
+                  {
+                    "start": 62,
+                    "end": 89,
+                    "words": 4,
+                    "content_hash": "sha256:61b4bd471a613a7f0e0cf5938dab8317fdbe761ec167bbc85b9858d9b4c509b2",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 52,
+                      "end": 77
+                    }
+                  },
+                  {
+                    "start": 100,
+                    "end": 134,
+                    "words": 6,
+                    "content_hash": "sha256:1a8850ed65de2167bc7b0b4864f102ffd3333ce52b9129bfb887629aebbed04b",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 86,
+                      "end": 119
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "input_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+                "output_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54",
+                "spans": [
+                  {
+                    "start": 1,
+                    "end": 28,
+                    "words": 4,
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 189,
+                      "end": 215
+                    }
+                  },
+                  {
+                    "start": 58,
+                    "end": 85,
+                    "words": 4,
+                    "content_hash": "sha256:61b4bd471a613a7f0e0cf5938dab8317fdbe761ec167bbc85b9858d9b4c509b2",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 52,
+                      "end": 77
+                    }
+                  },
+                  {
+                    "start": 96,
+                    "end": 130,
+                    "words": 6,
+                    "content_hash": "sha256:1a8850ed65de2167bc7b0b4864f102ffd3333ce52b9129bfb887629aebbed04b",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 86,
+                      "end": 119
+                    }
+                  },
+                  {
+                    "start": 137,
+                    "end": 164,
+                    "words": 4,
+                    "content_hash": "sha256:5217ee0338ca03278165ad3c5b0a78dee9c1413794a80faf2c79b02c4f8aaa2d",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 127,
+                      "end": 153
+                    }
+                  },
+                  {
+                    "start": 329,
+                    "end": 369,
+                    "words": 6,
+                    "content_hash": "sha256:5d1cd6006c6a428739c4895d452dc223cf53c805a5212331ec6cf72076b666b6",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 220,
+                      "end": 259
+                    }
+                  },
+                  {
+                    "start": 369,
+                    "end": 391,
+                    "words": 4,
+                    "content_hash": "sha256:433325580032efd4d1c0f78fc99ebf297b84098cecd18807180dbb523caab0b3",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 260,
+                      "end": 281
+                    }
+                  },
+                  {
+                    "start": 471,
+                    "end": 499,
+                    "words": 4,
+                    "content_hash": "sha256:88d6113bf5aaff7f44e3db48bae339f1d69ea16f910309f404af0dc214e83407",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                      "start": 567,
+                      "end": 594
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "input_hash": "sha256:34c84f8cb8de090f8fba83d331bc71562277d565181a503fc9e9264ef1a5f7e5",
+                "output_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7",
+                "spans": [
+                  {
+                    "start": 52,
+                    "end": 128,
+                    "words": 12,
+                    "content_hash": "sha256:025ce9f2b704e00be91b2f414d7ad18cc816999d238642e4f81acc6e3eb07d76",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 52,
+                      "end": 126
+                    }
+                  },
+                  {
+                    "start": 128,
+                    "end": 155,
+                    "words": 4,
+                    "content_hash": "sha256:bab38877b9e5d6b7b9daf091cc1791d74098b647048643ea36535837b393026a",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 127,
+                      "end": 153
+                    }
+                  },
+                  {
+                    "start": 576,
+                    "end": 605,
+                    "words": 5,
+                    "content_hash": "sha256:88f25708638a556f08e08abe3fb86fdc7eb69fb4c09145cdc7b9ac1cf5dd8827",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 506,
+                      "end": 534
+                    }
+                  },
+                  {
+                    "start": 605,
+                    "end": 641,
+                    "words": 6,
+                    "content_hash": "sha256:c89d51c995af05f6f2122176e38320a41bc59f9412804c4be6612abf7c977d10",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 535,
+                      "end": 570
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+                "input_hash": "sha256:a1134cb4eb81789664ec0a38928bb7e904b6ae5e53e5b5d8f2339fe3684f6e44",
+                "output_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf",
+                "spans": [
+                  {
+                    "start": 49,
+                    "end": 125,
+                    "words": 12,
+                    "content_hash": "sha256:025ce9f2b704e00be91b2f414d7ad18cc816999d238642e4f81acc6e3eb07d76",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 52,
+                      "end": 126
+                    }
+                  },
+                  {
+                    "start": 125,
+                    "end": 152,
+                    "words": 4,
+                    "content_hash": "sha256:bab38877b9e5d6b7b9daf091cc1791d74098b647048643ea36535837b393026a",
+                    "first_kept": {
+                      "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                      "start": 127,
+                      "end": 153
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md"
+              ],
+              "output": [
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+                "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "fidelity-verifier",
+            "version": "1",
+            "configuration_digest": "sha256:c19f1370d25fb29ce9b92616aef99b3cc5c46c4fd67691b6af18034af3658fa4"
+          },
+          "stage": "verify",
+          "timestamp": "2026-09-07T19:12:57.452Z",
+          "started_at": "2026-09-07T19:12:57.446Z",
+          "finished_at": "2026-09-07T19:12:57.452Z",
+          "latency_ms": 5,
+          "decision": "abstain",
+          "method": "deterministic sentence segmentation of the answer, then per-claim word-sequence matching against the supported and contradicted citations and the window parts' retained text",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:c113b1370f84d459112786349c8cdb006eeff31a31f79ef4708db08addf1a691"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf"
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "claim_count": 2,
+            "claim_counts": {
+              "supported": 0,
+              "contradicted": 0,
+              "unsupported": 2
+            },
+            "supported_fraction": 0.0,
+            "minimum_claim_words": 3,
+            "minimum_window_run_words": 6,
+            "claims": [
+              {
+                "index": 0,
+                "start": 0,
+                "end": 125,
+                "text": "The supplied context cannot establish whether the Aurelio Presto 200 espresso machine is still available from Fictive Retail.",
+                "words": 18,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              },
+              {
+                "index": 1,
+                "start": 126,
+                "end": 240,
+                "text": "Additionally, it does not provide specific recommendations for alternative products a buyer should choose instead.",
+                "words": 15,
+                "verdict": "unsupported",
+                "basis": null,
+                "citation": null,
+                "evidence": null,
+                "reason": "no supported citation's quote and no run of 6 or more consecutive words of the claim occurs in the window's retained text; a paraphrase of the window is invisible to this check"
+              }
+            ]
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Supported means a word sequence of the claim entered the window, not that the claim is true, and not that the window as a whole agrees with it.",
+            "A paraphrase of the window is invisible: a claim that restates a source in other words is unsupported here, and the model judge's disagreement on such claims is expected.",
+            "Sentence segmentation is a punctuation rule: an abbreviation splits a sentence, and a claim spread over several sentences is judged one sentence at a time.",
+            "Contradicted carries the grounding evaluator's meaning: the claim reproduces a quote its citation attributes to a source that does not contain it. No claim is judged false."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "coverage_gap",
+          "detail": "The corpus held 5 document(s) matching this job against the 10 requested; the sealed query response names every document scanned."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "answer",
+              "content_hash": "sha256:c113b1370f84d459112786349c8cdb006eeff31a31f79ef4708db08addf1a691"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 2,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "quote": "The Presto 200 is Aurelio's flagship espresso machine: a 15-bar pump, a warming rack for two cups, and the dose dial our baristas tune by hand.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+                "start": 173,
+                "end": 316
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            },
+            {
+              "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "quote": "The Presto 300 is the newest machine in the Presto line, built for tight counters: a slimmer chassis than any Presto before it, a quieter pump, and the new auto-dose tray that meters ground coffee without a tamper.",
+              "verdict": "supported",
+              "matched": {
+                "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7",
+                "start": 66,
+                "end": 280
+              },
+              "reason": "the cited source's retained text contains this word sequence at the recorded span"
+            }
+          ],
+          "unevaluated": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": {
+            "name": "commerce-availability",
+            "version": "1"
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf"
+            }
+          ],
+          "items": [
+            {
+              "item": "discontinuation",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "replacement",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "item": "current-availability",
+              "covered": false,
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "covered_count": 0,
+          "item_count": 3,
+          "fraction": 0.0,
+          "unmeasured": null,
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-08",
+            "maximum_age_days": 180
+          },
+          "inputs": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7"
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "declared_date": "2025-11-12",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 269,
+              "within_maximum_age": false
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "content_hash": "sha256:f59199849a3f0572a15715fc1a3b1b963d2eaf4e71f7c04faf62849e26c0696a",
+              "declared_date": "2026-04-02",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 128,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "content_hash": "sha256:3788a7c60035bb30e0fb690c697c59acea9779c86a1365f59e6c1ab0f2e33b54",
+              "declared_date": "2026-03-30",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 131,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-presto-300-page.md",
+              "content_hash": "sha256:daa142276b12e2050a113503f19a5724d1005d11c47a2b04d8f2050a1583e4f7",
+              "declared_date": "2026-05-04",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 96,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/brand-content/aurelio-brewlink-hub-page.md",
+              "content_hash": "sha256:5dcbd65871189e49e168b5c7a0003c93508c41e6975c21e6c50345aca172fbcf",
+              "declared_date": "2026-02-10",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "age_days": 179,
+              "within_maximum_age": true
+            }
+          ],
+          "fresh_count": 4,
+          "part_count": 5,
+          "fraction": 0.8,
+          "unmeasured": null,
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": "internal-only",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric commerce-availability/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 0.40 (coverage 0.00, freshness 0.80). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "unavailable_inputs": []
+  }
+}

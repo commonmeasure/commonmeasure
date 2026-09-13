@@ -1,0 +1,71 @@
+{
+  "replay_version": "contextops-replay-run/v1",
+  "manifest": "demo/recon/replay-manifest.json",
+  "recordings": [
+    {
+      "provider": "exa",
+      "capability": "search",
+      "source": "exa/exa-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.exa.ai/search",
+      "response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "redactions": "The credential request header is replaced with a visible redaction naming $EXA_API_KEY; every result's `text` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "firecrawl",
+      "capability": "search",
+      "source": "firecrawl/firecrawl-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+      "response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "redactions": "The credential request header is replaced with a visible redaction naming $FIRECRAWL_API_KEY; every result's `description` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "tavily",
+      "capability": "search",
+      "source": "tavily/tavily-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.tavily.com/search",
+      "response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TAVILY_API_KEY; every result's `content` is elided to a 120-character lead plus a marker recording its true length.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    }
+  ],
+  "bindings": [
+    {
+      "plan": "exa-only",
+      "provider": "exa",
+      "source": "exa/exa-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.exa.ai/search",
+      "recorded_response_sha256": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "sealed_response_ref": "responses/exa-only.json",
+      "sealed_response_hash": "sha256:9ae9dcd7f39d2082eef5f83747809e23a1fb8128d85fe555616f0b9896753071",
+      "matches_recorded_input": true
+    },
+    {
+      "plan": "firecrawl-only",
+      "provider": "firecrawl",
+      "source": "firecrawl/firecrawl-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/search",
+      "recorded_response_sha256": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "sealed_response_ref": "responses/firecrawl-only.json",
+      "sealed_response_hash": "sha256:caa3ed73673f2f1beab1c67c63e2150f526971c270dbd40c97599761633b5edd",
+      "matches_recorded_input": true
+    },
+    {
+      "plan": "tavily-only",
+      "provider": "tavily",
+      "source": "tavily/tavily-search.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.tavily.com/search",
+      "recorded_response_sha256": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "sealed_response_ref": "responses/tavily-only.json",
+      "sealed_response_hash": "sha256:5fbec0351a498fd9be139e097fba9242b8c40c30d08724b3488724392112c713",
+      "matches_recorded_input": true
+    }
+  ]
+}

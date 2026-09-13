@@ -1,0 +1,57 @@
+{
+  "probe": "tollbit-search",
+  "note": "Does the developer key authenticate at all? Spec-verified surface per throughline UNVERIFIED.md U1/U7. No content purchased.",
+  "request": {
+    "method": "GET",
+    "url": "https://gateway.tollbit.com/dev/v2/search?q=EU%20AI%20Act%20general%20purpose%20AI%20code%20of%20practice%20obligations&size=2",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 1070,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:26:33 GMT",
+      "Content-Type": "application/json",
+      "Content-Length": "755",
+      "Connection": "close",
+      "Cache-Control": "no-cache",
+      "Vary": "Origin"
+    },
+    "body": {
+      "nextToken": "MToy",
+      "items": [
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-09T12:12:04",
+          "publisher": {
+            "domain": "www.natlawreview.com",
+            "name": "National Law Review"
+          },
+          "title": "EU AI Act Transparency Code Finalized Ahead of 2026 Deadline",
+          "url": "https://natlawreview.com/article/ai-generated-content-european-union-what-adherence-code-practice-means-article-50"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2025-07-14T00:00:00",
+          "publisher": {
+            "domain": "www.natlawreview.com",
+            "name": "National Law Review"
+          },
+          "title": "EU Finalizes AI Code—Transparency, Copyright & Safety Rules",
+          "url": "https://natlawreview.com/article/european-commission-publishes-general-purpose-ai-code-practice"
+        }
+      ]
+    }
+  }
+}

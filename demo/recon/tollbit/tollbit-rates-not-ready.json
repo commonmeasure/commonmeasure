@@ -1,0 +1,32 @@
+{
+  "probe": "tollbit-rates-not-ready",
+  "note": "readyToLicense:false control. Quote only, nothing purchased.",
+  "request": {
+    "method": "GET",
+    "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Fwww.npr.org%2Fsections%2Fclimate",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 403,
+    "latency_ms": 348,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:28:12 GMT",
+      "Content-Type": "application/problem+json; charset=utf-8",
+      "Content-Length": "188",
+      "Connection": "close",
+      "Vary": "Origin"
+    },
+    "body": {
+      "detail": "The content provider has disallowed access to this page.",
+      "instance": "/dev/v2/rates/https://www.npr.org/sections/climate",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    }
+  }
+}

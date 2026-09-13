@@ -1,0 +1,123 @@
+{
+  "probe": "parallel-search",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-search.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. `text` per result arrives as `excerpts`; `sku_search` usage is disclosed, no currency.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.parallel.ai/v1/search",
+    "headers": {
+      "x-api-key": "«REDACTED: value of $PARALLEL_API_KEY, never recorded»",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "objective": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+      "search_queries": [
+        "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?"
+      ],
+      "advanced_settings": {
+        "source_policy": {
+          "include_domains": [
+            "www.w3.org"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 2890,
+    "body": {
+      "search_id": "search_aefeee47dc5880520d119fd7e9934227",
+      "results": [
+        {
+          "url": "https://www.w3.org/TR/prov-dm",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1727 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/prov-overview",
+          "title": "PROV-Overview",
+          "publish_date": "2013-04-30",
+          "excerpts": [
+            "# PROV-Overview\n## Status of This Document\n### PROV Family of Documents\n* [PROV-O](https://www.w3.org/TR/2013/REC-prov-o[…elided, 1547 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/prov-o",
+          "title": "PROV-O: The PROV Ontology",
+          "publish_date": "2013-04-30",
+          "excerpts": [
+            "PROV-O: The PROV Ontology\nApr 30, 2013 — The PROV Ontology (PROV-O) defines the OWL2 Web Ontology Language encoding of t[…elided, 183 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/prov-dm/Overview.html",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1727 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/2013/REC-prov-dm-20130430/Overview.html",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1727 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/2013/REC-prov-dm-20130430/",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1727 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/prov-dm/diff.html",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## W3C Proposed Recommendation 12 March 30 April 2013\nThis version:\nhttp://www.w3.org/TR/[…elided, 1073 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/2013/PR-prov-dm-20130312",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1349 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/prov-links",
+          "title": "Linking Across Provenance Bundles",
+          "publish_date": "2013-04-30",
+          "excerpts": [
+            "# Linking Across Provenance Bundles\n## Abstract\nProvenance is information about entities, activities, and people\ninvolve[…elided, 1420 chars total; shape recorded, text not committed]"
+          ]
+        },
+        {
+          "url": "https://www.w3.org/TR/2012/CR-prov-dm-20121211",
+          "title": "PROV-DM: The PROV Data Model",
+          "publish_date": null,
+          "excerpts": [
+            "# PROV-DM: The PROV Data Model\n## Abstract\nProvenance is information about entities, activities, and people\ninvolved in […elided, 1282 chars total; shape recorded, text not committed]"
+          ]
+        }
+      ],
+      "warnings": null,
+      "usage": [
+        {
+          "name": "sku_search",
+          "count": 1
+        }
+      ],
+      "session_id": "session_aefeee47dc5880520d119fd7e9934227"
+    }
+  }
+}

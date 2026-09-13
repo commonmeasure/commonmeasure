@@ -1,0 +1,13 @@
+{
+  "source": "draft-ietf-aipref-attach-05, section 3.4, figure 2",
+  "cases": [
+    {"token": "ExampleBot", "path": "/anything", "group": "ExampleBot", "crawlable": true,
+     "effective": {"train-ai": "allow", "ai-input": "unknown", "ai-index": "unknown", "search": "unknown"}},
+    {"token": "CommonMeasureBot", "path": "/page", "group": "*", "crawlable": true,
+     "effective": {"train-ai": "disallow", "ai-input": "unknown", "ai-index": "unknown", "search": "unknown"}},
+    {"token": "CommonMeasureBot", "path": "/ai-ok/paper", "group": "*", "crawlable": true,
+     "effective": {"train-ai": "allow", "ai-input": "unknown", "ai-index": "unknown", "search": "unknown"}},
+    {"token": "CommonMeasureBot", "path": "/never/secret", "group": "*", "crawlable": false,
+     "effective": {"train-ai": "unknown", "ai-input": "unknown", "ai-index": "unknown", "search": "unknown"}}
+  ]
+}

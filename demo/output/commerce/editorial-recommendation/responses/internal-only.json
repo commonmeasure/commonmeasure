@@ -1,0 +1,97 @@
+{
+  "corpus": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party",
+  "corpus_name": "Fictive Retail third-party editorial and reviews (synthetic)",
+  "query": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+  "terms": [
+    "buyer",
+    "choose",
+    "espresso",
+    "fictive",
+    "kitchen",
+    "machine",
+    "range",
+    "retail's",
+    "small"
+  ],
+  "documents_discovered": 5,
+  "documents_scanned": 5,
+  "requested": 10,
+  "licence": {
+    "state": "unknown"
+  },
+  "matches": [
+    {
+      "path": "crema-courier-roundup.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-roundup.md",
+      "title": "The Crema Courier: espresso machines for small kitchens, summer 2026",
+      "text": "# The Crema Courier: espresso machines for small kitchens, summer 2026\n\nEditorial supplied under syndication by The Crema Courier (a fictional\npublication of the Fictive Retail bundle). Published 20 June 2026.\n\nWe spent six weeks pulling shots on the machines a small kitchen can\nactually hold. The Aurelio Presto 300 is our pick for small kitchens: the\nslimmest chassis we measured, the auto-dose tray genuinely reduces bench\nmess, and the pump is noticeably quieter than the Presto 200 it replaces.\n\nIf counter depth is the constraint rather than width, the tamper-first\nmachines still win on repairability, and refurbished Presto 200 units\nremain a fine manual machine while parts last — but as a new purchase for\na small kitchen the Presto 300 is the one we would buy.\n",
+      "content_hash": "sha256:f70d401e9a66149927fb2c4a1ed6bbb547a53702999dd9784d6dd1f48a37a47f",
+      "declared_date": "2026-06-20",
+      "licence": {
+        "state": "declared",
+        "reference": "crema-courier/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 5,
+      "occurrences": 14
+    },
+    {
+      "path": "crema-courier-grinder-guide.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+      "title": "The Crema Courier: grinders for auto-dose espresso machines, summer 2026",
+      "text": "# The Crema Courier: grinders for auto-dose espresso machines, summer 2026\n\nEditorial supplied under syndication by The Crema Courier (a fictional\npublication of the Fictive Retail bundle). Published 25 July 2026.\n\nAuto-dose trays are fussy about what feeds them, so we tested the grinders\nthat claim to. The Northglade G4 is our grinder pick for auto-dose\nmachines: it seats cleanly on the Aurelio Presto 300's tray collar once\nthe DR-2 adapter ring is fitted, and units sold this summer arrive with\nthe dose-complete firmware already installed.\n\nAt £129.00 from Fictive Retail after July's price cut it undercuts\neverything else we tested, though budget for the adapter ring on top. For\nmanual machines the G4 was already the value pick; the price cut settles\nit for auto-dose owners too.\n",
+      "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+      "declared_date": "2026-07-25",
+      "licence": {
+        "state": "declared",
+        "reference": "crema-courier/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 6
+    },
+    {
+      "path": "gadgetgrove-presto-300-review.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/gadgetgrove-presto-300-review.md",
+      "title": "GadgetGrove hands-on: Aurelio Presto 300",
+      "text": "# GadgetGrove hands-on: Aurelio Presto 300\n\nReview page captured from GadgetGrove (a fictional site of the Fictive\nRetail bundle). GadgetGrove granted no licence for this capture; the\ncorpus manifest deliberately declares none. Published 18 July 2026.\n\nThree weeks with the Presto 300 and the auto-dose tray has changed our\nmorning routine: no tamper, no scale, no bench mess. Shots are consistent\nonce the dose dial settles, and the slim chassis leaves room for a grinder\nbeside it on a narrow counter.\n\nDownsides: the drip tray fills fast, and the app nags about descaling on\na schedule our water hardness does not justify. Even so, the Presto 300 is\nthe espresso machine we reach for, and the one we would recommend to\nanyone short on space.\n",
+      "content_hash": "sha256:d8634f983cd0ae217f7a902b38f6ca3161a2335cd26393240279c96ee04d88cc",
+      "declared_date": "2026-07-18",
+      "licence": null,
+      "governance": null,
+      "distinct_terms": 3,
+      "occurrences": 3
+    },
+    {
+      "path": "brewprint-g4-review.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+      "title": "BrewPrint reviews the Northglade G4 burr grinder",
+      "text": "# BrewPrint reviews the Northglade G4 burr grinder\n\nEditorial supplied under syndication by BrewPrint (a fictional publication\nof the Fictive Retail bundle). Published 30 September 2025.\n\nThe Northglade G4 is the best-value burr grinder we tested this year: 40\ngrind settings, a low-retention chute, and burrs you can swap without\ntools. Two caveats keep it from a perfect score.\n\nFirst, the hopper lid rattles at the coarsest settings. Second, the G4 is\nnot compatible with the Aurelio Presto auto-dose tray: the spout does not\nseat on the tray collar and the grinder sends no dose-complete signal, so\nauto-dose owners must dose by hand. For a manual workflow neither caveat\nmatters, and at this price nothing else comes close.\n",
+      "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+      "declared_date": "2025-09-30",
+      "licence": {
+        "state": "declared",
+        "reference": "brewprint/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 1,
+      "occurrences": 1
+    },
+    {
+      "path": "brewprint-steam-tip-review.md",
+      "url": "file:///var/home/alexs/commonmeasure-ai/commonmeasure/demo/commerce/corpus/third-party/brewprint-steam-tip-review.md",
+      "title": "BrewPrint reviews the Aurelio steam tip set ST-1",
+      "text": "# BrewPrint reviews the Aurelio steam tip set ST-1\n\nEditorial supplied under syndication by BrewPrint (a fictional publication\nof the Fictive Retail bundle). Published 20 July 2026.\n\nAurelio's steam tip set ST-1 replaces the discontinued milk wand, and it\nis the rare replacement that improves on the original: three tips of\ndifferent bore, a locking collar that fits the steam arm of the Presto 200\nand Presto 300 alike, and microfoam that took our testers one morning to\ndial in.\n\nAt £39.00 it is our pick for microfoam on the Presto line. Milk wand\nowners lose nothing by switching except the rattle the wand developed at\nhigh pressure.\n",
+      "content_hash": "sha256:59ab95488ee12ec648ecc6f15b606365b1dd6d911b603e3789d950ca5d5349e7",
+      "declared_date": "2026-07-20",
+      "licence": {
+        "state": "declared",
+        "reference": "brewprint/syndication-licence-v1"
+      },
+      "governance": null,
+      "distinct_terms": 1,
+      "occurrences": 1
+    }
+  ],
+  "skipped": []
+}

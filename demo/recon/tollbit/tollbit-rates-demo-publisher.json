@@ -1,0 +1,32 @@
+{
+ "probe": "tollbit-rates-demo-publisher",
+ "note": "TollBit's own quickstart demo publisher, probed to tell per-page from account-wide 403. Quote only, nothing purchased.",
+ "request": {
+  "method": "GET",
+  "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Ftollbit.pioneervalleygazette.com%2Fdaydream",
+  "headers": {
+   "TollbitKey": "\u00abREDACTED: value of $TOLLBIT_API_KEY, never recorded\u00bb",
+   "User-Agent": "ContextOpsRecon/0.1",
+   "Accept": "application/json"
+  },
+  "body": null
+ },
+ "response": {
+  "status": 403,
+  "latency_ms": 370,
+  "headers": {
+   "Date": "Tue, 04 Aug 2026 07:20:00 GMT",
+   "Content-Type": "application/problem+json; charset=utf-8",
+   "Content-Length": "201",
+   "Connection": "close",
+   "Vary": "Origin"
+  },
+  "body": {
+   "detail": "The content provider has disallowed access to this page.",
+   "instance": "/dev/v2/rates/https://tollbit.pioneervalleygazette.com/daydream",
+   "status": 403,
+   "title": "Forbidden",
+   "type": "about:blank"
+  }
+ }
+}

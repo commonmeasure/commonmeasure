@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-editorial-milk-accessory-choice/v1",
+  "label": "Commerce routing experiment, recommendation question 'milk-accessory-choice': third-party editorial alone",
+  "job": {
+    "id": "13119250-414f-45ac-83f9-c8265cafeccb",
+    "kind": "research.answer",
+    "prompt": "Which milk-texturing accessory should an Aurelio Presto owner buy from Fictive Retail today?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-milk-accessory-choice",
+    "version": "1",
+    "items": [
+      {
+        "name": "editorial-pick",
+        "any_of": [
+          "pick for microfoam"
+        ]
+      },
+      {
+        "name": "product",
+        "any_of": [
+          "steam tip set ST-1"
+        ]
+      },
+      {
+        "name": "current-price",
+        "any_of": [
+          "£39.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

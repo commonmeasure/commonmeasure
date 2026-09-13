@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-brand-accessory-carryover/v1",
+  "label": "Commerce routing experiment, compatibility question 'accessory-carryover': brand content alone",
+  "job": {
+    "id": "65d063e4-70c9-4bc8-ab9c-2fa95b928b60",
+    "kind": "research.answer",
+    "prompt": "A buyer is replacing an Aurelio Presto 200 with a Presto 300: which of their accessories carry over?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-accessory-carryover",
+    "version": "1",
+    "items": [
+      {
+        "name": "portafilter",
+        "any_of": [
+          "same portafilter size"
+        ]
+      },
+      {
+        "name": "water-filter",
+        "any_of": [
+          "do not fit the Presto 300 reservoir"
+        ]
+      },
+      {
+        "name": "steam-tip",
+        "any_of": [
+          "fits the steam arm of both"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

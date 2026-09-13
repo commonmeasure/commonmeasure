@@ -1,0 +1,36 @@
+{
+  "manifest_version": "contextops-replay-fixture/v1",
+  "derived_from": "The reconnaissance captures of 1 August 2026 that the adapter tests serve over loopback and no `--replay` run serves. `replay-manifest.json` names the captures a run serves; this file names the rest, so every capture a test puts on the wire has a declared hash and an altered one is refused on both paths.",
+  "recordings": [
+    {
+      "provider": "exa",
+      "capability": "fetch",
+      "source": "exa/exa-contents.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.exa.ai/contents",
+      "response_sha256": "sha256:4b4bd1cc2b476095180c3be5eeb4f511ec13450e5f29379f9ec5f3280d62b849",
+      "redactions": "The credential request header is replaced with a visible redaction naming $EXA_API_KEY.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for the parser tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "firecrawl",
+      "capability": "fetch",
+      "source": "firecrawl/firecrawl-scrape.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://api.firecrawl.dev/v2/scrape",
+      "response_sha256": "sha256:150579ef0c0408cf12d6eeab11c72d997a72958f852d75284d1805ff2ff3069d",
+      "redactions": "The credential request header is replaced with a visible redaction naming $FIRECRAWL_API_KEY.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for the parser tests. The bytes are retained reconnaissance evidence, not licensed content for redistribution or reuse."
+    },
+    {
+      "provider": "tollbit",
+      "capability": "rate",
+      "source": "tollbit/tollbit-rates.json",
+      "captured_at": "2026-08-01",
+      "recorded_endpoint": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Fbakercityherald.com%2F2026%2F07%2F18%2Fguest-commentary-understanding-our-changing-climate%2F",
+      "response_sha256": "sha256:ff8a355dc83bb3e5b07d00b0b014dc127023e6dde48ed19c735783c63149b198",
+      "redactions": "The credential request header is replaced with a visible redaction naming $TOLLBIT_API_KEY.",
+      "permitted_use": "Serving to this repository's own adapters over loopback for the parser tests. The bytes are the provider's own 403 refusal, retained as evidence that no rate was ever obtained."
+    }
+  ]
+}

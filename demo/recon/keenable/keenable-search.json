@@ -1,0 +1,99 @@
+{
+  "probe": "keenable-search",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-search.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. Ten results; text in `snippet`; no cost field. The `site` filter matched dvcs.w3.org URLs the job policy then refused at admission.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.keenable.ai/v1/search",
+    "headers": {
+      "X-API-Key": "«REDACTED: value of $KEENABLE_API_KEY, never recorded»",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "query": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+      "snippet_max_length": 3000,
+      "site": "www.w3.org"
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 492,
+    "body": {
+      "query": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+      "mode": "pro",
+      "results": [
+        {
+          "title": "PROV-DM: The PROV Data Model",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/model/prov-dm.html",
+          "description": "",
+          "snippet": "Provenance is information about entities, activities, and people involved in producing a piece of data or thing, which c[…elided, 2726 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-06-07T05:31:14Z"
+        },
+        {
+          "title": "PROV-Overview",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/overview/prov-overview.html",
+          "description": "",
+          "snippet": "a primer for the PROV data model [PROV-PRIMER]; PROV-O (Recommendation), the PROV ontology, an OWL2 ontology allowing th[…elided, 2570 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-07-07T14:19:22Z"
+        },
+        {
+          "title": "PROV-N: The Provenance Notation",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/model/prov-n.html",
+          "description": "",
+          "snippet": "Provenance is information about entities, activities, and people involved in producing a piece of data or thing, which c[…elided, 3040 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-06-10T14:45:17Z"
+        },
+        {
+          "title": "Constraints of the PROV Data Model",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/model/prov-constraints.html",
+          "description": "",
+          "snippet": "Provenance is information about entities, activities, and people involved in producing a piece of data or thing, which c[…elided, 2533 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-06-13T15:41:16Z"
+        },
+        {
+          "title": "PROV-XML: The PROV XML Schema",
+          "url": "http://w3.org/TR/prov-xml",
+          "description": "",
+          "snippet": "Abstract Provenance is information about entities, activities, and people involved in producing a piece of data or thing[…elided, 2685 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-06-11T10:03:22Z"
+        },
+        {
+          "title": "The PROV-JSONLD Serialization",
+          "url": "https://w3.org/submissions/2024/SUBM-prov-jsonld-20240704",
+          "description": "",
+          "snippet": "Abstract Provenance is information about entities, activities, and people involved in producing a piece of data or thing[…elided, 2919 chars total; shape recorded, text not committed]",
+          "published_at": "2024-07-04T19:54:30Z",
+          "acquired_at": "2026-06-04T19:54:18Z"
+        },
+        {
+          "title": "Semantics of the PROV Data Model",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/semantics/prov-sem.html",
+          "description": "",
+          "snippet": "PROV-DM is the conceptual data model that forms a basis for the W3C provenance (PROV) family of specifications. This doc[…elided, 2607 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-05-29T19:45:44Z"
+        },
+        {
+          "title": "PROV-DM Part II: Constraints of the Provenance Data Model",
+          "url": "http://dvcs.w3.org/hg/prov/raw-file/default/model/releases/ED-prov-dm-20120402/prov-dm-constraints.html",
+          "description": "",
+          "snippet": "and the time at which they were created, used, or ended; (2) agents bearing responsibility for entities that were genera[…elided, 2802 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-07-16T08:08:07Z"
+        },
+        {
+          "title": "PROV-AQ: Provenance Access and Query",
+          "url": "https://dvcs.w3.org/hg/prov/raw-file/default/paq/prov-aq.html",
+          "description": "",
+          "snippet": "mapping of the PROV data model to RDF [PROV-O]; PROV-DM (Recommendation), the PROV data model for provenance [PROV-DM]; […elided, 2629 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-05-29T23:04:28Z"
+        },
+        {
+          "title": "PROV-Dictionary: Modeling Provenance for Dictionary Data Structures",
+          "url": "https://w3.org/TR/prov-dictionary",
+          "description": "",
+          "snippet": "describes extensions to PROV to facilitate the modeling of provenance for dictionary data structures. [PROV-DM] specifie[…elided, 2485 chars total; shape recorded, text not committed]",
+          "acquired_at": "2026-05-31T23:51:30Z"
+        }
+      ]
+    }
+  }
+}

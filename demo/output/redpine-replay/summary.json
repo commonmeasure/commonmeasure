@@ -1,0 +1,798 @@
+{
+  "schema_version": "contextops-run/v7",
+  "suite_version": "nvidia-redpine-replay/v1",
+  "run": {
+    "id": "f2f84ec6-ba2a-468a-b65e-3002537ea5e4",
+    "mode": "replay",
+    "started_at": "2026-09-06T20:25:20Z",
+    "manifest_hash": "sha256:b5f160b0756a1b5a01959f9cd794e5af6529acb61a67447ac27dbc8168c6bcd1",
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "token_basis": "whitespace-words",
+    "evidence_complete": true,
+    "replay_manifest": "demo/recon/replay-manifest.json"
+  },
+  "evidence_log": {
+    "records": 11,
+    "sha256": "sha256:85bee773e0f3eb08942ae163a8d50a9fd80e8cc02e38e84ee64c3c6758667f93"
+  },
+  "job": {
+    "id": "ffb01267-a785-4c0e-a7d5-2ea8b1c41efb",
+    "label": "Replay the 4 August 2026 licensed fetch: Redpine quote-then-buy through the run contract",
+    "kind": "research.answer",
+    "prompt": "NVIDIA",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 0.0,
+      "freshness": 1.0,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": {
+      "enforcement_mode": "strict",
+      "max_acquisition_cost": {
+        "currency": "USD",
+        "micros": 50000
+      },
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "allowed_source_hosts": [],
+      "denied_source_hosts": [],
+      "allowed_providers": [],
+      "denied_providers": [],
+      "required_licences": []
+    },
+    "requirements": [
+      {
+        "description": "Licensed media mentions of the monitored keyword, each with a supplier-declared date and its observed charge",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18",
+    "gateway": null,
+    "endpoint": null,
+    "configured": false
+  },
+  "plans": [
+    {
+      "id": "no-context",
+      "provider": "none",
+      "capability": null,
+      "adapter_version": null,
+      "verification_state": "planned",
+      "status": "unavailable",
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "acquisition": null,
+      "latency_ms": null,
+      "sources": [],
+      "source_count": 0,
+      "context_tokens_admitted": 0,
+      "answer": null,
+      "inference": null,
+      "policy_decisions": [],
+      "processors": [],
+      "gaps": [
+        {
+          "reason": "evidence_missing",
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer."
+        },
+        {
+          "reason": "inference_unavailable",
+          "detail": "No inference gateway is configured. Set COMMONMEASURE_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [],
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 7
+          },
+          "inputs": [],
+          "parts": [],
+          "fresh_count": null,
+          "part_count": null,
+          "fraction": null,
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date",
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    },
+    {
+      "id": "redpine-only",
+      "provider": "redpine",
+      "capability": "search",
+      "adapter_version": "commonmeasure-supply/0.1",
+      "verification_state": "replay-tested",
+      "status": "unavailable",
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "acquisition": {
+        "endpoint": "https://api.redpine.ai/mcp",
+        "http_status": 200,
+        "latency_ms": 0,
+        "provider_request_id": null,
+        "charge": {
+          "native": {
+            "unit": "trial_queries",
+            "amount": 1,
+            "basis": "observed",
+            "note": "Covered by the free trial — a meter, not a price; the confirm receipt reports cost_charged 0.000000 and balance_remaining 0.00. Billing note: Covered by free trial — 5 of 5 queries remaining. Confirming uses 1 trial query (4 would remain)."
+          }
+        },
+        "response_ref": "responses/redpine-only.json",
+        "response_hash": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+        "response_bytes": 5909,
+        "result_count": 3,
+        "quote": {
+          "endpoint": "http://127.0.0.1:40339",
+          "preview_id": "pv_8d491df883034fec",
+          "workflow": "requires_confirm",
+          "billing_status": "trial",
+          "billing_note": "Covered by free trial — 5 of 5 queries remaining. Confirming uses 1 trial query (4 would remain).",
+          "trial_remaining": 5,
+          "trial_total": 5,
+          "balance_before": "0.00",
+          "charge": {
+            "native": {
+              "unit": "credits",
+              "amount": 0.03,
+              "basis": "quoted",
+              "note": "inspect-tool's pricing annotation for media--sample. The confirmed payload's own _meta.cost_usd has been seen to disagree with it twenty-fold, and nothing in the responses says which figure a funded account is charged (docs/knowledge-base/unverified-assumptions.md R1)."
+            }
+          },
+          "latency_ms": 0,
+          "inspect_ref": "responses/redpine-only-inspect.json",
+          "inspect_hash": "sha256:a0da52d25131e9bff98a1b3196366d2b10ec873e9c1c5f8f1cc0ee7b09c9cb97",
+          "preview_ref": "responses/redpine-only-quote.json",
+          "preview_hash": "sha256:845a5e3cdd5bc5a2036146c4cdff1de0f76eb6c00da46451cdd8d2aeceef3941",
+          "decision_reason": "The supplier states the purchase is covered by the trial; no charge applies (the billing note above is the supplier's own sentence).",
+          "allowance": {
+            "consulted": false,
+            "reason": "the run holds no principal allowance context: it was started without principal policy, or in replay, where no money moves"
+          },
+          "decision": "confirmed"
+        },
+        "replay": {
+          "source": "redpine/redpine-confirm-sample.json",
+          "captured_at": "2026-08-04",
+          "recorded_endpoint": "https://api.redpine.ai/mcp",
+          "recorded_response_sha256": "sha256:95d09e43328cee974b439c5b57643883a8879a7a4f291a1d4fb98d9ccce691d4",
+          "matches_recorded_input": true,
+          "redactions": "The credential request header is replaced with a visible redaction naming $REDPINE_API_KEY; session ids carry the issued-by marker on both sides. Every mention's licensed transcript text is truncated to a short lead plus a marker, in both the content and structuredContent carriers; full bytes are retained locally and are not in this repository.",
+          "permitted_use": "Serving to this repository's own adapters over loopback for deterministic replay and tests. The bytes are retained reconnaissance evidence — the licensed transcript text is truncated out — not licensed content for redistribution or reuse."
+        }
+      },
+      "latency_ms": 0,
+      "sources": [
+        {
+          "url": "https://www.cnbc.com",
+          "host": "www.cnbc.com",
+          "title": "Mad Money w/ Jim Cramer 8/3/26",
+          "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 1,
+          "tokens": 36,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "channel_name": "Mad Money w/ Jim Cramer",
+            "channel_type": "podcast",
+            "timing_seconds": 472,
+            "id": "ba595f0f-d980-42ad-8d49-46d675503111",
+            "impact_score": 0,
+            "sentiment_score": 0.02,
+            "reach": 0,
+            "sentiment": "neutral"
+          }
+        },
+        {
+          "url": "https://www.cnbc.com",
+          "host": "www.cnbc.com",
+          "title": "Software Leading a Market Rally… And What To Expect from Yen Intervention. 8/3/26",
+          "content_hash": "sha256:9673b02300ecebeab1acb69e218728d07725a9dfc667467d10385936c5326a91",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 2,
+          "tokens": 27,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "channel_name": "CNBC's \"Fast Money\"",
+            "channel_type": "podcast",
+            "timing_seconds": 443,
+            "id": "b663192a-64ba-41b1-b27b-35d251d1f17b",
+            "impact_score": 0,
+            "sentiment_score": 0.02,
+            "reach": 0,
+            "sentiment": "neutral"
+          }
+        },
+        {
+          "url": "https://www.latent.space/p/inference-eng",
+          "host": "www.latent.space",
+          "title": "The Inference Engineering Masterclass — Philip Kiely & Ali Taha, Baseten",
+          "content_hash": "sha256:6d699f9124813cee4761a4ee131bbdc0ca510170040117d3f4410e47cc80743e",
+          "licence": {
+            "state": "unknown"
+          },
+          "retrieval_rank": 3,
+          "tokens": 28,
+          "admitted": true,
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "native_metadata": {
+            "channel_name": "Latent Space: The AI Engineer Podcast",
+            "channel_type": "podcast",
+            "timing_seconds": 2911,
+            "id": "25f169f6-a029-42a4-8390-d3552d73dc76",
+            "impact_score": 0,
+            "sentiment_score": -0.35,
+            "reach": 0,
+            "sentiment": "negative"
+          }
+        }
+      ],
+      "source_count": 3,
+      "context_tokens_admitted": 91,
+      "answer": null,
+      "inference": null,
+      "policy_decisions": [],
+      "processors": [
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.714Z",
+          "started_at": "2026-09-06T20:25:20.714Z",
+          "finished_at": "2026-09-06T20:25:20.714Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+              "tokens": 36
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.715Z",
+          "started_at": "2026-09-06T20:25:20.715Z",
+          "finished_at": "2026-09-06T20:25:20.715Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+              "tokens": 36
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.717Z",
+          "started_at": "2026-09-06T20:25:20.717Z",
+          "finished_at": "2026-09-06T20:25:20.717Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:9673b02300ecebeab1acb69e218728d07725a9dfc667467d10385936c5326a91",
+              "tokens": 40
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.718Z",
+          "started_at": "2026-09-06T20:25:20.718Z",
+          "finished_at": "2026-09-06T20:25:20.718Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:9673b02300ecebeab1acb69e218728d07725a9dfc667467d10385936c5326a91",
+              "tokens": 40
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "pii-detector",
+            "version": "1",
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.720Z",
+          "started_at": "2026-09-06T20:25:20.720Z",
+          "finished_at": "2026-09-06T20:25:20.720Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:6d699f9124813cee4761a4ee131bbdc0ca510170040117d3f4410e47cc80743e",
+              "tokens": 41
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "categories": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "injection-screen",
+            "version": "1",
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567"
+          },
+          "stage": "admit",
+          "timestamp": "2026-09-06T20:25:20.721Z",
+          "started_at": "2026-09-06T20:25:20.721Z",
+          "finished_at": "2026-09-06T20:25:20.721Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "inputs": [
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:6d699f9124813cee4761a4ee131bbdc0ca510170040117d3f4410e47cc80743e",
+              "tokens": 41
+            }
+          ],
+          "outputs": [],
+          "detail": {
+            "findings": [],
+            "rules_matched": {},
+            "matched_text_recorded": false
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ]
+        },
+        {
+          "record_version": "contextops-processor-invocation/v1",
+          "processor": {
+            "name": "context-optimiser",
+            "version": "2",
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69"
+          },
+          "stage": "transform",
+          "timestamp": "2026-09-06T20:25:20.723Z",
+          "started_at": "2026-09-06T20:25:20.722Z",
+          "finished_at": "2026-09-06T20:25:20.723Z",
+          "latency_ms": 0,
+          "decision": "admit",
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 2 repeated phrases",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+              "tokens": 36
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:9673b02300ecebeab1acb69e218728d07725a9dfc667467d10385936c5326a91",
+              "tokens": 40
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:6d699f9124813cee4761a4ee131bbdc0ca510170040117d3f4410e47cc80743e",
+              "tokens": 41
+            }
+          ],
+          "outputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+              "tokens": 36
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c",
+              "tokens": 27
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093",
+              "tokens": 28
+            }
+          ],
+          "detail": {
+            "token_basis": "whitespace-words",
+            "tokens_in": 117,
+            "tokens_out": 91,
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "reference": "https://www.cnbc.com",
+                "input_hash": "sha256:9673b02300ecebeab1acb69e218728d07725a9dfc667467d10385936c5326a91",
+                "output_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c",
+                "spans": [
+                  {
+                    "start": 120,
+                    "end": 225,
+                    "words": 13,
+                    "content_hash": "sha256:9e41e8f729ea720f23a2f12fc250945a563d1156eea48ac855764241e9b037ad",
+                    "first_kept": {
+                      "reference": "https://www.cnbc.com",
+                      "start": 121,
+                      "end": 225
+                    }
+                  }
+                ]
+              },
+              {
+                "reference": "https://www.latent.space/p/inference-eng",
+                "input_hash": "sha256:6d699f9124813cee4761a4ee131bbdc0ca510170040117d3f4410e47cc80743e",
+                "output_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093",
+                "spans": [
+                  {
+                    "start": 119,
+                    "end": 225,
+                    "words": 13,
+                    "content_hash": "sha256:5afe2bdc61e79044ecaf9089433e21e46cc157bc97a10d6062373c407b8b65d8",
+                    "first_kept": {
+                      "reference": "https://www.cnbc.com",
+                      "start": 121,
+                      "end": 225
+                    }
+                  }
+                ]
+              }
+            ],
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "https://www.cnbc.com",
+                "https://www.cnbc.com",
+                "https://www.latent.space/p/inference-eng"
+              ],
+              "output": [
+                "https://www.cnbc.com",
+                "https://www.cnbc.com",
+                "https://www.latent.space/p/inference-eng"
+              ]
+            }
+          },
+          "gaps": [],
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ]
+        }
+      ],
+      "gaps": [
+        {
+          "reason": "inference_unavailable",
+          "detail": "No inference gateway is configured. Set COMMONMEASURE_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint."
+        }
+      ],
+      "evaluation": {
+        "grounding": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "grounding",
+            "version": "0.4.0",
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3"
+          },
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39"
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c"
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093"
+            }
+          ],
+          "verdict_counts": {
+            "supported": 0,
+            "contradicted": 0,
+            "uncovered": 0,
+            "unavailable": 0
+          },
+          "citations": [],
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ]
+        },
+        "coverage": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "coverage",
+            "version": "0.1.0",
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7"
+          },
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "rubric": null,
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39"
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c"
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093"
+            }
+          ],
+          "items": [],
+          "covered_count": null,
+          "item_count": null,
+          "fraction": null,
+          "unmeasured": "the suite declares no coverage rubric, and coverage is measured only against predeclared items (set coverage_rubric)",
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ]
+        },
+        "freshness": {
+          "record_version": "contextops-evaluation/v1",
+          "evaluator": {
+            "name": "freshness",
+            "version": "0.2.0",
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103"
+          },
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "as_of": {
+            "date": "2026-08-06",
+            "maximum_age_days": 7
+          },
+          "inputs": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39"
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c"
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093"
+            }
+          ],
+          "parts": [
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:5c18eedb8f8bf68b716aab9f026171b610f924a881b0351e805dabd82066ab39",
+              "declared_date": "2026-08-03T23:32:42Z",
+              "date_provenance": "supplier-declared: published_at on the Redpine mention",
+              "age_days": 3,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "https://www.cnbc.com",
+              "content_hash": "sha256:38bf0db429acb09e49e12aa27d506bdb0a93f1395a14dfe33e0d79aa24c4fe0c",
+              "declared_date": "2026-08-03T22:10:39Z",
+              "date_provenance": "supplier-declared: published_at on the Redpine mention",
+              "age_days": 3,
+              "within_maximum_age": true
+            },
+            {
+              "reference": "https://www.latent.space/p/inference-eng",
+              "content_hash": "sha256:0ee13fda1af3899bd30033a192c99534774b446cd46950709cbaa58a9d69e093",
+              "declared_date": "2026-08-03T21:44:03Z",
+              "date_provenance": "supplier-declared: published_at on the Redpine mention",
+              "age_days": 3,
+              "within_maximum_age": true
+            }
+          ],
+          "fresh_count": 3,
+          "part_count": 3,
+          "fraction": 1.0,
+          "unmeasured": null,
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ]
+        }
+      }
+    }
+  ],
+  "selection": {
+    "plan_id": "redpine-only",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 0.0,
+      "freshness": 1.0,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "method": "maximum weighted utility over measured freshness",
+    "explanation": "Every candidate's admitted window is measured this run — freshness against the suite's as_of date — and that term is a unitless fraction, so the objective is arithmetic on the declared weights: redpine-only 1.00 (freshness 1.00). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "unavailable_inputs": []
+  }
+}

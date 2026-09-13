@@ -1,0 +1,58 @@
+{
+  "label": "Provider re-verification: one fetch per adapter that declares fetch, of one stable public standard page",
+  "job": {
+    "id": "454b091a-afec-498f-9fb2-400f143fe359",
+    "kind": "research.answer",
+    "prompt": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 1.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_acquisition_cost",
+        "amount": {
+          "currency": "USD",
+          "micros": 100000
+        }
+      },
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      },
+      {
+        "kind": "maximum_latency_ms",
+        "milliseconds": 30000
+      },
+      {
+        "kind": "allowed_source_host",
+        "host": "www.w3.org"
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "The W3C Recommendation that defines PROV-DM",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 3,
+  "suite_version": "recon-w3c-prov-fetch/v1",
+  "fetch_target": "https://www.w3.org/TR/prov-dm/",
+  "providers": [
+    "parallel",
+    "linkup",
+    "tavily"
+  ]
+}

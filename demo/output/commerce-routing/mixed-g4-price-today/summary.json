@@ -1,0 +1,2173 @@
+{
+  "evidence_log": {
+    "records": 25,
+    "sha256": "sha256:665b77c2ce3056210d8237da24a51fb4fe4b4c35e68e0bffa4d10689776d5890"
+  },
+  "job": {
+    "constraints": {
+      "allowed_providers": [],
+      "allowed_source_hosts": [],
+      "denied_providers": [],
+      "denied_source_hosts": [],
+      "enforcement_mode": "observe",
+      "max_acquisition_cost": null,
+      "max_context_tokens": 4000,
+      "max_total_latency_ms": null,
+      "required_licences": []
+    },
+    "id": "44d49f79-3064-45fe-a94c-85be2eb6d950",
+    "kind": "research.answer",
+    "label": "Commerce routing experiment, availability question 'g4-price-today': all three source classes together",
+    "objective": {
+      "cost": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "kind": "weighted",
+      "latency": 0.0,
+      "policy_risk": 0.0,
+      "quality": 0.0
+    },
+    "prompt": "What does the Northglade G4 burr grinder cost at Fictive Retail today, and are replacement burrs available?",
+    "requirements": []
+  },
+  "model_plan": {
+    "configured": false,
+    "endpoint": null,
+    "gateway": null,
+    "requested_model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "plans": [
+    {
+      "acquisition": null,
+      "adapter_version": null,
+      "answer": null,
+      "capability": null,
+      "context_tokens_admitted": 0,
+      "eligibility": {
+        "eligible": true,
+        "reason": "The baseline uses no provider."
+      },
+      "evaluation": {
+        "coverage": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ],
+          "covered_count": 0,
+          "evaluator": {
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7",
+            "name": "coverage",
+            "version": "0.1.0"
+          },
+          "fraction": 0.0,
+          "inputs": [],
+          "item_count": 3,
+          "items": [
+            {
+              "covered": false,
+              "item": "current-price",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "covered": false,
+              "item": "price-history",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            },
+            {
+              "covered": false,
+              "item": "spare-burrs",
+              "matched": null,
+              "reason": "no declared phrase for this item occurs in the retained text of any admitted window part"
+            }
+          ],
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "rubric": {
+            "name": "commerce-g4-price-today",
+            "version": "1"
+          },
+          "unmeasured": null
+        },
+        "freshness": {
+          "as_of": {
+            "date": "2026-08-13",
+            "maximum_age_days": 180
+          },
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ],
+          "evaluator": {
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103",
+            "name": "freshness",
+            "version": "0.2.0"
+          },
+          "fraction": null,
+          "fresh_count": null,
+          "inputs": [],
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "part_count": null,
+          "parts": [],
+          "record_version": "contextops-evaluation/v1",
+          "unmeasured": "the admitted window holds no parts, so there is nothing to date"
+        },
+        "grounding": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ],
+          "citations": [],
+          "evaluator": {
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+            "name": "grounding",
+            "version": "0.4.0"
+          },
+          "inputs": [],
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "verdict_counts": {
+            "contradicted": 0,
+            "supported": 0,
+            "unavailable": 0,
+            "uncovered": 0
+          }
+        }
+      },
+      "gaps": [
+        {
+          "detail": "The controlled baseline requested no external context, so nothing grounds its answer.",
+          "reason": "evidence_missing"
+        },
+        {
+          "detail": "No inference gateway is configured. Set CONTEXTOPS_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint.",
+          "reason": "inference_unavailable"
+        }
+      ],
+      "id": "no-context",
+      "inference": null,
+      "latency_ms": null,
+      "policy_decisions": [],
+      "processors": [],
+      "provider": "none",
+      "source_count": 0,
+      "sources": [],
+      "status": "unavailable",
+      "verification_state": "planned"
+    },
+    {
+      "acquisition": {
+        "charge": {},
+        "endpoint": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus",
+        "http_status": null,
+        "latency_ms": 1,
+        "provider_request_id": null,
+        "response_bytes": 13666,
+        "response_hash": "sha256:02f3624d28e340455affcc68e8f2c13c6732b2f1eeb2581cf37b04636a6ac278",
+        "response_ref": "responses/internal-only.json",
+        "result_count": 10
+      },
+      "adapter_version": "ctx-supply/0.1",
+      "answer": null,
+      "capability": "query",
+      "context_tokens_admitted": 925,
+      "eligibility": {
+        "eligible": true,
+        "reason": "No constraint excluded this provider."
+      },
+      "evaluation": {
+        "coverage": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Coverage measures agreement with the rubric's author: covered means a declared phrase's words entered the window, not that the rubric is complete or right, and not that any answer used them.",
+            "Phrase matching is verbatim word-sequence presence; a paraphrase of a rubric item is invisible to this check.",
+            "Items count equally in the fraction; the rubric declares no weights."
+          ],
+          "covered_count": 3,
+          "evaluator": {
+            "configuration_digest": "sha256:f53ba04a722c216a2b4f9993cc3c5cd02c65337e6938e9717e3450d07dc492d7",
+            "name": "coverage",
+            "version": "0.1.0"
+          },
+          "fraction": 1.0,
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md"
+            },
+            {
+              "content_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md"
+            },
+            {
+              "content_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md"
+            },
+            {
+              "content_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md"
+            },
+            {
+              "content_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md"
+            },
+            {
+              "content_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md"
+            },
+            {
+              "content_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+            }
+          ],
+          "item_count": 3,
+          "items": [
+            {
+              "covered": true,
+              "item": "current-price",
+              "matched": {
+                "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+                "end": 273,
+                "phrase": "£129.00",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                "start": 265
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "covered": true,
+              "item": "price-history",
+              "matched": {
+                "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+                "end": 362,
+                "phrase": "reduced from £159.00",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                "start": 341
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            },
+            {
+              "covered": true,
+              "item": "spare-burrs",
+              "matched": {
+                "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+                "end": 643,
+                "phrase": "burr set BS-40",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                "start": 629
+              },
+              "reason": "a declared phrase's word sequence occurs in this part's retained text at the recorded span"
+            }
+          ],
+          "method": "deterministic matching of predeclared rubric phrases over the retained text of the admitted window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "rubric": {
+            "name": "commerce-g4-price-today",
+            "version": "1"
+          },
+          "unmeasured": null
+        },
+        "freshness": {
+          "as_of": {
+            "date": "2026-08-13",
+            "maximum_age_days": 180
+          },
+          "assurance": "declared",
+          "blind_spots": [
+            "Every date is declared metadata — a supplier's own claim, the operator's corpus manifest, or a replay manifest's capture date — and is trusted as declared; nothing here verifies when content was actually written.",
+            "A part dated only by its capture date may be older than the day it was fetched, and a supplier-declared date is still only the supplier's word.",
+            "Within the declared window is binary; the record carries each part's age in days for a reader who needs finer judgement.",
+            "One undated part withholds the whole fraction: a window that is mostly dated publishes no number, and its dated majority is visible only in the per-part record."
+          ],
+          "evaluator": {
+            "configuration_digest": "sha256:98aa6b492c8cbf2ff6a76aa5762b3f112041a03af998ac149c3674a6f034d103",
+            "name": "freshness",
+            "version": "0.2.0"
+          },
+          "fraction": 0.8,
+          "fresh_count": 8,
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md"
+            },
+            {
+              "content_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md"
+            },
+            {
+              "content_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md"
+            },
+            {
+              "content_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md"
+            },
+            {
+              "content_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md"
+            },
+            {
+              "content_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md"
+            },
+            {
+              "content_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+            }
+          ],
+          "method": "deterministic comparison of each admitted part's declared date against the suite's as_of reference and maximum age; no clock is read",
+          "part_count": 10,
+          "parts": [
+            {
+              "age_days": 12,
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-08-01",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 136,
+              "content_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-03-30",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 317,
+              "content_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2025-09-30",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "within_maximum_age": false
+            },
+            {
+              "age_days": 12,
+              "content_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-08-01",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 133,
+              "content_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-04-02",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 19,
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-07-25",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 12,
+              "content_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-08-01",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 12,
+              "content_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-08-01",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 12,
+              "content_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2026-08-01",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+              "within_maximum_age": true
+            },
+            {
+              "age_days": 274,
+              "content_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+              "date_provenance": "operator-declared: document date in corpus.json",
+              "declared_date": "2025-11-12",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "within_maximum_age": false
+            }
+          ],
+          "record_version": "contextops-evaluation/v1",
+          "unmeasured": null
+        },
+        "grounding": {
+          "assurance": "observed",
+          "blind_spots": [
+            "Verbatim quotes only: a paraphrase of the context is invisible to this check.",
+            "Supported means the quote is in the supplied context, not that it is true.",
+            "Contradicted means the cited source's retained text does not contain the quoted word sequence. It is not a finding about the claim's truth, nor about the model's intent.",
+            "Quotes are compared word by word, ignoring case entirely, whitespace, and trailing punctuation. Case is ignored even where it carries meaning (Polish/polish, March/march): supported is a coarse presence check — this word sequence entered the window — and fidelity-grade matching (case-as-meaning, alteration marks, emphasis) is deferred to a planned add-on. A quote that differs inside a word or in leading punctuation is still contradicted even where the source says the same thing, and part of a word is not a word.",
+            "Claims the answer makes without a citation are not examined."
+          ],
+          "citations": [],
+          "evaluator": {
+            "configuration_digest": "sha256:4ea522440e2a930482325a0466347643b221853aa339ab4dc4d77cb48356e0e3",
+            "name": "grounding",
+            "version": "0.4.0"
+          },
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md"
+            },
+            {
+              "content_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md"
+            },
+            {
+              "content_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+            },
+            {
+              "content_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md"
+            },
+            {
+              "content_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md"
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+            },
+            {
+              "content_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md"
+            },
+            {
+              "content_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md"
+            },
+            {
+              "content_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md"
+            },
+            {
+              "content_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+            }
+          ],
+          "method": "deterministic citation parsing and quote matching over the window parts (word sequences, case-insensitive, flexible in whitespace and trailing punctuation, otherwise exact)",
+          "record_version": "contextops-evaluation/v1",
+          "unevaluated": "no answer exists for this plan; inference did not complete",
+          "verdict_counts": {
+            "contradicted": 0,
+            "supported": 0,
+            "unavailable": 0,
+            "uncovered": 0
+          }
+        }
+      },
+      "gaps": [
+        {
+          "detail": "No inference gateway is configured. Set CONTEXTOPS_INFERENCE_ENDPOINT to an OpenAI-compatible chat-completions endpoint.",
+          "reason": "inference_unavailable"
+        }
+      ],
+      "id": "internal-only",
+      "inference": null,
+      "latency_ms": 1,
+      "policy_decisions": [],
+      "processors": [
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.738Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+              "tokens": 121
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.738Z",
+          "timestamp": "2026-08-13T10:48:59.738Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.738Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+              "tokens": 121
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.738Z",
+          "timestamp": "2026-08-13T10:48:59.738Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.739Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "tokens": 105
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.739Z",
+          "timestamp": "2026-08-13T10:48:59.739Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.739Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "tokens": 105
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.739Z",
+          "timestamp": "2026-08-13T10:48:59.739Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.740Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.740Z",
+          "timestamp": "2026-08-13T10:48:59.740Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.740Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.740Z",
+          "timestamp": "2026-08-13T10:48:59.740Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.741Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "tokens": 117
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.741Z",
+          "timestamp": "2026-08-13T10:48:59.741Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.741Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "tokens": 117
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.741Z",
+          "timestamp": "2026-08-13T10:48:59.741Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.742Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.742Z",
+          "timestamp": "2026-08-13T10:48:59.742Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.743Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "tokens": 118
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.742Z",
+          "timestamp": "2026-08-13T10:48:59.743Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.743Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.743Z",
+          "timestamp": "2026-08-13T10:48:59.743Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.744Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.743Z",
+          "timestamp": "2026-08-13T10:48:59.744Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.744Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "tokens": 103
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.744Z",
+          "timestamp": "2026-08-13T10:48:59.744Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.745Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "tokens": 103
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.745Z",
+          "timestamp": "2026-08-13T10:48:59.745Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.745Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "tokens": 124
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.745Z",
+          "timestamp": "2026-08-13T10:48:59.745Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.746Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "tokens": 124
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.746Z",
+          "timestamp": "2026-08-13T10:48:59.746Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.746Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+              "tokens": 108
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.746Z",
+          "timestamp": "2026-08-13T10:48:59.746Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.747Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+              "tokens": 108
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.747Z",
+          "timestamp": "2026-08-13T10:48:59.747Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Pattern rules detect structured identifiers only; names, postal addresses and other free-text personal data are not detected.",
+            "Only crossings this runtime carries are scanned; an observed crossing has already happened and is recorded, not scanned."
+          ],
+          "decision": "admit",
+          "detail": {
+            "categories": {},
+            "findings": [],
+            "matched_text_recorded": false
+          },
+          "finished_at": "2026-08-13T10:48:59.747Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "tokens": 120
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one deterministic pass of the pattern rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:310f35618589b5f3eaee5e34993fb098bdfd94de8b1657db314f3143948161d7",
+            "name": "pii-detector",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.747Z",
+          "timestamp": "2026-08-13T10:48:59.747Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "A bounded set of known phrasings is matched as case-folded substrings; reworded, obfuscated, translated or unicode-disguised instructions are not detected, and a clean result means only that no rule matched.",
+            "Matching is exact on whitespace: a rule phrase interrupted by a line wrap or any other whitespace change — the normal shape of text wrapped at a fixed column — is not matched.",
+            "Detection is a substring test, not comprehension: the screen cannot tell a genuine instruction to the agent from a page that quotes or documents one, and treats both alike.",
+            "Only crossings this runtime carries are screened; an observed crossing has already happened and is recorded, not screened."
+          ],
+          "decision": "admit",
+          "detail": {
+            "findings": [],
+            "matched_text_recorded": false,
+            "rules_matched": {}
+          },
+          "finished_at": "2026-08-13T10:48:59.748Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "tokens": 120
+            }
+          ],
+          "latency_ms": 0,
+          "method": "one case-folded substring pass of the rules the configuration digest pins",
+          "outputs": [],
+          "processor": {
+            "configuration_digest": "sha256:7ec0b3056ff0a97ee45b8a1705caa136af06aa66b8df73e57228db6fd1566567",
+            "name": "injection-screen",
+            "version": "1"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "admit",
+          "started_at": "2026-08-13T10:48:59.748Z",
+          "timestamp": "2026-08-13T10:48:59.748Z"
+        },
+        {
+          "assurance": "observed",
+          "blind_spots": [
+            "Deduplication precedes budget fitting: a phrase kept only in an earlier source leaves the context entirely if that source is later dropped by the budget.",
+            "Deterministic textual rules only: no relevance judgement is made, and near-duplicates that differ in wording survive."
+          ],
+          "decision": "admit",
+          "detail": {
+            "ordering": {
+              "basis": "provider retrieval order, preserved",
+              "input": [
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+              ],
+              "output": [
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+                "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+              ]
+            },
+            "removed_sources": [],
+            "removed_spans": [
+              {
+                "input_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+                "output_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "end": 28,
+                    "first_kept": {
+                      "end": 54,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 28
+                    },
+                    "start": 1,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:3d6b3ab353dc95156b5019a901264a728a9159f6a163bb77446b4b2789cda5f7",
+                    "end": 201,
+                    "first_kept": {
+                      "end": 318,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 298
+                    },
+                    "start": 179,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:99b9b87ca9ec6229cdb429840ecd091a9437ca2a66eee6292cf8fc7de2739c29",
+                    "end": 427,
+                    "first_kept": {
+                      "end": 498,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 472
+                    },
+                    "start": 400,
+                    "words": 5
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+                "output_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "end": 50,
+                    "first_kept": {
+                      "end": 54,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 28
+                    },
+                    "start": 23,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:3d6b3ab353dc95156b5019a901264a728a9159f6a163bb77446b4b2789cda5f7",
+                    "end": 208,
+                    "first_kept": {
+                      "end": 318,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 298
+                    },
+                    "start": 186,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:1d566f43b684c5d3d24911d1077ee4e3c352ab05c550ea4c3e9efa99637db5c4",
+                    "end": 330,
+                    "first_kept": {
+                      "end": 304,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 253
+                    },
+                    "start": 278,
+                    "words": 8
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+                "output_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "end": 140,
+                    "first_kept": {
+                      "end": 125,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 56
+                    },
+                    "start": 69,
+                    "words": 9
+                  },
+                  {
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "end": 171,
+                    "first_kept": {
+                      "end": 156,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 126
+                    },
+                    "start": 140,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:3de679b9475b3f6d01ce34566875a639f4725bd4cb45793cd9608486f49c05fe",
+                    "end": 361,
+                    "first_kept": {
+                      "end": 269,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+                      "start": 237
+                    },
+                    "start": 328,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "end": 430,
+                    "first_kept": {
+                      "end": 54,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 28
+                    },
+                    "start": 403,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:b5026173b677a2274b541eb3d17642d350db865f4b6e6dc1b8a6e547b23e4669",
+                    "end": 482,
+                    "first_kept": {
+                      "end": 606,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 578
+                    },
+                    "start": 453,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:68b2fe5733f71a362457da60fda67d3ecb338efefe17b40609ce27842b78bd5f",
+                    "end": 526,
+                    "first_kept": {
+                      "end": 493,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 472
+                    },
+                    "start": 504,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+                "output_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:1a64a430e3af78a18c7d3a64cdf5aa2f2ddb367cd0f6946d00af65bf29e34a9c",
+                    "end": 134,
+                    "first_kept": {
+                      "end": 130,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 60
+                    },
+                    "start": 62,
+                    "words": 11
+                  },
+                  {
+                    "content_hash": "sha256:5150bd2ae043489c78389b313d56c075b395208e38304c99571dd5be60949212",
+                    "end": 215,
+                    "first_kept": {
+                      "end": 54,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 28
+                    },
+                    "start": 188,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:5d1cd6006c6a428739c4895d452dc223cf53c805a5212331ec6cf72076b666b6",
+                    "end": 259,
+                    "first_kept": {
+                      "end": 369,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 330
+                    },
+                    "start": 219,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:30267a74865b345e5a69727a3373099d01f84629c59ace9d47b42370652d4fd5",
+                    "end": 281,
+                    "first_kept": {
+                      "end": 391,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 370
+                    },
+                    "start": 259,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:88d6113bf5aaff7f44e3db48bae339f1d69ea16f910309f404af0dc214e83407",
+                    "end": 594,
+                    "first_kept": {
+                      "end": 499,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 472
+                    },
+                    "start": 566,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:c5f965a927b8160756986c75df51aa4f776eeddb2f80544a62e5cfd7d6dc2d20",
+                    "end": 641,
+                    "first_kept": {
+                      "end": 528,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 510
+                    },
+                    "start": 622,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+                "output_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:62ecc4e4fbb6a7b9288ba5e4eb7a8a1555801c906079f6f8097ba727767abca8",
+                    "end": 115,
+                    "first_kept": {
+                      "end": 91,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 52
+                    },
+                    "start": 74,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:0c202d21d2fd74e887aff4b5537d96b9946ba9a73baed6433743d2b822209b17",
+                    "end": 199,
+                    "first_kept": {
+                      "end": 167,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+                      "start": 127
+                    },
+                    "start": 158,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:92bc1e507807cd73c086b29ebe4541990d46e02d57d1e713da1af9a2adc98fef",
+                    "end": 325,
+                    "first_kept": {
+                      "end": 318,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 298
+                    },
+                    "start": 304,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+                "output_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:13747efaf8c36fcd91124ed50fb7c4319dc372574e5cd19ff573880292ccf9c6",
+                    "end": 27,
+                    "first_kept": {
+                      "end": 27,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 0
+                    },
+                    "start": 0,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "end": 134,
+                    "first_kept": {
+                      "end": 125,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 56
+                    },
+                    "start": 63,
+                    "words": 9
+                  },
+                  {
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "end": 165,
+                    "first_kept": {
+                      "end": 156,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 126
+                    },
+                    "start": 134,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:d132d7ff6d046fdf5458ae8b371a0380ce400efdb3d1bfeb8899c4f616137d41",
+                    "end": 184,
+                    "first_kept": {
+                      "end": 175,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 158
+                    },
+                    "start": 165,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:e9c87893dfd75297a3f40dc902e7683e242e7c25f2ed536ce3e2f103f6f8ecd5",
+                    "end": 273,
+                    "first_kept": {
+                      "end": 63,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 36
+                    },
+                    "start": 245,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:0a4b5db8bf67a80533adf119581edc6d70ea0b7ccc0ef98b77006a40b9608cfa",
+                    "end": 473,
+                    "first_kept": {
+                      "end": 396,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 373
+                    },
+                    "start": 449,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+                "output_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:13747efaf8c36fcd91124ed50fb7c4319dc372574e5cd19ff573880292ccf9c6",
+                    "end": 27,
+                    "first_kept": {
+                      "end": 27,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 0
+                    },
+                    "start": 0,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "end": 134,
+                    "first_kept": {
+                      "end": 125,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 56
+                    },
+                    "start": 63,
+                    "words": 9
+                  },
+                  {
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "end": 165,
+                    "first_kept": {
+                      "end": 156,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 126
+                    },
+                    "start": 134,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:d132d7ff6d046fdf5458ae8b371a0380ce400efdb3d1bfeb8899c4f616137d41",
+                    "end": 184,
+                    "first_kept": {
+                      "end": 175,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 158
+                    },
+                    "start": 165,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:9641925aa6286aa39f7ee5141b15a5aa61e4c21b974d9dd82886974f4bf3da51",
+                    "end": 233,
+                    "first_kept": {
+                      "end": 233,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 214
+                    },
+                    "start": 213,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:318256404f88d835ae423325246b91c7e8b806c2a620dc2727c8a19f4d17d88c",
+                    "end": 273,
+                    "first_kept": {
+                      "end": 63,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+                      "start": 36
+                    },
+                    "start": 245,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:3c72eac0575dafdbf23fb9e5f3f73d0209a20088baafb80992ca81f23bdd2757",
+                    "end": 317,
+                    "first_kept": {
+                      "end": 296,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 276
+                    },
+                    "start": 296,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:867e60e032ce5721c5270143672fd73fa2c01ef8bc108c1ad78b043ea45fbd62",
+                    "end": 419,
+                    "first_kept": {
+                      "end": 330,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 316
+                    },
+                    "start": 404,
+                    "words": 4
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+                "output_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:13747efaf8c36fcd91124ed50fb7c4319dc372574e5cd19ff573880292ccf9c6",
+                    "end": 27,
+                    "first_kept": {
+                      "end": 27,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 0
+                    },
+                    "start": 0,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:a5ec6f66295ef17195c8cc06c21e130a97717827899667a60b8ad306e951d082",
+                    "end": 119,
+                    "first_kept": {
+                      "end": 125,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 56
+                    },
+                    "start": 48,
+                    "words": 9
+                  },
+                  {
+                    "content_hash": "sha256:bd35fe6469fdb805c9dc2e4847534a80c32c3850852cae1c50145013dae53378",
+                    "end": 150,
+                    "first_kept": {
+                      "end": 156,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 126
+                    },
+                    "start": 119,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:d132d7ff6d046fdf5458ae8b371a0380ce400efdb3d1bfeb8899c4f616137d41",
+                    "end": 169,
+                    "first_kept": {
+                      "end": 175,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+                      "start": 158
+                    },
+                    "start": 150,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:9641925aa6286aa39f7ee5141b15a5aa61e4c21b974d9dd82886974f4bf3da51",
+                    "end": 217,
+                    "first_kept": {
+                      "end": 233,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 214
+                    },
+                    "start": 197,
+                    "words": 5
+                  },
+                  {
+                    "content_hash": "sha256:3b6331b801843ba243813477a1978210d6324ca905848bf4f27d060608c7ee7a",
+                    "end": 265,
+                    "first_kept": {
+                      "end": 296,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 276
+                    },
+                    "start": 244,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:df85edcfaf0b88bad6d427d100dbc0cfecf5a2a3a281fadcbe1ac9f8c0ce92ab",
+                    "end": 299,
+                    "first_kept": {
+                      "end": 330,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+                      "start": 297
+                    },
+                    "start": 265,
+                    "words": 7
+                  }
+                ]
+              },
+              {
+                "input_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+                "output_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+                "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+                "spans": [
+                  {
+                    "content_hash": "sha256:61b4bd471a613a7f0e0cf5938dab8317fdbe761ec167bbc85b9858d9b4c509b2",
+                    "end": 77,
+                    "first_kept": {
+                      "end": 85,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 60
+                    },
+                    "start": 50,
+                    "words": 4
+                  },
+                  {
+                    "content_hash": "sha256:1a8850ed65de2167bc7b0b4864f102ffd3333ce52b9129bfb887629aebbed04b",
+                    "end": 119,
+                    "first_kept": {
+                      "end": 130,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 97
+                    },
+                    "start": 85,
+                    "words": 6
+                  },
+                  {
+                    "content_hash": "sha256:bab38877b9e5d6b7b9daf091cc1791d74098b647048643ea36535837b393026a",
+                    "end": 153,
+                    "first_kept": {
+                      "end": 164,
+                      "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+                      "start": 138
+                    },
+                    "start": 126,
+                    "words": 4
+                  }
+                ]
+              }
+            ],
+            "token_basis": "whitespace-words",
+            "tokens_in": 1162,
+            "tokens_out": 925
+          },
+          "finished_at": "2026-08-13T10:48:59.754Z",
+          "gaps": [],
+          "inputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+              "tokens": 121
+            },
+            {
+              "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "tokens": 105
+            },
+            {
+              "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 118
+            },
+            {
+              "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "tokens": 117
+            },
+            {
+              "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "tokens": 118
+            },
+            {
+              "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 128
+            },
+            {
+              "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "tokens": 103
+            },
+            {
+              "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "tokens": 124
+            },
+            {
+              "content_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+              "tokens": 108
+            },
+            {
+              "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "tokens": 120
+            }
+          ],
+          "latency_ms": 5,
+          "method": "deterministic deduplication in retrieval order; removed 0 whole sources and 45 repeated phrases",
+          "outputs": [
+            {
+              "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md",
+              "tokens": 121
+            },
+            {
+              "content_hash": "sha256:e8b10fdf401a38605bec2354d126878e7c0913ffd02e5dcad07a2eeee85c9f7f",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md",
+              "tokens": 92
+            },
+            {
+              "content_hash": "sha256:78e7d0f70b9e7c99c2f6dd9ab677b76abe57a11b1d6dde0af1ed1514723bfb27",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md",
+              "tokens": 102
+            },
+            {
+              "content_hash": "sha256:1b21a475f59c7d991aad4339288370f4afed86d05ff55b5f79a02d4cec53782e",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md",
+              "tokens": 85
+            },
+            {
+              "content_hash": "sha256:b0fa8cbfccd14ec727297e9bd8e71908fca31924ed7c56d59443e3946b84c7dc",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md",
+              "tokens": 85
+            },
+            {
+              "content_hash": "sha256:f6981c6f44539fa4a3ad706d823be7e9a74c70a2ba9ca420d515f49c61e47bf3",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md",
+              "tokens": 113
+            },
+            {
+              "content_hash": "sha256:ddff328484e6efa78ac538a3588427d9836b72b92fb5792361cff9985b1586b4",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md",
+              "tokens": 72
+            },
+            {
+              "content_hash": "sha256:a69270f042e0495da9dd01f6be1bcfbd84bccedbd530cacca5b5679f9ba4bac9",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md",
+              "tokens": 82
+            },
+            {
+              "content_hash": "sha256:91bed41262ed4cc27975c350050e0de304375bd34ec42e8e610189c91831b97c",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md",
+              "tokens": 67
+            },
+            {
+              "content_hash": "sha256:f60f3002916a66d1f5ddd9a6c25f684d28ed662c0a147a4d9282e36bbaad0e92",
+              "reference": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md",
+              "tokens": 106
+            }
+          ],
+          "processor": {
+            "configuration_digest": "sha256:1b45c43c0ff09f8f85bae5cce6a3cfe72a13a17940b60736ca2ae3735577eb69",
+            "name": "context-optimiser",
+            "version": "2"
+          },
+          "record_version": "contextops-processor-invocation/v1",
+          "stage": "transform",
+          "started_at": "2026-08-13T10:48:59.748Z",
+          "timestamp": "2026-08-13T10:48:59.754Z"
+        }
+      ],
+      "provider": "internal",
+      "source_count": 10,
+      "sources": [
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:02f913e82b3f0c91f79892dc9503b1cd54f4ac4e80b6b2dc00d37bc94b90be44",
+          "host": "",
+          "licence": {
+            "reference": "fictive-retail/product-data-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 16,
+            "path": "product-data/northglade-g4-listing.md"
+          },
+          "retrieval_rank": 1,
+          "title": "Fictive Retail catalogue: Northglade G4 burr grinder",
+          "tokens": 121,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/northglade-g4-listing.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:87dacdbf389d5c9c2951c8a8b3cbea4adb963ad91fa5d03a9b7e0d959878cc25",
+          "host": "",
+          "licence": {
+            "reference": "northglade/brand-content-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 13,
+            "path": "brand-content/northglade-g4-page.md"
+          },
+          "retrieval_rank": 2,
+          "title": "Northglade G4 burr grinder — forty settings, zero fuss",
+          "tokens": 92,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-page.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:eeb01085989fb27ef7aae495a2af817ceeac5c79f3465ee0e461c77eda9be1e6",
+          "host": "",
+          "licence": {
+            "reference": "brewprint/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 6,
+            "governance": null,
+            "occurrences": 11,
+            "path": "third-party/brewprint-g4-review.md"
+          },
+          "retrieval_rank": 3,
+          "title": "BrewPrint reviews the Northglade G4 burr grinder",
+          "tokens": 102,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/brewprint-g4-review.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:6defcc9d36c162602348b3204ba40434fbf5dce340d67acec0fe44ffe3b3c189",
+          "host": "",
+          "licence": {
+            "reference": "fictive-retail/product-data-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 5,
+            "governance": null,
+            "occurrences": 13,
+            "path": "product-data/compatibility-matrix.md"
+          },
+          "retrieval_rank": 4,
+          "title": "Fictive Retail compatibility matrix: grinders and espresso machines",
+          "tokens": 85,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/compatibility-matrix.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:607420219a15b3522bbbcb1bd67bb0bd51eb4163df09ae50fd840841b094ed0b",
+          "host": "",
+          "licence": {
+            "reference": "northglade/brand-content-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 5,
+            "governance": null,
+            "occurrences": 9,
+            "path": "brand-content/northglade-g4-guide.md"
+          },
+          "retrieval_rank": 5,
+          "title": "Northglade G4: using the G4 with auto-dose espresso machines",
+          "tokens": 85,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/northglade-g4-guide.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:f4d294a477d4d478d7287eea9a8c7cc40c46bf1202e4dc967943ea5133822c13",
+          "host": "",
+          "licence": {
+            "reference": "crema-courier/syndication-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 4,
+            "governance": null,
+            "occurrences": 8,
+            "path": "third-party/crema-courier-grinder-guide.md"
+          },
+          "retrieval_rank": 6,
+          "title": "The Crema Courier: grinders for auto-dose espresso machines, summer 2026",
+          "tokens": 113,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/third-party/crema-courier-grinder-guide.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:dd7ceec3f1ee41d2756fe95ff0efaa3b28061b0b6ac5ea7c35e76e365c63f5e7",
+          "host": "",
+          "licence": {
+            "reference": "fictive-retail/product-data-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 3,
+            "governance": null,
+            "occurrences": 7,
+            "path": "product-data/presto-200-listing.md"
+          },
+          "retrieval_rank": 7,
+          "title": "Fictive Retail catalogue: Aurelio Presto 200 espresso machine",
+          "tokens": 72,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-200-listing.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:0e674cb78f1e648b11a44c5a76a0430fbf97286b876d364583dae6d2720457f0",
+          "host": "",
+          "licence": {
+            "reference": "fictive-retail/product-data-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 3,
+            "governance": null,
+            "occurrences": 7,
+            "path": "product-data/presto-300-listing.md"
+          },
+          "retrieval_rank": 8,
+          "title": "Fictive Retail catalogue: Aurelio Presto 300 espresso machine",
+          "tokens": 82,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/presto-300-listing.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:5fc99cabec679f9c1462fee0abee12b53852996e80bd224531bec89ad8d6a7b4",
+          "host": "",
+          "licence": {
+            "reference": "fictive-retail/product-data-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 3,
+            "governance": null,
+            "occurrences": 5,
+            "path": "product-data/brewlink-hub-listing.md"
+          },
+          "retrieval_rank": 9,
+          "title": "Fictive Retail catalogue: Aurelio BrewLink Hub",
+          "tokens": 67,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/product-data/brewlink-hub-listing.md"
+        },
+        {
+          "admission_reason": "Admitted; no constraint excluded it.",
+          "admitted": true,
+          "content_hash": "sha256:a2f678f8cb958863533959a37a647a5b36ef797bff866d1cc05882d14116481d",
+          "host": "",
+          "licence": {
+            "reference": "aurelio/brand-content-licence-v1",
+            "state": "declared"
+          },
+          "native_metadata": {
+            "distinct_terms": 3,
+            "governance": null,
+            "occurrences": 3,
+            "path": "brand-content/aurelio-presto-200-page.md"
+          },
+          "retrieval_rank": 10,
+          "title": "Aurelio Presto 200 — the heart of the home bar",
+          "tokens": 106,
+          "url": "file:///home/alexs/common-measure/contextops/demo/commerce/corpus/brand-content/aurelio-presto-200-page.md"
+        }
+      ],
+      "status": "unavailable",
+      "verification_state": "live-verified"
+    }
+  ],
+  "run": {
+    "evidence_complete": true,
+    "fairness": "One job, one system prompt, one requested model, one result limit and one admission budget across every plan. Each provider discovers independently; no provider is given another's URLs. Acquisition charges stay in the provider's own unit.",
+    "id": "36a1b7c5-0052-49d6-ae74-0b253721387d",
+    "manifest_hash": "sha256:e22f03c9955caf041b7cd6982f045b7b17450c5a8e0b6732189eaf24bbcf8a9a",
+    "mode": "no-external-acquisition",
+    "started_at": "2026-08-13T10:48:59Z",
+    "token_basis": "whitespace-words"
+  },
+  "schema_version": "contextops-run/v6",
+  "selection": {
+    "explanation": "Every candidate's admitted window is measured this run — coverage against rubric commerce-g4-price-today/1 and freshness against the suite's as_of date — and both terms are unitless fractions, so the objective is arithmetic on the declared weights: internal-only 1.40 (coverage 1.00, freshness 0.80). The ranking reads the evaluation records of the admitted windows, not the answers.",
+    "method": "maximum weighted utility over measured coverage and freshness",
+    "objective": {
+      "cost": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "kind": "weighted",
+      "latency": 0.0,
+      "policy_risk": 0.0,
+      "quality": 0.0
+    },
+    "plan_id": "internal-only",
+    "unavailable_inputs": []
+  },
+  "suite_version": "commerce-routing-mixed-g4-price-today/v1"
+}

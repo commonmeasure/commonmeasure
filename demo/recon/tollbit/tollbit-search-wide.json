@@ -1,0 +1,291 @@
+{
+  "probe": "tollbit-search-wide",
+  "note": "Broad query, max page size, to find any licensable item. Free.",
+  "request": {
+    "method": "GET",
+    "url": "https://gateway.tollbit.com/dev/v2/search?q=climate&size=20",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 914,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:27:35 GMT",
+      "Content-Type": "application/json",
+      "Transfer-Encoding": "chunked",
+      "Connection": "close",
+      "Cache-Control": "no-cache",
+      "Vary": "Origin"
+    },
+    "body": {
+      "nextToken": "MToyMA==",
+      "items": [
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-26T10:25:03",
+          "publisher": {
+            "domain": "npr.org",
+            "name": "National Public Radio website"
+          },
+          "title": "Climate : NPR",
+          "url": "https://www.npr.org/sections/climate"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-08T18:00:25",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "Another Super El Niño is brewing. Scientists are looking at a controversial solution to squash them | CNN",
+          "url": "https://www.cnn.com/2026/07/08/climate/super-el-ninos-extreme-weather-geoengineering-cloud-brightening"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-24T23:29:34",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "Climate change | CNN",
+          "url": "https://www.cnn.com/climate"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-06-25T14:09:26",
+          "publisher": {
+            "domain": "www.theatlantic.com",
+            "name": "The Atlantic"
+          },
+          "title": "America Isn’t Sweating Climate Change - The Atlantic",
+          "url": "https://www.theatlantic.com/science/2026/06/climate-ambivalence/687673/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-06-28T21:08:25",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "‘As soon as I see the sun, I’m frightened’: The parents paying the heart-breaking price of soaring temperatures | CNN",
+          "url": "https://www.cnn.com/2026/06/28/climate/europe-heatwaves-drownings-intl-cmd"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-06-11T15:59:09",
+          "publisher": {
+            "domain": "www.theatlantic.com",
+            "name": "The Atlantic"
+          },
+          "title": "Why the Media Keep Quoting the Same Climate Scientist - The Atlantic",
+          "url": "https://www.theatlantic.com/science/2026/06/climate-weather-scientist-daniel-swain/687457/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-06-26T09:00:00",
+          "publisher": {
+            "domain": "npr.org",
+            "name": "National Public Radio website"
+          },
+          "title": "Ex-NOAA employees re-create a valuable climate data site shut down by Trump",
+          "url": "https://www.npr.org/2026/06/26/nx-s1-5869615/climate-noaa-data-trump-doge"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-28T22:19:36",
+          "publisher": {
+            "domain": "apnews.com",
+            "name": "apnews.com Production"
+          },
+          "title": "Climate and environment | AP News",
+          "url": "https://apnews.com/climate-and-environment"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-31T11:48:28",
+          "publisher": {
+            "domain": "apnews.com",
+            "name": "apnews.com Production"
+          },
+          "title": "Climate change | AP News",
+          "url": "https://apnews.com/hub/climate-change"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2025-04-24T04:00:08",
+          "publisher": {
+            "domain": "www.pewresearch.org",
+            "name": "Pew Research Center"
+          },
+          "title": "Americans’ views of climate change in 8 charts | Pew Research Center",
+          "url": "https://www.pewresearch.org/short-reads/2023/08/09/what-the-data-says-about-americans-views-of-climate-change/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-31T00:45:03",
+          "publisher": {
+            "domain": "www.reuters.com",
+            "name": "reuters.com"
+          },
+          "title": "Reuters Climate Monitor",
+          "url": "https://www.reuters.com/graphics/CLIMATE-AUTOMATED/MONITOR/akpeykqqapr/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": true
+          },
+          "publishedDate": "2026-07-18T15:00:00",
+          "publisher": {
+            "domain": "bakercityherald.com",
+            "name": "Baker City Herald"
+          },
+          "title": "Guest commentary: Understanding our changing climate | Baker City Herald",
+          "url": "https://bakercityherald.com/2026/07/18/guest-commentary-understanding-our-changing-climate/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "",
+          "publisher": {
+            "domain": "pbs.org",
+            "name": "PBS News"
+          },
+          "title": "Climate Change | PBS News",
+          "url": "https://www.pbs.org/newshour/tag/climate-change"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-04-08T19:26:21",
+          "publisher": {
+            "domain": "pbs.org",
+            "name": "PBS News"
+          },
+          "title": "Zeldin tells climate skeptics to 'celebrate vindication' after repeal of baseline climate rule | PBS News",
+          "url": "https://www.pbs.org/newshour/politics/zeldin-tells-climate-skeptics-to-celebrate-vindication-after-repeal-of-baseline-climate-rule"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-26T09:41:49",
+          "publisher": {
+            "domain": "npr.org",
+            "name": "National Public Radio website"
+          },
+          "title": "Climate change is now threatening a pillar of childhood: summer break",
+          "url": "https://www.npr.org/2026/07/26/nx-s1-5900911/wildfire-smoke-fires-camp-minnesota"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-20T17:15:39",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "Fires, floods and record heat: This is the summer of compounding disasters | CNN",
+          "url": "https://www.cnn.com/2026/07/20/climate/climate-compounding-disasters-summer"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": true
+          },
+          "publishedDate": "2023-05-03T21:35:12",
+          "publisher": {
+            "domain": "zmescience.com",
+            "name": "ZME Science"
+          },
+          "title": "What's the difference between weather and climate? Here's why it matters",
+          "url": "https://www.zmescience.com/ecology/climate/what-is-climate-043242/"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-07-23T17:25:02",
+          "publisher": {
+            "domain": "npr.org",
+            "name": "National Public Radio website"
+          },
+          "title": "Climate: Fighting Extreme Heat In 2026 : 1A : NPR",
+          "url": "https://www.npr.org/2026/07/23/nx-s1-5904513/climate-fighting-extreme-heat-in-2026"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2026-05-26T15:18:25",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "‘Mind-bogglingly crazy’: Europe’s deadly, early heatwave is smashing records | CNN",
+          "url": "https://www.cnn.com/2026/05/26/climate/europe-heat-climate-intl"
+        },
+        {
+          "availability": {
+            "discoverable": true,
+            "readyToLicense": false
+          },
+          "publishedDate": "2019-04-19T13:56:47",
+          "publisher": {
+            "domain": "cnn.com",
+            "name": "CNN"
+          },
+          "title": "Climate change: Latest news and explainers - CNN",
+          "url": "https://www.cnn.com/specials/world/cnn-climate"
+        }
+      ]
+    }
+  }
+}

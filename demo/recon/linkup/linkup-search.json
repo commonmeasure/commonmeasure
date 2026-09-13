@@ -1,0 +1,51 @@
+{
+  "probe": "linkup-search",
+  "note": "Re-verification capture of 5 September 2026 made by `contextops run demo/jobs/recon-w3c-prov-search.json --live` through the real adapter; the run sealed the body, the HTTP status and the latency. Response headers are not recorded by the run path. No cost field; the adapter quotes the published standard-depth price.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.linkup.so/v1/search",
+    "headers": {
+      "Authorization": "«REDACTED: value of $LINKUP_API_KEY, never recorded» (Bearer)",
+      "Content-Type": "application/json",
+      "Accept": "application/json"
+    },
+    "body": {
+      "q": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+      "depth": "standard",
+      "outputType": "searchResults",
+      "maxResults": 3,
+      "includeDomains": [
+        "www.w3.org"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 3459,
+    "body": {
+      "results": [
+        {
+          "name": "PROV-XML: The PROV XML Schema",
+          "url": "https://www.w3.org/TR/prov-xml/",
+          "content": "[Copyright](https://www.w3.org/Consortium/Legal/ipr-notice#Copyright) © 2012-2013 [W3C](https://www.w3.org/)® ([MIT](htt[…elided, 4172 chars total; shape recorded, text not committed]",
+          "favicon": "https://favicons.linkup.so?domain=www.w3.org",
+          "type": "text"
+        },
+        {
+          "name": "PROV-XML: The PROV XML Schema",
+          "url": "https://www.w3.org/TR/prov-xml/diff.html",
+          "content": "[Copyright](https://www.w3.org/Consortium/Legal/ipr-notice#Copyright) © 2012-2013 [W3C](https://www.w3.org/)® ([MIT](htt[…elided, 4195 chars total; shape recorded, text not committed]",
+          "favicon": "https://favicons.linkup.so?domain=www.w3.org",
+          "type": "text"
+        },
+        {
+          "name": "PROV-DM: The PROV Data Model",
+          "url": "https://www.w3.org/TR/prov-dm/",
+          "content": "PROV-LINKS (Note) introduces a mechanism to link across bundles [PROV-LINKS]. This document has been reviewed by W3C Mem[…elided, 1884 chars total; shape recorded, text not committed]",
+          "favicon": "https://favicons.linkup.so?domain=www.w3.org",
+          "type": "text"
+        }
+      ]
+    }
+  }
+}

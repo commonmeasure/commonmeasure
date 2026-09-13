@@ -1,0 +1,82 @@
+{
+  "probe": "exa-search",
+  "note": "Smallest practical result limit and a truncated text payload.",
+  "request": {
+    "method": "POST",
+    "url": "https://api.exa.ai/search",
+    "headers": {
+      "x-api-key": "«REDACTED: value of $EXA_API_KEY, never recorded»",
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "query": "EU AI Act general purpose AI code of practice obligations",
+      "numResults": 2,
+      "contents": {
+        "text": {
+          "maxCharacters": 400
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "latency_ms": 2344,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:26:35 GMT",
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": "1861",
+      "Connection": "close",
+      "Server-Timing": "cfCacheStatus;desc=\"DYNAMIC\"",
+      "content-security-policy": "frame-ancestors 'self'",
+      "cross-origin-opener-policy": "same-origin",
+      "cross-origin-resource-policy": "same-origin",
+      "origin-agent-cluster": "?1",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+      "x-content-type-options": "nosniff",
+      "x-dns-prefetch-control": "off",
+      "x-download-options": "noopen",
+      "x-frame-options": "DENY",
+      "x-permitted-cross-domain-policies": "none",
+      "x-xss-protection": "0",
+      "vary": "Origin",
+      "access-control-allow-credentials": "true",
+      "access-control-expose-headers": "PAYMENT-REQUIRED,PAYMENT-RESPONSE,payment-required,payment-response,WWW-Authenticate,Payment-Receipt",
+      "x-exa-queued": "false",
+      "x-exa-queue-ms": "0",
+      "etag": "W/\"745-ixEsIMaOYQtaArX7HjVp0km0Pmo\"",
+      "cf-cache-status": "DYNAMIC",
+      "Server": "cloudflare",
+      "CF-RAY": "a244d4f69d7ef422-LHR"
+    },
+    "body": {
+      "requestId": "414c17b47f628c776e84b6a16b11e717",
+      "resolvedSearchType": "",
+      "results": [
+        {
+          "id": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+          "title": "Article 53: Obligations for providers of general-purpose AI models | AI Act Service Desk",
+          "url": "https://ai-act-service-desk.ec.europa.eu/en/ai-act/article-53",
+          "text": "Article 53: Obligations for providers of general-purpose AI models | AI Act Service Desk Skip to main content  # AI Act  […elided, 400 chars total; shape recorded, text not committed]",
+          "image": "https://ai-act-service-desk.ec.europa.eu/themes/custom/sip_theme/logo.svg",
+          "favicon": "https://ai-act-service-desk.ec.europa.eu/themes/contrib/oe_theme/images/favicons/ec/favicon.ico"
+        },
+        {
+          "id": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "title": "The General-Purpose AI Code of Practice",
+          "url": "https://digital-strategy.ec.europa.eu/en/policies/contents-code-gpai",
+          "text": "The General-Purpose AI Code of Practice | Shaping Europe’s digital future Skip to main content  # The General-Purpose AI […elided, 400 chars total; shape recorded, text not committed]",
+          "image": "https://digital-strategy.ec.europa.eu/themes/contrib/oe_theme/dist/ec/images/logo/logo-ec--mute.svg",
+          "favicon": "https://digital-strategy.ec.europa.eu/themes/custom/cnt_theme/images/favicons/ec/favicon.ico"
+        }
+      ],
+      "searchTime": 2078.4,
+      "costDollars": {
+        "total": 0.007,
+        "search": {
+          "neural": 0.007
+        }
+      }
+    }
+  }
+}

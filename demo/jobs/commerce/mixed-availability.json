@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-mixed-availability/v1",
+  "label": "Commerce comparison, availability question: all three source classes together",
+  "job": {
+    "id": "095837a6-ab58-4053-9fd2-8f3d25843721",
+    "kind": "research.answer",
+    "prompt": "Is the Aurelio Presto 200 espresso machine still available from Fictive Retail, and what should a buyer choose instead?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-availability",
+    "version": "1",
+    "items": [
+      {
+        "name": "discontinuation",
+        "any_of": [
+          "discontinued on 15 July 2026"
+        ]
+      },
+      {
+        "name": "replacement",
+        "any_of": [
+          "replaced by the Aurelio Presto 300"
+        ]
+      },
+      {
+        "name": "current-availability",
+        "any_of": [
+          "in stock at £329.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-08",
+    "maximum_age_days": 180
+  }
+}

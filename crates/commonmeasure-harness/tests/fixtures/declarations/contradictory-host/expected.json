@@ -1,0 +1,14 @@
+{
+  "source": "a host whose robots.txt Content-Usage rule, Content-Signal line and RSL licence contradict each other; the vocabulary draft's section 5.1 combines them most-restrictive-wins",
+  "cases": [
+    {"token": "CommonMeasureBot", "path": "/article", "group": "*", "crawlable": true,
+     "licence": "https://contradictory.example/license.xml",
+     "effective": {"train-ai": "disallow", "ai-input": "disallow", "ai-index": "disallow", "search": "allow"},
+     "sources": {
+       "train-ai": ["robots-content-usage", "robots-content-signal", "rsl-licence"],
+       "ai-input": ["robots-content-signal", "rsl-licence"],
+       "ai-index": ["rsl-licence"],
+       "search": ["robots-content-usage", "robots-content-signal", "rsl-licence"]
+     }}
+  ]
+}

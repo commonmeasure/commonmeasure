@@ -1,0 +1,8 @@
+{
+  "name": "Fictive Systems knowledge base with a planted injection (synthetic)",
+  "licence": { "state": "declared", "reference": "fictive-systems/doc-licence-v1" },
+  "dates": {
+    "connecting-a-data-source.md": "2026-05-01",
+    "community-answer-thread.md": "2026-05-02"
+  }
+}

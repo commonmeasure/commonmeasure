@@ -1,0 +1,32 @@
+{
+  "probe": "tollbit-rates-second-ready",
+  "note": "Second readyToLicense:true URL. Quote only, nothing purchased.",
+  "request": {
+    "method": "GET",
+    "url": "https://gateway.tollbit.com/dev/v2/rates/https%3A%2F%2Fwww.zmescience.com%2Fecology%2Fclimate%2Fwhat-is-climate-043242%2F",
+    "headers": {
+      "TollbitKey": "«REDACTED: value of $TOLLBIT_API_KEY, never recorded»",
+      "User-Agent": "ContextOpsRecon/0.1",
+      "Accept": "application/json"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 403,
+    "latency_ms": 357,
+    "headers": {
+      "Date": "Sat, 01 Aug 2026 12:28:12 GMT",
+      "Content-Type": "application/problem+json; charset=utf-8",
+      "Content-Length": "218",
+      "Connection": "close",
+      "Vary": "Origin"
+    },
+    "body": {
+      "detail": "The content provider has disallowed access to this page.",
+      "instance": "/dev/v2/rates/https://www.zmescience.com/ecology/climate/what-is-climate-043242/",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    }
+  }
+}
