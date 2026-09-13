@@ -123,11 +123,26 @@ curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/downlo
 ```
 
 On a platform the release has no binary for it stops and lists the
-binaries the release holds. The Windows binary is built and checksummed by
-the release run; the installer has not been run on Windows. This one
-command is verified against a loopback release only (`crates/commonmeasure-cli/tests/installer.rs`), because the
-first public release is not yet published; every other command in this
-document was run as written.
+binaries the release holds. Run on macOS (Apple silicon) from an empty
+home directory, the command printed:
+
+```text
+installed ~/.local/bin/commonmeasure: commonmeasure 0.3.0, checksum verified
+~/.local/bin is not on PATH. This installer does not edit shell profiles; add this line to yours:
+  export PATH="~/.local/bin:$PATH"
+Next: work a session in your host, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine.
+```
+
+The release run's `verify` job ran the same installer against the
+published release in a clean Linux container on GitHub, with no toolchain
+and no credential, and passed ([`docs/RELEASE.md`](RELEASE.md) §The
+clean-container check). The installer's refusals (a checksum that does not
+match, a binary reporting another version, a platform or a release that
+does not exist, a missing `curl`) are each driven against a loopback origin
+standing where the release stands
+(`crates/commonmeasure-cli/tests/installer.rs`). The Windows binary is
+built and checksummed by the release run; the installer has not been run on
+Windows.
 
 ### From this checkout
 
@@ -304,12 +319,11 @@ declaring it (`demo/skills/README.md` is a worked example;
 Absent policy means observe: record everything, refuse nothing. To let the
 operator refuse, put a source policy at `~/.commonmeasure/policy.json` (or
 `$COMMONMEASURE_HOME/policy.json`). The repository commits the smallest one
-that reproduces the four fetches of
-[the door page](guide/what-an-agent-meets-at-the-door.md): copy it into
-place.
+that reproduces the four fetches of the example,
+[Four fetches, two refused](guide/four-fetches.md): copy it into place.
 
 ```sh
-cp demo/policy/door.json ~/.commonmeasure/policy.json
+cp demo/policy/four-fetches.json ~/.commonmeasure/policy.json
 cat ~/.commonmeasure/policy.json
 ```
 
@@ -327,7 +341,7 @@ cat ~/.commonmeasure/policy.json
 
 Four ordered access rules in strict mode: three named hosts are allowed and
 the last rule refuses every other host. Under it the four fetches of the
-door page, made through `context_fetch` from a new session, came out as
+example, made through `context_fetch` from a new session, came out as
 follows; each result is quoted as it ran, with the page text elided and
 `/home/op` standing for your home directory.
 
@@ -373,7 +387,7 @@ follows; each result is quoted as it ran, with the page text elided and
 }
 ```
 
-The Guardian article the door page names, refused before any request for
+The Guardian article the example names, refused before any request for
 it, as a tool error:
 
 ```text
@@ -387,12 +401,12 @@ error:
 refused before the crossing: access rule 4 (*) refuses host www.economist.com. (operator policy in /home/op/.commonmeasure/policy.json)
 ```
 
-Two of these differ from the door page, whose records come from an earlier
+Two of these differ from the example, whose records come from an earlier
 session: gov.uk served different bytes (a different `retrieved_hash`) that
 extracted to the same text (the same `content_hash`), and people.com's page
 had changed, so both its hashes and its token estimate differ; the Guardian
 refusal is word for word the same, and the Economist refusal names rule 4
-because this policy has four rules where the door page's scope has 32.
+because this policy has four rules where the example's scope has 32.
 
 Read the session back:
 

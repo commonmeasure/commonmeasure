@@ -1,7 +1,6 @@
-//! The committed door policy (`demo/policy/door.json`), the smallest source
-//! policy that makes the four fetches of
-//! `docs/guide/what-an-agent-meets-at-the-door.md` come out as that page
-//! shows: two hosts admitted, the Guardian refused on the payment term its
+//! The committed example policy (`demo/policy/four-fetches.json`), the
+//! smallest source policy that makes the four fetches of the example
+//! (`docs/guide/four-fetches.md`) come out as that page shows: two hosts admitted, the Guardian refused on the payment term its
 //! licence states, the Economist refused by the operator's own rule.
 //!
 //! The policy is read through the runtime's own loader, the host rulings are
@@ -20,7 +19,7 @@ use commonmeasure_runtime::policy::Ruling;
 use commonmeasure_types::PolicyMode;
 use serde_json::{Value, json};
 
-const DOOR_POLICY: &str = include_str!("../../../demo/policy/door.json");
+const EXAMPLE_POLICY: &str = include_str!("../../../demo/policy/four-fetches.json");
 
 const ROBOTS: &str = "\
 User-agent: *
@@ -29,7 +28,7 @@ Allow: /
 License: /license.xml
 ";
 
-/// The shape of the Guardian's licence as the door page records it: AI
+/// The shape of the Guardian's licence as the example records it: AI
 /// input and training permitted under a subscription, nothing else
 /// permitted.
 const LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
@@ -63,7 +62,7 @@ fn publisher() -> ServerHandle {
 /// one response per line out.
 fn converse(home: &Path, requests: &[Value]) -> Vec<Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
-        .args(["mcp", "--host", "claude-code", "--session", "door"])
+        .args(["mcp", "--host", "claude-code", "--session", "four-fetches"])
         .env("COMMONMEASURE_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -93,14 +92,14 @@ fn refusal_reason(ruling: Ruling) -> String {
 }
 
 /// The policy loads through the loader every session uses, in strict mode,
-/// and rules on the four hosts as the door page shows. The Guardian is
+/// and rules on the four hosts as the example shows. The Guardian is
 /// admitted at the host level: its refusal comes later, from its licence.
 #[test]
-fn the_door_policy_loads_and_rules_on_the_four_hosts() {
+fn the_example_policy_loads_and_rules_on_the_four_hosts() {
     let home = tempfile::tempdir().expect("tempdir");
-    std::fs::write(home.path().join("policy.json"), DOOR_POLICY).expect("policy");
+    std::fs::write(home.path().join("policy.json"), EXAMPLE_POLICY).expect("policy");
 
-    let policy = SessionPolicy::load(home.path(), None).expect("the door policy loads");
+    let policy = SessionPolicy::load(home.path(), None).expect("the example policy loads");
     assert_eq!(policy.mode(), PolicyMode::Strict);
     assert_eq!(
         policy.constraints().len(),
@@ -125,18 +124,19 @@ fn the_door_policy_loads_and_rules_on_the_four_hosts() {
     );
 }
 
-/// Under the door policy, a publisher whose `robots.txt` names an RSL licence
+/// Under the example policy, a publisher whose `robots.txt` names an RSL licence
 /// permitting AI input under a subscription is refused before its page is
-/// requested, with the reason the door page quotes. The loopback publisher
+/// requested, with the reason the example quotes. The loopback publisher
 /// takes the Guardian's place, so the policy gains one allow rule for the
 /// loopback host ahead of the closing `*` and the switch every loopback
 /// test needs to reach a private address; the four committed rules are
 /// otherwise as written.
 #[test]
-fn the_door_policy_refuses_a_subscription_licence_on_its_payment_term() {
+fn the_example_policy_refuses_a_subscription_licence_on_its_payment_term() {
     let site = publisher();
     let home = tempfile::tempdir().expect("tempdir");
-    let mut policy: Value = serde_json::from_str(DOOR_POLICY).expect("the door policy is JSON");
+    let mut policy: Value =
+        serde_json::from_str(EXAMPLE_POLICY).expect("the example policy is JSON");
     policy["allow_private_hosts"] = json!(true);
     let rules = policy["constraints"].as_array_mut().expect("rules");
     let closing = rules.pop().expect("the closing rule");
@@ -162,7 +162,8 @@ fn the_door_policy_refuses_a_subscription_licence_on_its_payment_term() {
         .expect("an error result carries text");
     assert!(detail.contains(&expected), "{detail}");
 
-    let log = std::fs::read_to_string(home.path().join("sessions/door.ndjson")).expect("log");
+    let log =
+        std::fs::read_to_string(home.path().join("sessions/four-fetches.ndjson")).expect("log");
     let refused: Vec<Value> = log
         .lines()
         .filter(|line| !line.trim().is_empty())

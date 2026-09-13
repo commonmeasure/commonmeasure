@@ -22,18 +22,13 @@ it serves; a hub-side entry is on the hub's own board and has no box here.
    documents from `https://hub.commonmeasure.ai`, the identity origin chosen
    once for every enrolled edge. Hub board. Nothing after enrolment can be
    exercised until it exists.
-2. WP-41, one box: the Record pane shows both hashes, the HTTP status and the
-   identity a crossing presented.
-3. WP-45: the door page reproduced from a committed policy.
-4. WP-45: every platform the release names has had the installer run on it,
-   or the claim is narrowed.
-5. Self-serve onboarding at the hub: sign in, create an organisation, land
+2. Self-serve onboarding at the hub: sign in, create an organisation, land
    on the enrolment page. Hub board.
-6. WP-45: the walkthrough run to a first delivered batch against the hosted
+3. WP-45: the walkthrough run to a first delivered batch against the hosted
    hub, with the hub's client pages served by the hub.
-7. WP-44, boxes one to three: content owners, the report and unattributed
+4. WP-44, boxes one to three: content owners, the report and unattributed
    hosts as screens.
-8. WP-19, last box: managed policy run end to end against the hosted hub.
+5. WP-19, last box: managed policy run end to end against the hosted hub.
 
 Packages not on this path are under §Deferred packages, each with the reason
 it waits.
@@ -917,10 +912,10 @@ the hub is equal.
 The console is documented as rendered "from the same JSON values the `/api/*`
 routes serve" (`ARCHITECTURE.md` §Console and relay, `DECISIONS.md` §Execution
 and evidence). It is not, in both directions. Three screens compute values no
-route serves; one route serves a value no screen renders; and the fields WP-23,
-WP-29 and WP-30 put on every mediated crossing appear on no screen at all. This
-package makes the sentence true and puts this month's evidence in front of the
-operator. It adds no capability and no write the console does not already have.
+route serves; one route serves a value no screen renders; and most of the
+fields WP-23, WP-29 and WP-30 put on every mediated crossing appear on no
+screen. This package makes the sentence true and puts this month's evidence in
+front of the operator. It adds no capability and no write the console does not already have.
 
 - [ ] `GET /api/policy/forecast` answers the value `console::forecast::forecast`
   builds, and `forecast_fragment` renders that value and computes nothing of its
@@ -940,13 +935,18 @@ operator. It adds no capability and no write the console does not already have.
   policy panel's own projection, and every declared principal allowance with its
   ledger standing. `crates/commonmeasure-console/src/console/budget.rs`'s module
   documentation names the screen that exists.
-- [ ] The Record detail renders what a mediated crossing carries: the statements
-  with their sources, the group that governed, the effective preference per
-  category, operator terms where they governed, `named_by`, the manifest outcome
-  and its probes from the referenced `manifest_resolved` record, the reporting
-  ruling with the receiver or its absence, the `Content-Telemetry-ID`, the
-  allowance decision and its settlement, and the HTTP status. A field the record
-  does not carry is absent, never rendered as unknown or zero
+- [x] The Record pane renders both hashes, the HTTP status and the identity a
+  mediated crossing presented, and an observed crossing's content hash alone
+  with no status and no identity, asserted against the log the real binary
+  wrote (`crates/commonmeasure-cli/tests/serve_e2e.rs`,
+  `the_record_pane_shows_the_hashes_status_and_identity_the_record_carries`).
+- [ ] The Record detail renders the rest of what a mediated crossing carries:
+  the statements with their sources, the group that governed, the effective
+  preference per category, operator terms where they governed, `named_by`, the
+  manifest outcome and its probes from the referenced `manifest_resolved`
+  record, the reporting ruling with the receiver or its absence, the
+  `Content-Telemetry-ID`, and the allowance decision and its settlement. A
+  field the record does not carry is absent, never rendered as unknown or zero
   (`docs/FAIL-POLICY.md` §7).
 - [ ] The Overview's refusal line counts the window it names, or names the window
   it counts.
@@ -1000,22 +1000,22 @@ the page; a revision published from the page and served to a signed edge fetch.
 ### WP-45: the stranger's path
 
 A stranger who has read the product's website installs the edge, records a
-crossing, reproduces the door page and enrols with the hosted hub with no
+crossing, reproduces the example and enrols with the hosted hub with no
 step that needs a person from Common Measure, a private repository or a
 credential handed out; every failure names its cause and the next action;
 the documents answer the question a stranger has at each step. The hub's
 halves (the hosted service, onboarding, the client pages served by the hub)
 are on the hub's own board.
 
-- [x] The door page reproduced from a committed policy: `demo/policy/door.json`
-  is the smallest source policy under which the door page's four fetches
-  come out as the page shows (two admitted, one refused on the licence's
-  payment term, one refused by an operator rule); `docs/GETTING-STARTED.md`
-  §5 tells the reader to copy it and quotes the four results as run; the
-  policy is loaded through the runtime loader, ruled on the four hosts, and
-  driven through the real binary against a loopback publisher whose
-  `robots.txt` names an RSL licence with a subscription payment term
-  (`crates/commonmeasure-cli/tests/demo_policy.rs`).
+- [x] The example reproduced from a committed policy:
+  `demo/policy/four-fetches.json` is the smallest source policy under which
+  the example's four fetches come out as the page shows (two admitted, one
+  refused on the licence's payment term, one refused by an operator rule);
+  `docs/GETTING-STARTED.md` §5 tells the reader to copy it and quotes the
+  four results as run; the policy is loaded through the runtime loader,
+  ruled on the four hosts, and driven through the real binary against a
+  loopback publisher whose `robots.txt` names an RSL licence with a
+  subscription payment term (`crates/commonmeasure-cli/tests/demo_policy.rs`).
 - [x] Every platform the release names has had the installer run on it, or
   the release says which have not: the narrowed form landed. `docs/RELEASE.md`
   and `docs/GETTING-STARTED.md` §2 say the Windows binary is built and

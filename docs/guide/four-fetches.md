@@ -1,11 +1,11 @@
 ---
-title: What an agent meets at the door
+title: Four fetches, two refused
 description: One AI agent, four web fetches, read from the record they left. Two pages were admitted, two were refused, and every decision has a reason a person can check.
 ---
 
-# What an agent meets at the door
+# Four fetches, two refused
 
-An AI agent that fetches a web page today meets nothing at the door. Its
+An AI agent that fetches a web page today is subject to no control. Its
 tool requests the page, the page arrives, and the text goes into the
 model's working memory. Nothing checks first whether the organisation
 running the agent permits that source, nothing reads what the publisher has
@@ -57,7 +57,7 @@ rules do not allow is refused. The scope holds 32 ordered access rules.
 Rules 1 to 31 allow named publisher hosts, `www.gov.uk` and `*.bbc.co.uk`
 among them. Rule 32 has the pattern `*` and the action `refuse`, so any
 host the first 31 rules do not name is refused. The smallest policy that
-produces the same four outcomes is committed as `demo/policy/door.json`
+produces the same four outcomes is committed as `demo/policy/four-fetches.json`
 (four rules, so its last rule is rule 4), and the
 [getting started walkthrough](../GETTING-STARTED.md) runs the four fetches
 under it.
@@ -222,8 +222,8 @@ The notice ends with the address of the publisher's content-licensing
 desk. It prohibits exactly what this fetch did, and no agent can act on it,
 because the format has no place for it. A comment in `robots.txt` is text
 for a person. The machine-readable fields in the same file said the page
-was open. The publisher's door admitted an unverified agent, and the
-publisher's terms were invisible to it. The next fetch shows what changes
+was open. The publisher admitted an unverified agent, and the publisher's
+terms were invisible to it. The next fetch shows what changes
 when a publisher states its terms in a form an agent can read.
 
 ## 3. The Guardian: refused on a term the licence stated and the edge could not meet

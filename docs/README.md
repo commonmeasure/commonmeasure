@@ -11,8 +11,8 @@ make the second possible are stated at the end of this page.
 
 ## Pages
 
-Start with the [door page](guide/what-an-agent-meets-at-the-door.md), which
-follows one agent through four recorded fetches, then the
+Start with the example, [Four fetches, two refused](guide/four-fetches.md),
+which follows one agent through four recorded fetches, then the
 [getting started walkthrough](GETTING-STARTED.md), which takes a clean
 checkout to a session that records crossings of your own.
 
@@ -38,8 +38,8 @@ Reading the committed demonstrations:
 
 Guide:
 
-- [`docs/guide/what-an-agent-meets-at-the-door.md`](guide/what-an-agent-meets-at-the-door.md):
-  four fetches under the product, read from their evidence.
+- [`docs/guide/four-fetches.md`](guide/four-fetches.md): the example, four
+  fetches under the product, read from their evidence.
 - [`docs/guide/context-window-optimisation.md`](guide/context-window-optimisation.md):
   what should enter a context window and how to know it helped.
 - [`docs/guide/state-of-the-evidence.md`](guide/state-of-the-evidence.md): the
@@ -108,5 +108,5 @@ and nothing else, so every rule the build needs is here.
    the two directories, and every page in them also carries `draft: true` in
    its front matter, so a build that takes the whole directory still leaves
    them out.
-7. **Sidebar order** follows the groups above: the door page and the
+7. **Sidebar order** follows the groups above: the example and the
    walkthrough first, then product, demonstrations, guide, contracts.

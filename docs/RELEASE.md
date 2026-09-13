@@ -79,11 +79,13 @@ To pin a release, download the installer into a directory of its own (a
 checkout has an `install.sh` of its own at the root) and name the tag:
 `curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs
 https://github.com/commonmeasure/commonmeasure/releases/download/v0.3.0/install.sh`,
-then `sh /tmp/commonmeasure-release/install.sh --tag v0.3.0`. Both forms
-are verified against a loopback release only
-(`crates/commonmeasure-cli/tests/installer.rs`) until the first public
-release is published; every other command in this document was run as
-written, and §The clean-container check quotes what the verify job runs.
+then `sh /tmp/commonmeasure-release/install.sh --tag v0.3.0`. The pinned
+form is what §The clean-container check runs, and the release run's
+`verify` job ran it on GitHub against the published v0.3.0 release and
+passed. The one-line form was run on macOS from an empty home directory,
+and its output is quoted in [`docs/GETTING-STARTED.md`](GETTING-STARTED.md)
+§2. `crates/commonmeasure-cli/tests/installer.rs` drives both forms and
+every refusal against a loopback origin standing where the release stands.
 
 It detects the platform, downloads `SHA256SUMS` and that platform's binary
 from the release's download address, verifies the checksum, moves the
@@ -160,11 +162,15 @@ marketplace and the plugin installed from it, listed at version 0.3.0 and
 enabled; and `commonmeasure 0.3.0` from that launcher, which bundles no
 binary and finds the installed one.
 
-The `verify` job of the release workflow runs the same check on every tag.
+The `verify` job of the release workflow runs the same check on every tag,
+in a Linux x64 container on GitHub against the release the run has just
+published. For v0.3.0 that job ran in the release run and passed.
 
 What this check covers: the installer, the archive and both marketplace
 routes on Linux, x64 in the workflow and arm64 where the check is run on an
 Apple Silicon machine. The macOS arm64 binary is built and run on the
 workflow's macOS runner; the macOS x64, Linux arm64 (in the workflow) and
-Windows binaries are built and checksummed by the same run; the installer
-has not been run on Windows.
+Windows binaries are built and checksummed by the same run. The one-line
+installer has been run on macOS Apple silicon from an empty home directory
+([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §2); the installer has
+not been run on Windows.
