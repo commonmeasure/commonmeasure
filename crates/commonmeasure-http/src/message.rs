@@ -9,7 +9,8 @@ use std::io::{BufRead, Read, Write};
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Hard ceiling on body size. Provider search responses and extracted pages fit
 /// comfortably; anything larger is not something to place in a context window
-/// anyway.
+/// anyway. It bounds a decoded body as well as a served one, so a small gzip
+/// body that expands without limit is refused at the same size.
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Ordered, case-insensitive header map.
@@ -111,7 +112,20 @@ pub struct Response {
     pub status: u16,
     pub reason: String,
     pub headers: Headers,
+    /// The body with any content coding removed: the representation itself.
     pub body: Vec<u8>,
+    /// The body as the origin served it, where a content coding was removed
+    /// to produce `body`; absent where `body` is exactly the bytes served.
+    pub coded: Option<CodedBody>,
+}
+
+/// A response body as served under a content coding this reader removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodedBody {
+    /// The content coding, as registered: `gzip` (`x-gzip` is read as it).
+    pub coding: &'static str,
+    /// The bytes on the wire after transfer framing was removed.
+    pub bytes: Vec<u8>,
 }
 
 impl Response {
@@ -121,7 +135,16 @@ impl Response {
             reason: reason_for(status).to_string(),
             headers: Headers::new(),
             body,
+            coded: None,
         }
+    }
+
+    /// The body as the origin served it: the coded bytes where a content
+    /// coding was removed, and otherwise `body`.
+    pub fn served_body(&self) -> &[u8] {
+        self.coded
+            .as_ref()
+            .map_or(self.body.as_slice(), |coded| coded.bytes.as_slice())
     }
 
     pub fn text(status: u16, body: &str) -> Self {
@@ -240,18 +263,56 @@ fn content_length(headers: &Headers) -> Result<Option<usize>> {
     Ok(Some(len))
 }
 
+/// The content coding a message declares, where it is one this reader
+/// removes: `None` for no coding or `identity`, `Some("gzip")` for gzip
+/// (RFC 9110 §8.4.1.3 has a recipient treat `x-gzip` as gzip).
+///
+/// Every other coding is refused, as is more than one coding, whether in one
+/// field or across repeated fields: a body this reader did not decode would
+/// be hashed, stored and handed on as if it were the content it claims to be.
+/// `gzip` is removed only where the caller can keep the served bytes beside
+/// the decoded ones, which is a response.
+fn content_coding(headers: &Headers, gzip_allowed: bool) -> Result<Option<&'static str>> {
+    let codings: Vec<&str> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .flat_map(|(_, value)| value.split(','))
+        .map(|coding| coding.trim_matches([' ', '\t']))
+        .filter(|coding| !coding.is_empty() && !coding.eq_ignore_ascii_case("identity"))
+        .collect();
+    match codings.as_slice() {
+        [] => Ok(None),
+        [coding]
+            if gzip_allowed
+                && (coding.eq_ignore_ascii_case("gzip")
+                    || coding.eq_ignore_ascii_case("x-gzip")) =>
+        {
+            Ok(Some("gzip"))
+        }
+        codings => bail!("unsupported content encoding {}", codings.join(", ")),
+    }
+}
+
+/// Remove the gzip coding from a served body, every member in turn, with the
+/// output bounded by the body ceiling. A body that does not decode completely
+/// is an error naming the cause, never a shorter or empty body.
+fn gunzip(coded: &[u8]) -> Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    flate2::read::MultiGzDecoder::new(coded)
+        .take(MAX_BODY_BYTES as u64 + 1)
+        .read_to_end(&mut decoded)
+        .map_err(|error| anyhow::anyhow!("gzip body could not be decoded: {error}"))?;
+    if decoded.len() > MAX_BODY_BYTES {
+        bail!("gzip body decodes past the size ceiling of {MAX_BODY_BYTES} bytes");
+    }
+    Ok(decoded)
+}
+
 fn read_body(
     reader: &mut impl BufRead,
     headers: &Headers,
     allow_eof_delimited: bool,
 ) -> Result<Vec<u8>> {
-    // Nothing here decodes a body, so a coded body would be hashed, stored and
-    // handed on as if it were the content it claims to be.
-    if let Some(coding) = headers.get("Content-Encoding")
-        && !coding.eq_ignore_ascii_case("identity")
-    {
-        bail!("unsupported content encoding {coding}");
-    }
     let declared = content_length(headers)?;
     if let Some(te) = headers.get("Transfer-Encoding") {
         if declared.is_some() {
@@ -353,6 +414,7 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Request> {
     let target = parts.next().context("missing target")?.to_string();
     check_version(parts.next().context("missing version")?)?;
     let headers = read_headers(reader, &mut budget)?;
+    content_coding(&headers, false)?;
     let body = read_body(reader, &headers, false)?;
     Ok(Request {
         method,
@@ -374,16 +436,29 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response> {
         .context("parse status")?;
     let reason = parts.next().unwrap_or("").to_string();
     let headers = read_headers(reader, &mut budget)?;
-    let body = if (100..200).contains(&status) || status == 204 || status == 304 {
+    let coding = content_coding(&headers, true)?;
+    let served = if (100..200).contains(&status) || status == 204 || status == 304 {
         Vec::new()
     } else {
         read_body(reader, &headers, true)?
+    };
+    // An empty body has nothing to decode, whatever coding it declares.
+    let (body, coded) = match coding {
+        Some(coding) if !served.is_empty() => (
+            gunzip(&served)?,
+            Some(CodedBody {
+                coding,
+                bytes: served,
+            }),
+        ),
+        _ => (served, None),
     };
     Ok(Response {
         status,
         reason,
         headers,
         body,
+        coded,
     })
 }
 
@@ -417,8 +492,10 @@ pub fn write_request(writer: &mut impl Write, req: &Request) -> Result<()> {
     Ok(())
 }
 
-/// Write a response: the whole head in one call, then the body, for the same
-/// reason as [`write_request`].
+/// Write a response: the whole head in one call, then the body as served, for
+/// the same reason as [`write_request`]. A response read under a content
+/// coding keeps its `Content-Encoding` field, so the coded bytes are what
+/// agree with it.
 ///
 /// The caller's headers keep their order. Framing — `Content-Length` and
 /// `Connection` — is decided here rather than passed through, so those two
@@ -438,10 +515,11 @@ pub fn write_response(writer: &mut impl Write, resp: &Response) -> Result<()> {
         }
         let _ = write!(head, "{name}: {value}\r\n");
     }
-    let _ = write!(head, "Content-Length: {}\r\n", resp.body.len());
+    let body = resp.served_body();
+    let _ = write!(head, "Content-Length: {}\r\n", body.len());
     head.push_str("Connection: close\r\n\r\n");
     writer.write_all(head.as_bytes())?;
-    writer.write_all(&resp.body)?;
+    writer.write_all(body)?;
     writer.flush()?;
     Ok(())
 }

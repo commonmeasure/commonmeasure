@@ -169,11 +169,11 @@ PY
 }
 set_mode strict
 
-echo "==> beat 4: the same fetch again, refused before the crossing under strict"
+echo "==> beat 4: the same fetch again, refused before its content enters the context under strict"
 # A mediated session loads its policy at startup, so the strict fetch is a new
 # server process; a session already running keeps the policy it loaded.
 mediated_session arc-mediated-strict > "$home/scripted/arc-mediated-strict.jsonl"
-grep -q 'refused before the crossing' "$home/scripted/arc-mediated-strict.jsonl" \
+grep -q 'refused before the content entered the context' "$home/scripted/arc-mediated-strict.jsonl" \
     || fail "strict mode did not refuse the hostile fetch"
 grep -q 'crossing_refused' "$home/sessions/arc-mediated-strict.ndjson" \
     || fail "no refusal was recorded under strict"

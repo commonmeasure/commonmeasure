@@ -25,6 +25,7 @@ const SKIP_DIRS: &[&str] = &["target", ".git", ".claude", "node_modules"];
 /// asserts this list against the root's own entries, so it cannot drift the
 /// other way either.
 const ROOTS: &[&str] = &[
+    "browser/",
     "crates/",
     "docs/",
     "work/",
@@ -63,14 +64,10 @@ const TOP_LEVEL_FILES: &[&str] = &[
 const BUILD_OUTPUTS: &[&str] = &["dist"];
 
 /// Paths that are documented but deliberately absent from a checkout:
-/// gitignored build outputs, local-only run artefacts, and the sibling hub
-/// repository's crate named in the cross-repo conformance contract. The
-/// documents name them to explain the convention or the other side of the
-/// wire, and this test must not force them into existence. `crates/server`
-/// is the receiver's crate in the hub's own repository; this repository has only
-/// `commonmeasure-*` crates, so ignoring it cannot mask a real local break.
+/// gitignored build outputs and local-only run artefacts. The documents name
+/// them to explain the convention, and this test must not force them into
+/// existence.
 const IGNORED_PREFIXES: &[&str] = &[
-    "crates/server",
     "demo/arc/home",
     "demo/output/live",
     "plugin/bin/commonmeasure-linux-x64",

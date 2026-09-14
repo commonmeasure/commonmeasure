@@ -11,8 +11,9 @@ agent system it builds or runs itself. Common Measure is not a harness and not
 an agent framework: it is the component between an agent and the content
 the agent reads. A **harness** is the agent system the operator runs, bought
 or built. A **host** is the specific program the integration attaches to;
-Claude Code, Codex, Pi, Claude Desktop and Cursor are the hosts integrated
-today. Terms like
+Claude Code, Codex, Pi, Claude Desktop, Cursor, the Copilot CLI and VS Code
+are the hosts integrated today, and a Chrome extension observes three
+browser answer surfaces (§2, Browser answer surfaces). Terms like
 crossing, admission, principal and scope are defined in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 Every claim below names the code or test it rests on. The binary is
 `commonmeasure` and its home directory is `~/.commonmeasure`.
@@ -44,11 +45,13 @@ nothing; that is the state with no policy file
 (`crates/commonmeasure-harness/src/policy.rs`). `prefer` records and steers; `strict`
 refuses what the rules do not allow ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)).
 
-`--host` on the hook command accepts `claude-code`, `codex` and `pi`
-(`crates/commonmeasure-cli/src/main.rs` `HOSTS`); on the MCP server it also
-accepts `claude-desktop`, `cursor`, `copilot-cli` and `vscode` (`MCP_HOSTS`),
-the hosts that reach the server through a configuration write before an
-`install` for them exists. An unknown name is rejected by the argument
+`--host` on the hook command accepts `claude-code`, `codex`, `pi`, `cursor`
+and `copilot-cli`, and the three browser surfaces `chatgpt-web`,
+`google-ai-overview` and `bing-copilot-search`
+(`crates/commonmeasure-cli/src/main.rs` `HOSTS`); on the MCP server it
+accepts `claude-code`, `codex`, `pi`, `claude-desktop`, `cursor`,
+`copilot-cli` and `vscode` (`MCP_HOSTS`), one for each registration
+`install` writes. An unknown name is rejected by the argument
 parser with the list, never recorded under the default; the hook command
 defaults an unparseable surface to Claude Code. The value is the `host` on
 every record. The program's own name and version, from the `clientInfo` it
@@ -86,12 +89,77 @@ identity). `install cursor` writes the server into `~/.cursor/mcp.json`
 moments the Claude Code registration hooks; `uninstall` removes exactly
 those entries and deletes nothing: the `mcpServers` object, the `hooks`
 object and each file stay, empty where ours was the only entry, because
-the host may have written them; `doctor` reads both back. Both files, and
-Claude Desktop's, are rewritten whole, so every other key keeps its value
-and the file comes back in this writer's formatting. A file the host or
+the host may have written them; `doctor` reads both back.
+
+`install copilot` writes one `mcpServers.commonmeasure` entry into the
+Copilot CLI's `~/.copilot/mcp-config.json` (`$COPILOT_HOME` honoured), with
+`type: local`, the binary, `mcp --host copilot-cli` and `tools: ["*"]`, the
+fields the CLI's own `copilot mcp add` writes. It writes four hooks into
+`~/.copilot/hooks/commonmeasure.json`, a file of this product's own in the
+directory from which the CLI loads every `*.json` file: `sessionStart`,
+`postToolUse` with the matcher `web_fetch|web_search`, `userPromptSubmitted`
+and `agentStop`. Each runs the binary directly (`exec`, with the arguments
+`hook <event> --host copilot-cli`), so no shell quotes the path on any
+platform. The camelCase event names select the CLI's camelCase payload
+(§2). The same `mcp-config.json` is the registration for two more programs:
+the GitHub Copilot app's documentation states that servers configured for
+the Copilot CLI are available in it
+(<https://docs.github.com/en/copilot/how-tos/github-copilot-app/customize-github-copilot-app>),
+and VS Code's MCP configuration reference states that its Agent Host reads
+the file natively
+(<https://code.visualstudio.com/docs/agents/reference/mcp-configuration>).
+`uninstall copilot` removes the entry, leaving the file and its
+`mcpServers` object, and removes this product's hook entries; the hook file
+is deleted when nothing else is left in it, and the hooks directory, which
+is the CLI's, stays.
+
+`install vscode` writes one `servers.commonmeasure` entry (`type: stdio`,
+the binary, `mcp --host vscode`) into VS Code's user-profile `mcp.json`
+(`~/Library/Application Support/Code/User/mcp.json` on macOS,
+`%APPDATA%\Code\User\` on Windows, `~/.config/Code/User/` elsewhere). The
+file is written directly rather than through `code --add-mcp`, which can
+add an entry but not remove one and needs the `code` command on `PATH`;
+VS Code's reference documents the file as the configuration a user edits.
+VS Code accepts comments in the file and this writer would drop them, so a
+file with a comment is refused and nothing is written. VS Code starts the
+server the first time a chat uses it, and forwards the entry to its Agent
+Host, where the Copilot harness runs, so Copilot agent mode in VS Code
+uses this same registration. No hook is registered for VS Code. Its hooks
+run only through the Copilot Chat extension, which also loads Claude Code's
+hook files and ignores their matchers, and its hooks reference does not
+state that a `PostToolUse` input carries the tool's result
+(<https://code.visualstudio.com/docs/agent-customization/hooks>). A hook
+registered there would fire on every tool call with nothing it is known to
+be able to record, so the decision waits for a session with a Copilot plan
+to show what the payload carries.
+
+Every JSON file named above is rewritten whole, so every other key keeps
+its value and the file comes back in this writer's formatting. A file the host or
 the operator wrote in another formatting comes back with the same content
 and different bytes; the byte-for-byte round trip holds only for a file
 that was already in this writer's format.
+
+`install chrome` writes one native messaging host manifest,
+`ai.commonmeasure.browser.json`, into Chrome's user-level
+`NativeMessagingHosts` directory (`~/Library/Application
+Support/Google/Chrome/` on macOS, `~/.config/google-chrome/` on Linux),
+and the same file for Chromium and Brave where that browser's directory
+already exists, so nothing is created for a browser not in use. The file
+names the binary's absolute path, `type: stdio`, and one allowed origin,
+the Common Measure extension (`chrome-extension://hojjbnoeobjkjklcdhhnncmmojmcneig/`),
+whose id is fixed by the public key in `browser/manifest.json`. Chrome
+starts the binary itself with that origin as the only argument, which the
+binary reads as `commonmeasure native-host`. The file is wholly this
+writer's, so it is written byte for byte; `uninstall chrome` removes the
+file where it names this host and leaves the directory; `doctor chrome`
+reads each file back, runs the binary it names and says whether the
+extension's origin is allowed. Chrome reads the directory under the user
+data directory it runs with, so a browser started with `--user-data-dir`
+looks for the file there and not in the default location. On Windows,
+Chrome finds native messaging hosts through the registry, which `install
+chrome` does not write; it refuses there and writes nothing. Whether the
+extension is loaded is the browser's own record, which `doctor` does not
+read; the extension's popup says whether it reaches the binary.
 
 The absolute path is written because a host's hook environment does not
 share the login shell's `PATH`. Replacing the binary at the registered path
@@ -100,14 +168,14 @@ JSON files are rewritten whole, so their keys come back in sorted order and
 their formatting is this writer's; the Codex TOML keeps its bytes. `install
 claude` refuses while a Common Measure plugin is enabled in the settings
 file, because the plugin declares the same hooks and two registrations
-record every crossing twice. The operator home is never touched by any of
-the three.
+record every crossing twice. The operator home is never touched by
+`install`, `uninstall` or `doctor` for any host.
 
 ## 2. What a host must supply
 
 Each session-evidence event is defined by what the host supplies, not by
 which hook writes it. The table states the minimum for any host and what
-the three integrated hosts provide today.
+Claude Code, Codex and Pi provide today.
 
 | Event | Any host must supply | Claude Code | Codex | Pi |
 |---|---|---|---|---|
@@ -132,20 +200,125 @@ Cursor's `MCP:<tool>` spelling are excluded; `beforeSubmitPrompt` carries
 Cursor's `conversation_id`, the turn identifier its `generation_id`, the
 working directory its `cwd` or the first of `workspace_roots`. Cursor's
 built-in web tool is not named in its documentation's matcher list, so its
-results are not claimed as observed until a hook has run against one. A
-hook command told `--host claude-code` refuses a payload carrying Cursor's
-or the Copilot family's fields and records nothing, and at session start
-prints nothing, because Cursor and VS Code load Claude Code's hook file
-and run its commands with payloads of their own
-(`crates/commonmeasure-harness/src/hook.rs` `HookInput::from_payload`).
-Cursor's loading of Claude Code hooks is opt-in (its settings' "include
-third-party plugins" switch), and its documentation does not say whether
-those hooks receive Cursor's shape or a translated one; the refusal
-therefore does not rest on the field names alone. Cursor sets
-`CURSOR_PROJECT_DIR` for every hook it runs, and a hook command told
-`--host claude-code` that finds that variable refuses whatever the payload
-looks like. A Claude Code payload that is not JSON still gets the nudge,
-as §2 states; a payload that is JSON and refused gets nothing.
+results are not claimed as observed until a hook has run against one.
+
+The Copilot CLI supplies the observed path's events under its camelCase
+names and payload, which the hook command reads when told `--host
+copilot-cli`
+(<https://docs.github.com/en/copilot/reference/hooks-reference>):
+`postToolUse` carries `toolName`, `toolArgs` and
+`toolResult.textResultForLlm`, the text the model was given, so a
+`web_fetch` is a grounded `crossing_observed` hashed over that text and a
+`web_search` records each result URL, retrieved and not grounded; the
+record keeps the CLI's tool names. The matcher names only those two tools,
+so our own tools (spelt `commonmeasure-context_fetch` in the CLI's
+`<server>-<tool>` form) and third-party MCP tools never reach the hook.
+`userPromptSubmitted` carries `prompt` and gives `prompt_sources` and
+`turn_started`; `agentStop` gives `turn_completed`; `sessionStart` receives
+the nudge as the JSON field `additionalContext` and gives `nudge_issued`
+with the CLI's `source`. The session identity is the CLI's `sessionId`; the
+CLI supplies no turn identifier, so none is recorded. The reader accepts
+only that shape: a payload without `sessionId`, or carrying `session_id`,
+`tool_name` or Cursor's `conversation_id`, records nothing and prints
+nothing. The hooks reference does not name `web_fetch`'s arguments; the
+installed CLI's bundle declares `url`. The same bundle carries a hosted web
+search for one model provider that does not run as a local tool, so a
+`web_search` is observed only when it runs locally.
+
+A hook command told `--host claude-code` refuses a payload carrying
+Cursor's fields, the Copilot CLI's camelCase fields, or `timestamp` or
+`tool_result`, and records nothing, and at session start prints nothing.
+Cursor and VS Code load Claude Code's hook files and run their commands
+with payloads of their own, and the Copilot CLI loads a repository's
+`.claude/settings.json`. VS Code's Copilot Chat, and the Copilot CLI for a
+hook configured under Claude Code's event names, send a snake_case payload
+with Claude Code's own field names (`session_id`, `hook_event_name`,
+`tool_name`, `tool_input`) beside a `timestamp`, which Claude Code's hooks
+reference lists for no event
+(<https://code.claude.com/docs/en/hooks>); `timestamp` is what tells the
+two apart (`crates/commonmeasure-harness/src/hook.rs`
+`HookInput::from_payload`).
+Field names alone do not identify Claude Code, because other hosts run
+Claude Code's hook commands and some send Claude Code's own shape. A hook
+command told `--host claude-code` refuses whatever the payload looks like
+when it finds another host's variable in its environment:
+
+| Variable | Host | Why that host runs Claude Code's hooks |
+|---|---|---|
+| `CURSOR_PROJECT_DIR` | Cursor | loads Claude Code's hook files when its "include third-party plugins" switch is on, and its documentation does not say which shape those hooks receive |
+| `GEMINI_SESSION_ID` | Gemini CLI | `gemini hooks migrate` copies Claude Code's hooks into Gemini's settings; its hooks reference lists the variable (<https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/index.md>) |
+| `DEVIN_PROJECT_DIR` | the Devin CLI | runs the hooks in `~/.claude/settings.json` by default, with payloads in Claude Code's shape (<https://docs.devin.ai/cli/extensibility/hooks/overview.md>) |
+| `GROK_SESSION_ID` | Grok Build | scans `~/.claude/settings.json` for hooks by default (<https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md>) |
+
+Gemini CLI and Grok Build also set `CLAUDE_PROJECT_DIR` for every hook, so
+that variable does not identify Claude Code. The refused hook records
+nothing and at session start prints nothing, because naming the host from
+the variable would record a host the command was not told
+(`crates/commonmeasure-harness/src/hook.rs` `FOREIGN_ENVIRONMENT`). A
+Claude Code payload that is not JSON still gets the nudge, as §2 states; a
+payload that is JSON and refused gets nothing.
+
+The mediated half is not refused this way. The Devin CLI, Grok Build and
+Oh My Pi read Claude Code's `~/.claude.json`, so they start the server that
+entry names, with `--host claude-code`, and its records say
+`host: claude-code`; the client's own name in `client` is what tells them
+apart (`docs/contracts/session-evidence.md` §Client identity).
+
+### Browser answer surfaces
+
+ChatGPT on the web, Google AI Overviews and Bing Copilot Search answer
+with the model's own web search, which crosses no tool this product can
+offer, so none of them can be mediated. The extension in `browser/`
+observes what each page shows and sends the binary one message per
+answer over Chrome native messaging (`crates/commonmeasure-harness/src/browser.rs`,
+`crates/commonmeasure-cli/tests/browser_e2e.rs`):
+
+```json
+{"host": "chatgpt-web", "session": "<conversation id>",
+ "retrieved": ["https://…"], "cited": ["https://…"]}
+```
+
+The binary answers each message with `{"recorded": <n>, "session": "<id>"}`,
+or `{"recorded": 0, "error": "<reason>"}`, and a message `{"status": true}`
+with its version and whether a session log can be written. The same message
+on stdin to `commonmeasure hook post-tool-use --host <surface>` is read the
+same way.
+
+| Event | ChatGPT on the web | Google AI Overviews | Bing Copilot Search |
+|---|---|---|---|
+| `crossing_observed` | the conversation's event stream, teed in the page and parsed in the extension (`browser/parse.js`): search-result links and citation links | the external links in the rendered overview block | the citation links in the rendered Copilot answer block, unwrapped from Bing's click redirects |
+| session identity | the stream's `conversation_id` | none | none |
+| every other event | not supplied | not supplied | not supplied |
+
+How a message becomes records:
+
+- **One observed crossing per distinct source**, `retrieved` and `cited`
+  together, under the privacy floor and the named internal prefixes as
+  every observed crossing is. Each is `grounded: false` with no
+  `content_hash` and no `estimated_tokens`: no surface exposes the page text
+  the model read, so nothing about it is claimed. Grounding is never
+  recorded from these surfaces.
+- **A citation is recorded as the retrieved crossing it also is.** The
+  session-evidence contract has no field that says a source was cited in the
+  answer, so that fact is not recorded; a citation missing from `retrieved`
+  is still recorded once as retrieved.
+- **No `tool`, `cwd` or `turn_id`.** A page shows sources, not the tool call
+  that found each; a browser runs in no working directory, so no policy
+  scope and no governing engagement resolves for these crossings, and the
+  relay, which projects only crossings under a scope cleared for egress,
+  never sends them; no surface names the turn.
+- **Session.** ChatGPT's conversation id is the session. Google and Bing
+  expose no identity for a search, so each answer is a session the binary
+  names `local-<millis>-<pid>`, as the MCP server names one; a later
+  message carrying sources the page added to the same answer is a second
+  session. A session identifier that is not a plain name (letters, digits,
+  `-`, `_`, `.`, not leading `.`) is refused and nothing is recorded,
+  because it names a file and a page controls it.
+- **What the record rests on.** The extension records what the page
+  delivered. A script running in the ChatGPT page can post to the channel
+  the capture script uses, and Google and Bing control the markup read, so
+  a page could put a source in the record that its model never saw. Only
+  the Common Measure extension may start the binary.
 
 Facts behind the table:
 
@@ -154,9 +327,12 @@ Facts behind the table:
   and on each mediated crossing as `client`; a client that sends none
   leaves neither. `host` stays the registration's word.
 - **Session id.** A hook uses the host's `session_id`; a missing one is
-  recorded as `unknown-session`. The MCP server uses `--session` when given
-  and otherwise generates `local-<millis>-<pid>` (`main.rs` `uuid_like_session`).
-  A host that wants its hook records and its mediated records in one log
+  recorded as `unknown-session`. The MCP server uses `--session` when given,
+  then `AGENT_SESSION_ID` from its environment (which Goose sets), and
+  otherwise generates `local-<millis>-<pid>` (`main.rs` `mcp_session_id`).
+  An identifier that is not a plain name is refused by both paths
+  ([`docs/contracts/session-evidence.md`](session-evidence.md) §Where). A
+  host that wants its hook records and its mediated records in one log
   must pass its own session id to both.
 - **Working directory.** Hooks read `cwd` from the payload. The MCP server
   reads its own current directory once at start, resolves the policy scope
@@ -287,8 +463,28 @@ defines and are never collapsed.
 | Cursor, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the server and the four hooks around a foreign server and hook, content-exact, and byte for byte for files already in this writer's format; Cursor's own log on one operator machine recorded the server start from `~/.cursor/mcp.json`, not committed |
 | Cursor, mediated | `planned` | no session through Cursor is recorded |
 | Cursor, observed | `spec-verified` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the payload shapes Cursor's hooks documentation states (a third-party MCP result recorded under `conversation_id`, our own tools excluded, the nudge as `additional_context`, the prompt and stop boundaries) and with foreign shapes and Cursor's environment fed to the Claude Code reader; no payload recorded from Cursor exists, so the shapes are the documentation's and not a fixture |
+| Copilot CLI, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the `mcp-config.json` entry beside a foreign server, byte for byte, and the hook file with its four hooks, byte for byte, keeping an entry someone else added to it; on one operator machine the CLI listed the entry (`copilot mcp list`: `commonmeasure (local)`) and refused to start it, "1 MCP server was blocked by policy", because the account has no Copilot plan; not committed |
+| Copilot CLI, observed | `spec-verified` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the camelCase payload shapes the CLI's hooks reference states (`web_fetch` grounded under `sessionId`, `web_search` retrieved, our own tool excluded, the nudge as `additionalContext`, the prompt and stop boundaries) and refuses other shapes; no payload recorded from the CLI exists, and no hook ran on the operator machine because the session ended at the missing plan |
+| Copilot CLI, mediated | `planned` | the server was refused before it started; a call needs an account whose Copilot plan allows MCP |
+| GitHub Copilot app, the Copilot CLI registration | `spec-verified` | the app's documentation states that servers configured for the Copilot CLI are available in it; the app was not installed and no session is recorded |
+| Copilot agent mode in VS Code, the VS Code and Copilot CLI registrations | `spec-verified` | VS Code's MCP configuration reference states that VS Code forwards its configured servers to the Agent Host, where the Copilot harness runs, and that the Agent Host reads `~/.copilot/mcp-config.json` natively; which of the two entries it starts when both exist is not documented, and `doctor vscode` says so; a call needs a Copilot plan; no hook is registered (§1) |
+| VS Code, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the `servers` entry beside a foreign server and `inputs`, byte for byte, keeps the content of a tab-indented file as VS Code writes it, and refuses a file with a comment; on one operator machine VS Code, opened with the entry in place, created the server's output log `mcpServer.mcp.config.usrlocal.commonmeasure.log`, empty because the server starts on first use in a chat; not committed |
+| VS Code, mediated | `planned` | no session is recorded; a call needs a chat with a model, through Copilot or a model key for VS Code's own harness |
 | Codex IDE extension, the same registration | `spec-verified` | Codex's documentation states the extension reads the same table, and the installed extension's bundle resolves that file; no session through the extension is recorded here |
 | Pi, registration and mediated | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the extension; the session a real Pi session recorded through it is `demo/host-sessions/pi/`, read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` |
+| Gemini CLI, mediated | `planned` | no `install` for the host; a hand-written `mcpServers` entry started the server and listed the tools before sign-in on one operator machine (`docs/knowledge-base/host-surfaces-2.md` §Gemini CLI); no session through it is recorded |
+| Gemini CLI, observed | `planned` | no reader for Gemini's `AfterTool` exists; a hook Gemini runs from Claude Code's registration is refused under `GEMINI_SESSION_ID` and, carrying `timestamp`, by its shape (`crates/commonmeasure-cli/tests/hook_e2e.rs`) |
+| Zed, mediated | `planned` | no `install` for the host; a `context_servers` entry started one server per open project on one operator machine; no session through it is recorded |
+| Cline, mediated | `planned` | no `install` for the host; an entry in `cline_mcp_settings.json` started the server before any account on one operator machine; no session through it is recorded |
+| OpenCode, mediated | `planned` | no `install` for the host; `opencode mcp list` connected to a hand-written entry on one operator machine; the host's own run failed before a call |
+| Goose, mediated | `planned` | no `install` for the host; a session extension started the server and passed `AGENT_SESSION_ID`, which the server takes as the session id when no `--session` is given (`crates/commonmeasure-cli/tests/mediated_e2e.rs`); no session through Goose is recorded |
+| Google Antigravity, mediated | `planned` | no `install` for the host; an `agy mcp add` entry started the server before sign-in on one operator machine |
+| JetBrains Junie, mediated | `planned` | the server answers `initialize` with the `2025-03-26` Junie's client asks for (`crates/commonmeasure-cli/tests/mediated_e2e.rs`); on one operator machine Junie refused a server that answered `2025-06-18`, and connected to and listed the tools of one that answered `2025-03-26` (`docs/knowledge-base/host-surfaces-2.md` §Junie); no call through Junie is recorded |
+| Devin CLI, Kiro, Amp, mediated | `planned` | registration written with each host's own command; each stops at sign-in before starting a server |
+| Chrome, registration (`install chrome`, `uninstall`, `doctor`) | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes the manifest byte for byte for Chrome and Brave around another host's manifest, skips a browser whose directory does not exist, reads it back and removes it; `crates/commonmeasure-harness/src/registration.rs` checks the allowed extension id against the key in `browser/manifest.json`; on one operator machine Chrome loaded the unpacked extension and its popup reached the binary through the written manifest, which is the operator's record and not committed |
+| ChatGPT on the web, observed | `fixture-tested` | `browser/test/parse.test.js` holds the stream parser to the assertions of the Rust parser it was ported from, over a compact stream in the shape ChatGPT sends, and asserts it produces the message `crates/commonmeasure-cli/tests/browser_e2e.rs` feeds the real binary over native messaging framing; no ChatGPT turn has been recorded through the extension |
+| Google AI Overviews, observed | `planned` | the message path is the one `crates/commonmeasure-cli/tests/browser_e2e.rs` drives; on the live results page the overview's links are opaque `/goto?url=` tokens that name no destination, so the page reader finds no source and records nothing |
+| Bing Copilot Search, observed | `fixture-tested` | the message path is driven by `crates/commonmeasure-cli/tests/browser_e2e.rs`; the page reader has no committed test; one search on `bing.com/search` on an operator machine recorded five observed crossings from the Copilot answer through Chrome, which is the operator's record and not committed |
 | Screening-proxy socket | `planned` | no implementation |
 | Crates linked directly | no state claimed | the crates are the binary's own dependencies; no external consumer is evidenced |
 

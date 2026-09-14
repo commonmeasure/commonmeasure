@@ -11,13 +11,15 @@
 //! trivial. `https` is supported on the client side only, via `rustls` with a
 //! vendored root set (see [`tls`]); the server does not terminate TLS.
 //!
-//! What owning the transport buys: the sealed "exact response bytes" claim is
-//! literal, because nothing decompresses or reframes a body on the way past;
-//! header order is preserved for the message signatures a mediated crossing
-//! will need (RFC 9421); and the whole byte path is auditable with the rest of
-//! the supply chain. What it forgoes, deliberately: HTTP/2, content
-//! compression, connection reuse and proxies. An origin that requires any of
-//! those fails loudly rather than being quietly accommodated.
+//! What owning the transport buys: the bytes an origin served are always
+//! available as served, because the one content coding a response is decoded
+//! from (gzip, which some origins send whatever the request accepts) keeps its
+//! coded bytes beside the decoded ones ([`Response::coded`]); header order is
+//! preserved for the message signatures a mediated crossing will need (RFC
+//! 9421); and the whole byte path is auditable with the rest of the supply
+//! chain. What it forgoes, deliberately: HTTP/2, every other content coding,
+//! connection reuse and proxies. An origin that requires any of those fails
+//! loudly rather than being quietly accommodated.
 
 mod deadline;
 mod message;
@@ -25,7 +27,8 @@ mod server;
 mod tls;
 
 pub use message::{
-    Headers, Request, Response, read_request, read_response, write_request, write_response,
+    CodedBody, Headers, Request, Response, read_request, read_response, write_request,
+    write_response,
 };
 pub use server::{MAX_CONCURRENT_CONNECTIONS, SERVER_TIMEOUT, Server, ServerHandle};
 

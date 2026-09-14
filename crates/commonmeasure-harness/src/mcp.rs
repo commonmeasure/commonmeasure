@@ -34,7 +34,32 @@ use crate::identity::{Identity, PresentedIdentity, SigningIdentity};
 use crate::policy::SessionPolicy;
 use crate::session::{Crossing, CrossingMode, SessionLog};
 
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// The protocol revisions this server serves, oldest first. A tools-only
+/// stdio server behaves the same under each, with two exceptions this file
+/// handles: 2025-03-26 requires a server to accept JSON-RPC batches, which
+/// 2025-06-18 removed, and its `Implementation` has no `title`. 2024-11-05
+/// is not served: no client probed asks for it, and it has no tool
+/// annotations (`readOnlyHint`), which the hosted edge's design adds to these
+/// tools. A client asking for it is answered with the latest revision.
+pub const PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", "2025-11-25"];
+
+/// The revision that required servers to accept JSON-RPC batches.
+const BATCHING_PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// The revision to answer an `initialize` request with. The protocol's
+/// version negotiation (`basic/lifecycle`, "Version Negotiation", in each
+/// revision since 2025-03-26) states that a server supporting the requested
+/// version "MUST respond with the same version", and otherwise "MUST respond
+/// with another protocol version it supports", which "SHOULD be the latest".
+/// A client that sends no version, or one this server does not serve, is
+/// answered with the latest.
+pub fn negotiate_protocol(requested: Option<&str>) -> &'static str {
+    PROTOCOL_VERSIONS
+        .into_iter()
+        .find(|served| Some(*served) == requested)
+        .unwrap_or(PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.len() - 1])
+}
+
 const MAX_REDIRECTS: usize = 5;
 /// The request header carrying the retrieval correlation id (Content
 /// Telemetry section 7.2).
@@ -61,8 +86,12 @@ pub struct McpServer {
     client: Option<crate::session::ClientIdentity>,
     /// The protocol version the client asked for in `initialize`.
     client_protocol: Option<String>,
-    /// Whether the `client_identified` record has been written.
-    client_recorded: bool,
+    /// The protocol version this server answered `initialize` with, once it
+    /// has; it decides whether a JSON-RPC batch is accepted.
+    negotiated_protocol: Option<&'static str>,
+    /// Whether the records a session's first tool call writes before its own
+    /// (`credentials_loaded`, `client_identified`) have been written.
+    start_recorded: bool,
     /// The directory this server was started in. Stdio carries no cwd, but
     /// the server inherits the harness's, and it is the same directory the
     /// session's policy scope was resolved against.
@@ -112,7 +141,8 @@ impl McpServer {
             host: host.to_owned(),
             client: None,
             client_protocol: None,
-            client_recorded: false,
+            negotiated_protocol: None,
+            start_recorded: false,
             cwd,
             credentials,
             declarations: DeclarationCache::open(&home),
@@ -158,6 +188,44 @@ impl McpServer {
                 ));
             }
         };
+        let Value::Array(batch) = message else {
+            return self.handle_message(&message, false);
+        };
+        // A batch is accepted only under the revision that requires it; under
+        // any other it is one invalid request, answered rather than dropped,
+        // because a client waiting on its members would hang.
+        if self.negotiated_protocol != Some(BATCHING_PROTOCOL_VERSION) {
+            return Some(error_response(
+                Value::Null,
+                -32600,
+                &format!(
+                    "a JSON-RPC batch is accepted only under protocol version \
+                     {BATCHING_PROTOCOL_VERSION}; this session negotiated {}",
+                    self.negotiated_protocol.unwrap_or("none")
+                ),
+            ));
+        }
+        if batch.is_empty() {
+            return Some(error_response(Value::Null, -32600, "empty batch"));
+        }
+        // JSON-RPC 2.0 answers a batch with an array of the responses its
+        // requests are owed, and with nothing when it held only
+        // notifications.
+        let responses: Vec<Value> = batch
+            .iter()
+            .filter_map(|member| self.handle_message(member, true))
+            .collect();
+        (!responses.is_empty()).then(|| Value::Array(responses))
+    }
+
+    fn handle_message(&mut self, message: &Value, in_batch: bool) -> Option<Value> {
+        if !message.is_object() {
+            return Some(error_response(
+                Value::Null,
+                -32600,
+                "a message is a JSON object",
+            ));
+        }
         // Requests carry an id and are owed a response — even a request too
         // malformed to name a method, or a host waiting on it hangs.
         // Notifications carry no id and get nothing.
@@ -165,6 +233,15 @@ impl McpServer {
         let Some(method) = message.get("method").and_then(Value::as_str) else {
             return Some(error_response(id, -32600, "request has no method"));
         };
+        if in_batch && method == "initialize" {
+            // 2025-03-26 lifecycle: "The initialize request MUST NOT be part
+            // of a JSON-RPC batch".
+            return Some(error_response(
+                id,
+                -32600,
+                "initialize cannot be part of a batch",
+            ));
+        }
         let method = method.to_owned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         Some(self.handle_request(id, &method, &params))
@@ -174,16 +251,27 @@ impl McpServer {
         match method {
             "initialize" => {
                 self.identify_client(params);
+                let negotiated = negotiate_protocol(params["protocolVersion"].as_str());
+                self.negotiated_protocol = Some(negotiated);
+                let mut server_info = json!({
+                    "name": "commonmeasure",
+                    "title": "Common Measure mediated context",
+                    "version": env!("CARGO_PKG_VERSION"),
+                });
+                // `title` on an implementation arrived in 2025-06-18; a
+                // client held to 2025-03-26's schema is sent only the fields
+                // that revision defines.
+                if negotiated == BATCHING_PROTOCOL_VERSION
+                    && let Some(info) = server_info.as_object_mut()
+                {
+                    info.remove("title");
+                }
                 ok_response(
                     id,
                     json!({
-                        "protocolVersion": PROTOCOL_VERSION,
+                        "protocolVersion": negotiated,
                         "capabilities": {"tools": {}},
-                        "serverInfo": {
-                            "name": "commonmeasure",
-                            "title": "Common Measure mediated context",
-                            "version": env!("CARGO_PKG_VERSION"),
-                        }
+                        "serverInfo": server_info,
                     }),
                 )
             }
@@ -212,21 +300,42 @@ impl McpServer {
         self.client_protocol = params["protocolVersion"].as_str().map(str::to_owned);
     }
 
-    /// Write the `client_identified` record once, before the first record a
-    /// tool call leaves, so it precedes every crossing in the log. A failed
-    /// append cannot fail the tool call; the log owes a gap.
-    fn record_client(&mut self) {
-        if self.client_recorded {
-            return;
+    /// Write the records that precede every crossing, once, before the first
+    /// record a tool call leaves: `credentials_loaded` where the operator file
+    /// was loaded at start, then `client_identified`. Written here rather than
+    /// at start so a server that is started and never asked for anything
+    /// leaves no session file.
+    ///
+    /// `credentials_loaded` is what lets a reader conclude, from its absence,
+    /// that a session ran on the launching environment alone, so a failed
+    /// append of it fails the tool call before anything is fetched, naming
+    /// the log, and the next call tries again. A failed `client_identified`
+    /// append does not fail the call; the log owes a gap.
+    fn record_session_start(&mut self) -> Result<(), String> {
+        if self.start_recorded {
+            return Ok(());
+        }
+        if self.credentials.loaded.is_some() {
+            self.session
+                .record_credentials(&self.host, self.credentials.to_value())
+                .map_err(|error| {
+                    format!(
+                        "unavailable: could not record credentials_loaded to {}: {error}. \
+                         Nothing was fetched.",
+                        self.session.path().display()
+                    )
+                })?;
         }
         if let Some(client) = &self.client {
             let _ = self.session.record_client_identified(
                 &self.host,
                 client,
                 self.client_protocol.as_deref(),
+                self.negotiated_protocol,
             );
         }
-        self.client_recorded = true;
+        self.start_recorded = true;
+        Ok(())
     }
 
     fn handle_tool_call(&mut self, id: Value, params: &Value) -> Value {
@@ -263,7 +372,7 @@ impl McpServer {
     /// `Content-Usage` and `Link` headers are read and ruled on again, so a
     /// statement the page carries can still keep its bytes out of context.
     fn tool_fetch(&mut self, arguments: &Value) -> Result<Value, String> {
-        self.record_client();
+        self.record_session_start()?;
         let url = arguments
             .get("url")
             .and_then(Value::as_str)
@@ -525,10 +634,16 @@ impl McpServer {
         // else is decoded and delivered as it stands. The extraction record
         // is written before the crossing and carries the hash of the bytes
         // received beside the hash of the text delivered, so the crossing's
-        // two hashes are tied by a record a reader can re-derive.
+        // two hashes are tied by a record a reader can re-derive. A body the
+        // origin served under gzip arrives decoded, with its coded bytes kept,
+        // and the retrieved hash is over those.
         let (extraction_invocation, extraction) = commonmeasure_runtime::processor::extract::invoke(
             &final_url,
             &response.body,
+            response
+                .coded
+                .as_ref()
+                .map(|coded| (coded.coding, coded.bytes.as_slice())),
             response.headers.get("Content-Type"),
         );
         let _ = self
@@ -979,7 +1094,7 @@ impl McpServer {
     }
 
     fn tool_search(&mut self, arguments: &Value) -> Result<Value, String> {
-        self.record_client();
+        self.record_session_start()?;
         let query = arguments
             .get("query")
             .and_then(Value::as_str)

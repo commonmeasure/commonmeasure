@@ -1,0 +1,22 @@
+event: delta_encoding
+data: "v1"
+
+data: {"type": "resume_conversation_token", "token": "REDACTED", "conversation_id": "conv-abc"}
+
+data: {"type": "message_marker", "marker": "search_start", "conversation_id": "conv-abc"}
+
+event: delta
+data: {"p": "", "o": "add", "v": {"message": {"content": {"content_type": "code", "text": "search(\"iran news\")"}, "recipient": "web"}, "conversation_id": "conv-abc"}, "c": 0}
+
+event: delta
+data: {"o": "patch", "v": [{"p": "/message/metadata/content_references", "o": "append", "v": [{"matched_text": "cite", "type": "hidden", "invalid": true}]}]}
+
+event: delta
+data: {"p": "/message/metadata/content_references/0", "o": "append", "v": {"status": "done", "type": "grouped_webpages", "items": [{"title": "Reuters piece", "url": "https://www.reuters.com/world/deal/?utm_source=chatgpt.com", "attribution": "Reuters", "supporting_websites": [{"title": "Guardian live", "url": "https://www.theguardian.com/world/live/?utm_source=chatgpt.com", "attribution": "The Guardian"}]}]}}
+
+event: delta
+data: {"p": "/message/metadata", "o": "append", "v": {"is_complete": true, "content_references": [{"type": "sources_footnote", "sources": [{"title": "Reuters piece", "url": "https://www.reuters.com/world/deal/", "attribution": "Reuters"}]}], "search_result_groups": [{"domain": "axios.com", "entries": [{"url": "https://www.axios.com/2026/06/07/iran/?utm_source=chatgpt.com", "title": "Axios"}]}, {"domain": "aljazeera.com", "entries": [{"url": "https://www.aljazeera.com/news/2026/6/8/iran/?utm_source=chatgpt.com", "title": "Al Jazeera"}]}]}}
+
+data: {"type": "message_stream_complete", "conversation_id": "conv-abc"}
+
+data: [DONE]

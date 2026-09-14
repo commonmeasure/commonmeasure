@@ -58,8 +58,8 @@ Every processor declares:
   determines its behaviour. Running code cannot attest to a digest of its own
   machine code; the rule digest is what a reader needs to re-derive an
   invocation, and behaviour cannot change without the rule digest changing.
-  Sidecar and remote processors, which arrive as separate artefacts, will
-  declare an artefact digest as well;
+  A sidecar or remote processor, which arrives as a separate artefact,
+  declares an artefact digest as well;
 - supported stage and capability name;
 - network, filesystem, model, credential and content permissions;
 - whether it can see raw content, prompts or responses;
@@ -71,8 +71,9 @@ Every processor declares:
 - the evidence format its invocations take
   (`contextops-processor-invocation/v1`). No schema file exists for it; the
   invocation shape is defined in code at `crates/commonmeasure-runtime/src/processor.rs`
-  (`INVOCATION_VERSION`). Health-check formats will be declared with the
-  first sidecar: an in-process processor's health is the process's health.
+  (`INVOCATION_VERSION`). No health-check format is declared: an
+  in-process processor's health is the process's health, and a sidecar
+  declares one with its protocol.
 
 ## Evidence
 
@@ -155,7 +156,9 @@ only in batch runs whose suite declares `output_provenance`.
   `svg` elements are dropped, the text of every other element is kept, each
   block element starts a line, character references are decoded and runs of
   whitespace collapse. Any other body is decoded and delivered unextracted.
-  It runs before the admit screens, so the screens rule on the text the agent
+  A body the origin served under the gzip content coding is gunzipped
+  first, and the input hash stays over the coded bytes it served; a body
+  under any other coding never reaches it. It runs before the admit screens, so the screens rule on the text the agent
   would read and a finding's offsets index that text. Its record's input is
   the hash of the bytes received and its output the hash of the text
   delivered, the two hashes the crossing carries as `retrieved_hash` and

@@ -42,8 +42,8 @@ time. In order: it simulates an agent's ordinary web reads so the console has
 content; fetches a page containing a planted prompt-injection attack in
 `observe` mode, which lets it through but records the finding; switches the
 policy to `strict` by rewriting `policy.json`, the same edit an operator
-makes; fetches the same malicious page again, which this time is blocked
-before download with the matched rules named; sends the one cleared
+makes; fetches the same malicious page again, which this time is refused
+before its content enters the context, with the matched rules named; sends the one cleared
 engagement's records to a local stand-in receiver, proving the other
 engagement's records stay put; and switches the policy back so the presenter
 can perform the switch live.
@@ -104,7 +104,8 @@ session in the console, plus its raw transcript in `demo/arc/home/scripted/`.
 
 **The policy switch.** Edit `demo/arc/home/policy.json` and set
 `"policy_mode": "strict"`, the same edit the script made, then repeat the
-malicious fetch in a fresh session: blocked before download, rules named.
+malicious fetch in a fresh session: refused before its content enters the
+context, rules named.
 Say the limitation the Policy section states: a session that is already
 running keeps the policy it started with, and picks up the new mode when it
 restarts. *Fallback:* the `arc-mediated-strict` session, §1 above.
@@ -141,6 +142,7 @@ fetches it with its checksum verified ([`docs/RELEASE.md`](RELEASE.md)). To buil
 this checkout instead:
 
 ```sh
+sh plugin/build.sh
 sh plugin/package.sh
 ```
 

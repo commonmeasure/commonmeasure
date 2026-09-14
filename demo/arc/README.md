@@ -57,8 +57,9 @@ permission to leave the machine:
    the malicious page passes too but the injection screen's finding is
    recorded, naming the matched rules;
 3. the policy switched to **strict** in `policy.json`;
-4. the same fetch again under **strict**: blocked before download, the
-   rules named, the attack text not quoted anywhere in the record;
+4. the same fetch again under **strict**: fetched, then refused before its
+   content enters the context, the rules named, the attack text not quoted
+   anywhere in the record;
 5. the relay delivering the permitted project's records to the local
    stand-in receiver; the test-server traffic and the unpermitted
    project's records do not leave, which `regenerate.sh` verifies;

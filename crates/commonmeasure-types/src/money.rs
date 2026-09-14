@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Exact non-negative money in a named currency's millionth units.
@@ -24,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// let mut cap = commonmeasure_types::Money::new("USD", 10);
 /// cap.currency = "usd".to_owned();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Money {
     /// Always upper case. Read through [`Money::currency`].

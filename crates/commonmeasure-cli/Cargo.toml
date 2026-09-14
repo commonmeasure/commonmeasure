@@ -16,17 +16,26 @@ commonmeasure-supply.workspace = true
 chrono.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The tests recompute the hashes the binary records.
+sha2.workspace = true
 commonmeasure-http.workspace = true
+# The mediated fetch test serves a page gzipped, as some origins do whatever
+# the request accepts.
+flate2.workspace = true
 # The managed-policy test signs envelopes as the hub would.
 ring.workspace = true
+# The source policy contract test checks what the published schema accepts
+# against what the loader accepts.
+jsonschema.workspace = true
 # The loopback hub in the enrolment test verifies the proof of possession
 # the binary sends, as the real hub does.
 base64.workspace = true
 ed25519-dalek.workspace = true
+# The enrolment test loads the record through the 0.3.1 release's own type.
+serde.workspace = true
 # The prompt-hook tests build a signed C2PA manifest and embed it in text,
 # so the reader is exercised on a real manifest store.
 c2pa.workspace = true

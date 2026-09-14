@@ -29,8 +29,9 @@ use spool::{Spool, SpoolEntry};
 use state::RelayState;
 
 pub use enrolment::{
-    ConnectReport, DisconnectReport, ManagedPin, PolicySigner, SIGNER_PATH, Standing,
-    check_standing, connect, disconnect,
+    ConnectReport, DisconnectReport, EnrolmentCheck, ManagedPin, PolicySigner, ProofAction,
+    ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, disconnect,
+    refresh_directory_proof, refresh_directory_proof_if_due,
 };
 pub use state::egress_report;
 
@@ -142,6 +143,10 @@ pub struct RelayReport {
     /// learnt here is recorded on the enrolment record before delivery, so
     /// the next session's evidence names it.
     pub standing: Option<enrolment::Standing>,
+    /// What keeping the enrolled key listed in the key directory did this
+    /// run; `None` for an edge that is not enrolled or whose standing the hub
+    /// did not confirm.
+    pub directory_proof: Option<enrolment::ProofRefresh>,
 }
 
 /// A delivery the receiver refused or that never reached it, with the key's
@@ -152,6 +157,7 @@ pub struct RelayReport {
 #[derive(Debug)]
 pub struct DeliveryFailure {
     pub standing: Option<enrolment::Standing>,
+    pub directory_proof: Option<enrolment::ProofRefresh>,
     pub receiver: String,
     pub spool: PathBuf,
     pub cause: anyhow::Error,
@@ -161,6 +167,9 @@ impl fmt::Display for DeliveryFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(standing) = &self.standing {
             writeln!(formatter, "{standing}")?;
+        }
+        if let Some(directory_proof) = &self.directory_proof {
+            writeln!(formatter, "{directory_proof}")?;
         }
         formatter.write_str(&self.delivery_text())
     }
@@ -204,8 +213,12 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     };
 
     // The enrolled key's standing, asked before anything is delivered:
-    // a revocation is learnt on the next relay run, which is this one.
-    let standing = enrolment::check_standing(home, api_key.as_deref())?;
+    // a revocation is learnt on the next relay run, which is this one. The
+    // same answer keeps a standing key's directory proof current.
+    let (standing, directory_proof) = match enrolment::check_standing(home, api_key.as_deref())? {
+        Some(check) => (Some(check.standing), check.directory_proof),
+        None => (None, None),
+    };
 
     // The same policy.json the capture paths read, held for the whole
     // invocation: every egress decision below is taken against these bytes, so
@@ -407,6 +420,7 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
                 state.record_failure(&receiver, &format!("{error:#}"))?;
                 return Err(anyhow::Error::new(DeliveryFailure {
                     standing,
+                    directory_proof,
                     receiver,
                     spool: home.join("relay").join("spool"),
                     cause: error,
@@ -452,6 +466,7 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
             .map(|(clearance, events)| DeliveredUnderClearance { clearance, events })
             .collect(),
         standing,
+        directory_proof,
     })
 }
 

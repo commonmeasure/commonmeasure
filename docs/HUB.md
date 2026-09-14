@@ -5,8 +5,8 @@ description: What Common Measure Hub is, what leaves a machine and what never do
 
 # The hub
 
-Common Measure Hub is the organisation service an edge can enrol with;
-Common Measure Ltd will run one for organisations that want it, and whether an
+Common Measure Hub is the organisation service an edge can enrol with.
+Common Measure Ltd runs one at hub.commonmeasure.ai, and whether an
 organisation may run its own is not decided. An edge is complete without
 it: the hub is never in the path of a crossing, and a hub that is
 unreachable, closed or wrong never relaxes the policy on a machine. What it
@@ -52,3 +52,41 @@ in it, sets how long delivered records are kept, and can revoke any
 machine's key. The hub's own documentation, for an owner and the people an
 owner invites, is served on the hub: Start here at `/docs/start-here`, and
 policy distribution at `/docs/policy-distribution`.
+
+## History before enrolment
+
+A machine's first relay run after it enrols reads every session log the
+machine holds, including sessions recorded before it enrolled, and decides
+each crossing against the policy in force at that run. A crossing leaves
+when it was witnessed (observed by a hook, or mediated by Common Measure's
+own tools) and its recorded working directory matches a scope with
+`allow_telemetry_egress: true`. Each event carries the time the crossing
+happened, not the time it was delivered. A session recorded before the
+machine enrolled names no key id, so its events leave under the agent id
+`commonmeasure`. Scopes are tried in order and the first whose `match`
+appears in the directory decides, so a narrower scope that keeps work on
+the machine must be listed before a broader scope that clears it
+([`docs/contracts/source-policy.md`](contracts/source-policy.md) §Scopes and
+principals).
+
+What stays on the machine from that history: every crossing whose
+directory matches no cleared scope, which the relay reports as withheld
+sessions; crossings to private addresses or named internal prefixes;
+mediated fetches that failed or that the origin answered outside 2xx;
+refused crossings, which leave only as a count on a session that sends at
+least one event; and every reconstructed crossing. A later relay run under
+a wider policy sends what the wider policy clears, and sends nothing
+already delivered a second time. A session recorded before enrolment and
+resumed after its first delivery names the key id on its next batch, and
+the hub refuses a session that changes agent id.
+
+`commonmeasure import` reconstructs work done before Common Measure was
+installed, from Claude Code transcripts: a `WebFetch` with a recorded
+result becomes one grounded crossing, with a hash and token estimate taken
+from the transcript text, and a `WebSearch` becomes one ungrounded crossing
+per result link. A reconstructed crossing records no working directory and
+no licence, and the relay projects none, so imported history stays on the
+operator's own record and never reaches the hub. Codex and Pi transcripts
+are reported as not importable
+([`contracts/session-evidence.md`](contracts/session-evidence.md)
+§Importing history).

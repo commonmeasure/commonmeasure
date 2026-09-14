@@ -45,16 +45,18 @@ binaries the release holds. Run on macOS (Apple silicon) from an empty
 home directory, the command printed:
 
 ```text
-installed ~/.local/bin/commonmeasure: commonmeasure 0.3.0, checksum verified
+installed ~/.local/bin/commonmeasure: commonmeasure 0.3.1, checksum verified
 ~/.local/bin is not on PATH. This installer does not edit shell profiles; add this line to yours:
   export PATH="~/.local/bin:$PATH"
-Next: work a session in your host, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine.
+Next: commonmeasure install claude (or codex, pi) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine.
 ```
 
-The release run's `verify` job ran the same installer against the
+The home directory is written as `~` above; the installer prints it in full.
+
+The release workflow's `verify` job runs the same installer against each
 published release in a clean Linux container on GitHub, with no toolchain
-and no credential, and passed ([`docs/RELEASE.md`](RELEASE.md) §The
-clean-container check). The installer's refusals (a checksum that does not
+and no credential ([`docs/RELEASE.md`](RELEASE.md) §The clean-container
+check). The installer's refusals (a checksum that does not
 match, a binary reporting another version, a platform or a release that
 does not exist, a missing `curl`) are each driven against a loopback origin
 standing where the release stands
@@ -90,7 +92,15 @@ approval mode Codex needs to call the tools without asking, and it serves
 the Codex CLI, the ChatGPT desktop app and the Codex IDE extension alike.
 `commonmeasure install claude-desktop` and `commonmeasure install cursor`
 register with those two applications (`plugin/README.md` §Claude Desktop
-and Cursor).
+and Cursor), and `commonmeasure install copilot` and `commonmeasure install
+vscode` with the Copilot CLI and VS Code (`plugin/README.md` §GitHub
+Copilot and VS Code). `commonmeasure install chrome` registers the binary
+for the browser extension in `browser/`, which records the sources ChatGPT
+on the web, Google AI Overviews and Bing Copilot Search show
+(`plugin/README.md` §Chrome).
+
+Version 0.3.2 registers all the hosts above. Earlier binaries may refuse
+a host added in this release; rerun the installer to update.
 
 ### Check what arrived
 
@@ -158,7 +168,7 @@ mediated crossings alongside observed ones.
 
 A mediated fetch checks the operator's source policy first, records the
 crossing either way, and hands the agent the bytes plus the hash it just
-recorded. Of the seven installed in-process processors, the PII detector and
+recorded. Of the eight installed in-process processors, the PII detector and
 the injection screen run at this crossing, judging the text before the model
 sees it, and each invocation is recorded as a `processor_invoked` event
 beside the crossing it judged ([`docs/contracts/processor.md`](contracts/processor.md)); the context
@@ -375,7 +385,8 @@ The same file carries the rest of the declared policy:
 - **Scopes** bind a working directory to an engagement and to the rules
   that govern work there; the mode, constraints and clearance of the
   matching scope apply, and the top level applies where nothing matches
-  (`plugin/README.md` §Policy).
+  ([`docs/contracts/source-policy.md`](contracts/source-policy.md) §Scopes and
+  principals).
 - **Engagements** are the names records, policy and reporting are grouped
   under. `allow_telemetry_egress: true` on a scope is the clearance for that
   engagement's witnessed crossings to leave the machine (§7); without it
@@ -383,7 +394,8 @@ The same file carries the rest of the declared policy:
 - **Principals** are authenticated identities: a `principals` list names
   who may exercise the policy, resolved from an authentication basis the
   process cannot rewrite, and a principal that cannot be authenticated is
-  refused rather than degraded (`plugin/README.md` §Policy). That basis is
+  refused rather than degraded ([`docs/contracts/source-policy.md`](contracts/source-policy.md)
+  §Scopes and principals). That basis is
   the process's operating-system user and is unix-only, so a policy that
   declares `principals` refuses every mediated crossing on Windows; a
   policy declaring none is unaffected there.
@@ -430,7 +442,7 @@ falling back to the top-level rules. A second solicitor is a second
 scope; a directory holding client-confidential material gets a scope whose
 `constraints` refuse every host. What each field does, and what declaring
 any principal changes for every other user of the machine, is
-`plugin/README.md` §Policy.
+[`docs/contracts/source-policy.md`](contracts/source-policy.md).
 
 [`docs/GLOSSARY.md`](GLOSSARY.md) defines each term in one line.
 
@@ -439,7 +451,8 @@ Where the file comes from a hub rather than your editor, because
 session start and before every relay run, and `commonmeasure doctor` adds a
 line naming the revision in force and its expiry. An envelope that has
 expired keeps enforcing its policy and that line says `stale since` when;
-`plugin/README.md` §Policy has the rest.
+[`docs/contracts/policy-envelope.md`](contracts/policy-envelope.md) §Cadence
+and staleness has the rest.
 
 ## 5. The console
 
@@ -464,7 +477,7 @@ Always look before importing:
 commonmeasure import --dry-run
 ```
 
-which reports, per host, what a real import would do (`<host>: N new
+which reports, per host, what a real import would do (`<host>  N new
 crossings from M transcripts`) and names the hosts it will not import from,
 with reasons: Codex transcripts hold shell command text, and a URL inside a
 command is not evidence that anything was retrieved.
@@ -514,7 +527,8 @@ An owner of your organisation mints the token in the hub's API keys page,
 which prints the `connect` command to run. It exchanges the token for an
 ingest key, written straight into `relay.json`, mints the edge's signing key
 (`edge-key.json`, which never leaves the machine), records the key id the
-hub assigned in `enrolment.json`, and makes a first relay run. With
+hub assigned in `enrolment.json`, signs and uploads the proof that lists the
+key in the hub's key directory, and makes a first relay run. With
 `--managed` it also reads the hub's policy signer under the new ingest key,
 writes `deployment.json` pinned to it, and makes a first policy
 synchronisation, so a machine that takes the organisation's policy from the

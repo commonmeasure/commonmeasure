@@ -129,9 +129,9 @@ mod tests {
     }
 
     /// The editor accepts any non-empty name, so every name it accepts must
-    /// survive the trip back through the engagement filter. The two decoders
-    /// that used to disagree here made the console report six recorded
-    /// sessions as "Nothing recorded yet".
+    /// survive the trip back through the engagement filter. Two decoders that
+    /// disagree here make the console report recorded sessions as "Nothing
+    /// recorded yet".
     #[test]
     fn every_name_the_editor_accepts_round_trips_through_the_filter() {
         for name in [

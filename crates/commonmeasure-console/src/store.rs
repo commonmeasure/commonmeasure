@@ -501,48 +501,6 @@ impl Store {
         })
     }
 
-    /// Where one host's crossings happened, for the surface that offers to
-    /// block it: crossings per recorded working directory, so the caller can
-    /// resolve which policy scopes actually govern this host's traffic, plus
-    /// the crossings under no recorded directory, which no scope can govern.
-    ///
-    /// Facts only, like [`Self::cwd_facts`]. Which scope a directory falls
-    /// under is the declared policy's answer and is resolved by the runtime's
-    /// own loader above this store, never guessed at here.
-    ///
-    /// The host is matched as recorded. Normalising it is the enforcement
-    /// path's job and is done with the enforcement path's own function; a
-    /// second spelling rule here could offer a block over crossings the block
-    /// would not then cover.
-    pub fn host_crossings(&self, host: &str) -> Result<Value> {
-        let mut by_cwd: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-        let mut without_cwd = 0u64;
-        let mut total = 0u64;
-        for (_, event, record) in self.all_records()? {
-            if !event.starts_with("crossing_") {
-                continue;
-            }
-            let payload = &record["payload"];
-            if payload["host_name"].as_str() != Some(host) {
-                continue;
-            }
-            total += 1;
-            match payload["cwd"].as_str() {
-                Some(cwd) => *by_cwd.entry(cwd.to_owned()).or_default() += 1,
-                None => without_cwd += 1,
-            }
-        }
-        Ok(json!({
-            "host": host,
-            "crossings": total,
-            "cwds": by_cwd
-                .into_iter()
-                .map(|(cwd, crossings)| json!({"cwd": cwd, "crossings": crossings}))
-                .collect::<Vec<_>>(),
-            "crossings_without_cwd": without_cwd,
-        }))
-    }
-
     /// What each engagement's recorded work consumed, as facts: sessions,
     /// crossings by grade, and the context footprint with the basis it was
     /// counted in.

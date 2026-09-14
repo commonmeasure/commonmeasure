@@ -3,7 +3,7 @@
 # Prerequisites: rustc 1.97 or later (Cargo.toml `rust-version`), and one
 # online `cargo fetch` before the offline gates below. Optional, per recipe:
 # docker (gateway-up), python3 (demo-arc, routing-*), cargo-zigbuild (plugin
-# cross targets), tailscale (serve-tailnet).
+# cross targets), tailscale (serve-tailnet), node 22 or later (browser, gates).
 #
 # Recipes never read .env unless the recipe says so; credentials stay in the
 # launching shell (docs/GETTING-STARTED.md §3). Recipes marked "gateway"
@@ -18,7 +18,7 @@ fetch:
     cargo fetch
 
 # The definition-of-done gates: formatting, clippy, tests
-gates: fmt clippy test
+gates: fmt clippy test browser
 
 test:
     cargo test --workspace --offline
@@ -28,6 +28,10 @@ fmt:
 
 clippy:
     cargo clippy --workspace --all-targets --offline -- -D warnings
+
+# The browser extension's parser tests (browser/README.md)
+browser:
+    node --test browser/test/
 
 # Publish the no-credential run to a scratch directory and print its account
 run-empty out="/tmp/commonmeasure-empty":

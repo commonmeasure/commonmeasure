@@ -3,10 +3,11 @@
 //! disconnecting. The offline tests use a loopback `commonmeasure_http::Server`
 //! that answers the hub's enrolment routes and verifies the proof of
 //! possession the binary sends, so the bytes on the wire are the ones a
-//! real hub receives. Its answers copy the shapes of the hub's handlers in
-//! the hub repository: `crates/server/src/enrolment.rs`
-//! (exchange, status, disconnect) and `crates/server/src/telemetry.rs`
-//! (the acceptance body); a change to either shape is a change here. The
+//! real hub receives. Its answers copy the shapes of the hub's enrolment
+//! handlers (exchange, status, disconnect, the directory-proof upload), of
+//! its key directory and of its telemetry acceptance body; a change to any
+//! of those shapes is a change here. It checks an uploaded directory proof
+//! by the per-key rule in `webbotauth`, not by the edge's signing code. The
 //! one test against a running hub is ignored by default; see
 //! `a_real_hub_enrols_revokes_and_disconnects_this_edge` for how to run it.
 
@@ -21,6 +22,8 @@ use commonmeasure_http::{Request, Response, Server, ServerHandle, send};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+mod webbotauth;
 
 const TOKEN: &str = "et_0123456789abcdef";
 const API_KEY: &str = "ak_hub_issued_secret";
@@ -57,6 +60,79 @@ struct HubState {
     /// the hub builds from its public origin, which the edge must prefer to
     /// the address it typed.
     signer_policy_url: Option<&'static str>,
+    policy_response: Option<(u16, &'static str)>,
+    /// When set, the exchange and status answers carry the hub's
+    /// `directory_proof` statement with this authority, and the hub takes
+    /// uploads. Unset, the hub is one that takes no directory proofs.
+    proof_authority: Option<&'static str>,
+    /// The enrolled public key, base64url, as the exchange registered it.
+    x: Option<String>,
+    /// Upload request bodies, verbatim.
+    uploads: Vec<Value>,
+    /// When set, an upload is refused with this status and detail.
+    refuse_upload: Option<(u16, &'static str)>,
+    /// The proof the hub holds: the params, the signature and the expiry.
+    held: Option<(String, String, i64)>,
+}
+
+/// The lifetime this hub states and accepts, seconds.
+const LIFETIME_SECS: i64 = 604_800;
+
+fn rfc3339(seconds: i64) -> String {
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+impl HubState {
+    /// The `directory_proof` member as the hub states it, or nothing.
+    fn statement(&self) -> Option<Value> {
+        self.proof_authority.map(|authority| {
+            json!({
+                "lifetime_secs": LIFETIME_SECS,
+                "authority": authority,
+                "expires_at": self.held.as_ref().map(|(_, _, expires)| rfc3339(*expires)),
+            })
+        })
+    }
+
+    /// The key directory this hub serves: the key while it stands and holds
+    /// a proof at least two cache ages from expiry, with its member.
+    fn directory(&self) -> webbotauth::Directory {
+        let mut directory = webbotauth::Directory::default();
+        if let (Some(x), Some((params, signature, expires)), None) =
+            (&self.x, &self.held, self.revoked)
+            && *expires - now() >= 7_200
+        {
+            let raw: [u8; 32] = URL_SAFE_NO_PAD.decode(x).unwrap().try_into().unwrap();
+            directory.publish(&raw, params, signature);
+        }
+        directory
+    }
+}
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// Fetch the loopback hub's key directory and apply the per-key rule to it,
+/// returning the key ids a verifier may use.
+fn usable_in_directory(hub_url: &str) -> Vec<String> {
+    let response = send(
+        &format!("{hub_url}/.well-known/http-message-signatures-directory"),
+        Request::get("/"),
+    )
+    .expect("the hub answers");
+    assert_eq!(response.status, 200);
+    let usable = webbotauth::usable_keys(
+        &String::from_utf8_lossy(&response.body),
+        response.headers.get("Signature-Input"),
+        response.headers.get("Signature"),
+        "hub.example",
+        now(),
+    )
+    .expect("a directory a verifier can read");
+    usable.keys.into_keys().collect()
 }
 
 fn thumbprint(x: &str) -> String {
@@ -93,23 +169,87 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                     }
                     let key_id = thumbprint(x);
                     state.key_id = Some(key_id.clone());
-                    Response::json(
-                        201,
-                        &json!({
-                            "organization": {"id": "11111111-1111-1111-1111-111111111111", "name": "Org A Media"},
-                            "name": "laptop-7",
-                            "key_id": key_id,
-                            "identity": {
-                                "origin": ORIGIN,
-                                "bot_page": "https://hub.example/bot",
-                                "contact": "mailto:bot@hub.example",
-                            },
-                            "api_key_id": "22222222-2222-2222-2222-222222222222",
-                            "api_key": API_KEY,
-                            "telemetry_path": "/api/v1/telemetry",
-                        })
-                        .to_string(),
+                    state.x = Some(x.to_owned());
+                    let mut answer = json!({
+                        "organization": {"id": "11111111-1111-1111-1111-111111111111", "name": "Org A Media"},
+                        "name": "laptop-7",
+                        "key_id": key_id,
+                        "identity": {
+                            "origin": ORIGIN,
+                            "bot_page": "https://hub.example/bot",
+                            "contact": "mailto:bot@hub.example",
+                        },
+                        "api_key_id": "22222222-2222-2222-2222-222222222222",
+                        "api_key": API_KEY,
+                        "telemetry_path": "/api/v1/telemetry",
+                    });
+                    if let Some(statement) = state.statement() {
+                        answer["directory_proof"] = statement;
+                    }
+                    Response::json(201, &answer.to_string())
+                }
+                // The upload, checked by the per-key rule a verifier applies
+                // to the directory it will be served in, not by the edge's
+                // own signing code.
+                ("PUT", "/api/v1/enrolment/directory-proof") => {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    state.uploads.push(body.clone());
+                    if api_key.as_deref() != Some(API_KEY) {
+                        return Response::json(404, r#"{"detail":"no edge key for this ingest key"}"#);
+                    }
+                    if let Some((status, detail)) = state.refuse_upload {
+                        return Response::json(status, &json!({"detail": detail}).to_string());
+                    }
+                    if body["key_id"] != json!(state.key_id) {
+                        return Response::json(422, r#"{"detail":"keyid is not this edge's key"}"#);
+                    }
+                    let params = body["signature_input"].as_str().unwrap().to_owned();
+                    let signature = body["signature"].as_str().unwrap().to_owned();
+                    let raw: [u8; 32] = URL_SAFE_NO_PAD
+                        .decode(state.x.as_deref().unwrap())
+                        .unwrap()
+                        .try_into()
+                        .unwrap();
+                    let mut candidate = webbotauth::Directory::default();
+                    candidate.publish(&raw, &params, &signature);
+                    let (directory, input, served) = candidate.response();
+                    let usable = webbotauth::usable_keys(
+                        &directory,
+                        input.as_deref(),
+                        served.as_deref(),
+                        state.proof_authority.unwrap(),
+                        now(),
                     )
+                    .unwrap();
+                    let key_id = state.key_id.clone().unwrap();
+                    if let Some(reason) = usable.refused.get(&key_id) {
+                        return Response::json(422, &json!({"detail": reason}).to_string());
+                    }
+                    let field = |name: &str| -> i64 {
+                        let at = params.find(&format!(";{name}=")).unwrap() + name.len() + 2;
+                        params[at..].split(';').next().unwrap().parse().unwrap()
+                    };
+                    let (created, expires) = (field("created"), field("expires"));
+                    if expires - created > LIFETIME_SECS || expires - now() < 7_200 {
+                        return Response::json(422, r#"{"detail":"the validity window is refused"}"#);
+                    }
+                    if state
+                        .held
+                        .as_ref()
+                        .is_none_or(|(_, _, held)| expires > *held)
+                    {
+                        state.held = Some((params, signature, expires));
+                    }
+                    Response::new(204, Vec::new())
+                }
+                ("GET", "/.well-known/http-message-signatures-directory") => {
+                    let (body, input, signature) = state.directory().response();
+                    let mut response = Response::json(200, &body);
+                    if let (Some(input), Some(signature)) = (input, signature) {
+                        response.headers.set("Signature-Input", &input);
+                        response.headers.set("Signature", &signature);
+                    }
+                    response
                 }
                 ("GET", "/api/v1/enrolment/status") => {
                     state.status_keys.push(api_key.clone());
@@ -120,16 +260,16 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                         Some((at, by)) => (json!(at), json!(by)),
                         None => (Value::Null, Value::Null),
                     };
-                    Response::json(
-                        200,
-                        &json!({
-                            "key_id": state.key_id,
-                            "name": "laptop-7",
-                            "revoked_at": revoked_at,
-                            "revocation": revocation,
-                        })
-                        .to_string(),
-                    )
+                    let mut answer = json!({
+                        "key_id": state.key_id,
+                        "name": "laptop-7",
+                        "revoked_at": revoked_at,
+                        "revocation": revocation,
+                    });
+                    if let Some(statement) = state.statement() {
+                        answer["directory_proof"] = statement;
+                    }
+                    Response::json(200, &answer.to_string())
                 }
                 ("POST", "/api/v1/enrolment/disconnect") => {
                     state.disconnect_keys.push(api_key.clone());
@@ -156,6 +296,11 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                         signer["policy_url"] = json!(url);
                     }
                     Response::json(200, &signer.to_string())
+                }
+                ("GET", "/api/v1/policy/desired") => {
+                    let (status, body) = state.policy_response.unwrap_or((404,
+                        r#"{"detail":"no policy revision has been published for this organisation"}"#));
+                    Response::json(status, body)
                 }
                 ("POST", "/api/v1/telemetry/events") => {
                     if api_key.as_deref() != Some(API_KEY) || state.refuse_key {
@@ -425,6 +570,14 @@ fn an_edge_enrols_records_its_key_id_learns_revocation_and_disconnects() {
     assert_eq!(identity[0]["payload"]["key_id"], json!(key_id));
     assert_eq!(identity[0]["payload"]["standing"], json!("enrolled"));
     assert_eq!(identity[0]["payload"]["hub"], json!(hub_url));
+    // This hub takes no directory proofs: nothing was uploaded, and the
+    // record says the directory carries no signature by this key.
+    assert!(state.lock().unwrap().uploads.is_empty());
+    assert!(identity[0]["payload"].get("listed_until").is_none());
+    let unlisted = identity[0]["payload"]["unlisted"]
+        .as_str()
+        .expect("a reason");
+    assert!(unlisted.contains("stated no directory proof"), "{unlisted}");
     mcp_session(home.path(), "s-mediated");
     let identity = edge_identity_records(home.path(), "s-mediated");
     assert_eq!(identity.len(), 1, "the mediated server start names the key");
@@ -559,6 +712,319 @@ fn an_edge_enrols_records_its_key_id_learns_revocation_and_disconnects() {
     server.stop();
 }
 
+fn directory_listing(home: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(home.join("directory-listing.json")).unwrap()).unwrap()
+}
+
+/// Set the expiry of the proof the listing file says the hub holds.
+fn age_listing(home: &Path, expires: i64) {
+    let mut listing = directory_listing(home);
+    listing["stated"]["expires_at"] = json!(rfc3339(expires));
+    std::fs::write(
+        home.join("directory-listing.json"),
+        serde_json::to_vec_pretty(&listing).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The enrolment record exactly as the 0.3.1 release defines it, copied from
+/// `crates/commonmeasure-harness/src/enrolment.rs` at the `v0.3.1` tag with
+/// the documentation stripped. A released binary and a newer one share one
+/// operator home during an upgrade, and the released binary refuses a record
+/// with a member it does not know, so what this build writes to
+/// `enrolment.json` must load through this type. Never edit it to follow the
+/// current type.
+mod released_0_3_1 {
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    pub struct EnrolledIdentity {
+        pub origin: String,
+        pub bot_page: String,
+        #[serde(default)]
+        pub contact: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    pub struct EnrolledOrganization {
+        pub id: String,
+        pub name: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    pub struct EnrolmentRecord {
+        pub hub: String,
+        pub organization: EnrolledOrganization,
+        pub name: String,
+        pub key_id: String,
+        pub identity: EnrolledIdentity,
+        pub enrolled_at: String,
+        #[serde(default)]
+        pub revoked_at: Option<String>,
+        #[serde(default)]
+        pub revocation: Option<String>,
+        #[serde(default)]
+        pub revocation_learnt_at: Option<String>,
+    }
+
+    /// Load `<home>/enrolment.json` as the 0.3.1 release does.
+    pub fn load(home: &std::path::Path) -> Result<EnrolmentRecord, String> {
+        let bytes =
+            std::fs::read(home.join("enrolment.json")).map_err(|error| error.to_string())?;
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+    }
+}
+
+/// The directory proof across an edge's life against a hub that takes them:
+/// signed and uploaded at `connect`, verifying under the per-key rule in the
+/// directory the hub serves, left alone while it is current, renewed at a
+/// session start once it is more than a day old, and gone with revocation.
+///
+/// Catches: an edge that enrols a key no verifier will use, one that signs
+/// and uploads on every contact, and a session record that claims a listing
+/// the directory does not carry.
+#[test]
+fn connect_lists_the_key_with_a_proof_that_verifies_and_a_start_renews_it_when_due() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let hub_url = server.url();
+
+    let output = commonmeasure(home.path(), &["connect", &hub_url, "--token", TOKEN]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("directory proof: signed and accepted by the hub"),
+        "{stdout}"
+    );
+    let key_id = state.lock().unwrap().key_id.clone().unwrap();
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(state.uploads.len(), 1, "one proof, not one per request");
+        let upload = &state.uploads[0];
+        assert_eq!(upload["key_id"], json!(key_id));
+        assert!(
+            upload["signature_input"]
+                .as_str()
+                .unwrap()
+                .starts_with(r#"("@authority";req);"#),
+            "{upload}"
+        );
+        let private: Value =
+            serde_json::from_slice(&std::fs::read(home.path().join("edge-key.json")).unwrap())
+                .unwrap();
+        assert!(
+            !upload.to_string().contains(private["d"].as_str().unwrap()),
+            "the private key left the machine"
+        );
+    }
+    assert_eq!(usable_in_directory(&hub_url), vec![key_id.clone()]);
+    let listing = directory_listing(home.path());
+    assert_eq!(listing["key_id"], json!(key_id));
+    let expires_at = listing["stated"]["expires_at"]
+        .as_str()
+        .expect("the held proof's expiry is recorded")
+        .to_owned();
+
+    // A session start with a current proof asks the hub nothing, and names
+    // the listing: the held proof's expiry less the hub's serving margin.
+    let status_calls = state.lock().unwrap().status_keys.len();
+    session_start(home.path(), "s-listed");
+    assert_eq!(state.lock().unwrap().status_keys.len(), status_calls);
+    let identity = &edge_identity_records(home.path(), "s-listed")[0]["payload"];
+    let listed_until = identity["listed_until"].as_str().expect("listed");
+    let expected = chrono::DateTime::parse_from_rfc3339(&expires_at).unwrap()
+        - chrono::Duration::seconds(7_200);
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(listed_until).unwrap(),
+        expected
+    );
+    assert!(identity.get("unlisted").is_none(), "{identity}");
+
+    // A relay run reads the hub's statement and sends nothing.
+    let output = commonmeasure(home.path(), &["relay"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("directory proof: current"), "{stdout}");
+    assert_eq!(state.lock().unwrap().uploads.len(), 1);
+
+    // Two days on, as far as the hub and the record are concerned: the
+    // next session start asks and renews.
+    let aged = now() + LIFETIME_SECS - 2 * 86_400;
+    {
+        let mut state = state.lock().unwrap();
+        let held = state.held.as_mut().unwrap();
+        held.2 = aged;
+    }
+    age_listing(home.path(), aged);
+    session_start(home.path(), "s-renewed");
+    assert_eq!(state.lock().unwrap().uploads.len(), 2, "renewed once");
+    let identity = &edge_identity_records(home.path(), "s-renewed")[0]["payload"];
+    let renewed =
+        chrono::DateTime::parse_from_rfc3339(identity["listed_until"].as_str().unwrap()).unwrap();
+    assert!(
+        renewed.timestamp() >= expected.timestamp() && renewed.timestamp() > aged - 7_200,
+        "listed until the renewed proof's expiry, not the aged one's: {identity}"
+    );
+    assert_eq!(usable_in_directory(&hub_url), vec![key_id.clone()]);
+
+    // The mediated server's start is the other path that opens a session,
+    // and a host without a session-start hook reaches the hub only there.
+    let aged = now() + LIFETIME_SECS - 2 * 86_400;
+    state.lock().unwrap().held.as_mut().unwrap().2 = aged;
+    age_listing(home.path(), aged);
+    mcp_session(home.path(), "s-server");
+    assert_eq!(
+        state.lock().unwrap().uploads.len(),
+        3,
+        "renewed at server start"
+    );
+    let identity = &edge_identity_records(home.path(), "s-server")[0]["payload"];
+    assert!(identity["listed_until"].is_string(), "{identity}");
+
+    // Revoked: the hub drops the proof, the directory lists nothing, the
+    // relay run learns it and uploads nothing, and the record says why.
+    {
+        let mut state = state.lock().unwrap();
+        state.revoked = Some(("2026-09-06T08:00:00Z", "owner"));
+        state.held = None;
+    }
+    assert!(usable_in_directory(&hub_url).is_empty());
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(output.status.success());
+    assert_eq!(state.lock().unwrap().uploads.len(), 3);
+    session_start(home.path(), "s-revoked");
+    let identity = &edge_identity_records(home.path(), "s-revoked")[0]["payload"];
+    let unlisted = identity["unlisted"].as_str().expect("unlisted");
+    assert!(unlisted.contains("revoked"), "{unlisted}");
+    assert_eq!(state.lock().unwrap().uploads.len(), 3);
+
+    server.stop();
+}
+
+/// What this build writes to `enrolment.json` loads in the 0.3.1 release,
+/// whatever the directory proof does: after `connect` uploads one, after a
+/// start renews it, and after a relay run learns a revocation. The listing
+/// lives in its own file, which the release never reads.
+///
+/// Catches: a new member on the enrolment record, which the release refuses,
+/// so a host still running the release binary against the same operator home
+/// fails to start its mediated server.
+#[test]
+fn the_enrolment_record_keeps_the_shape_the_0_3_1_release_reads() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(state.lock().unwrap().uploads.len(), 1);
+    assert!(home.path().join("directory-listing.json").exists());
+    let released = released_0_3_1::load(home.path()).expect("0.3.1 reads the record connect wrote");
+    assert_eq!(Some(released.key_id), state.lock().unwrap().key_id);
+
+    let aged = now() + LIFETIME_SECS - 2 * 86_400;
+    state.lock().unwrap().held.as_mut().unwrap().2 = aged;
+    age_listing(home.path(), aged);
+    session_start(home.path(), "s-renewed");
+    assert_eq!(state.lock().unwrap().uploads.len(), 2);
+    released_0_3_1::load(home.path()).expect("0.3.1 reads the record after a renewal");
+
+    state.lock().unwrap().revoked = Some(("2026-09-06T08:00:00Z", "owner"));
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(output.status.success());
+    let released =
+        released_0_3_1::load(home.path()).expect("0.3.1 reads the record after a revocation");
+    assert_eq!(released.revoked_at.as_deref(), Some("2026-09-06T08:00:00Z"));
+
+    let output = commonmeasure(home.path(), &["disconnect"]);
+    assert!(output.status.success());
+    assert!(
+        !home.path().join("directory-listing.json").exists(),
+        "the listing goes with the enrolment"
+    );
+    server.stop();
+}
+
+/// A refused upload keeps the enrolment, says why on `connect`'s account
+/// and on every session record, and a session start within the hour does
+/// not ask again.
+#[test]
+fn a_refused_directory_proof_leaves_the_enrolment_standing_and_the_record_says_why() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        refuse_upload: Some((422, "created is later than now plus 60 seconds")),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("directory proof: not accepted: the hub refused the proof (422)"),
+        "{stdout}"
+    );
+    assert!(home.path().join("enrolment.json").exists());
+    let uploads = state.lock().unwrap().uploads.len();
+    assert!(uploads >= 1);
+
+    session_start(home.path(), "s-refused");
+    assert_eq!(
+        state.lock().unwrap().uploads.len(),
+        uploads,
+        "a start within the hour of a failure does not try again"
+    );
+    let identity = &edge_identity_records(home.path(), "s-refused")[0]["payload"];
+    let unlisted = identity["unlisted"].as_str().expect("unlisted");
+    assert!(unlisted.contains("created is later than now"), "{unlisted}");
+    assert!(usable_in_directory(&server.url()).is_empty());
+    server.stop();
+}
+
+/// A hub that serves its directory from another authority than the origin
+/// this edge enrolled under gets no proof: the edge signs only for the
+/// origin its requests name.
+#[test]
+fn no_proof_is_made_for_an_authority_the_edge_did_not_enrol_under() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("elsewhere.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(
+        stdout.contains("serves its key directory from elsewhere.example"),
+        "{stdout}"
+    );
+    assert!(state.lock().unwrap().uploads.is_empty());
+    server.stop();
+}
+
 #[test]
 fn disconnect_with_the_hub_unreachable_removes_the_files_and_says_the_key_must_be_revoked_there() {
     let home = tempfile::tempdir().unwrap();
@@ -632,8 +1098,8 @@ fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        !output.status.success(),
-        "pinned, but the first synchronisation activated nothing, so the exit says so: {stdout}"
+        output.status.success(),
+        "enrolled while awaiting the first revision: {stdout}"
     );
 
     let deployment: Value =
@@ -659,22 +1125,31 @@ fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
 
     // What was said: the pin, and the first synchronisation's outcome. This
     // hub has published no revision, so its desired route answers 404, the
-    // synchronisation activates nothing, and the command exits non-zero
-    // after the account so a scripted setup sees it; the pin stands.
+    // synchronisation activates nothing, and enrolment succeeds while
+    // explicitly awaiting the first revision; the pin stands.
     assert!(
         stdout.contains("deployment  managed: signer hub-policy-test pinned in"),
         "{stdout}"
     );
     assert!(stdout.contains("first policy sync:"), "{stdout}");
-    assert!(stdout.contains("outcome       unreachable"), "{stdout}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("outcome       no_revision"), "{stdout}");
     assert!(
-        stderr.contains("did not activate a policy (unreachable)"),
-        "{stderr}"
+        stdout.contains("waiting for the organisation's first policy revision"),
+        "{stdout}"
     );
+    assert!(!home.path().join("policy.json").exists());
+    assert!(!home.path().join("managed/last-known-good.json").exists());
+    let sync = commonmeasure(home.path(), &["policy", "sync"]);
+    assert!(!sync.status.success(), "absence is not convergence");
     let output = commonmeasure(home.path(), &["status", "--json"]);
     let status: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(status["deployment_mode"], json!("managed"), "{status}");
+    assert_eq!(
+        status["desired"]["outcome"],
+        json!("no_revision"),
+        "{status}"
+    );
+    assert!(status["applied"]["revision"].is_null(), "{status}");
 
     // Leaving the hub takes the deployment pinned to it along.
     let output = commonmeasure(home.path(), &["disconnect"]);
@@ -897,15 +1372,14 @@ fn a_refused_exchange_writes_nothing() {
 }
 
 /// The whole enrolment life against a running Common Measure Hub, driven
-/// by this binary: the real exchange, the key in the hub's directory,
-/// revocation from the hub's API, the next relay run learning it, and
+/// by this binary: the real exchange, the key in the hub's directory with a
+/// member it signed that verifies under the per-key rule, revocation from
+/// the hub's API taking it out, the next relay run learning it, and
 /// disconnect. Ignored by default because it needs a hub. To run it:
 ///
-/// 1. In a checkout of the hub repository, start Postgres, apply migrations
-///    and run the server with `IDENTITY_ORIGIN` set (its README's
-///    quickstart), with an organisation whose owner has a session; the
-///    hub's `crates/server/tests/fixtures/setup.sql` is one way to seed
-///    one.
+/// 1. Run a Common Measure Hub server with its database migrated and
+///    `IDENTITY_ORIGIN` set, with an organisation whose owner has a
+///    session.
 /// 2. Export `COMMONMEASURE_TEST_HUB` (the server's base URL, e.g.
 ///    `http://127.0.0.1:8080`) and `COMMONMEASURE_TEST_HUB_SESSION` (the
 ///    owner's raw session token, sent as the `__Host-session` cookie).
@@ -940,18 +1414,32 @@ fn a_real_hub_enrols_revokes_and_disconnects_this_edge() {
         let body = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
         (response.status, body)
     };
-    let directory = || -> Value {
+    // The directory as a verifier reads it: the body, and the keys the
+    // per-key rule lets it use, checked against the authority the hub
+    // serves it from with no hub function involved.
+    let directory = |authority: &str| -> (Value, Vec<String>) {
         let response = send(
             &format!("{hub_url}/.well-known/http-message-signatures-directory"),
             Request::get("/"),
         )
         .expect("the hub answers");
         assert_eq!(response.status, 200);
-        assert!(
-            response.headers.get("Signature-Input").is_some(),
-            "the directory is signed"
-        );
-        serde_json::from_slice(&response.body).expect("json")
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+        let usable = webbotauth::usable_keys(
+            &body,
+            response.headers.get("Signature-Input"),
+            response.headers.get("Signature"),
+            authority,
+            now(),
+        )
+        .expect("a directory a verifier can read");
+        for (kid, reason) in &usable.refused {
+            println!("directory key {kid} not usable: {reason}");
+        }
+        (
+            serde_json::from_str(&body).expect("json"),
+            usable.keys.into_keys().collect(),
+        )
     };
     let kids = |directory: &Value| -> Vec<String> {
         directory["keys"]
@@ -995,10 +1483,31 @@ fn a_real_hub_enrols_revokes_and_disconnects_this_edge() {
     let key_id = enrolment["key_id"].as_str().expect("key id").to_owned();
     assert!(!stdout.contains("ak_"), "the ingest key was printed");
 
-    println!("\n## 4. The key is in the hub's signed directory and in the owner's listing");
-    let listed = directory();
+    println!(
+        "\n## 4. The key is in the hub's directory with a member it signed, and in the owner's \
+         listing"
+    );
+    let origin = enrolment["identity"]["origin"].as_str().expect("origin");
+    let authority = origin
+        .split_once("://")
+        .map(|(_, rest)| rest.trim_end_matches('/'))
+        .expect("an absolute origin")
+        .to_owned();
+    assert!(
+        serde_json::from_slice::<Value>(
+            &std::fs::read(home.path().join("directory-listing.json")).unwrap()
+        )
+        .unwrap()["stated"]["expires_at"]
+            .is_string(),
+        "connect recorded the proof the hub holds"
+    );
+    let (listed, usable) = directory(&authority);
     assert!(kids(&listed).contains(&key_id));
-    println!("directory kids: {:?}", kids(&listed));
+    assert!(
+        usable.contains(&key_id),
+        "the enrolled key is listed with a member that verifies under it"
+    );
+    println!("directory kids: {:?}; usable: {usable:?}", kids(&listed));
     let (status, keys) = owner("GET", "/api/v1/enrolment/keys", None);
     assert_eq!(status, 200);
     let ours = keys
@@ -1030,9 +1539,10 @@ fn a_real_hub_enrols_revokes_and_disconnects_this_edge() {
     let (status, _) = owner("DELETE", &format!("/api/v1/enrolment/keys/{key_id}"), None);
     assert_eq!(status, 204);
     println!("DELETE /api/v1/enrolment/keys/<key_id> -> 204");
-    let after = directory();
+    let (after, usable) = directory(&authority);
     assert!(!kids(&after).contains(&key_id));
-    println!("directory kids: {:?}", kids(&after));
+    assert!(!usable.contains(&key_id));
+    println!("directory kids: {:?}; usable: {usable:?}", kids(&after));
     let output = commonmeasure(home.path(), &["relay"]);
     assert!(
         output.status.success(),
@@ -1067,5 +1577,43 @@ fn a_real_hub_enrols_revokes_and_disconnects_this_edge() {
     );
     for file in ["relay.json", "edge-key.json", "enrolment.json"] {
         assert!(!home.path().join(file).exists());
+    }
+}
+
+/// Only the explicit absence response can finish enrolment without a revision.
+#[test]
+fn managed_connect_still_fails_on_errors_and_keeps_the_local_policy() {
+    for response in [
+        (404, r#"{"detail":"not found"}"#),
+        (404, "not JSON"),
+        (401, r#"{"detail":"a valid credential is required"}"#),
+        (403, r#"{"detail":"forbidden"}"#),
+        (
+            500,
+            r#"{"detail":"no policy revision has been published for this organisation"}"#,
+        ),
+        (
+            200,
+            r#"{"detail":"no policy revision has been published for this organisation"}"#,
+        ),
+    ] {
+        let server = hub(Arc::new(Mutex::new(HubState {
+            policy_response: Some(response),
+            ..HubState::default()
+        })));
+        let home = tempfile::tempdir().unwrap();
+        let policy = br#"{"policy_mode":"strict"}"#;
+        std::fs::write(home.path().join("policy.json"), policy).unwrap();
+        let output = commonmeasure(
+            home.path(),
+            &["connect", &server.url(), "--token", TOKEN, "--managed"],
+        );
+        assert!(!output.status.success(), "{response:?}");
+        assert!(home.path().join("deployment.json").exists());
+        assert_eq!(
+            std::fs::read(home.path().join("policy.json")).unwrap(),
+            policy
+        );
+        assert!(!home.path().join("managed/last-known-good.json").exists());
     }
 }

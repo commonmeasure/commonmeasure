@@ -1310,3 +1310,507 @@ fn the_claude_code_reader_refuses_another_hosts_payload_shape() {
         "a foreign payload must leave no record"
     );
 }
+
+/// The variables other hosts set for every hook they run, which the hook
+/// command reads; removed from each test process so the machine running the
+/// tests cannot decide the result.
+const HOST_MARKERS: [&str; 4] = [
+    "CURSOR_PROJECT_DIR",
+    "GEMINI_SESSION_ID",
+    "DEVIN_PROJECT_DIR",
+    "GROK_SESSION_ID",
+];
+
+/// Run one hook with a chosen environment on top of a clean one.
+fn hook_in_environment(
+    home: &Path,
+    host: &str,
+    event: &str,
+    environment: &[(&str, &str)],
+    payload: &Value,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    command
+        .args(["hook", event, "--host", host])
+        .env("COMMONMEASURE_HOME", home);
+    for marker in HOST_MARKERS {
+        command.env_remove(marker);
+    }
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary should start");
+    writeln!(child.stdin.as_mut().unwrap(), "{payload}").unwrap();
+    child.wait_with_output().expect("wait")
+}
+
+/// The four hooks `install claude` registers, each with a payload in Claude
+/// Code's own shape and nothing another host's shape adds.
+fn claude_shaped_events(session: &str) -> [(&'static str, Value); 4] {
+    [
+        (
+            "session-start",
+            json!({"session_id": session, "hook_event_name": "SessionStart",
+                   "cwd": "/work", "source": "startup"}),
+        ),
+        (
+            "post-tool-use",
+            json!({"session_id": session, "hook_event_name": "PostToolUse", "cwd": "/work",
+                   "tool_name": "WebFetch", "tool_input": {"url": "https://www.example.org/"},
+                   "tool_response": {"result": "Enough page text to count as grounded."}}),
+        ),
+        (
+            "user-prompt-submit",
+            json!({"session_id": session, "hook_event_name": "UserPromptSubmit", "cwd": "/work",
+                   "prompt_id": "p-1", "prompt": "read https://www.example.org/report"}),
+        ),
+        (
+            "stop",
+            json!({"session_id": session, "hook_event_name": "Stop", "cwd": "/work",
+                   "prompt_id": "p-1"}),
+        ),
+    ]
+}
+
+/// Gemini CLI (after `gemini hooks migrate`), the Devin CLI and Grok Build run
+/// the hooks Claude Code's registration names, and the Devin CLI sends them a
+/// payload in Claude Code's shape. Told it is reading Claude Code, the command
+/// refuses under each host's own variable on all four events: exit zero,
+/// nothing recorded, nothing printed. Without the variable the same payloads
+/// are recorded and the nudge is printed, so the refusal is the variable's.
+#[test]
+fn the_claude_code_reader_refuses_under_gemini_devin_and_grok_environments() {
+    for (marker, value) in [
+        ("GEMINI_SESSION_ID", "8195e8c6-94a2-4f8d-b6ca-545246a50ea6"),
+        ("DEVIN_PROJECT_DIR", "/work"),
+        ("GROK_SESSION_ID", "grok-1"),
+    ] {
+        let home = tempfile::tempdir().expect("tempdir");
+        for (event, payload) in claude_shaped_events("s-foreign") {
+            // Gemini CLI and Grok Build also set CLAUDE_PROJECT_DIR, which is
+            // therefore not evidence of Claude Code.
+            let output = hook_in_environment(
+                home.path(),
+                "claude-code",
+                event,
+                &[(marker, value), ("CLAUDE_PROJECT_DIR", "/work")],
+                &payload,
+            );
+            assert!(output.status.success(), "{marker} {event}");
+            assert!(
+                output.stdout.is_empty(),
+                "{marker} {event}: {:?}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        assert!(
+            !home.path().join("sessions").exists()
+                || std::fs::read_dir(home.path().join("sessions"))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+            "a Claude-shaped payload under {marker} left a record"
+        );
+    }
+
+    // Gemini CLI's own SessionStart payload, as a probe captured it, is
+    // refused under its variable and, carrying `timestamp`, by its shape too.
+    let gemini = json!({"session_id": "8195e8c6-94a2-4f8d-b6ca-545246a50ea6",
+        "transcript_path": "~/.gemini/tmp/work/chats/session-2026-09-14T16-45-8195e8c6.jsonl",
+        "cwd": "/work", "hook_event_name": "SessionStart",
+        "timestamp": "2026-09-14T16:45:39.715Z", "source": "startup"});
+    let home = tempfile::tempdir().expect("tempdir");
+    for environment in [&[("GEMINI_SESSION_ID", "8195e8c6")][..], &[]] {
+        let output = hook_in_environment(
+            home.path(),
+            "claude-code",
+            "session-start",
+            environment,
+            &gemini,
+        );
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty(), "{environment:?}");
+    }
+    assert!(!home.path().join("sessions").exists());
+
+    let home = tempfile::tempdir().expect("tempdir");
+    for (event, payload) in claude_shaped_events("s-claude") {
+        let output = hook_in_environment(
+            home.path(),
+            "claude-code",
+            event,
+            &[("CLAUDE_PROJECT_DIR", "/work")],
+            &payload,
+        );
+        assert!(output.status.success());
+        if event == "session-start" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("context_fetch"));
+        }
+    }
+    let events: Vec<String> = records(home.path(), "s-claude")
+        .iter()
+        .map(|record| record["event"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    for expected in [
+        "nudge_issued",
+        "crossing_observed",
+        "prompt_sources",
+        "turn_started",
+        "turn_completed",
+    ] {
+        assert!(events.contains(&expected.to_owned()), "{events:?}");
+    }
+}
+
+/// A session id names a file under the operator home, so an id that is not a
+/// plain name, from any host reader, records nothing anywhere and the hook
+/// still exits zero. The session-start hook still prints the nudge, because
+/// delivery does not depend on the record.
+#[test]
+fn a_traversal_session_id_from_any_host_reader_records_nothing() {
+    let traversal = "../../escaped";
+    let prompt = "read https://www.example.org/report";
+    let readers = [
+        (
+            "claude-code",
+            json!({"session_id": traversal, "hook_event_name": "UserPromptSubmit",
+                   "prompt_id": "p-1", "prompt": prompt}),
+        ),
+        (
+            "codex",
+            json!({"session_id": traversal, "hook_event_name": "UserPromptSubmit",
+                   "turn_id": "t-1", "prompt": prompt}),
+        ),
+        (
+            "pi",
+            json!({"session_id": traversal, "hook_event_name": "UserPromptSubmit",
+                   "prompt": prompt}),
+        ),
+        (
+            "cursor",
+            json!({"conversation_id": traversal, "generation_id": "g-1",
+                   "hook_event_name": "beforeSubmitPrompt", "prompt": prompt}),
+        ),
+        (
+            "copilot-cli",
+            json!({"sessionId": traversal, "timestamp": 1789400000000i64, "cwd": "/work",
+                   "prompt": prompt}),
+        ),
+    ];
+    for (host, payload) in readers {
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().join("operator").join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        for event in [
+            "user-prompt-submit",
+            "post-tool-use",
+            "stop",
+            "session-start",
+        ] {
+            let output = hook_in_environment(&home, host, event, &[], &payload);
+            assert!(output.status.success(), "{host} {event}");
+            if event == "session-start" {
+                assert!(
+                    String::from_utf8_lossy(&output.stdout).contains("context_fetch"),
+                    "{host}: the nudge is still delivered"
+                );
+            }
+        }
+        let mut written = Vec::new();
+        let mut pending = vec![root.path().to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).expect("read") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    written.push(path);
+                }
+            }
+        }
+        assert!(
+            written.is_empty(),
+            "{host}: a traversal id wrote {written:?}"
+        );
+        // The same payload under a plain id is recorded, so the refusal is
+        // the id's.
+        let plain: Value =
+            serde_json::from_str(&payload.to_string().replace(traversal, "plain-session"))
+                .expect("payload");
+        let output = hook_in_environment(&home, host, "user-prompt-submit", &[], &plain);
+        assert!(output.status.success());
+        assert!(
+            !records(&home, "plain-session").is_empty(),
+            "{host}: a plain id recorded nothing"
+        );
+    }
+}
+
+/// The Copilot CLI's camelCase `postToolUse` payloads, in the shapes its
+/// hooks reference states: `web_fetch` is a grounded crossing hashed over
+/// `textResultForLlm` and recorded under the CLI's `sessionId` and its own
+/// tool name; `web_search` records each result URL, grounded none; our own
+/// tools under the CLI's `<server>-<tool>` spelling record nothing. The
+/// CLI keeps a tool result unchanged on empty output, so nothing is
+/// printed.
+#[test]
+fn a_copilot_post_tool_use_records_web_fetch_and_web_search_under_the_session_id() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "post-tool-use",
+        json!({
+            "sessionId": "cop-42", "timestamp": 1789400000000i64, "cwd": "/work/project",
+            "toolName": "web_fetch",
+            "toolArgs": {"url": "https://www.example.org/report", "max_length": 5000},
+            "toolResult": {"resultType": "success", "textResultForLlm": "The report says so."}
+        }),
+    );
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "post-tool-use",
+        json!({
+            "sessionId": "cop-42", "timestamp": 1789400001000i64, "cwd": "/work/project",
+            "toolName": "web_search", "toolArgs": {"query": "report"},
+            "toolResult": {"resultType": "success",
+                           "textResultForLlm": "1. https://www.example.org/a\n2. https://www.example.net/b"}
+        }),
+    );
+    assert!(output.status.success());
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "post-tool-use",
+        json!({
+            "sessionId": "cop-42", "timestamp": 1789400002000i64, "cwd": "/work/project",
+            "toolName": "commonmeasure-context_fetch", "toolArgs": {"url": "https://www.example.org/c"},
+            "toolResult": {"resultType": "success", "textResultForLlm": "{\"url\":\"https://www.example.org/c\"}"}
+        }),
+    );
+    assert!(output.status.success());
+
+    let recorded = records(home.path(), "cop-42");
+    let crossings: Vec<&Value> = recorded
+        .iter()
+        .filter(|r| r["event"] == "crossing_observed")
+        .map(|r| &r["payload"])
+        .collect();
+    assert_eq!(crossings.len(), 3, "{recorded:?}");
+    let fetch = crossings
+        .iter()
+        .find(|c| c["tool"] == "web_fetch")
+        .expect("the fetch");
+    assert_eq!(fetch["host"], "copilot-cli");
+    assert_eq!(fetch["session_id"], "cop-42");
+    assert_eq!(fetch["cwd"], "/work/project");
+    assert_eq!(fetch["url"], "https://www.example.org/report");
+    assert_eq!(fetch["grounded"], true);
+    assert_eq!(
+        fetch["content_hash"],
+        commonmeasure_types::canonical::sha256_digest(b"The report says so.")
+    );
+    let mut searched: Vec<&str> = crossings
+        .iter()
+        .filter(|c| c["tool"] == "web_search")
+        .map(|c| {
+            assert_eq!(c["grounded"], false);
+            c["url"].as_str().unwrap()
+        })
+        .collect();
+    searched.sort();
+    assert_eq!(
+        searched,
+        vec!["https://www.example.net/b", "https://www.example.org/a"]
+    );
+    assert!(
+        !crossings
+            .iter()
+            .any(|c| c["url"] == "https://www.example.org/c"),
+        "our own tool is not observed a second time"
+    );
+}
+
+/// The Copilot CLI's session start receives the nudge as the JSON field
+/// `additionalContext` and records the issuance with the CLI's `source`;
+/// `userPromptSubmitted` leaves the prompt's sources and a turn boundary,
+/// `agentStop` the other boundary. The CLI supplies no turn identifier, so
+/// none is recorded.
+#[test]
+fn a_copilot_session_is_nudged_and_bounded_in_the_clis_own_shapes() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "session-start",
+        json!({"sessionId": "cop-9", "timestamp": 1789400000000i64, "cwd": "/work/project",
+               "source": "new", "initialPrompt": "read the report"}),
+    );
+    assert!(output.status.success());
+    let answer: Value = serde_json::from_slice(&output.stdout).expect("JSON for the CLI");
+    assert!(
+        answer["additionalContext"]
+            .as_str()
+            .is_some_and(|text| text.contains("context_fetch")),
+        "{answer}"
+    );
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "user-prompt-submit",
+        json!({"sessionId": "cop-9", "timestamp": 1789400001000i64, "cwd": "/work/project",
+               "prompt": "read https://www.example.org/report"}),
+    );
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let output = hook_as(
+        home.path(),
+        "copilot-cli",
+        "stop",
+        json!({"sessionId": "cop-9", "timestamp": 1789400002000i64, "cwd": "/work/project",
+               "transcriptPath": "/tmp/none.jsonl", "stopReason": "end_turn",
+               "stop_hook_active": false}),
+    );
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let recorded = records(home.path(), "cop-9");
+    let find = |event: &str| {
+        recorded
+            .iter()
+            .find(|r| r["event"] == event)
+            .unwrap_or_else(|| panic!("{event} in {recorded:?}"))
+    };
+    let nudge = find("nudge_issued");
+    assert_eq!(nudge["payload"]["host"], "copilot-cli");
+    assert_eq!(nudge["payload"]["source"], "new");
+    find("prompt_sources");
+    let started = find("turn_started");
+    assert_eq!(started["payload"]["host"], "copilot-cli");
+    assert!(started["payload"].get("turn_id").is_none_or(Value::is_null));
+    find("turn_completed");
+    assert!(
+        !recorded.iter().any(|r| r["event"] == "context_snapshot"),
+        "the transcript reader is Claude Code's; no snapshot is claimed"
+    );
+}
+
+/// Payloads that are not the Copilot CLI's camelCase shape are refused by
+/// the Copilot CLI reader: exit zero, no record, and nothing printed, not
+/// even the nudge at session start.
+#[test]
+fn the_copilot_reader_refuses_other_shapes() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let claude = json!({
+        "session_id": "not-cop", "hook_event_name": "PostToolUse", "cwd": "/work",
+        "tool_name": "WebFetch", "tool_input": {"url": "https://www.example.org/"},
+        "tool_response": {"result": "Page text."}
+    });
+    let snake = json!({
+        "hook_event_name": "PostToolUse", "session_id": "not-cop",
+        "timestamp": "2026-09-14T09:00:00.000Z", "cwd": "/work", "tool_name": "WebFetch",
+        "tool_input": {"url": "https://www.example.org/"},
+        "tool_result": {"result_type": "success", "text_result_for_llm": "Page text."}
+    });
+    for payload in [claude, snake] {
+        for event in [
+            "post-tool-use",
+            "session-start",
+            "user-prompt-submit",
+            "stop",
+        ] {
+            let output = hook_as(home.path(), "copilot-cli", event, payload.clone());
+            assert!(output.status.success());
+            assert!(output.stdout.is_empty(), "{event}: {:?}", output.stdout);
+        }
+    }
+    assert!(
+        !home.path().join("sessions").exists()
+            || std::fs::read_dir(home.path().join("sessions"))
+                .unwrap()
+                .next()
+                .is_none(),
+        "a foreign payload must leave no record"
+    );
+}
+
+/// The Copilot CLI runs a repository's `.claude/settings.json` hooks and VS
+/// Code's Copilot Chat runs `~/.claude/settings.json` hooks, each with a
+/// snake_case payload that carries Claude Code's own field names beside a
+/// `timestamp` Claude Code never sends. A command told `--host claude-code`
+/// refuses both shapes on every event: exit zero, no record, no nudge.
+#[test]
+fn the_claude_code_reader_refuses_the_copilot_and_vs_code_snake_case_shapes() {
+    let home = tempfile::tempdir().expect("tempdir");
+    // The Copilot CLI's VS Code compatible format, one payload per event its
+    // reference documents, tool names mapped to Claude Code's.
+    let copilot = [
+        (
+            "session-start",
+            json!({"hook_event_name": "SessionStart", "session_id": "cp-1",
+                   "timestamp": "2026-09-14T09:00:00.000Z", "cwd": "/work", "source": "startup"}),
+        ),
+        (
+            "user-prompt-submit",
+            json!({"hook_event_name": "UserPromptSubmit", "session_id": "cp-1",
+                   "timestamp": "2026-09-14T09:00:01.000Z", "cwd": "/work",
+                   "prompt": "read https://www.example.org/"}),
+        ),
+        (
+            "post-tool-use",
+            json!({"hook_event_name": "PostToolUse", "session_id": "cp-1",
+                   "timestamp": "2026-09-14T09:00:02.000Z", "cwd": "/work",
+                   "tool_name": "WebFetch", "tool_input": {"url": "https://www.example.org/"},
+                   "tool_result": {"result_type": "success", "text_result_for_llm": "Page text."}}),
+        ),
+        (
+            "stop",
+            json!({"hook_event_name": "Stop", "session_id": "cp-1",
+                   "timestamp": "2026-09-14T09:00:03.000Z", "cwd": "/work",
+                   "transcript_path": "/tmp/t.jsonl", "stop_reason": "end_turn",
+                   "stop_hook_active": false}),
+        ),
+    ];
+    // VS Code's Copilot Chat hooks, with the fields its hooks page's
+    // examples read: `sessionId` and `timestamp` beside snake_case tool
+    // fields and VS Code's own tool names. Without the refusal the prompt
+    // would be recorded under an unknown session and the nudge printed.
+    let vscode = [
+        (
+            "session-start",
+            json!({"sessionId": "vs-1", "timestamp": "2026-09-14T09:00:00.000Z"}),
+        ),
+        (
+            "user-prompt-submit",
+            json!({"sessionId": "vs-1", "timestamp": "2026-09-14T09:00:01.000Z",
+                   "prompt": "read https://www.example.org/"}),
+        ),
+        (
+            "post-tool-use",
+            json!({"sessionId": "vs-1", "timestamp": "2026-09-14T09:00:02.000Z",
+                   "tool_name": "runTerminalCommand",
+                   "tool_input": {"command": "curl https://www.example.org/"}}),
+        ),
+    ];
+    for (event, payload) in copilot.into_iter().chain(vscode) {
+        let output = hook_as(home.path(), "claude-code", event, payload);
+        assert!(output.status.success(), "the tool call is never failed");
+        assert!(output.stdout.is_empty(), "{event}: {:?}", output.stdout);
+    }
+    assert!(
+        !home.path().join("sessions").exists()
+            || std::fs::read_dir(home.path().join("sessions"))
+                .unwrap()
+                .next()
+                .is_none(),
+        "a foreign payload must leave no record"
+    );
+}

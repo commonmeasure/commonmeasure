@@ -26,17 +26,20 @@ authoritative technical definitions live in the contracts under
 - **Hub** — Common Measure Hub, the service Common Measure Ltd hosts at
   hub.commonmeasure.ai, one service serving many organisations, that
   receives cleared evidence from many edges and distributes
-  organisation-wide policy. Both halves of policy distribution are built,
-  the hub's signing and the edge's acceptance, and they have not yet been
-  run against each other. It is never in the decision path for a crossing,
-  and its absence never relaxes local policy.
+  organisation-wide policy as signed revisions the edge accepts. It is never
+  in the decision path for a crossing, and its absence never relaxes local
+  policy.
 - **Harness** — the agent system an operator runs, whether bought or built.
   Common Measure is a component inside it, not a harness itself.
 - **Host** — the specific program the product registers with: Claude Code
   (hooks and the MCP server), Codex (the MCP server; one table serves the
   Codex CLI, the ChatGPT desktop app and the Codex IDE extension), Pi (an
-  extension that runs the MCP server), Claude Desktop (the MCP server) or
-  Cursor (the MCP server and hooks). A host supplies session identity
+  extension that runs the MCP server), Claude Desktop (the MCP server),
+  Cursor (the MCP server and hooks), the Copilot CLI (the MCP server and
+  hooks) or VS Code (the MCP server). A Chrome extension observes three
+  browser answer surfaces, recorded as the hosts `chatgpt-web`,
+  `google-ai-overview` and `bing-copilot-search` and registered with
+  `commonmeasure install chrome`. A host supplies session identity
   and, where it can, lifecycle hooks. In session evidence `host` is the
   registration's word for the host, `client` is the MCP client's own name
   and version, and `host_name` is the hostname of a source URL, not this
@@ -107,6 +110,10 @@ authoritative technical definitions live in the contracts under
   machine: a session's running total of them, carried as `refused` on every
   batch the relay sends for the session, with no address, reason or hash.
   A receiver keeps the larger value it has seen.
+- **Source policy** — the operator's policy file, `policy.json`: the mode,
+  the rules admission applies, the scopes and principals that replace them,
+  and the clearance for records to leave. Its format, and every check the
+  loader makes, is [`docs/contracts/source-policy.md`](contracts/source-policy.md).
 - **Admission** — the yes/no decision on whether retrieved content may
   enter the model's context window, made by deterministic policy rules.
 - **Access rule** — one ordered host rule in a policy: a host pattern and

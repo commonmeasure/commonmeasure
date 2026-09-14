@@ -84,9 +84,10 @@ pub struct Recording {
 #[serde(deny_unknown_fields)]
 struct ReplayManifest {
     manifest_version: String,
-    /// Where the captures came from, for a human reader.
-    #[allow(dead_code)]
-    derived_from: String,
+    /// Where the captures came from, for a human reader. Accepted and never
+    /// read, because an unknown field refuses the manifest.
+    #[serde(rename = "derived_from")]
+    _derived_from: String,
     recordings: Vec<Recording>,
 }
 

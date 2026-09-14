@@ -1302,7 +1302,7 @@ where uncompressed schemas scored 2.6%.[^113]
 On how far you can cut: one study found 92.7% success at 75% retained context
 against a 93.8% full-context baseline, with sharp divergence between 50% and
 35% retention.[^114] Treat ~75% as safe and ~35% as dangerous — one paper,
-days old at the time of writing — and measure where your own cliff sits.
+unreplicated — and measure where your own cliff sits.
 
 ### What is not known
 

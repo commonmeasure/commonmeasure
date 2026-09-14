@@ -76,18 +76,19 @@ Grouped by question, the committed runs read:
 
 | question | product | brand | editorial | mixed |
 |---|---|---|---|---|
-| availability | **1.50** | 0.33 | 0.33 | 1.39 |
-| compatibility | **1.50** | 1.00 | 0.33 | 1.39 |
-| recommendation | 1.17 | 0.33 | 0.67 | **1.39** |
+| availability | **1.50** | 0.40 | 0.40 | 1.45 |
+| compatibility | **1.50** | 1.07 | 0.40 | 1.40 |
+| recommendation | 1.17 | 0.40 | 0.73 | **1.45** |
 
 **Mixing wins the recommendation question and loses the other two.** The
 recommendation rubric needs the editorial pick *and* the product facts, so
 no single class covers it: product data measures 2/3, editorial 1/3, mixed
 3/3. Availability and compatibility are covered by the product-data class
-alone at freshness 1.00, so the mixed window's two 2025-dated documents
-(the stale brand page and the outdated review, each within the rubric's
-blind spot and outside the 180-day freshness horizon) cost 0.22 of
-freshness and add nothing the objective scores. That trade-off is what the
+alone at freshness 1.00, so the mixed window's 2025-dated documents (the
+stale brand page in both windows, and the outdated review in the
+compatibility window, each within the rubric's blind spot and outside the
+180-day freshness horizon) cost 0.10 and 0.20 of freshness and add nothing
+the objective scores. That trade-off is what the
 mixed-supply claim says: mixing helps where the classes complement each
 other, and adding documents to a class that covers the rubric with fresh
 documents does not improve it.
@@ -137,8 +138,8 @@ document is admitted with its unknown state on the record. In the governed
 run it is refused at
 admission: the plan's `policy_decisions` carry the refusal with the reason
 ("No supplier declared a licence this job accepts" — unknown is not
-permitted, [`docs/FAIL-POLICY.md`](FAIL-POLICY.md)), the window assembles eight parts instead
-of nine with the refused document in none of them, and inference runs only
+permitted, [`docs/FAIL-POLICY.md`](FAIL-POLICY.md)), the window assembles nine parts instead
+of ten with the refused document in none of them, and inference runs only
 over what admission let cross:
 
 ```sh
@@ -154,9 +155,9 @@ PY
 ```
 
 The refusal costs the governed run no coverage (3/3 without the capture)
-and 0.03 of freshness: the refused capture is dated 18 July 2026, fresh
-under the sealed as-of, so the fraction drops from 0.78 over nine parts to
-0.75 over eight, which is 0.01 of objective. That cost is this rubric's
+and 0.01 of freshness: the refused capture is dated 18 July 2026, fresh
+under the sealed as-of, so the fraction drops from 0.90 over ten parts to
+0.89 over nine, which is 0.006 of objective. That cost is this rubric's
 result, read from the record; it is not a general claim about what
 governance costs.
 

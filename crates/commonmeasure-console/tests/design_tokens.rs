@@ -1,8 +1,8 @@
 //! The console's contrast gate.
 //!
-//! The design tokens in `console/styles.css` are shared with the stylesheet
-//! of the hub (kept in the hub repository), and each carries a
-//! measured WCAG 2.2 obligation (the hub's `docs/design.md` holds the table).
+//! The design tokens in `console/styles.css` are shared with Common Measure
+//! Hub's stylesheet, and each carries a measured WCAG 2.2 obligation whose
+//! table the hub keeps.
 //! The hub enforces them with a Node script in its build; this test enforces
 //! the same obligations here, offline, so a token edit that breaks one fails
 //! the gate in either repo.
@@ -156,8 +156,8 @@ fn tokens_meet_their_contrast_obligations() {
 }
 
 // ---------------------------------------------------------------------------
-// The drift gate. The palette's canonical block lives in the hub's stylesheet
-// (`web/src/routes/layout.css` in the hub repository); the console and the guide
+// The drift gate. The palette's canonical block lives in the hub's stylesheet;
+// the console and the guide
 // carry hand-copied subsets. Hand-synced copies drift silently, so the copies
 // are held the way the vendored htmx build is held: `RECORDED_DIGEST` below is
 // the SHA-256 of the canonical palette, and these tests fail loudly when any
@@ -172,7 +172,7 @@ fn tokens_meet_their_contrast_obligations() {
 const GUIDE: &str = include_str!("../../../docs/guide/guide.css");
 
 /// SHA-256 of the canonical palette, recorded 2026-09-02 from the hub's
-/// `web/src/routes/layout.css`.
+/// stylesheet.
 const RECORDED_DIGEST: &str = "816cd80ada0f9b959d747ebb71599d83ce259ae31e0bf2dc356ec7dc0db60029";
 
 /// A palette token as written: name, whitespace-collapsed value.

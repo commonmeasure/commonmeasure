@@ -1756,6 +1756,78 @@ mod operator_credentials {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("chmod 600"), "{stderr}");
     }
+
+    /// A server started with an operator file and asked for nothing leaves no
+    /// session file, as one without a file does: the load is recorded before
+    /// the first record a tool call leaves, not at start. `context_status`
+    /// records nothing and so writes nothing. The first fetch writes
+    /// `credentials_loaded`, then `client_identified`, then what it records.
+    #[test]
+    fn the_credentials_record_waits_for_the_first_tool_call_that_records() {
+        let corpus = corpus();
+        let home = tempfile::tempdir().expect("tempdir");
+        write_policy(
+            home.path(),
+            r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+        );
+        let origin = origin("after the start records");
+        write_credentials(
+            home.path(),
+            &format!(
+                "COMMONMEASURE_INTERNAL_CORPUS={}\n",
+                corpus.path().display()
+            ),
+        );
+        let log = home.path().join("sessions/test-session.ndjson");
+        let client = json!({"name": "goose-cli", "version": "1.50.0"});
+
+        let output = spawn(home.path(), &[], &[initialize(Some(client.clone()))]);
+        assert!(output.status.success());
+        assert_eq!(responses(&output).len(), 1);
+        assert!(!log.exists(), "an initialised server wrote a session file");
+
+        let output = spawn(
+            home.path(),
+            &[],
+            &[
+                initialize(Some(client.clone())),
+                call("context_status", json!({})),
+            ],
+        );
+        assert!(output.status.success());
+        assert_eq!(
+            payload(&responses(&output)[1])["credentials"]["present"],
+            true
+        );
+        assert!(!log.exists(), "a status call wrote a session file");
+
+        let output = spawn(
+            home.path(),
+            &[],
+            &[
+                initialize(Some(client.clone())),
+                call("context_fetch", json!({"url": origin.url()})),
+                call("context_fetch", json!({"url": origin.url()})),
+            ],
+        );
+        assert!(output.status.success());
+        assert_eq!(responses(&output)[1]["result"]["isError"], false);
+        let events: Vec<String> = records(home.path())
+            .iter()
+            .map(|record| record["event"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(events[0], "credentials_loaded", "{events:?}");
+        assert_eq!(events[1], "client_identified", "{events:?}");
+        assert_eq!(
+            events.iter().filter(|e| *e == "credentials_loaded").count(),
+            1,
+            "written once per server: {events:?}"
+        );
+        assert!(
+            events.len() > 2,
+            "the search recorded after them: {events:?}"
+        );
+    }
 }
 
 /// Every mediated crossing names the policy that ruled on it, by the same
@@ -3305,6 +3377,96 @@ mod identity {
         assert!(unsigned.contains("revoked by the owner"), "{unsigned}");
     }
 
+    /// A listed key is usable only with a current proof its holder signed
+    /// for the authority serving the directory, which is Cloudflare's rule.
+    ///
+    /// Catches: a verifier, or a hub, treating a listed key as enough. A key
+    /// listed with no proof, with a proof for another authority, or with a
+    /// proof that has expired verifies nothing, and the edge's signed request
+    /// is challenged exactly as an unsigned one is.
+    #[test]
+    fn a_key_listed_without_a_current_proof_for_this_directory_is_challenged() {
+        use base64::Engine as _;
+        use commonmeasure_harness::identity::{EdgeKey, Identity};
+
+        let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let site = guarded_publisher(Arc::clone(&directory), Arc::clone(&seen));
+        let page = format!("{}/guidance", site.url());
+        let home = tempfile::tempdir().expect("tempdir");
+        write_policy(
+            home.path(),
+            r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+        );
+        webbotauth::enrol(
+            home.path(),
+            "https://hub.example",
+            ORIGIN,
+            &mut directory.lock().expect("lock"),
+        );
+        let admitted = fetch(home.path(), &page);
+        assert_eq!(admitted["result"]["isError"], false, "{admitted}");
+
+        let public: [u8; 32] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(
+                EdgeKey::load(home.path())
+                    .expect("load")
+                    .expect("a key")
+                    .jwk_x(),
+            )
+            .expect("base64url")
+            .try_into()
+            .expect("32 bytes");
+        let identity = Identity::load(home.path()).expect("identity");
+        let signer = identity.signer().expect("signs");
+        let now = chrono::Utc::now().timestamp();
+        let for_other = signer
+            .directory_proof("other.example", now, webbotauth::LIFETIME_SECS)
+            .expect("sign");
+        let expired = signer
+            .directory_proof("hub.example", now - 7_200, 3_600)
+            .expect("sign");
+
+        let challenged = |publish: &dyn Fn(&mut webbotauth::Directory), why: &str| {
+            publish(&mut directory.lock().expect("lock"));
+            let _ = std::fs::remove_file(home.path().join("sessions/test-session.ndjson"));
+            seen.lock().expect("lock").refused.clear();
+            let answer = fetch(home.path(), &page);
+            assert_eq!(answer["result"]["isError"], true, "{why}: {answer}");
+            let crossing = &crossings(home.path())[0]["payload"];
+            assert!(
+                crossing["identity"]["key_id"].is_string(),
+                "{why}: the request was signed"
+            );
+            assert_eq!(crossing["http_status"], json!(403), "{why}");
+            let refused = seen.lock().expect("lock").refused.clone();
+            assert!(
+                refused
+                    .iter()
+                    .any(|reason| reason.contains("listed but not usable") && reason.contains(why)),
+                "{why}: {refused:?}"
+            );
+        };
+        challenged(
+            &|directory| {
+                directory.publish_unsigned(&public);
+            },
+            "no Signature-Input member names this key",
+        );
+        challenged(
+            &|directory| {
+                directory.publish(&public, &for_other.signature_input, &for_other.signature);
+            },
+            "does not verify",
+        );
+        challenged(
+            &|directory| {
+                directory.publish(&public, &expired.signature_input, &expired.signature);
+            },
+            "not valid now",
+        );
+    }
+
     /// A source that declares a licence in `robots.txt`, so the terms are
     /// read before the page is requested and the page fetch carries the
     /// correlation id of Content Telemetry section 7.2.
@@ -3600,4 +3762,303 @@ Allow: /
             &["@authority".to_owned(), "signature-agent".to_owned()]
         );
     }
+}
+
+/// Version negotiation as the protocol states it: a server that supports the
+/// requested revision answers with it, and otherwise with the latest it
+/// supports. Each of the four revisions a probe sent is answered, and the
+/// session records what was asked and what was agreed beside the client's
+/// name. Under 2025-03-26 the implementation carries no `title`, which that
+/// revision's schema does not define.
+#[test]
+fn initialize_is_answered_with_the_requested_protocol_version_when_the_server_serves_it() {
+    let origin = origin("negotiated");
+    for (requested, answered) in [
+        ("2024-11-05", "2025-11-25"),
+        ("2025-03-26", "2025-03-26"),
+        ("2025-06-18", "2025-06-18"),
+        ("2025-11-25", "2025-11-25"),
+    ] {
+        let home = tempfile::tempdir().expect("tempdir");
+        write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+        let responses = converse(
+            home.path(),
+            &[
+                json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                       "params": {"protocolVersion": requested, "capabilities": {},
+                                  "clientInfo": {"name": "junie-client", "version": "1.0.0"}}}),
+                call("context_fetch", json!({"url": origin.url()})),
+            ],
+        );
+        assert_eq!(
+            responses[0]["result"]["protocolVersion"], answered,
+            "asked for {requested}"
+        );
+        assert_eq!(
+            responses[0]["result"]["serverInfo"].get("title").is_some(),
+            answered != "2025-03-26",
+            "asked for {requested}: {}",
+            responses[0]
+        );
+        assert_eq!(responses[1]["result"]["isError"], false, "{requested}");
+        let identified = records(home.path())
+            .into_iter()
+            .find(|record| record["event"] == "client_identified")
+            .expect("client_identified");
+        assert_eq!(identified["payload"]["protocol_version"], requested);
+        assert_eq!(
+            identified["payload"]["negotiated_protocol_version"],
+            answered
+        );
+    }
+
+    // A client that names no version is answered with the latest.
+    let home = tempfile::tempdir().expect("tempdir");
+    let responses = converse(
+        home.path(),
+        &[json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})],
+    );
+    assert_eq!(responses[0]["result"]["protocolVersion"], "2025-11-25");
+}
+
+/// 2025-03-26 requires a server to accept JSON-RPC batches, and 2025-06-18
+/// removed them. Under the first a batch is answered with an array of the
+/// responses its requests are owed, notifications owing none, and an
+/// `initialize` inside one is refused; under the second a batch is one
+/// invalid request, answered rather than left to hang.
+#[test]
+fn a_batch_is_answered_under_2025_03_26_and_refused_under_later_revisions() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let init = |version: &str| {
+        json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+               "params": {"protocolVersion": version, "capabilities": {}}})
+    };
+    let batch = json!([
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "initialize", "params": {}}
+    ]);
+    let responses = converse(
+        home.path(),
+        &[
+            init("2025-03-26"),
+            batch.clone(),
+            json!([{"jsonrpc": "2.0", "method": "notifications/initialized"}]),
+            json!([]),
+        ],
+    );
+    assert_eq!(
+        responses.len(),
+        3,
+        "a batch of notifications owes nothing: {responses:?}"
+    );
+    let answered = responses[1].as_array().expect("an array answers a batch");
+    assert_eq!(answered.len(), 3, "{answered:?}");
+    assert_eq!(answered[0]["id"], 1);
+    assert_eq!(answered[0]["result"], json!({}));
+    assert_eq!(answered[1]["id"], 2);
+    assert_eq!(answered[1]["result"]["tools"][0]["name"], "context_fetch");
+    assert_eq!(answered[2]["id"], 3);
+    assert_eq!(answered[2]["error"]["code"], -32600);
+    assert_eq!(
+        responses[2]["error"]["code"], -32600,
+        "an empty batch is invalid"
+    );
+
+    let responses = converse(home.path(), &[init("2025-06-18"), batch]);
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[1]["error"]["code"], -32600);
+    assert_eq!(responses[1]["id"], Value::Null);
+    assert!(
+        responses[1]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("2025-06-18")),
+        "{}",
+        responses[1]
+    );
+    assert!(
+        !home.path().join("sessions/test-session.ndjson").exists(),
+        "no tool was called"
+    );
+}
+
+/// The server started without `--session` by a host that sets
+/// `AGENT_SESSION_ID`, as Goose does, records under that id; `--session`
+/// still wins over it; with neither, the server mints an id. An id that is not
+/// a plain name, from either source, fails the start naming its source and
+/// writes nothing.
+#[test]
+fn the_session_id_comes_from_the_argument_then_agent_session_id_then_the_server() {
+    let origin = origin("goose session");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+    let start = |session: Option<&str>, agent_session: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+        command
+            .args(["mcp", "--host", "claude-code"])
+            .env("COMMONMEASURE_HOME", home.path())
+            .env_remove("AGENT_SESSION_ID");
+        if let Some(session) = session {
+            command.args(["--session", session]);
+        }
+        if let Some(agent_session) = agent_session {
+            command.env("AGENT_SESSION_ID", agent_session);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary should start");
+        // A server refused at start may exit before reading its input.
+        let _ = writeln!(
+            child.stdin.as_mut().expect("stdin"),
+            "{}",
+            call("context_fetch", json!({"url": origin.url()}))
+        );
+        child.wait_with_output().expect("wait")
+    };
+    let sessions = |home: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(home.join("sessions"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+
+    let output = start(None, Some("20260914_1"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(sessions(home.path()), ["20260914_1.ndjson"]);
+    let log = home.path().join("sessions/20260914_1.ndjson");
+    let crossing = std::fs::read_to_string(&log)
+        .expect("log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("NDJSON"))
+        .find(|record| record["event"] == "crossing_mediated")
+        .expect("a crossing");
+    assert_eq!(crossing["payload"]["session_id"], "20260914_1");
+    std::fs::remove_file(&log).expect("fresh");
+
+    let output = start(Some("host-given"), Some("20260914_1"));
+    assert!(output.status.success());
+    assert_eq!(sessions(home.path()), ["host-given.ndjson"]);
+    std::fs::remove_file(home.path().join("sessions/host-given.ndjson")).expect("fresh");
+
+    for empty_or_absent in [None, Some("")] {
+        let output = start(None, empty_or_absent);
+        assert!(output.status.success());
+        let minted = sessions(home.path());
+        assert_eq!(minted.len(), 1, "{minted:?}");
+        assert!(minted[0].starts_with("local-"), "{minted:?}");
+        std::fs::remove_file(home.path().join("sessions").join(&minted[0])).expect("fresh");
+    }
+
+    for (session, agent_session, source) in [
+        (None, Some("../../escaped"), "AGENT_SESSION_ID"),
+        (Some("../../escaped"), None, "--session"),
+    ] {
+        let output = start(session, agent_session);
+        assert!(!output.status.success(), "{source}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(source) && stderr.contains("not a plain identifier"),
+            "{stderr}"
+        );
+        assert!(sessions(home.path()).is_empty());
+        assert!(!home.path().join("escaped.ndjson").exists());
+        assert!(
+            !home
+                .path()
+                .parent()
+                .unwrap()
+                .join("escaped.ndjson")
+                .exists()
+        );
+    }
+}
+
+/// An origin that sends gzip whatever the request accepts is carried: the
+/// crossing's `retrieved_hash` is over the coded bytes the origin served and
+/// its `content_hash` over the text extracted from what they decode to, and
+/// the extraction record names the coding. A body that does not decode is a
+/// failure naming the cause, recorded, and never an empty page.
+#[test]
+fn a_gzip_page_is_carried_with_the_retrieved_hash_over_the_coded_bytes() {
+    use std::io::Write as _;
+    let page = "<html><head><title>t</title></head><body><p>Served gzipped.</p></body></html>";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(page.as_bytes()).expect("compress");
+    let coded = encoder.finish().expect("finish");
+    let served = coded.clone();
+    let origin = Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(move |_| {
+            let mut response = Response::new(200, served.clone());
+            response.headers.set("Content-Type", "text/html");
+            response.headers.set("Content-Encoding", "gzip");
+            response
+        })
+        .expect("spawn");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+    let responses = converse(
+        home.path(),
+        &[call("context_fetch", json!({"url": origin.url()}))],
+    );
+    assert_eq!(responses[0]["result"]["isError"], false, "{}", responses[0]);
+    let result = payload(&responses[0]);
+    assert_eq!(result["content"], "Served gzipped.");
+    assert_eq!(result["retrieved_hash"], sha256_digest(&coded));
+    assert_eq!(result["content_hash"], sha256_digest(b"Served gzipped."));
+    let crossing = &crossings(home.path())[0]["payload"];
+    assert_eq!(crossing["retrieved_hash"], sha256_digest(&coded));
+    assert_eq!(crossing["content_hash"], sha256_digest(b"Served gzipped."));
+    let extraction = invocations(home.path(), "html-text-extractor");
+    assert_eq!(extraction[0]["payload"]["detail"]["content_coding"], "gzip");
+    assert_eq!(
+        extraction[0]["payload"]["inputs"][0]["content_hash"],
+        sha256_digest(&coded)
+    );
+
+    let mut corrupt = coded.clone();
+    let crc = corrupt.len() - 8;
+    corrupt[crc] ^= 0xff;
+    let broken = Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(move |_| {
+            let mut response = Response::new(200, corrupt.clone());
+            response.headers.set("Content-Type", "text/html");
+            response.headers.set("Content-Encoding", "gzip");
+            response
+        })
+        .expect("spawn");
+    std::fs::remove_file(home.path().join("sessions/test-session.ndjson")).expect("fresh");
+    let responses = converse(
+        home.path(),
+        &[call("context_fetch", json!({"url": broken.url()}))],
+    );
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert!(
+        error_text(&responses[0]).contains("gzip body could not be decoded"),
+        "{}",
+        error_text(&responses[0])
+    );
+    let crossing = &crossings(home.path())[0]["payload"];
+    assert!(
+        crossing["failure"]
+            .as_str()
+            .is_some_and(|failure| failure.contains("gzip body could not be decoded")),
+        "{crossing}"
+    );
+    assert!(crossing.get("content_hash").is_none(), "{crossing}");
 }

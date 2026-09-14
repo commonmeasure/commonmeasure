@@ -1,8 +1,5 @@
 //! What a tool result put into the model's context, and what may be claimed
 //! about it.
-//!
-//! Raided from AI Content Diet's `diet-capture::grounding`, which had already
-//! paid for the details below.
 
 use serde_json::Value;
 

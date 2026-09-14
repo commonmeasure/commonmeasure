@@ -129,18 +129,152 @@ fn conflicting_content_lengths_are_an_error() {
     );
 }
 
-/// Nothing in this crate decodes a body. A coded one would be hashed and
-/// recorded as the content it only claims to be.
+fn gzip(plain: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(plain).expect("compress");
+    encoder.finish().expect("finish")
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+fn coded_response(coding: &str, body: &[u8]) -> Vec<u8> {
+    let mut raw = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: {coding}\r\n\
+         Content-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(body);
+    raw
+}
+
+/// Some origins send gzip whatever the request accepts. The body is decoded,
+/// and the bytes the origin served are kept beside it: the retrieved hash of
+/// the session-evidence contract is over those coded bytes and the content
+/// hash over what the decoding yields, so the two differ and each is
+/// recoverable from the response.
 #[test]
-fn a_coded_body_is_an_error_not_a_pass_through() {
-    let raw = b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\n\r\n\x1f\x8b";
-    let error = response(raw).expect_err("a gzipped body must not pass as content");
+fn a_gzip_body_decodes_and_keeps_the_bytes_served() {
+    let plain = b"The cap is set quarterly, and this page was served gzipped.";
+    let coded = gzip(plain);
+    for coding in ["gzip", "GZIP", "x-gzip"] {
+        let decoded = response(&coded_response(coding, &coded)).expect("gzip decodes");
+        assert_eq!(decoded.body, plain, "{coding}");
+        let kept = decoded.coded.as_ref().expect("the served bytes are kept");
+        assert_eq!(kept.coding, "gzip");
+        assert_eq!(kept.bytes, coded);
+        assert_eq!(decoded.served_body(), coded.as_slice());
+        let retrieved_hash = sha256(decoded.served_body());
+        let content_hash = sha256(&decoded.body);
+        assert_eq!(retrieved_hash, sha256(&coded));
+        assert_eq!(content_hash, sha256(plain));
+        assert_ne!(retrieved_hash, content_hash);
+    }
+
+    // Chunked framing is removed before the coding: the kept bytes are the
+    // coded body, not the chunk framing around it.
+    let mut chunked =
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    for piece in coded.chunks(7) {
+        chunked.extend_from_slice(format!("{:x}\r\n", piece.len()).as_bytes());
+        chunked.extend_from_slice(piece);
+        chunked.extend_from_slice(b"\r\n");
+    }
+    chunked.extend_from_slice(b"0\r\n\r\n");
+    let decoded = response(&chunked).expect("chunked gzip decodes");
+    assert_eq!(decoded.body, plain);
+    assert_eq!(decoded.served_body(), coded.as_slice());
+
+    // Written back out, the response carries the bytes its Content-Encoding
+    // describes.
+    let mut wire = Vec::new();
+    write_response(&mut wire, &decoded).expect("write");
+    assert_eq!(response(&wire).expect("round trip").body, plain);
+
+    // A body with no coding keeps nothing extra, and identity is no coding.
+    let identity = b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 2\r\n\r\nok";
+    let plain_response = response(identity).expect("identity decodes");
+    assert_eq!(plain_response.body, b"ok");
+    assert!(plain_response.coded.is_none());
+}
+
+/// A small gzip body that expands past the body ceiling is refused at the
+/// ceiling, not decoded into memory without bound.
+#[test]
+fn a_gzip_bomb_past_the_body_ceiling_is_refused() {
+    let bomb = gzip(&vec![0u8; 33 * 1024 * 1024]);
     assert!(
-        format!("{error:#}").contains("unsupported content encoding"),
+        bomb.len() < 64 * 1024,
+        "the coded body is small: {}",
+        bomb.len()
+    );
+    let error = response(&coded_response("gzip", &bomb)).expect_err("a bomb must not decode");
+    assert!(
+        format!("{error:#}").contains("gzip body decodes past the size ceiling"),
         "got: {error:#}"
     );
-    let identity = b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 2\r\n\r\nok";
-    assert_eq!(response(identity).expect("identity decodes").body, b"ok");
+}
+
+/// A gzip body that does not decode completely is an error naming the cause,
+/// never a shorter or empty body: a flipped checksum, a truncated stream and
+/// bytes that are not gzip at all.
+#[test]
+fn a_corrupt_gzip_body_is_refused() {
+    let coded = gzip(b"a page whose checksum will not match what it decodes to");
+    let mut flipped = coded.clone();
+    let crc = flipped.len() - 8;
+    flipped[crc] ^= 0xff;
+    let truncated = coded[..coded.len() / 2].to_vec();
+    let not_gzip = b"\x1f\x8b but nothing after the magic".to_vec();
+    for body in [flipped, truncated, not_gzip] {
+        let error = response(&coded_response("gzip", &body)).expect_err("corrupt gzip decodes");
+        assert!(
+            format!("{error:#}").contains("gzip body could not be decoded"),
+            "got: {error:#}"
+        );
+    }
+}
+
+/// Only gzip is decoded. Brotli, zstd and deflate are refused, as is more than
+/// one coding in one field or across two, and a request body under any coding:
+/// a body this parser did not decode would be hashed and recorded as the
+/// content it only claims to be.
+#[test]
+fn every_other_content_coding_is_still_refused() {
+    let coded = gzip(b"stacked");
+    for coding in [
+        "br",
+        "zstd",
+        "deflate",
+        "compress",
+        "gzip, gzip",
+        "gzip, br",
+    ] {
+        let error = response(&coded_response(coding, &coded))
+            .expect_err("a coding this parser does not decode must not pass");
+        assert!(
+            format!("{error:#}").contains("unsupported content encoding"),
+            "{coding}: {error:#}"
+        );
+    }
+    let mut two_fields =
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n".to_vec();
+    two_fields.extend_from_slice(format!("Content-Length: {}\r\n\r\n", coded.len()).as_bytes());
+    two_fields.extend_from_slice(&coded);
+    assert!(response(&two_fields).is_err(), "two coding fields decode");
+
+    let mut coded_request = format!(
+        "POST / HTTP/1.1\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+        coded.len()
+    )
+    .into_bytes();
+    coded_request.extend_from_slice(&coded);
+    let error = request(&coded_request).expect_err("a coded request body must not pass");
+    assert!(format!("{error:#}").contains("unsupported content encoding"));
 }
 
 /// Chunk extensions share one budget with the rest of the framing. Bounded per

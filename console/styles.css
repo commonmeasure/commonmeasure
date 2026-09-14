@@ -5,8 +5,8 @@
  * identity lives in text.
  *
  * The tokens are the Common Measure design language, whose canonical block is
- * the enterprise hub's stylesheet (from the common-measure foundation);
- * this copy is a subset, pinned to it by the digest recorded in README.md:
+ * Common Measure Hub's stylesheet; this copy is a subset, pinned to it by the
+ * digest in crates/commonmeasure-console/tests/design_tokens.rs:
  * semantic names only, warm-gray neutrals (oklch hue 85), one teal accent
  * (hue 195) that always means "you can act here", and three states — ok,
  * warn, err — each with a -soft tint for fills. Both themes are designed,

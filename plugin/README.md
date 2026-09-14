@@ -208,12 +208,13 @@ run *before* the crossing, so policy can refuse.
   empty search result. Provider `internal` is the exception: it queries
   the operator's own corpus — the bounded directory named by
   `COMMONMEASURE_INTERNAL_CORPUS`, set in the session's environment (`.mcp.json`
-  carries no `env` block; the server inherits the harness's) or in the same
+  carries no `env` block; the server inherits the host's) or in the same
   credentials file — with a
   deterministic query, no network and no charge, and its results carry the
   licence and effective date the corpus's own `corpus.json` declares. For
   the crossings to be *recorded*, the corpus's `file://` prefix must also be
-  named in `record_internal_prefixes` (see §Policy) — without that consent
+  named in `record_internal_prefixes` (`docs/contracts/source-policy.md`
+  §Recording) — without that consent
   the agent still gets its result and the record is withheld.
 - `context_status` reports the session, where its evidence is written, the
   policy in force and which providers are configured.
@@ -356,6 +357,68 @@ nothing. `uninstall` for either host deletes no file and leaves the
 `mcpServers` and `hooks` objects in place, empty if ours was the only
 entry.
 
+## GitHub Copilot and VS Code
+
+The Copilot CLI gets both halves:
+
+```sh
+commonmeasure install copilot    # ~/.copilot/mcp-config.json and ~/.copilot/hooks/commonmeasure.json
+commonmeasure uninstall copilot
+```
+
+The server is `mcp --host copilot-cli` in the CLI's user MCP file, which
+the GitHub Copilot app and VS Code's Agent Host read too. The hooks are the
+CLI's `sessionStart`, `postToolUse`, `userPromptSubmitted` and `agentStop`,
+in a hook file of this product's own, each running `hook <event> --host
+copilot-cli`. `postToolUse` fires for the CLI's `web_fetch` and
+`web_search` and carries the text the model was given, so a built-in fetch
+is an observed, grounded crossing under the CLI's `sessionId`, and each
+search result a retrieved one; the nudge reaches the session as the JSON
+field the CLI reads at session start. Every call needs a Copilot plan that
+allows MCP: without one the CLI lists the server and refuses to start it
+("1 MCP server was blocked by policy"), and no hook runs. `uninstall`
+deletes the hook file when nothing else is in it and leaves the
+`mcp-config.json` file and its `mcpServers` object.
+
+VS Code gets the mediated half:
+
+```sh
+commonmeasure install vscode     # servers.commonmeasure in the user mcp.json
+commonmeasure uninstall vscode
+```
+
+The entry is `mcp --host vscode` in VS Code's user `mcp.json`; VS Code
+starts the server the first time a chat uses it, and forwards it to the
+Copilot harness, so Copilot agent mode in VS Code uses the same entry. A
+`mcp.json` carrying comments, which VS Code allows, is refused and left as
+it was, because this writer would drop them. No hook is registered: VS
+Code runs hooks only through the Copilot Chat extension, which also loads
+`~/.claude/settings.json` and ignores its matchers. That is why the Claude
+Code reader refuses VS Code's payload, and the Copilot CLI's payload for
+Claude Code's event names, by the `timestamp` field Claude Code never
+sends, recording and printing nothing.
+
+## Chrome
+
+ChatGPT on the web, Google AI Overviews and Bing Copilot Search are
+observed through the browser extension in `browser/` (`browser/README.md`),
+which reaches the binary over Chrome native messaging:
+
+```sh
+commonmeasure install chrome    # ai.commonmeasure.browser.json in Chrome's NativeMessagingHosts
+commonmeasure uninstall chrome
+```
+
+The manifest names the binary by absolute path and allows only the Common
+Measure extension to start it; Chromium and Brave get the same file where
+their directories exist. Each answer's sources are recorded as observed
+crossings under `host: chatgpt-web`, `google-ai-overview` or
+`bing-copilot-search`, retrieved and never grounded, and nothing is
+refused: the model's own search on those surfaces crosses no tool this
+product offers. ChatGPT's conversation id is the session; Google and Bing
+give none, so each answer is its own `local-*` session. What each surface
+supplies is `docs/contracts/host-integration.md` §2.
+
 ## Policy
 
 `$COMMONMEASURE_HOME/policy.json`, or `~/.commonmeasure/policy.json`. If the file
@@ -365,178 +428,29 @@ is absent the mode is observe: record everything, refuse nothing.
 {
   "policy_mode": "strict",
   "constraints": [
-    {"kind": "allowed_source_host", "host": "www.gov.uk"},
-    {"kind": "denied_source_host", "host": "tracker.example"}
-  ],
-  "allow_private_hosts": false,
-  "principals": [
-    {
-      "principal": "research-agent",
-      "os_user": 1001,
-      "require_scope": true,
-      "policy_mode": "strict"
-    }
+    {"kind": "denied_source_host", "host": "tracker.example"},
+    {"kind": "access_rule", "host": "www.gov.uk", "action": "allow"},
+    {"kind": "access_rule", "host": "*", "action": "refuse"}
   ],
   "scopes": [
     {
       "match": "/work/personal",
-      "principal": "research-agent",
       "engagement": "personal",
-      "allow_telemetry_egress": true
+      "allow_telemetry_egress": true,
+      "policy_mode": "observe"
     }
   ]
 }
 ```
 
-`principals` binds a policy name to the process's effective numeric operating-
-system user. Common Measure reads that credential from the process boundary;
-`USER`, `LOGNAME` and `COMMONMEASURE_PRINCIPAL` cannot select authority. The last
-may be shown as an asserted label for diagnosis only. A principal with
-`require_scope: true` can use only a directory scope that explicitly names
-that principal; an unmatched directory fails closed instead of inheriting the
-top-level policy. The converse holds for every principal, `require_scope` or
-not: a scope naming a principal is that principal's authority, so anybody else
-whose working directory falls inside it is refused there rather than passed on
-to the next scope whose match string also appears in the directory. That next
-scope is usually the broader one, and a broader scope is usually the looser
-one, so passing on would relax a policy the operator did not declare relaxed.
-A scope naming nobody governs whoever works in it. Principal mode,
-constraints and private-host settings overlay the top
-level first, then the matched directory scope overlays them.
-
-Declaring any principal changes what happens to everyone else. An OS user with
-no binding holds no delegated authority, so every mediated crossing under it is
-refused and `context_status` names the reason — including where the top-level
-`policy_mode` is `observe`, because a mode decides what happens to a breach and
-not whether an unauthorised identity may act. Bind every OS user that
-should be able to work, service and CI accounts included.
-
-Contradictory bindings are refused at load, before the server starts: two
-principals sharing a name or an OS user, a scope naming a principal that is not
-declared, and a principal with `require_scope: true` that no scope names, which
-could never be admitted anywhere.
-
-That credential is unix-only. The Windows binary has no effective uid
-to read and Common Measure does not read a process token yet, so it authenticates
-nobody: a policy file declaring `principals` refuses every mediated crossing
-there and `context_status` names the reason, instead of falling through to
-the top level. A policy file declaring no principal is unaffected —
-directory scopes and everything else on this page work as described on every
-platform.
-
-`policy_mode` decides what happens to a breach, never whether it is recorded.
-`strict` refuses; `observe` and `prefer` carry the crossing with the breach on
-the record. The constraint vocabulary is `commonmeasure_types::Constraint` and it is
-enforced by the same `commonmeasure_runtime::policy` functions the batch runner uses —
+What the file may contain, what each field does, what a scope and a
+principal replace, the order admission applies the rules and every check the
+loader makes before a policy is used are `docs/contracts/source-policy.md`.
+`commonmeasure policy check <file>` loads a candidate through the same loader
+and prints what it accepted or the refusal, before the file is installed.
+The constraint vocabulary is `commonmeasure_types::Constraint`, enforced by
+the same `commonmeasure_runtime::policy` functions the batch runner uses;
 there is no second policy engine.
-
-Every constraint kind but one is a set, and its order means nothing. The
-exception is `access_rule`, the ordered form of host policy:
-
-```json
-{
-  "constraints": [
-    {"kind": "access_rule", "host": "docs.example.com", "action": "allow"},
-    {"kind": "access_rule", "host": "*.example.com", "action": "refuse"},
-    {"kind": "access_rule", "host": "publisher.example", "action": "require_licence", "licence": "rsl:publisher/2026"},
-    {"kind": "access_rule", "host": "*", "action": "require_mediation"}
-  ]
-}
-```
-
-Access rules are read in the order written and the first whose `host`
-matches the source's host decides; a later rule for the same host is never
-reached, so the exception above stands and the same exception written after
-the wildcard would not. `host` is an exact host, `*.example.com` for a
-domain and every host beneath it, or `*` for every host; a source with no
-host, such as a document from the operator's own corpus, matches no rule.
-The actions: `allow` passes the host, including past an `allowed_source_host`
-list that does not name it; `refuse` is a breach; `require_licence` admits
-the source only when the supplier declared exactly the named licence, an
-unknown licence being unknown rather than permitted; `require_mediation`
-states that a host is to be read only where policy rules before the content
-moves, which every mediated fetch and every batch-run source does, so it
-passes those like `allow`, while an observed crossing, which nothing ruled
-on, is recorded without being checked against it. Set it where the policy
-file should state that intent; where a host must not be read at all, use
-`refuse`. The order of checks at admission is fixed:
-the `denied_source_host` set first, because a denial is absolute and no rule
-allows past it, then the access rules, then the `allowed_source_host` set,
-then `required_licence`. The rules in a scope's `constraints` govern that
-scope alone, like every other constraint there. A rule whose host pattern
-names no host, or whose `require_licence` names no licence, is refused at
-load.
-
-`allow_private_hosts` lets the mediated tools reach loopback and private
-addresses, for an operator running a local documentation server. It is off by
-default and it does **not** affect observed capture, which holds a floor:
-passive capture sees everything and never asks, so localhost, private networks
-and `file://` stay out of the record regardless of this setting.
-
-The PII detector scans the text of every mediated crossing and records what
-it found, as categories and offsets, never the identifiers themselves. What
-`strict` does with a finding depends on where the text came from. On an
-internal or private source (a named internal prefix, a loopback or private
-address reached under `allow_private_hosts`, the operator's own corpus)
-`strict` refuses the crossing, as it does every breach. On a public source
-the crossing is admitted with the finding recorded in `breach`: a public
-page's published contact addresses are not the personal data the detector
-exists to keep out of a model, and a firm whose first admitted source is a
-government page should not find it refused for the department's email
-address. `refuse_on_pii: true`, at the top level or on a scope, restores
-the refusal on every source for an operator that wants it; it is off by
-default. `observe` and `prefer` carry the finding on every source, as they
-carry every breach.
-
-The floor is a default, and there is one way to lower it:
-`record_internal_prefixes` names internal prefixes
-(`"https://rag.example.internal/"`, `"file:///corp/kb/"`, each required to end
-with `/`) whose crossings are recorded like public traffic, for observed and
-mediated capture alike. Nothing the list does not match is affected, an absent
-or empty list means the floor holds everywhere, and matched crossings are
-marked `internal` in the record so egress never projects them.
-`docs/contracts/session-evidence.md` is the authority on what that means.
-
-`terms` names agreements the operator holds with sources, by host:
-
-```json
-{
-  "terms": [
-    {"host": "publisher.example", "reference": "agreement-42", "requires_reporting": true,
-     "access_context": [{"scheme": "ror", "value": "https://ror.org/013meh722"}]}
-  ]
-}
-```
-
-A terms entry is a statement of fact about an agreement, referenced by an
-identifier the operator chooses; the runtime never checks it. Where one names
-the host of a mediated fetch, it governs over any preference the source
-publishes: the source's statements are still read and recorded, none is
-enforced, and the crossing's licence is the reference. `requires_reporting`
-says the agreement itself requires usage reporting; `access_context` names the
-institution identifiers the agreement attributes usage to, which are the
-operator's to declare and never name a person. A scope may carry its own
-`terms`, replacing the top-level list as `constraints` does. What the record
-carries is `docs/contracts/session-evidence.md` §Source declarations.
-
-Telemetry is a second, independent permission. A scope binds its matching cwd
-to `engagement`; `allow_telemetry_egress` must be explicitly true before a
-witnessed public crossing in that engagement can enter the configured relay.
-An absent policy, unmatched cwd, unnamed scope, or omitted flag stays local.
-Client engagements therefore default to no egress rather than inheriting a
-weaker machine-wide mode.
-
-That `engagement` is the governing engagement, the only engagement name the
-runtime and the relay can read (`context_status` reports it as
-`governing_engagement`); the name the console reports work under is resolved
-separately from `attribution.json` (`DECISIONS.md` §Session policy and
-egress).
-
-A policy file that cannot be parsed is an error, not a silent fallback to
-permissive. That includes a key the installed binary does not know: an
-unknown key fails the whole file (`policy.json is not a valid policy: unknown
-field "engagement"`), so a policy written for a newer binary refuses every
-mediated crossing on an older one until that binary is reinstalled.
 
 On a managed edge, one whose `deployment.json` pins a hub's signing key
 (`docs/contracts/policy-envelope.md`), the file is the hub's desired policy

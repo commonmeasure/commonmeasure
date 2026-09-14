@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 license-file = "LICENSE.md"
 rust-version = "1.97"
@@ -68,11 +68,21 @@ base64 = "0.22"
 # Telemetry schemas (dev-dependency use only; the runtime emits from types).
 jsonschema = "0.18"
 
+# The JSON Schema of the source policy, derived from the loader's own types
+# rather than written beside them, so the schema an author validates against
+# and the types the loader parses with cannot drift
+# (`commonmeasure policy schema`, `docs/contracts/source-policy.md`).
+schemars = "1.2"
+
 # TLS for the client side of commonmeasure-http. `ring` rather than the default
 # `aws-lc-rs` backend: it needs no C toolchain at build time, which keeps the
 # supply chain small and the build reproducible.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 webpki-roots = "1"
+# Removes the gzip content coding some origins send whatever the request
+# accepts (`crates/commonmeasure-http/src/message.rs`). Already in the tree
+# through another dependency; the default pure-Rust backend needs no C.
+flate2 = "1.1"
 # Ed25519 verification of the signed policy envelope
 # (`crates/commonmeasure-harness/src/managed.rs`). The same crate rustls
 # already pulls in, so no second cryptography dependency enters the tree.

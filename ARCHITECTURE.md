@@ -60,8 +60,11 @@ What each grade of evidence means, and why nothing merges them, is
 `docs/contracts/session-evidence.md` §Crossing.
 
 Neither needs the inference component: the model is the host's.
-`commonmeasure install` registers both with Claude Code, and the MCP server
-alone with Codex and with Pi, whose crossings are mediated or nothing;
+`commonmeasure install` registers both with Claude Code, Cursor and the
+Copilot CLI, and the MCP server alone with Codex, Pi, Claude Desktop and VS
+Code, whose crossings are mediated or nothing; `install chrome` registers the
+binary for the browser extension in `browser/`, which observes the sources
+three browser answer surfaces show (`docs/contracts/host-integration.md`);
 `plugin/` is the marketplace registration for Claude Code
 (`plugin/README.md`). Any host that speaks MCP can attach the
 server the same way, and a Rust harness can link `commonmeasure-runtime` and
@@ -161,8 +164,8 @@ produced it; they are kept out of git apart from one stated exception
 explicit gap record, written by the next successful write, and a run is
 published atomically or not at all (`docs/FAIL-POLICY.md`).
 
-Add-on processors run in-process at the crossings the runtime carries. There
-are five, all deterministic: a PII detector, an injection screen and a
+Eight add-on processors run in-process (`docs/contracts/processor.md`
+§Status). Five run at the crossings the runtime carries, all deterministic: a PII detector, an injection screen and a
 support-status governor at the admit stage, and an HTML text extractor and a
 context optimiser at the transform stage. The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
@@ -237,9 +240,13 @@ private key stays in `~/.commonmeasure/edge-key.json`; the ingest key is
 written into `relay.json` without passing through a shell; the public
 facts, the hub, the organisation, the key id the hub assigned, go to
 `enrolment.json`, from which every session records an `edge_identity`
-line. Each relay run asks the hub for the key's standing and records a
-revocation; `commonmeasure disconnect` revokes both credentials at the hub
-and removes the three files.
+line. `connect` also signs and uploads the directory proof that lists the
+key in the hub's key directory, and what the hub then holds goes to
+`directory-listing.json`, a file of its own so that `enrolment.json` keeps
+the shape released binaries sharing the home read. Each relay run asks the
+hub for the key's standing, records a revocation and renews the proof once
+it is a day old; `commonmeasure disconnect` revokes both credentials at the
+hub and removes the four files.
 
 The relay's own report states which clearance was used when events left. It
 names each governing engagement whose declared clearance let events leave,

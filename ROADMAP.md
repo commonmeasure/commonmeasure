@@ -29,6 +29,11 @@ it serves; a hub-side entry is on the hub's own board and has no box here.
 4. WP-44, boxes one to three: content owners, the report and unattributed
    hosts as screens.
 5. WP-19, last box: managed policy run end to end against the hosted hub.
+6. WP-46: the hosted edge, serving the mediated tools over HTTPS to the
+   hosts that reach MCP only remotely. It follows the stranger's path
+   because a hosted edge is an enrolled, managed edge whose users sign in
+   through the hub, so it needs the hosted hub, onboarding and managed
+   policy of entries 1, 2 and 5 working first.
 
 Packages not on this path are under §Deferred packages, each with the reason
 it waits.
@@ -47,6 +52,13 @@ bullet names its test or artefact.
   licence or require the mediated path; first match wins; declared in a
   policy scope's constraints like any other; validated at load
   (`crates/commonmeasure-harness/src/policy.rs`).
+- The source policy as a published contract: its fields, what scopes and
+  principals replace, the admission order and every check the loader makes;
+  a JSON Schema derived from the loader's types; validation and ruling
+  vectors checked against the binary and the runtime; and
+  `commonmeasure policy check`, which settles a candidate with the loader
+  itself (`docs/contracts/source-policy.md`,
+  `crates/commonmeasure-cli/tests/source_policy_contract.rs`).
 - Policy scopes per working directory naming a governing engagement;
   principal resolution from a basis the process cannot rewrite, unauthenticated
   identity refused (`crates/commonmeasure-harness/src/policy.rs`,
@@ -174,15 +186,19 @@ bullet names its test or artefact.
   exercised in a clean container (`docs/RELEASE.md`).
 - Host registrations the binary writes, verifies and removes by absolute
   path: `commonmeasure install|uninstall|doctor` for Claude Code (hooks and
-  the MCP server), Codex (the MCP server table) and Pi (an extension that
-  runs the MCP server), touching only this product's entries
+  the MCP server), Codex (the MCP server table), Pi (an extension that
+  runs the MCP server), Claude Desktop (the MCP server), Cursor and the
+  Copilot CLI (the MCP server and hooks), VS Code (the MCP server) and
+  Chrome (the native messaging host the browser extension in `browser/`
+  reaches), touching only this product's entries
   (`crates/commonmeasure-harness/src/registration.rs`,
   `crates/commonmeasure-cli/tests/install_e2e.rs`); the plugin holds a
   manifest, hooks and a launcher and no binary (`plugin/README.md`).
-- Real sessions recorded through those registrations, committed as
-  fixtures: a Claude Code session with observed, mediated and turn records,
-  four boundaries and a compaction, and a Pi session with a mediated
-  crossing (`demo/host-sessions/`,
+- Real sessions recorded through the Claude Code, Codex and Pi
+  registrations, committed as fixtures: a Claude Code session with
+  observed, mediated and turn records, four boundaries and a compaction, a
+  Codex CLI run and a Pi session, each with a mediated crossing
+  (`demo/host-sessions/`,
   `crates/commonmeasure-cli/tests/recorded_sessions.rs`).
 
 ### First-party add-ons
@@ -246,9 +262,10 @@ scheduling; a consumer browser product.
 ## What is not built
 
 - Usage reporting to the content sources that require it (WP-23).
-- WP-19's synchronisation exercised against a running hub. The edge signs
-  the request with its enrolled key and a loopback endpoint verifies it;
-  the two halves have not been run against each other.
+- WP-19's synchronisation against the hosted hub, recorded in this
+  repository. The edge signs the request with its enrolled key and a
+  loopback endpoint verifies it as the hub does; no transcript of a run
+  against the hub is committed.
 - Console editing of policy fields beyond the mode and the denied hosts:
   access rules, scopes, principals, allowances, clearance and recordable
   prefixes are edited by hand.
@@ -273,8 +290,10 @@ scheduling; a consumer browser product.
 - Support the source: a voluntary payment to a source that helped (WP-36).
 - The sidecar processor boundary for third-party add-ons (WP-37).
 - The add-on catalogue and marketplace at the hub (WP-38).
-- The other hosts: Copilot, Cursor, VS Code, Codex desktop and IDE, Claude
-  Desktop and Claude in the browser (WP-39).
+- A recorded session through Claude Desktop, Cursor, the Copilot CLI, VS
+  Code, the ChatGPT desktop app, the Codex IDE extension or any browser
+  answer surface; `install` for Gemini CLI and Goose; and Claude in the
+  browser (WP-39, WP-46).
 - The console's API and its screens agreeing, with this month's crossing
   evidence on a screen (WP-41).
 - A read-only management surface an agent can ask about its own record
@@ -349,8 +368,8 @@ request and records why.
   unavailable or compromised hub gains no access to the operator record and
   is never needed for a crossing. The edge half is exercised against a
   loopback endpoint that verifies the request signature as the hub does
-  (`crates/commonmeasure-cli/tests/managed_policy.rs`); the two
-  implementations have not been run against each other.
+  (`crates/commonmeasure-cli/tests/managed_policy.rs`); no transcript of a
+  run against the hub is committed here.
 
 **Acceptance evidence:** signed rollout from desired to applied, visible
 drift before convergence, rollback refused, a complete offline
@@ -400,14 +419,13 @@ is committed at `demo/host-sessions/claude-code/` (observed crossings, one
 mediated crossing in the server's own log, four boundaries, one
 compaction), read by `crates/commonmeasure-cli/tests/recorded_sessions.rs`;
 `uninstall` restored both host files, pinned by `install_e2e.rs`. Box 1,
-Codex: the table is written, read back and removed by `install_e2e.rs`; no
-Codex session has produced a mediated crossing, so the Codex half is
-`spec-verified` (`docs/contracts/host-integration.md` §6). Box 2, Pi: the
+Codex: the table is written, read back and removed by `install_e2e.rs`, and
+a real Codex CLI run through it recorded the mediated crossing committed at
+`demo/host-sessions/codex/`, read by `recorded_sessions.rs`
+(`docs/contracts/host-integration.md` §6). Box 2, Pi: the
 extension is written, read back and removed by `install_e2e.rs`, and a real
 Pi session through it recorded the mediated crossing committed at
-`demo/host-sessions/pi/`. Boxes 3 to 5: `install_e2e.rs`. The binary each
-session ran was a build of this tree; the published release predates these
-subcommands.
+`demo/host-sessions/pi/`. Boxes 3 to 5: `install_e2e.rs`.
 
 ### WP-22: one-command hub enrolment
 
@@ -522,7 +540,7 @@ registration, domain verification, owner dashboards) is run by others
 - [x] The HTTP status recorded on every mediated crossing, and a non-2xx
   answer never projected as a retrieval; the conformance corpus regenerated
   (`crates/commonmeasure-relay/src/project.rs`, `conformance/`). The hub's
-  pinned copy is taken from this corpus when the branch merges.
+  pinned copy is taken from this corpus.
 - [x] The reporting demand ruled on at admission: meet it, or refuse in
   `strict` and record the breach in `observe` and `prefer`. Needs
   `require-mediation` in the constraint vocabulary (WP-24). A demand is met
@@ -755,8 +773,9 @@ market-signals record) would apply to this runtime.
   Bot Auth (`Signature`, `Signature-Input`, `Signature-Agent`;
   `docs/knowledge-base/source-declarations.md` §Web Bot Auth), the scheme
   Cloudflare's Pay Per Crawl AI-owner flow already requires. Each enrolled
-  edge signs with the key minted at enrolment (WP-22); the key directory
-  and the agent card on the product domain list every enrolled edge. An
+  edge signs with the key minted at enrolment (WP-22); the agent card on
+  the product domain lists every enrolled edge, and the key directory every
+  enrolled edge holding a current directory proof signed by its own key. An
   unenrolled edge sends the user agent unsigned and the record says so; it
   never publishes a key under the `CommonMeasureBot` name. The
   `Content-Telemetry-ID` of WP-23 is a signed component, so the id a
@@ -806,11 +825,23 @@ the identity presented; a key revoked at the hub leaves the directory, the
 edge stops signing on the next relay run, and the same page challenges it
 again; the correlation id is a covered component; no code path sends a user
 agent other than the runtime's own
-(`crates/commonmeasure-cli/tests/mediated_e2e.rs`). Not verified: the SRA
+(`crates/commonmeasure-cli/tests/mediated_e2e.rs`). The same publisher uses a
+listed key only when the directory response carries that key's directory
+proof, a signature over `("@authority";req)` tagged
+`http-message-signatures-directory` and valid now, so a key listed with no
+proof, a proof for another authority or an expired one is challenged; the
+proof matches the vector pinned in both repositories
+(`crates/commonmeasure-harness/src/identity.rs`); `connect` signs and
+uploads it, a loopback hub checks the upload by that rule and serves it, a
+session or server start renews it once it is a day old, and the session
+record says until when the key is listed or why it is not
+(`crates/commonmeasure-cli/tests/connect_e2e.rs`). Not verified: the SRA
 page itself, or any live site, which needs the Cloudflare registration
 above, and the signature verified by an implementation other than this
 repository's — the hub verifies the policy fetch by the same rule, and the
-pinned vector is what holds the two to it.
+pinned vector is what holds the two to it; and a directory proof uploaded to
+a running hub and served in its directory, which the ignored real-hub test
+in `crates/commonmeasure-cli/tests/connect_e2e.rs` asserts.
 
 ### WP-30: source preferences and the named source
 
@@ -972,15 +1003,19 @@ the same revision.
 
 ### WP-44: the hub's operator screens
 
-The hub's product capabilities are API-first and four of them have no screen:
-content owners and their reports, onward delivery, policy revisions, and the
-unattributed hosts no registration claims. The client documentation instructs
+The hub's product capabilities are API-first and three of them have no screen:
+content owners and their reports, onward delivery, and the unattributed hosts
+no registration claims. The client documentation instructs
 `curl` for each. The buyer is a platform or risk owner, not an engineer with a
 terminal, and the report is a hand-over artefact they have to produce on request.
 The handlers, scopes and tests exist; this package is the SvelteKit half and adds
 no route.
-Boxes four and five, onward delivery and policy revisions as screens, wait
-until an operator asks for them; the first three are on the path in §Next.
+Box four, onward delivery as a screen, waits until an operator asks for it;
+the first three are on the path in §Next. Policy revisions have a screen at
+the hub: the ordered history, the current revision's digest and publisher,
+a builder that composes the next revision and checks it against
+`docs/contracts/source-policy.md` before it is published, and each edge's
+last fetch.
 
 - [ ] Content owners: register an owner, add and remove hosts with the stated
   basis, see which hosts resolve to each, and see the refusal when a host is
@@ -994,18 +1029,15 @@ until an operator asks for them; the first three are on the path in §Next.
 - [ ] Onward delivery: per owner, the destination and the credential it was given
   (never revealed back), queued, delivered and dead counts, the dead letters with
   their last error, and requeue.
-- [ ] Policy revisions: the ordered history with digests and who published each,
-  a publish form validated against the policy schema before it is sent, and the
-  signer document an edge pins shown as the edge needs it.
 - [ ] Every screen states the boundary it sits on: the hub holds no owner
   accounts, opens no owner-facing view, and is never in the path of a crossing.
-- [ ] The hub's client pages for these four are rewritten around the screens, with
+- [ ] The hub's client pages for these three are rewritten around the screens, with
   the API kept as the second half of each page rather than the whole of it.
 
 **Acceptance evidence:** a Vitest flow per screen against the real handler
 responses; one registered owner whose report downloads from the page and matches
 the API's bytes; a destination set and a delivery dead-lettered and requeued from
-the page; a revision published from the page and served to a signed edge fetch.
+the page.
 
 ### WP-45: the stranger's path
 
@@ -1027,7 +1059,7 @@ are on the hub's own board.
   loopback publisher whose `robots.txt` names an RSL licence with a
   subscription payment term (`crates/commonmeasure-cli/tests/demo_policy.rs`).
 - [x] Every platform the release names has had the installer run on it, or
-  the release says which have not: the narrowed form landed. `docs/RELEASE.md`
+  the release says which have not. `docs/RELEASE.md`
   and `docs/GETTING-STARTED.md` §1 say the Windows binary is built and
   checksummed by the release run and the installer has not been run on
   Windows, and §4 of the walkthrough states that a policy declaring
@@ -1037,15 +1069,111 @@ are on the hub's own board.
   hub: `docs/GETTING-STARTED.md` §7 names the hub's address, shows the
   smallest scope that clears the reader's working directory for egress, and
   quotes `connect`, one mediated crossing in that scope and a relay run
-  delivering one batch, each run in order from a fresh operator home;
-  `docs/GLOSSARY.md` §Hub no longer describes policy distribution as
-  unbuilt.
+  delivering one batch, each run in order from a fresh operator home.
 
 **Acceptance evidence:** each box's quoted commands were run as written
 (`AGENTS.md` §Document ownership); the policy test and
 `crates/commonmeasure-cli/tests/docs_paths.rs` pass; the delivered batch is
 visible in the hosted hub's fleet view, with the transcript kept under
 `demo/enrolment/`.
+
+### WP-46: the hosted edge
+
+Claude on the web and in Chrome, ChatGPT on the web, Microsoft 365 Copilot
+and the Copilot cloud agent on GitHub reach MCP servers only over HTTPS from
+the vendor's cloud (`docs/knowledge-base/host-surfaces.md` §Order). This
+package serves them: the same binary in a service mode, one per
+organisation, enrolled and managed like any edge, answering Streamable HTTP
+and authenticating each person with a token the hub issues. The policy
+engine, the refusal semantics, the record format and the relay are
+unchanged; what is new is transport, identity, tenancy and where the record
+lives. The design, its sources and its build sequence are
+`docs/knowledge-base/hosted-edge.md`. The hub's authorisation server (client
+metadata documents, dynamic registration, tokens bound to the edge's
+address, sign-in and membership) is on the hub's own board. Depends on
+WP-22 and WP-19.
+
+- [ ] A principal authenticated by a token: the `oauth_subject` and
+  `edge_token` bases beside `os_user`, policy bindings keyed by `subject`
+  or `edge_token`, exactly one key per binding; no existing policy document
+  resolves differently and its policy identity does not move.
+- [ ] Streamable HTTP at protocol revisions 2025-06-18 and 2025-11-25
+  behind the same tool definitions and the same `McpServer`: one endpoint
+  per host word, a session id minted at `initialize` and bound to its
+  principal, `404` for an unknown session, `Origin` and protocol-version
+  checks, JSON responses; the stdio path unchanged; the three tools declare
+  `readOnlyHint`.
+- [ ] A resource server: protected resource metadata per endpoint, `401`
+  with `WWW-Authenticate`, tokens verified against the issuer pinned at
+  enrolment for signature, issuer, audience, expiry and organisation, with
+  no hub call in a crossing's ruling; edge-issued tokens for a host with no
+  OAuth, stored hashed and revocable.
+- [ ] A service mode: refuses to start unenrolled, unmanaged or without an
+  exclusive lock on its home; runs the relay and the policy refresh on an
+  interval; holds the private-address floor whatever the policy says, so
+  `allow_private_hosts` is not honoured and the cloud metadata service is
+  never reached; `doctor` and `status` report it.
+- [ ] The contracts carry it: `docs/contracts/host-integration.md` names
+  the hosted path and grades each host,
+  `docs/contracts/session-evidence.md` the new bases and the hosted session
+  id, `docs/contracts/policy-envelope.md` the interval refresh.
+- [ ] One recorded mediated crossing through one of the four hosts, from a
+  hosted edge deployed for one organisation, committed in a directory under
+  `demo/host-sessions/` named for the host.
+- [ ] Each remaining host registered by its administrator's documented
+  steps with a recorded session, or listed with the reason it is not.
+
+**Acceptance evidence:** a real-binary test driving the server over HTTP
+against a loopback origin with the assertions of
+`crates/commonmeasure-cli/tests/mediated_e2e.rs`, two concurrent sessions
+leaving two files, and each token check refused by name against a loopback
+issuer; a real session through a registered host read by
+`crates/commonmeasure-cli/tests/recorded_sessions.rs`, carrying the host's
+own client name, `authentication_basis: oauth_subject` and a mediated
+crossing whose content hash the agent quoted back; an ignored live test
+against the hub's authorisation server, its doc comment saying how to run
+it.
+
+### WP-47: the source policy as a published contract
+
+Publish what the policy loader accepts and what admission decides, so
+anything that writes or checks a policy outside this repository is held to
+the loader's answers rather than to a copy of its types. No policy semantics
+change and no field is added.
+
+- [x] A source-policy contract: every field with its default, what a scope
+  and a principal replace, the order admission applies, and each check the
+  loader makes after parsing with the refusal it produces
+  (`docs/contracts/source-policy.md`).
+- [x] A JSON Schema of the policy file derived from the loader's own types,
+  printed by `commonmeasure policy schema`, with a test that fails when the
+  committed schema is not what the binary prints
+  (`docs/contracts/source-policy.schema.json`,
+  `crates/commonmeasure-cli/tests/source_policy_contract.rs`).
+- [x] Validation vectors: accepted documents with the loader's form, and a
+  refused document for every check with the loader's sentence, each carrying
+  the schema's verdict beside the loader's, including documents the schema
+  accepts and the loader refuses (`docs/contracts/source-policy-vectors.json`,
+  driven through the real binary by
+  `crates/commonmeasure-cli/tests/source_policy_contract.rs`).
+- [x] Ruling vectors: policy, working directory, source and declared licence
+  to the governing scope, the mode, the ruling and the runtime's sentence,
+  checked against the runtime's admission
+  (`docs/contracts/source-policy-vectors.json`).
+- [x] `commonmeasure policy check <file>` loads a candidate through the
+  loader and prints what it accepted, with the digest of its loader's form,
+  or the refusal (`crates/commonmeasure-cli/src/main.rs`).
+- [x] The contract states which fields mean something different on each
+  machine a policy reaches — a principal binding's `os_user` and a scope's
+  `match` — and the policy-envelope contract states that a distributed
+  policy declares no `principals`
+  (`docs/contracts/source-policy.md` §Policy written for many machines,
+  `docs/contracts/policy-envelope.md` §What a distributed policy carries).
+
+**Acceptance evidence:** the schema and both vector sets are checked against
+the binary and the runtime in this repository's offline gate. The hub's
+half, its publish check and its policy builder held to the same vectors, is
+on the hub's own board.
 
 ## Deferred packages
 
@@ -1198,15 +1326,14 @@ edge's reconciled spend.
 
 ### WP-34: add-on management and settings
 
-The extension story, not the self-serve path; the reader-facing sentence it
-corrects is fixed by wording until it lands.
+The extension story, not the self-serve path.
 
-Every processor compiled into the binary runs wherever it is wired; two are
-gated by per-job flags; nothing in `policy.json` names a processor; the run
-manifest seals the installed set and not the active one; a session records
-no processor set; the console shows no processor. Reader-facing text saying
-add-ons are switched on per operator (`PRODUCT.md`, `README.md`) is ahead of
-the code. This package makes the statement true and gives each add-on a
+Every processor compiled into the binary runs wherever it is wired; three
+are gated by per-job flags; nothing in `policy.json` names a processor; the
+run manifest seals the installed set and not the active one; a session
+records no processor set; the console shows no processor. `PRODUCT.md` and
+`README.md` say that a per-operator switch is not built. This package
+builds the switch and gives each add-on a
 settings surface with no add-on-specific screen: an add-on declares its
 settings, and the console and the hub render them. Depends on WP-24 for the
 console write path and on WP-18 and WP-19 for the organisation half.
@@ -1442,7 +1569,8 @@ not approve it cannot enable it.
 Adds reach to further hosts; Claude Code, Codex and Pi are enough for the
 first stranger.
 
-Claude Code, Codex and Pi are the hosts integrated today. Each host below
+Claude Code, Codex, Pi, Claude Desktop, Cursor, the Copilot CLI and VS Code
+are the hosts integrated today. Each host below
 is investigated first and integrated second, under the host-integration
 contract: a host supplies session identity and, where it can, lifecycle
 hooks; with hooks it gets observed crossings, without them it gets the
@@ -1458,9 +1586,48 @@ Depends on WP-21 for the `install <host>` shape.
   do not exist, and how it identifies itself so `host` in the record is
   exact. Each section names the document or the live probe it rests on
   (`docs/knowledge-base/host-surfaces.md`).
-- [ ] GitHub Copilot: the agent mode inside VS Code and the Copilot CLI,
+- [x] Investigation of the hosts the first page does not name, one
+  section per host in `docs/knowledge-base/host-surfaces-2.md`: Gemini
+  CLI, Zed, Cline, OpenCode, Devin, JetBrains AI
+  Assistant and Junie, Kiro, Goose, Amp and Google Antigravity, with the
+  other agent hosts Herdr recognises in a table, and an order for
+  integration.
+- [x] The MCP server answers `initialize` with the client's requested
+  protocol version when it can serve it (`2025-03-26`, `2025-06-18`,
+  `2025-11-25`), so a client that refuses another version (Junie) connects;
+  pinned by a test in `crates/commonmeasure-cli/tests/mediated_e2e.rs`
+  (`initialize_is_answered_with_the_requested_protocol_version_when_the_server_serves_it`,
+  and `a_batch_is_answered_under_2025_03_26_and_refused_under_later_revisions`
+  for the batching `2025-03-26` requires).
+- [x] The Claude Code hook reader refuses a payload under
+  `GEMINI_SESSION_ID`, `DEVIN_PROJECT_DIR` or `GROK_SESSION_ID`, recording
+  nothing and printing nothing, as under `CURSOR_PROJECT_DIR`
+  (`crates/commonmeasure-cli/tests/hook_e2e.rs`
+  `the_claude_code_reader_refuses_under_gemini_devin_and_grok_environments`).
+- [ ] Gemini CLI: `install gemini-cli` writes the server into
+  `~/.gemini/settings.json` and hooks read Gemini's `AfterTool` shape.
+- [ ] Hosts that read Claude Code's registration (the Devin CLI, Grok
+  Build, Oh My Pi): the mediated record names the host rather than
+  `claude-code`, through a `--host` value an entry in the host's own file
+  carries.
+- [x] Goose: the MCP server takes `AGENT_SESSION_ID` as the session id
+  when no `--session` is given (`crates/commonmeasure-cli/tests/mediated_e2e.rs`
+  `the_session_id_comes_from_the_argument_then_agent_session_id_then_the_server`).
+- [ ] Goose: `install goose` writes the extension into
+  `~/.config/goose/config.yaml`.
+- [x] GitHub Copilot: the agent mode inside VS Code and the Copilot CLI,
   as two surfaces; the coding-agent on GitHub as a third, which runs where
   no edge is and is recorded as out of reach unless a hosted edge serves it.
+  The Copilot CLI: `install copilot` writes the server into
+  `~/.copilot/mcp-config.json` and four camelCase hooks into a hook file of
+  its own, and the hook command reads the CLI's payload under `sessionId`;
+  registration `fixture-tested` in `install_e2e.rs`, observed
+  `spec-verified` in `hook_e2e.rs` on the documented shapes, mediated
+  `planned`: the CLI listed the entry and refused to start it for want of a
+  Copilot plan. The Copilot app and agent mode in VS Code: `spec-verified`,
+  the same files by their documentation. The cloud agent runs in a
+  sandbox with no operator home, out of reach of the local binary
+  (`docs/contracts/host-integration.md` §6).
 - [x] Cursor: its MCP configuration and its hooks, and whether a hook
   event carries the fetched content or only the call. `postToolUse`
   carries every tool's output; `install cursor` writes the server and four
@@ -1469,9 +1636,20 @@ Depends on WP-21 for the `install <host>` shape.
   observed `spec-verified` in `hook_e2e.rs` on the documented shapes, no
   payload recorded from Cursor; mediated `planned`, no Cursor session is
   recorded (`docs/contracts/host-integration.md` §6).
-- [ ] VS Code without Copilot: the workspace and user MCP configuration
+- [x] VS Code without Copilot: the workspace and user MCP configuration
   that any MCP-capable extension reads, so one registration serves several
-  extensions; which extensions read it is recorded, not assumed.
+  extensions; which extensions read it is recorded, not assumed. VS Code's
+  own harnesses and, forwarded, the Copilot harness read it; Cline,
+  Continue and Roo Code keep their own files
+  (`docs/knowledge-base/host-surfaces.md`). `install vscode` writes one
+  `servers` entry in the user `mcp.json` and no hooks; registration
+  `fixture-tested` in `install_e2e.rs`, mediated `planned`, no chat
+  session is recorded (`docs/contracts/host-integration.md` §6).
+- [ ] VS Code hooks: whether to register any, decided once a session with
+  Copilot Chat shows what its `PostToolUse` input carries. Its hooks run
+  only through that extension, which also loads Claude Code's hook files
+  and ignores matchers, so none is registered until a payload shows a tool
+  result to record.
 - [x] Codex beyond the CLI: the desktop app and the IDE extension, and
   whether the CLI registration reaches them. One table serves all three;
   `install codex` writes the approval mode Codex needs and the record
@@ -1492,8 +1670,18 @@ Depends on WP-21 for the `install <host>` shape.
   browser extension. Both reach tools only over HTTP, so they need the
   mediated tools served as a remote MCP endpoint by an edge running as a
   service under the organisation's policy, never by the hub; that edge is
-  designed in this box and built only if the investigation shows a host
-  can use it.
+  WP-46.
+- [ ] Browser answer surfaces: ChatGPT on the web, Google AI Overviews and
+  Bing Copilot Search, whose own web search crosses no tool this product
+  can offer. The extension in `browser/` observes each answer's sources and
+  sends them to the binary over Chrome native messaging; `install chrome`
+  writes the host manifest, `uninstall` removes it and `doctor` reads it
+  back. Registration `fixture-tested` in `install_e2e.rs`; the message path
+  `fixture-tested` in `browser_e2e.rs`, and the ChatGPT stream parser in
+  `browser/test/`; the Google page reader finds no source on the live page,
+  whose overview links name no destination; no session through the
+  extension is committed (`docs/contracts/host-integration.md` §6). Ticked
+  when a real session per surface is recorded through the real binary.
 - [ ] Implementation per host, in the order the investigation ranks by
   reach: `commonmeasure install <host>` and `uninstall <host>` writing only
   that host's surface, `doctor` reporting it, hooks registered where they

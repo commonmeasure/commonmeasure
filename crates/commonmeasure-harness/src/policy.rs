@@ -20,6 +20,7 @@ use commonmeasure_runtime::policy::{self, Ruling, normalised_host};
 pub use commonmeasure_types::PolicyMode;
 use commonmeasure_types::canonical::{canonical_digest, canonical_json};
 use commonmeasure_types::{AllowanceDeclaration, Constraint, ContextEnvelope};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -27,7 +28,7 @@ use serde_json::{Value, json};
 /// permissive default, so a misspelled `"contraints"` would otherwise load as
 /// a strict policy enforcing nothing — and `context_status` would report the
 /// mode the operator wrote over the constraints they lost.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyFile {
     #[serde(default = "observe")]
@@ -44,7 +45,8 @@ pub struct PolicyFile {
     #[serde(default)]
     pub scopes: Vec<PolicyScope>,
     /// Delegated authority keyed by an authenticated operating-system user.
-    /// An empty list preserves the legacy directory-only policy exactly.
+    /// An empty list leaves the policy scoped by directory alone, resolving
+    /// exactly as a policy with no principals.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub principals: Vec<PrincipalBinding>,
     /// Whether the mediated tools may reach loopback and private-network
@@ -94,7 +96,7 @@ pub struct PolicyFile {
 }
 
 /// One agreement the operator holds with a source, keyed by host.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TermsDeclaration {
     /// The host the agreement covers, exactly; a subdomain needs its own
@@ -121,7 +123,7 @@ pub struct TermsDeclaration {
 /// One typed institution identifier, in the standard's `access_context`
 /// shape: a scheme (`ror`, `isni`, `saml_entity_id`, or an operator-chosen
 /// one) and a value in that scheme's own format.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstitutionIdentifier {
     pub scheme: String,
@@ -130,7 +132,7 @@ pub struct InstitutionIdentifier {
 
 /// One scoped overlay. A field left out inherits the top-level value, so a
 /// scope states only what it changes.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyScope {
     /// Substring matched against the session's working directory.
@@ -175,7 +177,7 @@ pub struct PolicyScope {
 
 /// One authenticated principal's overlay. `os_user` is the effective numeric
 /// user id, read from the process rather than an environment variable.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PrincipalBinding {
     pub principal: String,
@@ -278,7 +280,7 @@ impl Principal {
 /// has one this runtime can read.
 ///
 /// Unix keeps the effective uid in the kernel, which is why it is the first
-/// shipped basis (`docs/contracts/session-evidence.md` §Principal).
+/// shipped basis (`docs/contracts/session-evidence.md` §Crossing).
 #[cfg(unix)]
 fn trusted_os_user() -> Option<u32> {
     // SAFETY: `geteuid` takes no arguments and has no memory-safety
@@ -1330,7 +1332,57 @@ impl SessionPolicy {
     }
 }
 
+/// The JSON Schema of the policy file, derived from the types a load parses
+/// with, so the schema an author validates against cannot drift from what the
+/// loader accepts.
+///
+/// It is the structural half of the policy's contract and no more: the checks
+/// [`parse`] makes after deserialising — an empty scope match, egress cleared
+/// without an engagement, a recordable prefix that ends at no component — are
+/// not expressible in a schema and are stated in the contract and enforced by
+/// the loader alone (`docs/contracts/source-policy.md`).
+///
+/// The derived descriptions are removed. They are this crate's doc comments,
+/// written for someone reading the loader; the contract is what explains a
+/// field to an author, and a published schema that moved with every comment
+/// edit would report structural change where there was none.
+pub fn schema() -> Value {
+    fn without_descriptions(value: Value) -> Value {
+        match value {
+            Value::Object(members) => Value::Object(
+                members
+                    .into_iter()
+                    // Only a string-valued `description` is annotation; a
+                    // property named `description` would carry a schema object.
+                    .filter(|(key, member)| !(key == "description" && member.is_string()))
+                    .map(|(key, member)| (key, without_descriptions(member)))
+                    .collect(),
+            ),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(without_descriptions).collect())
+            }
+            other => other,
+        }
+    }
+    let mut schema = without_descriptions(
+        serde_json::to_value(schemars::schema_for!(PolicyFile))
+            .expect("a derived schema serialises to JSON"),
+    );
+    schema["title"] = json!("Common Measure source policy");
+    schema
+}
+
 impl PolicyDocument {
+    /// Parse and validate candidate policy bytes exactly as a load does,
+    /// naming `source` in the refusal.
+    ///
+    /// For callers that hold a document rather than an operator home: the
+    /// `policy check` command, and anything holding a policy before it is
+    /// installed anywhere.
+    pub fn check(encoded: &[u8], source: &Path) -> Result<PolicyFile, String> {
+        parse(encoded, source)
+    }
+
     /// The one validity rule, applied to a policy before it is written by
     /// anything other than [`Self::save`]: the same rule a load enforces.
     pub fn validate(file: &PolicyFile) -> Result<(), String> {

@@ -12,9 +12,11 @@
 //! Every mediated fetch that produced a body passes through here, HTML or
 //! not, so the record can tie the bytes the origin served to the text that
 //! entered or was withheld from context in every case. A body whose content
-//! type is not HTML is decoded and delivered unextracted; where the decoding
-//! changed nothing, the input and output hashes are equal and the record says
-//! so. The invocation's input is the hash of the bytes received and its
+//! type is not HTML is decoded and delivered unextracted; where neither the
+//! removal of a content coding nor the decoding changed anything, the input
+//! and output hashes are equal and the record says so. The invocation's input
+//! is the hash of the bytes the origin served, coded where it served them
+//! under gzip, and its
 //! output the hash of the text delivered, which is how a reader re-derives
 //! the crossing's `content_hash` from its `retrieved_hash` without trusting
 //! this runtime (`docs/FAIL-POLICY.md` §12).
@@ -47,6 +49,10 @@ const RULES: &str = "\
 applies-to: a response whose Content-Type media type, case-folded and without parameters, \
 is text/html or application/xhtml+xml is extracted; any other body, or a body with no \
 Content-Type, is delivered as decoded and not extracted.\n\
+content-coding: a non-empty body served with the single content coding gzip (or x-gzip) is \
+gunzipped, every gzip member in turn, before decoding; the input hash covers the bytes as \
+served and the rules below apply to the gunzipped bytes. A body under any other content \
+coding, or under more than one, is never delivered.\n\
 decoding: the body is decoded as UTF-8 with each invalid sequence replaced by U+FFFD; the \
 charset the response declares is not consulted.\n\
 dropped: comments (from '<!--' to the next '-->', or to the end of the body), the doctype \
@@ -222,7 +228,8 @@ const BLIND_SPOTS: &[&str] = &[
 pub struct Extraction {
     /// The text that goes to the screens and, if admitted, to the agent.
     pub text: String,
-    /// SHA-256 over the body as received.
+    /// SHA-256 over the body as the origin served it: the coded bytes where it
+    /// served them under a content coding.
     pub retrieved_hash: String,
     /// SHA-256 over `text`.
     pub content_hash: String,
@@ -265,13 +272,19 @@ pub fn is_html(content_type: &str) -> bool {
 /// Decode and, where the content type names HTML, extract one body, and
 /// record the invocation. Every mediated fetch with a body passes through
 /// here so the record ties `retrieved_hash` to `content_hash` in every case.
+///
+/// `body` is the body with any content coding removed; `coded` is the
+/// coding and the bytes as served where the transport removed one, which is
+/// what the input hash covers.
 pub fn invoke(
     reference: &str,
     body: &[u8],
+    coded: Option<(&str, &[u8])>,
     content_type: Option<&str>,
 ) -> (Invocation, Extraction) {
     let started_at = Utc::now();
-    let retrieved_hash = sha256_digest(body);
+    let served = coded.map_or(body, |(_, bytes)| bytes);
+    let retrieved_hash = sha256_digest(served);
     let decoded = String::from_utf8_lossy(body);
     let lossy = matches!(decoded, std::borrow::Cow::Owned(_));
     let extracted = content_type.is_some_and(is_html);
@@ -281,13 +294,17 @@ pub fn invoke(
         decoded.into_owned()
     };
     let content_hash = sha256_digest(text.as_bytes());
+    let removed = coded
+        .map(|(coding, _)| format!("the {coding} content coding removed, "))
+        .unwrap_or_default();
     let method = if extracted {
-        "the body decoded as UTF-8 and its readable text extracted under the rules the \
-         configuration digest pins"
-            .to_owned()
+        format!(
+            "{removed}the body decoded as UTF-8 and its readable text extracted under the rules \
+             the configuration digest pins"
+        )
     } else {
         format!(
-            "the body decoded as UTF-8 and delivered unextracted: {} is not HTML",
+            "{removed}the body decoded as UTF-8 and delivered unextracted: {} is not HTML",
             content_type
                 .map(|content_type| format!("the content type {content_type}"))
                 .unwrap_or_else(|| "a body with no content type".to_owned())
@@ -310,8 +327,10 @@ pub fn invoke(
         }],
         json!({
             "content_type": content_type,
+            "content_coding": coded.map(|(coding, _)| coding),
             "extracted": extracted,
-            "bytes_received": body.len(),
+            "bytes_received": served.len(),
+            "bytes_decoded": body.len(),
             "characters_delivered": text.chars().count(),
             "lossy_decoding": lossy,
             "token_basis": TOKEN_BASIS,
@@ -660,11 +679,13 @@ mod tests {
         let (first, one) = invoke(
             "https://a.example/p",
             body,
+            None,
             Some("text/html; charset=utf-8"),
         );
         let (_, two) = invoke(
             "https://a.example/p",
             body,
+            None,
             Some("text/html; charset=utf-8"),
         );
         assert_eq!(one.text, two.text);
@@ -692,7 +713,8 @@ mod tests {
     #[test]
     fn a_body_that_is_not_html_is_decoded_and_delivered_with_equal_hashes() {
         let body = b"<p>Not a page: a text file quoting markup.</p>";
-        let (invocation, extraction) = invoke("https://a.example/t", body, Some("text/plain"));
+        let (invocation, extraction) =
+            invoke("https://a.example/t", body, None, Some("text/plain"));
         assert!(!extraction.extracted);
         assert_eq!(extraction.text, String::from_utf8_lossy(body));
         assert_eq!(extraction.retrieved_hash, extraction.content_hash);
@@ -705,10 +727,41 @@ mod tests {
         assert_eq!(record["detail"]["lossy_decoding"], false);
     }
 
+    /// A body served under gzip: the input hash is over the coded bytes the
+    /// origin served, the output hash over the text delivered, and the record
+    /// names the coding and both sizes. The two hashes differ even for a body
+    /// delivered unextracted, because the coding was removed.
+    #[test]
+    fn a_coded_body_is_hashed_as_served_and_delivered_as_decoded() {
+        let decoded = b"plain text the origin gzipped";
+        let served = b"\x1f\x8b stands in for the coded bytes";
+        let (invocation, extraction) = invoke(
+            "https://a.example/z",
+            decoded,
+            Some(("gzip", served)),
+            Some("text/plain"),
+        );
+        assert_eq!(extraction.retrieved_hash, sha256_digest(served));
+        assert_eq!(extraction.content_hash, sha256_digest(decoded));
+        assert_eq!(extraction.text, String::from_utf8_lossy(decoded));
+        let record = invocation.to_value();
+        assert_eq!(record["inputs"][0]["content_hash"], sha256_digest(served));
+        assert_eq!(record["outputs"][0]["content_hash"], sha256_digest(decoded));
+        assert_eq!(record["detail"]["content_coding"], "gzip");
+        assert_eq!(record["detail"]["bytes_received"], served.len());
+        assert_eq!(record["detail"]["bytes_decoded"], decoded.len());
+        assert!(
+            record["method"]
+                .as_str()
+                .is_some_and(|method| method.starts_with("the gzip content coding removed")),
+            "{record}"
+        );
+    }
+
     #[test]
     fn a_body_that_is_not_utf8_records_the_lossy_decoding() {
         let body = b"caf\xe9 au lait";
-        let (invocation, extraction) = invoke("https://a.example/t", body, None);
+        let (invocation, extraction) = invoke("https://a.example/t", body, None, None);
         assert_ne!(extraction.retrieved_hash, extraction.content_hash);
         assert_eq!(invocation.to_value()["detail"]["lossy_decoding"], true);
         assert_eq!(

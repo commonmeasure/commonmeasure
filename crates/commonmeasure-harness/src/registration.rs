@@ -36,6 +36,25 @@
 //!   the binary named in it and registers the server's tools with Pi under
 //!   their own names. Mediated only: Pi has no web tool of its own to
 //!   observe.
+//! - Claude Desktop: one `mcpServers` entry in its configuration file.
+//!   Mediated only: it has no hook surface.
+//! - Cursor: one `mcpServers` entry in `~/.cursor/mcp.json` and four hooks
+//!   in `~/.cursor/hooks.json`.
+//! - Copilot CLI: one `mcpServers` entry in `~/.copilot/mcp-config.json`
+//!   (or `$COPILOT_HOME/mcp-config.json`), which the GitHub Copilot app and
+//!   VS Code's Agent Host also read, and one hook file of this product's
+//!   own, `hooks/commonmeasure.json` in the same directory, holding four
+//!   hooks under the CLI's camelCase event names.
+//! - VS Code: one `servers` entry in the user `mcp.json`. No hooks: VS Code
+//!   runs hooks only through the Copilot Chat extension, which also loads
+//!   Claude Code's hook files and ignores their matchers.
+//! - Chrome: one native messaging host manifest,
+//!   `ai.commonmeasure.browser.json`, in the browser's user-level
+//!   `NativeMessagingHosts` directory, naming the binary and the Common
+//!   Measure extension as the only origin allowed to start it. Chromium and
+//!   Brave read the same manifest from their own directories, where it is
+//!   written only if that browser's directory already exists. Observed only:
+//!   the extension reads what the page shows and cannot refuse anything.
 
 use std::path::{Path, PathBuf};
 
@@ -92,7 +111,50 @@ pub struct HostPaths {
     /// user's `.cursor` directory.
     pub cursor_mcp: PathBuf,
     pub cursor_hooks: PathBuf,
+    /// The Copilot CLI's user MCP file, and the hook file this product
+    /// writes in the CLI's user hooks directory, which the CLI loads whole.
+    pub copilot_mcp: PathBuf,
+    pub copilot_hooks: PathBuf,
+    /// VS Code's user-profile `mcp.json`, the default profile's.
+    pub vscode_mcp: PathBuf,
+    /// The Chromium-family browsers whose user-level native messaging
+    /// directory the Chrome registration writes into, Chrome first.
+    pub native_messaging: Vec<NativeMessagingDirectory>,
 }
+
+/// One browser's user-level native messaging directory.
+#[derive(Debug, Clone)]
+pub struct NativeMessagingDirectory {
+    /// The browser, as the operator knows it.
+    pub browser: &'static str,
+    /// The browser's own user data directory. The manifest is written for a
+    /// browser other than Chrome only when this exists, so the registration
+    /// creates no directory for a browser the operator does not use.
+    pub application: PathBuf,
+    /// Whether the manifest is written even when `application` is absent.
+    pub always: bool,
+}
+
+impl NativeMessagingDirectory {
+    /// Chrome looks for user-level hosts in `NativeMessagingHosts` under its
+    /// user data directory.
+    pub fn manifest(&self) -> PathBuf {
+        self.application
+            .join("NativeMessagingHosts")
+            .join(format!("{NATIVE_HOST}.json"))
+    }
+}
+
+/// The native messaging host name the extension connects to. Chrome allows
+/// lowercase letters, digits, dots and underscores.
+pub const NATIVE_HOST: &str = "ai.commonmeasure.browser";
+
+/// The Common Measure extension's id, fixed by the public key in
+/// `browser/manifest.json`: the first 32 hexadecimal digits of the key's
+/// SHA-256, each digit mapped from `0-f` to `a-p`. An unpacked extension
+/// without a key gets an id from its directory path, which the native
+/// messaging manifest could not name in advance.
+pub const EXTENSION_ID: &str = "hojjbnoeobjkjklcdhhnncmmojmcneig";
 
 /// The observed path's hooks for Cursor: Cursor's event name and the event
 /// name the `hook` subcommand takes. The same four moments as Claude Code's
@@ -105,13 +167,33 @@ pub const CURSOR_HOOKS: [(&str, &str); 4] = [
     ("stop", "stop"),
 ];
 
+/// The observed path's hooks for the Copilot CLI: the CLI's camelCase event
+/// name, the event name the `hook` subcommand takes, and the tool matcher
+/// where the event has one. The same four moments as Claude Code's
+/// (`CLAUDE_HOOKS`). The camelCase names select the camelCase payload,
+/// which carries `sessionId` and `toolResult.textResultForLlm`. The matcher
+/// is a regular expression over the CLI's own tool names and names only the
+/// two built-in web tools, so our own tools (`commonmeasure-context_fetch`)
+/// never reach the hook.
+pub const COPILOT_HOOKS: [(&str, &str, Option<&str>); 4] = [
+    ("sessionStart", "session-start", None),
+    ("postToolUse", "post-tool-use", Some("web_fetch|web_search")),
+    ("userPromptSubmitted", "user-prompt-submit", None),
+    ("agentStop", "stop", None),
+];
+
+/// The name of the hook file `install copilot` writes in the CLI's user
+/// hooks directory. The file is this product's alone.
+const COPILOT_HOOK_FILE: &str = "commonmeasure.json";
+
 /// The extension `install pi` writes, with the binary's path substituted
 /// where the marker stands.
 const PI_EXTENSION: &str = include_str!("pi_extension.ts");
 const PI_BINARY_MARKER: &str = "__COMMONMEASURE_BINARY__";
 
 impl HostPaths {
-    /// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are the hosts' own overrides and
+    /// `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR` and
+    /// `COPILOT_HOME` are the hosts' own overrides and
     /// are honoured as the hosts honour them; otherwise the defaults under
     /// `HOME`.
     pub fn from_environment() -> Result<Self, String> {
@@ -146,24 +228,65 @@ impl HostPaths {
             .filter(|dir| !dir.trim().is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".pi/agent"));
-        // Claude Desktop keeps its file where the platform keeps
-        // application data; there is no override of its own.
-        let claude_desktop_config = if cfg!(target_os = "macos") {
-            home.join("Library/Application Support/Claude/claude_desktop_config.json")
+        // Claude Desktop and VS Code keep their files where the platform
+        // keeps application data; neither has an override of its own.
+        let application_data = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support")
         } else if cfg!(windows) {
             std::env::var("APPDATA")
                 .ok()
                 .filter(|dir| !dir.trim().is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join("AppData/Roaming"))
-                .join("Claude/claude_desktop_config.json")
         } else {
             std::env::var("XDG_CONFIG_HOME")
                 .ok()
                 .filter(|dir| !dir.trim().is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".config"))
-                .join("Claude/claude_desktop_config.json")
+        };
+        let copilot_home = std::env::var("COPILOT_HOME")
+            .ok()
+            .filter(|dir| !dir.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".copilot"));
+        // The browsers' user data directories; Windows finds native
+        // messaging hosts through the registry instead, so it has none.
+        let browsers: [(&'static str, &str, &str, bool); 3] = [
+            ("Chrome", "Google/Chrome", "google-chrome", true),
+            ("Chromium", "Chromium", "chromium", false),
+            (
+                "Brave",
+                "BraveSoftware/Brave-Browser",
+                "BraveSoftware/Brave-Browser",
+                false,
+            ),
+        ];
+        let native_messaging = if cfg!(target_os = "macos") {
+            browsers
+                .iter()
+                .map(|(browser, mac, _, always)| NativeMessagingDirectory {
+                    browser,
+                    application: home.join("Library/Application Support").join(mac),
+                    always: *always,
+                })
+                .collect()
+        } else if cfg!(windows) {
+            Vec::new()
+        } else {
+            let config = std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .filter(|dir| !dir.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"));
+            browsers
+                .iter()
+                .map(|(browser, _, linux, always)| NativeMessagingDirectory {
+                    browser,
+                    application: config.join(linux),
+                    always: *always,
+                })
+                .collect()
         };
         Ok(Self {
             claude_settings,
@@ -171,9 +294,13 @@ impl HostPaths {
             claude_plugins,
             codex_config: codex_home.join("config.toml"),
             pi_extension: pi_agent.join("extensions/commonmeasure/index.ts"),
-            claude_desktop_config,
+            claude_desktop_config: application_data.join("Claude/claude_desktop_config.json"),
             cursor_mcp: home.join(".cursor/mcp.json"),
             cursor_hooks: home.join(".cursor/hooks.json"),
+            copilot_mcp: copilot_home.join("mcp-config.json"),
+            copilot_hooks: copilot_home.join("hooks").join(COPILOT_HOOK_FILE),
+            vscode_mcp: application_data.join("Code/User/mcp.json"),
+            native_messaging,
         })
     }
 }
@@ -222,11 +349,27 @@ fn is_our_hook_command(command: &str) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    let ours = matches!(
+    is_our_program(name) && rest.split_whitespace().next() == Some("hook")
+}
+
+/// Whether a program's file name is this product's binary or the plugin's
+/// launcher.
+fn is_our_program(name: &str) -> bool {
+    matches!(
         name,
         "commonmeasure" | "commonmeasure.exe" | "commonmeasure-launch"
-    );
-    ours && rest.split_whitespace().next() == Some("hook")
+    )
+}
+
+/// Whether a Copilot CLI hook entry is one of this product's: it runs the
+/// binary directly (`exec`) and its first argument is `hook`.
+fn is_our_copilot_hook(entry: &Value) -> bool {
+    entry["exec"].as_str().is_some_and(|program| {
+        Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_our_program)
+    }) && entry["args"][0] == "hook"
 }
 
 /// The program a hook command names, for the doctor's report.
@@ -392,7 +535,23 @@ pub fn install(
         HostSurface::Pi => install_pi(binary, paths),
         HostSurface::ClaudeDesktop => install_claude_desktop(binary, paths),
         HostSurface::Cursor => install_cursor(binary, paths),
+        HostSurface::CopilotCli => install_copilot(binary, paths),
+        HostSurface::VsCode => install_vscode(binary, paths),
+        HostSurface::Chrome => install_chrome(binary, paths),
+        surface @ (HostSurface::ChatgptWeb
+        | HostSurface::GoogleAiOverview
+        | HostSurface::BingCopilotSearch) => Err(browser_surface_is_not_a_registration(surface)),
     }
+}
+
+/// A browser answer surface is recorded under its own name and registered
+/// through the browser.
+fn browser_surface_is_not_a_registration(surface: HostSurface) -> String {
+    format!(
+        "{} is recorded through the browser extension; the registration is \
+         commonmeasure install chrome",
+        surface.id()
+    )
 }
 
 /// Remove the product's registration from one host. Returns one line per
@@ -404,25 +563,32 @@ pub fn uninstall(surface: HostSurface, paths: &HostPaths) -> Result<Vec<String>,
         HostSurface::Pi => uninstall_pi(paths),
         HostSurface::ClaudeDesktop => uninstall_claude_desktop(paths),
         HostSurface::Cursor => uninstall_cursor(paths),
+        HostSurface::CopilotCli => uninstall_copilot(paths),
+        HostSurface::VsCode => uninstall_vscode(paths),
+        HostSurface::Chrome => uninstall_chrome(paths),
+        surface @ (HostSurface::ChatgptWeb
+        | HostSurface::GoogleAiOverview
+        | HostSurface::BingCopilotSearch) => Err(browser_surface_is_not_a_registration(surface)),
     }
 }
 
-/// The JSON file a host keeps its MCP servers in (`mcpServers` for Claude
-/// Desktop and Cursor), with our entry added or removed and every other key
-/// kept. Nothing is ever deleted: a removal leaves the `mcpServers` object
-/// in place, empty if ours was its only entry, because the file and that
-/// object may be the host's own and a file that vanished would be the
-/// host's loss. Returns whether our entry was there.
-fn set_json_server(path: &Path, server: Option<Value>) -> Result<bool, String> {
+/// The JSON file a host keeps its MCP servers in, under `key` (`mcpServers`
+/// for Claude Desktop, Cursor and the Copilot CLI, `servers` for VS Code),
+/// with our entry added or removed and every other key kept. Nothing is
+/// ever deleted: a removal leaves the servers object in place, empty if
+/// ours was its only entry, because the file and that object may be the
+/// host's own and a file that vanished would be the host's loss. Returns
+/// whether our entry was there.
+fn set_json_server(path: &Path, key: &str, server: Option<Value>) -> Result<bool, String> {
     let mut document = read_json(path)?;
     let servers = document
         .as_object_mut()
         .expect("read_json returns an object")
-        .entry("mcpServers")
+        .entry(key)
         .or_insert_with(|| json!({}));
     let Some(servers) = servers.as_object_mut() else {
         return Err(format!(
-            "{} holds an \"mcpServers\" value that is not an object, so nothing is written to it",
+            "{} holds a \"{key}\" value that is not an object, so nothing is written to it",
             path.display()
         ));
     };
@@ -442,6 +608,7 @@ fn set_json_server(path: &Path, server: Option<Value>) -> Result<bool, String> {
 fn install_claude_desktop(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
     set_json_server(
         &paths.claude_desktop_config,
+        "mcpServers",
         Some(json!({
             "command": binary.to_string_lossy(),
             "args": ["mcp", "--host", "claude-desktop"],
@@ -466,7 +633,7 @@ fn install_claude_desktop(binary: &Path, paths: &HostPaths) -> Result<Vec<String
 }
 
 fn uninstall_claude_desktop(paths: &HostPaths) -> Result<Vec<String>, String> {
-    let had = set_json_server(&paths.claude_desktop_config, None)?;
+    let had = set_json_server(&paths.claude_desktop_config, "mcpServers", None)?;
     Ok(vec![
         if had {
             format!(
@@ -515,18 +682,10 @@ fn install_cursor(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
         entries.push(json!({"command": format!("{quoted} hook {argument} --host cursor")}));
     }
 
-    let previous_mcp = match std::fs::read(&paths.cursor_mcp) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(format!(
-                "cannot read {}: {error}",
-                paths.cursor_mcp.display()
-            ));
-        }
-    };
+    let previous_mcp = read_previous(&paths.cursor_mcp)?;
     set_json_server(
         &paths.cursor_mcp,
+        "mcpServers",
         Some(json!({
             "type": "stdio",
             "command": binary.to_string_lossy(),
@@ -534,21 +693,12 @@ fn install_cursor(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
         })),
     )?;
     if let Err(error) = write_json(&paths.cursor_hooks, &hooks_document) {
-        let restored = match previous_mcp {
-            Some(bytes) => std::fs::write(&paths.cursor_mcp, bytes),
-            None => std::fs::remove_file(&paths.cursor_mcp),
-        };
-        return Err(match restored {
-            Ok(()) => format!(
-                "{error}; {} was restored, so nothing is registered",
-                paths.cursor_mcp.display()
-            ),
-            Err(restore_error) => format!(
-                "{error}; and {} could not be restored ({restore_error}), so the MCP server is \
-                 registered with no hooks: run commonmeasure uninstall cursor",
-                paths.cursor_mcp.display()
-            ),
-        });
+        return Err(restore_after_failure(
+            error,
+            &paths.cursor_mcp,
+            previous_mcp,
+            "cursor",
+        ));
     }
     Ok(vec![
         format!(
@@ -602,7 +752,7 @@ fn uninstall_cursor(paths: &HostPaths) -> Result<Vec<String>, String> {
             paths.cursor_hooks.display()
         ));
     }
-    let had = set_json_server(&paths.cursor_mcp, None)?;
+    let had = set_json_server(&paths.cursor_mcp, "mcpServers", None)?;
     lines.push(if had {
         format!(
             "cursor: MCP server {SERVER_NAME} removed from {}; the file and its mcpServers \
@@ -617,6 +767,243 @@ fn uninstall_cursor(paths: &HostPaths) -> Result<Vec<String>, String> {
     });
     lines.push("the evidence in the operator home is untouched".to_owned());
     Ok(lines)
+}
+
+/// The Copilot CLI reads `mcp-config.json` for servers and loads every
+/// `*.json` file in its user hooks directory. The server goes into the
+/// operator's file beside their own; the hooks go into a file of this
+/// product's own. The server is written first and taken back if the hooks
+/// write fails, as for Cursor.
+fn install_copilot(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
+    let program = binary.to_string_lossy();
+    let mut hooks_document = read_json(&paths.copilot_hooks)?;
+    let root = hooks_document
+        .as_object_mut()
+        .expect("read_json returns an object");
+    root.entry("version").or_insert(json!(1));
+    let hooks = root.entry("hooks").or_insert_with(|| json!({}));
+    let Some(hooks) = hooks.as_object_mut() else {
+        return Err(format!(
+            "{} holds a \"hooks\" value that is not an object, so nothing is written to it",
+            paths.copilot_hooks.display()
+        ));
+    };
+    for (event, argument, matcher) in COPILOT_HOOKS {
+        let entries = hooks.entry(event).or_insert_with(|| json!([]));
+        let Some(entries) = entries.as_array_mut() else {
+            return Err(format!(
+                "{} holds a \"hooks.{event}\" value that is not an array, so nothing is \
+                 written to it",
+                paths.copilot_hooks.display()
+            ));
+        };
+        entries.retain(|entry| !is_our_copilot_hook(entry));
+        // `exec` runs the binary with no shell between, so the path needs
+        // no quoting on any platform.
+        let mut entry = json!({"type": "command"});
+        if let Some(matcher) = matcher {
+            entry["matcher"] = json!(matcher);
+        }
+        entry["exec"] = json!(program);
+        entry["args"] = json!(["hook", argument, "--host", "copilot-cli"]);
+        entries.push(entry);
+    }
+
+    let previous_mcp = read_previous(&paths.copilot_mcp)?;
+    set_json_server(
+        &paths.copilot_mcp,
+        "mcpServers",
+        Some(json!({
+            "type": "local",
+            "command": program,
+            "args": ["mcp", "--host", "copilot-cli"],
+            "tools": ["*"],
+        })),
+    )?;
+    if let Err(error) = write_json(&paths.copilot_hooks, &hooks_document) {
+        return Err(restore_after_failure(
+            error,
+            &paths.copilot_mcp,
+            previous_mcp,
+            "copilot",
+        ));
+    }
+    Ok(vec![
+        format!(
+            "copilot-cli: MCP server {SERVER_NAME} registered in {}, naming {}; the GitHub \
+             Copilot app and VS Code's Agent Host read the same file",
+            paths.copilot_mcp.display(),
+            binary.display()
+        ),
+        format!(
+            "copilot-cli: four hooks (sessionStart, postToolUse, userPromptSubmitted, agentStop) \
+             registered in {}, each running the same binary",
+            paths.copilot_hooks.display()
+        ),
+        "copilot-cli: observed crossings come from postToolUse on web_fetch and web_search; the \
+         session is the CLI's sessionId. A call needs a Copilot plan that allows MCP"
+            .to_owned(),
+    ])
+}
+
+fn uninstall_copilot(paths: &HostPaths) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    let mut hooks_document = read_json(&paths.copilot_hooks)?;
+    let mut removed = 0;
+    if let Some(hooks) = hooks_document["hooks"].as_object_mut() {
+        for (event, _, _) in COPILOT_HOOKS {
+            if let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) {
+                let before = entries.len();
+                entries.retain(|entry| !is_our_copilot_hook(entry));
+                removed += before - entries.len();
+            }
+        }
+        hooks.retain(|_, entries| entries.as_array().is_none_or(|e| !e.is_empty()));
+    }
+    if removed > 0 {
+        // The file is this product's: it goes when nothing but ours was in
+        // it, and stays with the rest when someone added to it. The hooks
+        // directory is the CLI's and stays.
+        let only_ours = hooks_document.as_object().is_some_and(|root| {
+            root.keys().all(|key| key == "version" || key == "hooks")
+                && root["hooks"]
+                    .as_object()
+                    .is_none_or(|hooks| hooks.is_empty())
+        });
+        if only_ours {
+            std::fs::remove_file(&paths.copilot_hooks).map_err(|error| {
+                format!("cannot remove {}: {error}", paths.copilot_hooks.display())
+            })?;
+            lines.push(format!(
+                "copilot-cli: {removed} hook handler(s) removed; {} deleted",
+                paths.copilot_hooks.display()
+            ));
+        } else {
+            write_json(&paths.copilot_hooks, &hooks_document)?;
+            lines.push(format!(
+                "copilot-cli: {removed} hook handler(s) removed from {}; the file stays, because \
+                 it holds entries that are not this product's",
+                paths.copilot_hooks.display()
+            ));
+        }
+    } else {
+        lines.push(format!(
+            "copilot-cli: no hook of this product in {}",
+            paths.copilot_hooks.display()
+        ));
+    }
+    let had = set_json_server(&paths.copilot_mcp, "mcpServers", None)?;
+    lines.push(if had {
+        format!(
+            "copilot-cli: MCP server {SERVER_NAME} removed from {}; the file and its mcpServers \
+             object stay, empty if ours was the only entry",
+            paths.copilot_mcp.display()
+        )
+    } else {
+        format!(
+            "copilot-cli: no MCP server {SERVER_NAME} in {}",
+            paths.copilot_mcp.display()
+        )
+    });
+    lines.push("the evidence in the operator home is untouched".to_owned());
+    Ok(lines)
+}
+
+/// VS Code accepts comments in `mcp.json`; this writer does not keep them,
+/// so a file carrying one is refused whole rather than rewritten without
+/// it.
+fn vscode_json_error(error: String) -> String {
+    if error.contains("is not valid JSON") {
+        format!(
+            "{error}. VS Code allows comments in this file and this writer would drop them, so \
+             nothing is written; remove the comments, or add the server with VS Code's MCP: Add \
+             Server command"
+        )
+    } else {
+        error
+    }
+}
+
+/// VS Code reads the user-profile `mcp.json`, key `servers`. It is written
+/// directly rather than through `code --add-mcp`, which only adds, needs
+/// the `code` command on `PATH`, and leaves `uninstall` and `doctor` to
+/// read the file anyway.
+fn install_vscode(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
+    set_json_server(
+        &paths.vscode_mcp,
+        "servers",
+        Some(json!({
+            "type": "stdio",
+            "command": binary.to_string_lossy(),
+            "args": ["mcp", "--host", "vscode"],
+        })),
+    )
+    .map_err(vscode_json_error)?;
+    Ok(vec![
+        format!(
+            "vscode: MCP server {SERVER_NAME} registered in {}, naming {}; VS Code starts it the \
+             first time a chat uses it, and forwards it to the Agent Host for the Copilot harness",
+            paths.vscode_mcp.display(),
+            binary.display()
+        ),
+        "vscode: mediated only. VS Code runs hooks only through the Copilot Chat extension, which \
+         also loads Claude Code's hook files and ignores their matchers, so no hook is registered"
+            .to_owned(),
+    ])
+}
+
+fn uninstall_vscode(paths: &HostPaths) -> Result<Vec<String>, String> {
+    let had = set_json_server(&paths.vscode_mcp, "servers", None).map_err(vscode_json_error)?;
+    Ok(vec![
+        if had {
+            format!(
+                "vscode: MCP server {SERVER_NAME} removed from {}; the file and its servers \
+                 object stay, empty if ours was the only entry",
+                paths.vscode_mcp.display()
+            )
+        } else {
+            format!(
+                "vscode: no MCP server {SERVER_NAME} in {}",
+                paths.vscode_mcp.display()
+            )
+        },
+        "the evidence in the operator home is untouched".to_owned(),
+    ])
+}
+
+/// A file's bytes before a write that may have to be undone, or `None`
+/// when it did not exist.
+fn read_previous(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
+
+/// Put the MCP file back as it was after the hooks write failed, and say
+/// whether that worked: hooks and server must not disagree.
+fn restore_after_failure(
+    error: String,
+    path: &Path,
+    previous: Option<Vec<u8>>,
+    host: &str,
+) -> String {
+    let restored = match previous {
+        Some(bytes) => std::fs::write(path, bytes),
+        None => std::fs::remove_file(path),
+    };
+    match restored {
+        Ok(()) => format!(
+            "{error}; {} was restored, so nothing is registered",
+            path.display()
+        ),
+        Err(restore_error) => format!(
+            "{error}; and {} could not be restored ({restore_error}), so the MCP server is \
+             registered with no hooks: run commonmeasure uninstall {host}",
+            path.display()
+        ),
+    }
 }
 
 /// The binary's path as a JSON string literal, which is also a TypeScript
@@ -663,6 +1050,181 @@ fn uninstall_pi(paths: &HostPaths) -> Result<Vec<String>, String> {
             "cannot remove {}: {error}",
             paths.pi_extension.display()
         )),
+    }
+}
+
+/// The native messaging host manifest `install chrome` writes, byte for byte.
+/// Chrome starts `path` itself, with the calling extension's origin as the
+/// only argument, so the manifest can carry no subcommand: the binary
+/// recognises that argument (`commonmeasure native-host`).
+pub fn native_messaging_manifest(binary: &Path) -> String {
+    let document = json!({
+        "name": NATIVE_HOST,
+        "description": "Common Measure: records the sources browser AI answers show",
+        "path": binary.to_string_lossy(),
+        "type": "stdio",
+        "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")],
+    });
+    let mut text = serde_json::to_string_pretty(&document).expect("a JSON value serialises");
+    text.push('\n');
+    text
+}
+
+/// A native messaging manifest is ours when it names our host; a file under
+/// our name that names another is left where it is.
+fn is_our_native_manifest(path: &Path) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    Ok(serde_json::from_str::<Value>(&text).is_ok_and(|document| document["name"] == NATIVE_HOST))
+}
+
+fn install_chrome(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
+    if paths.native_messaging.is_empty() {
+        return Err(
+            "Chrome on this platform finds native messaging hosts through the registry, which \
+             this command does not write; nothing was written"
+                .to_owned(),
+        );
+    }
+    let manifest = native_messaging_manifest(binary);
+    let mut lines = Vec::new();
+    for directory in &paths.native_messaging {
+        if !directory.always && !directory.application.is_dir() {
+            lines.push(format!(
+                "chrome: {} is not set up here ({} does not exist), so nothing is written for it",
+                directory.browser,
+                directory.application.display()
+            ));
+            continue;
+        }
+        write_atomically(&directory.manifest(), manifest.as_bytes())?;
+        lines.push(format!(
+            "chrome: native messaging host {NATIVE_HOST} registered for {} in {}, naming {}",
+            directory.browser,
+            directory.manifest().display(),
+            binary.display()
+        ));
+    }
+    lines.push(format!(
+        "chrome: only the extension chrome-extension://{EXTENSION_ID}/ may start it; load \
+         browser/ unpacked in chrome://extensions, and a running browser picks the host up \
+         at the extension's next message"
+    ));
+    lines.push(
+        "chrome: observed only. The extension records the sources ChatGPT, Google AI Overviews \
+         and Bing Copilot Search show, retrieved and never grounded, and refuses nothing"
+            .to_owned(),
+    );
+    Ok(lines)
+}
+
+fn uninstall_chrome(paths: &HostPaths) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    for directory in &paths.native_messaging {
+        let manifest = directory.manifest();
+        if !manifest.exists() {
+            lines.push(format!(
+                "chrome: no native messaging host {NATIVE_HOST} for {} in {}",
+                directory.browser,
+                manifest.display()
+            ));
+            continue;
+        }
+        if !is_our_native_manifest(&manifest)? {
+            lines.push(format!(
+                "chrome: {} names another host, so it is left in place",
+                manifest.display()
+            ));
+            continue;
+        }
+        std::fs::remove_file(&manifest)
+            .map_err(|error| format!("cannot remove {}: {error}", manifest.display()))?;
+        lines.push(format!(
+            "chrome: native messaging host {NATIVE_HOST} removed for {} from {}; the directory \
+             stays",
+            directory.browser,
+            manifest.display()
+        ));
+    }
+    lines.push(
+        "the extension stays loaded until it is removed in chrome://extensions; the evidence in \
+         the operator home is untouched"
+            .to_owned(),
+    );
+    Ok(lines)
+}
+
+fn doctor_chrome(paths: &HostPaths, home: &Path) -> HostReport {
+    let mut lines = Vec::new();
+    let mut registered = false;
+    if paths.native_messaging.is_empty() {
+        lines.push(
+            "native messaging: this platform's browsers read the registry, which this binary \
+             does not write"
+                .to_owned(),
+        );
+    }
+    for directory in &paths.native_messaging {
+        let manifest = directory.manifest();
+        let document = match std::fs::read_to_string(&manifest) {
+            Ok(text) => serde_json::from_str::<Value>(&text).ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                lines.push(format!(
+                    "native messaging: no host {NATIVE_HOST} for {} in {}",
+                    directory.browser,
+                    manifest.display()
+                ));
+                continue;
+            }
+            Err(error) => {
+                lines.push(format!(
+                    "native messaging: cannot read {}: {error}",
+                    manifest.display()
+                ));
+                continue;
+            }
+        };
+        let Some(document) = document.filter(|document| document["name"] == NATIVE_HOST) else {
+            lines.push(format!(
+                "native messaging: {} is not this product's manifest",
+                manifest.display()
+            ));
+            continue;
+        };
+        registered = true;
+        let command = document["path"].as_str().unwrap_or_default().to_owned();
+        lines.push(format!(
+            "native messaging: host {NATIVE_HOST} registered for {} in {}, command {command}",
+            directory.browser,
+            manifest.display()
+        ));
+        let origin = format!("chrome-extension://{EXTENSION_ID}/");
+        let allows_ours = document["allowed_origins"]
+            .as_array()
+            .is_some_and(|origins| origins.iter().any(|allowed| allowed == &json!(origin)));
+        if !allows_ours {
+            lines.push(format!(
+                "native messaging: the manifest does not allow {origin}, so the extension cannot \
+                 start the binary; run commonmeasure install chrome"
+            ));
+        }
+        lines.push(binary_line(&command));
+    }
+    lines.push(
+        "extension: whether it is loaded is the browser's record and is not read here; its \
+         popup says whether it reaches the binary"
+            .to_owned(),
+    );
+    lines.push(
+        "hooks: none; the extension observes ChatGPT, Google AI Overviews and Bing Copilot \
+         Search, and nothing it records is mediated"
+            .to_owned(),
+    );
+    lines.extend(home_lines(home));
+    HostReport {
+        host: "chrome",
+        registered,
+        lines,
     }
 }
 
@@ -734,16 +1296,7 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
     // The state file (the MCP server) goes first and is restored if the
     // settings write (the hooks) then fails, so the two surfaces never
     // disagree: hooks with no server would record without mediating.
-    let previous_state = match std::fs::read(&paths.claude_state) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(format!(
-                "cannot read {}: {error}",
-                paths.claude_state.display()
-            ));
-        }
-    };
+    let previous_state = read_previous(&paths.claude_state)?;
     let mut state = read_json(&paths.claude_state)?;
     let servers = state
         .as_object_mut()
@@ -763,21 +1316,12 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
     });
     write_json(&paths.claude_state, &state)?;
     if let Err(error) = write_json(&paths.claude_settings, &settings) {
-        let restored = match previous_state {
-            Some(bytes) => std::fs::write(&paths.claude_state, bytes),
-            None => std::fs::remove_file(&paths.claude_state),
-        };
-        return Err(match restored {
-            Ok(()) => format!(
-                "{error}; {} was restored, so nothing is registered",
-                paths.claude_state.display()
-            ),
-            Err(restore_error) => format!(
-                "{error}; and {} could not be restored ({restore_error}), so the MCP server is \
-                 registered with no hooks: run commonmeasure uninstall claude",
-                paths.claude_state.display()
-            ),
-        });
+        return Err(restore_after_failure(
+            error,
+            &paths.claude_state,
+            previous_state,
+            "claude",
+        ));
     }
 
     Ok(vec![
@@ -976,6 +1520,12 @@ fn binary_line(path: &str) -> String {
     }
 }
 
+/// Whether a session log can be written in the operator home, in the words
+/// `doctor` uses.
+pub fn recording_line(home: &Path) -> String {
+    home_lines(home).swap_remove(0)
+}
+
 /// The operator home's state, the same for every host: whether a session
 /// log can be written, and what the policy file says.
 fn home_lines(home: &Path) -> Vec<String> {
@@ -1083,13 +1633,24 @@ pub fn doctor(surface: HostSurface, paths: &HostPaths, home: &Path) -> HostRepor
         HostSurface::Pi => doctor_pi(paths, home),
         HostSurface::ClaudeDesktop => doctor_claude_desktop(paths, home),
         HostSurface::Cursor => doctor_cursor(paths, home),
+        HostSurface::CopilotCli => doctor_copilot(paths, home),
+        HostSurface::VsCode => doctor_vscode(paths, home),
+        HostSurface::Chrome => doctor_chrome(paths, home),
+        surface @ (HostSurface::ChatgptWeb
+        | HostSurface::GoogleAiOverview
+        | HostSurface::BingCopilotSearch) => HostReport {
+            host: surface.id(),
+            registered: false,
+            lines: vec![browser_surface_is_not_a_registration(surface)],
+        },
     }
 }
 
-/// The command a host's `mcpServers` entry names, when the entry is ours.
-fn json_server_command(path: &Path) -> Result<Option<String>, String> {
+/// The command a host's servers entry (under `key`) names, when the entry
+/// is ours.
+fn json_server_command(path: &Path, key: &str) -> Result<Option<String>, String> {
     let document = read_json(path)?;
-    Ok(document["mcpServers"][SERVER_NAME]
+    Ok(document[key][SERVER_NAME]
         .as_object()
         .and_then(|server| server.get("command"))
         .and_then(Value::as_str)
@@ -1098,7 +1659,7 @@ fn json_server_command(path: &Path) -> Result<Option<String>, String> {
 
 fn doctor_claude_desktop(paths: &HostPaths, home: &Path) -> HostReport {
     let mut lines = Vec::new();
-    let command = match json_server_command(&paths.claude_desktop_config) {
+    let command = match json_server_command(&paths.claude_desktop_config, "mcpServers") {
         Ok(command) => command,
         Err(error) => {
             return HostReport {
@@ -1195,7 +1756,7 @@ fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
             }
         ));
     }
-    let command = match json_server_command(&paths.cursor_mcp) {
+    let command = match json_server_command(&paths.cursor_mcp, "mcpServers") {
         Ok(command) => command,
         Err(error) => {
             lines.push(format!("mcp: {error}"));
@@ -1231,6 +1792,157 @@ fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
     HostReport {
         host: "cursor",
         registered: !hooked.is_empty() || command.is_some(),
+        lines,
+    }
+}
+
+fn doctor_copilot(paths: &HostPaths, home: &Path) -> HostReport {
+    let mut lines = Vec::new();
+    let mut binaries: Vec<String> = Vec::new();
+    let hooks_document = match read_json(&paths.copilot_hooks) {
+        Ok(document) => document,
+        Err(error) => {
+            return HostReport {
+                host: "copilot-cli",
+                registered: false,
+                lines: vec![format!("hooks: {error}")],
+            };
+        }
+    };
+    let mut hooked = Vec::new();
+    for (event, _, _) in COPILOT_HOOKS {
+        let programs: Vec<String> = hooks_document["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| is_our_copilot_hook(entry))
+            .filter_map(|entry| entry["exec"].as_str().map(str::to_owned))
+            .collect();
+        if !programs.is_empty() {
+            hooked.push(event);
+        }
+        for program in programs {
+            if !binaries.contains(&program) {
+                binaries.push(program);
+            }
+        }
+    }
+    if hooked.is_empty() {
+        lines.push(format!(
+            "hooks: none of this product in {}",
+            paths.copilot_hooks.display()
+        ));
+    } else {
+        let missing: Vec<&str> = COPILOT_HOOKS
+            .iter()
+            .map(|(event, _, _)| *event)
+            .filter(|event| !hooked.contains(event))
+            .collect();
+        lines.push(format!(
+            "hooks: {} registered in {}{}",
+            hooked.join(", "),
+            paths.copilot_hooks.display(),
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!(" (missing {})", missing.join(", "))
+            }
+        ));
+    }
+    let command = match json_server_command(&paths.copilot_mcp, "mcpServers") {
+        Ok(command) => command,
+        Err(error) => {
+            lines.push(format!("mcp: {error}"));
+            None
+        }
+    };
+    match &command {
+        Some(command) => {
+            lines.push(format!(
+                "mcp: server {SERVER_NAME} registered in {}, command {command}",
+                paths.copilot_mcp.display()
+            ));
+            if !binaries.contains(command) {
+                binaries.push(command.clone());
+            }
+        }
+        None => lines.push(format!(
+            "mcp: no server {SERVER_NAME} in {}",
+            paths.copilot_mcp.display()
+        )),
+    }
+    if binaries.len() > 1 {
+        lines.push(
+            "the hooks and the MCP server name different binaries; a session records under one \
+             version and mediates under another"
+                .to_owned(),
+        );
+    }
+    for binary in &binaries {
+        lines.push(binary_line(binary));
+    }
+    lines.push(
+        "readers: the Copilot CLI, the GitHub Copilot app and VS Code's Agent Host read the \
+         same mcp-config.json; the hooks are the CLI's"
+            .to_owned(),
+    );
+    lines.push(
+        "calls: a Copilot plan that allows MCP is needed; without one the CLI reports the server \
+         as blocked by policy and never starts it"
+            .to_owned(),
+    );
+    lines.extend(home_lines(home));
+    HostReport {
+        host: "copilot-cli",
+        registered: !hooked.is_empty() || command.is_some(),
+        lines,
+    }
+}
+
+fn doctor_vscode(paths: &HostPaths, home: &Path) -> HostReport {
+    let mut lines = Vec::new();
+    let command = match json_server_command(&paths.vscode_mcp, "servers") {
+        Ok(command) => command,
+        Err(error) => {
+            return HostReport {
+                host: "vscode",
+                registered: false,
+                lines: vec![format!("mcp: {}", vscode_json_error(error))],
+            };
+        }
+    };
+    match &command {
+        Some(command) => {
+            lines.push(format!(
+                "mcp: server {SERVER_NAME} registered in {}, command {command}",
+                paths.vscode_mcp.display()
+            ));
+            lines.push(binary_line(command));
+        }
+        None => lines.push(format!(
+            "mcp: no server {SERVER_NAME} in {}",
+            paths.vscode_mcp.display()
+        )),
+    }
+    lines.push(
+        "hooks: none by decision; VS Code runs hooks only through the Copilot Chat extension, \
+         which also loads Claude Code's hook files and ignores their matchers"
+            .to_owned(),
+    );
+    if command.is_some()
+        && json_server_command(&paths.copilot_mcp, "mcpServers").is_ok_and(|c| c.is_some())
+    {
+        lines.push(format!(
+            "copilot: {} names the server too; VS Code forwards this entry to its Agent Host, \
+             which also reads that file, and which of the two the Copilot harness starts is not \
+             documented",
+            paths.copilot_mcp.display()
+        ));
+    }
+    lines.extend(home_lines(home));
+    HostReport {
+        host: "vscode",
+        registered: command.is_some(),
         lines,
     }
 }
@@ -1465,7 +2177,97 @@ mod tests {
             claude_desktop_config: directory.join("Claude/claude_desktop_config.json"),
             cursor_mcp: directory.join(".cursor/mcp.json"),
             cursor_hooks: directory.join(".cursor/hooks.json"),
+            copilot_mcp: directory.join(".copilot/mcp-config.json"),
+            copilot_hooks: directory.join(".copilot/hooks/commonmeasure.json"),
+            vscode_mcp: directory.join("Code/User/mcp.json"),
+            native_messaging: vec![
+                NativeMessagingDirectory {
+                    browser: "Chrome",
+                    application: directory.join("Google/Chrome"),
+                    always: true,
+                },
+                NativeMessagingDirectory {
+                    browser: "Brave",
+                    application: directory.join("BraveSoftware/Brave-Browser"),
+                    always: false,
+                },
+            ],
         }
+    }
+
+    /// The id the native messaging manifest allows is the one Chrome derives
+    /// from the key in the extension's own manifest, and the extension's
+    /// version is the binary's: the two halves cannot drift apart unnoticed.
+    #[test]
+    fn the_extension_id_is_derived_from_the_key_the_extension_carries() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let manifest: Value =
+            serde_json::from_str(include_str!("../../../browser/manifest.json")).expect("JSON");
+        let key = base64::engine::general_purpose::STANDARD
+            .decode(manifest["key"].as_str().expect("a key"))
+            .expect("base64");
+        let digest = sha2::Sha256::digest(&key);
+        let id: String = digest[..16]
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0x0f])
+            .map(|nibble| char::from(b'a' + nibble))
+            .collect();
+        assert_eq!(id, EXTENSION_ID);
+        assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+        assert!(
+            manifest["permissions"]
+                .as_array()
+                .is_some_and(|permissions| permissions.contains(&json!("nativeMessaging")))
+        );
+    }
+
+    /// Chrome is always written; a browser whose directory does not exist is
+    /// not, so the registration creates nothing for a browser not in use.
+    /// A file under our name that names another host survives uninstall.
+    #[test]
+    fn the_chrome_manifest_is_written_where_a_browser_is_set_up_and_removed_only_if_ours() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        let binary = directory.path().join("commonmeasure");
+        std::fs::write(&binary, b"").unwrap();
+
+        let lines = install_chrome(&binary, &paths).expect("installs");
+        assert!(paths.native_messaging[0].manifest().is_file());
+        assert!(!paths.native_messaging[1].application.exists(), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Brave is not set up here"))
+        );
+
+        std::fs::create_dir_all(&paths.native_messaging[1].application).unwrap();
+        install_chrome(&binary, &paths).expect("installs again");
+        assert_eq!(
+            std::fs::read_to_string(paths.native_messaging[1].manifest()).unwrap(),
+            native_messaging_manifest(&binary)
+        );
+        let report = doctor_chrome(&paths, directory.path());
+        assert!(report.registered, "{:?}", report.lines);
+
+        std::fs::write(
+            paths.native_messaging[1].manifest(),
+            r#"{"name": "com.example.other", "path": "/usr/bin/other"}"#,
+        )
+        .unwrap();
+        uninstall_chrome(&paths).expect("uninstalls");
+        assert!(!paths.native_messaging[0].manifest().exists());
+        assert!(
+            paths.native_messaging[1].manifest().exists(),
+            "a manifest naming another host is not ours to remove"
+        );
+        assert!(
+            paths.native_messaging[0]
+                .manifest()
+                .parent()
+                .is_some_and(Path::is_dir),
+            "the directory stays"
+        );
     }
 
     /// The written extension names the binary as one string literal, which

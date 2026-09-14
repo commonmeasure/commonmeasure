@@ -79,7 +79,7 @@ Add-ons run on that same stream through one contract
 (`docs/contracts/processor.md`): a namespaced identity, a configuration
 digest and an evidence record per invocation. Every add-on compiled into
 the binary runs wherever it is wired; three run only in a batch run whose
-job asks for them; a per-operator switch in policy is not built yet
+job asks for them; a per-operator switch in policy is not built
 (`ROADMAP.md` §Add-on management and settings). The first set is built and
 maintained here:
 

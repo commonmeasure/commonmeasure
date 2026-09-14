@@ -65,10 +65,10 @@ are both exact.
 | Host | Registration surface | Hooks with a tool result | Session id to the server | Client name sent in `initialize` | Mediated tools | Verdict |
 |---|---|---|---|---|---|---|
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json`, `mcpServers`, stdio | none | none (server generates one) | `claude-ai` 0.1.0 and `local-agent-mode-<server>` 1.0.0 | listed, `live-verified`; a call `planned` | mediated only |
-| Claude in the browser, Claude in Chrome | account-level remote connectors only | none | not applicable | not probed | needs an HTTPS edge; `planned` | out of reach of the local binary |
+| Claude in the browser, Claude in Chrome | account-level remote connectors only | none | not applicable | not probed | needs an HTTPS edge, `planned`; Claude Desktop's bridge announces the local tools and a browser chat cannot call them, `live-verified` | out of reach of the local binary |
 | Cursor | `~/.cursor/mcp.json` and `<project>/.cursor/mcp.json`, `mcpServers`, stdio or HTTP | `afterMCPExecution`, `postToolUse`, `afterShellExecution` (`spec-verified`) | none to the server; `session_id` to hooks | `cursor-vscode` 1.0.0 | listed, `live-verified`; a call `planned` | observed too |
-| VS Code without Copilot | user `mcp.json` and `.vscode/mcp.json`, `servers`, stdio or HTTP | only through the Copilot Chat extension | none to the server; `sessionId` to hooks | not captured | registered, `live-verified`; start and call `planned` | mediated only |
-| Copilot CLI | `~/.copilot/mcp-config.json`, `mcpServers`, `type: local` or `http` | `postToolUse` with `textResultForLlm`, including `web_fetch` and `web_search` (`spec-verified`) | none to the server; `sessionId` to hooks | not captured: the client refused the server before starting it | registered, `live-verified`; a call `planned` | observed too |
+| VS Code without Copilot | user `mcp.json` and `.vscode/mcp.json`, `servers`, stdio or HTTP | only through the Copilot Chat extension | none to the server; `sessionId` to hooks | not captured | registered by `install vscode`, read by VS Code `live-verified`; start and call `planned` | mediated only |
+| Copilot CLI | `~/.copilot/mcp-config.json`, `mcpServers`, `type: local` or `http` | `postToolUse` with `textResultForLlm`, including `web_fetch` and `web_search` (`spec-verified`) | none to the server; `sessionId` to hooks | not captured: the client refused the server before starting it | registered by `install copilot`, read by the CLI `live-verified`; a call `planned` | observed too |
 | Copilot agent mode in VS Code | the VS Code `mcp.json`, forwarded to the Agent Host, or `~/.copilot/mcp-config.json` | Copilot Chat hooks | as VS Code | not captured | `spec-verified` | observed too, subject to subscription |
 | Copilot cloud agent on GitHub | repository settings JSON, `mcpServers` | `.github/hooks/*.json` in the job sandbox | `sessionId` per job | not applicable | needs an edge inside the job or hosted | out of reach of the local binary |
 | Microsoft 365 Copilot | Copilot Studio connector or declarative-agent plugin, Streamable HTTP URL | none | not applicable | not probed | needs an HTTPS edge | out of reach of the local binary |
@@ -213,10 +213,8 @@ result. After the entry above was in place, `main.log` recorded:
 and, with the entry removed, `[localMcpBridge] no stdio servers connected —
 announcing an empty local-MCP group`. The desktop announces a local stdio
 server's tools to the same device bridge that exposes its computer-use and
-browser tools to cloud sessions. Whether a chat on claude.ai or a Cowork
-session can call those three tools was not verified; that needs a person in
-the browser with the entry in place. Grade: the log lines `live-verified`;
-reachability from the browser `planned`.
+browser tools to cloud sessions. Grade: the log lines `live-verified`.
+Whether a browser chat can call the tools is the probe below.
 
 Claude in Chrome is a browser extension whose side panel runs as a Cowork
 session in the cloud; its `nativeMessaging` permission is reserved "to
@@ -226,10 +224,25 @@ configuration of its own. `spec-verified`:
 <https://support.claude.com/en/articles/12012173-getting-started-with-claude-in-chrome>
 (page says updated within two weeks of reading).
 
+**Probe.** With `install claude-desktop` in place and the desktop running,
+`main.log` recorded `[localMcpBridge] announcing commonmeasure: 3 tool(s)`
+twice. A claude.ai chat in Chrome on the same account, with web search off,
+answered that it had no `context_fetch` tool and no `commonmeasure` server,
+and listed only the Google connectors. The bridge announces the local
+server's tools and does not carry calls to a browser chat. `live-verified`
+on one operator machine, 14 September 2026.
+
 **Verdict:** the browser and the extension need the mediated tools served
-over HTTPS by an edge that Anthropic's cloud can reach, or the desktop
-bridge if it turns out to carry calls. Neither is served by the local binary
-as it stands.
+over HTTPS by an edge that Anthropic's cloud can reach; the desktop bridge
+does not carry calls (above), and the local binary as it stands serves
+neither. The hosted edge is designed in
+[`docs/knowledge-base/hosted-edge.md`](hosted-edge.md); custom connectors
+take client metadata documents and dynamic client registration, register
+the redirect `https://claude.ai/api/mcp/auth_callback` and reach servers
+from `160.79.104.0/21` (`spec-verified`:
+<https://claude.com/docs/connectors/building/authentication> and
+<https://platform.claude.com/docs/en/api/ip-addresses>, read 14 September
+2026).
 
 ## Cursor
 
@@ -455,6 +468,27 @@ The name VS Code sends in `initialize` is not documented: `planned`.
 a configured model, or the Copilot harness); observed crossings only with
 the Copilot Chat extension. Without Copilot: mediated only.
 
+**Integration.** `commonmeasure install vscode` writes one
+`servers.commonmeasure` entry (`type: stdio`, `mcp --host vscode`) into the
+user `mcp.json` directly, not through `code --add-mcp`, which cannot remove
+what it adds and needs the `code` command on `PATH`; a file with comments
+is refused rather than rewritten without them
+(`crates/commonmeasure-cli/tests/install_e2e.rs`). No hook is registered:
+the hooks are Copilot Chat's, load Claude Code's hook files with matchers
+ignored, and are not documented to carry a tool result, so the decision is
+left open in `ROADMAP.md` until a session with Copilot shows the payload.
+The snake_case payload those hooks send carries Claude Code's field names
+beside a `timestamp` Claude Code never sends, and the Claude Code reader
+refuses it on that field (`crates/commonmeasure-cli/tests/hook_e2e.rs`).
+Live, on 14 September 2026: with the entry written by `install vscode`,
+opening VS Code 1.137.0 created the server's output log,
+`logs/<timestamp>/window1/mcpServer.mcp.config.usrlocal.commonmeasure.log`
+under VS Code's application data, empty because no chat started the
+server. Grade: registration `fixture-tested`, and read by VS Code
+`live-verified` on that machine; start and call `planned`, needing a chat
+with a model. The contract grades the host in
+[`docs/contracts/host-integration.md`](../contracts/host-integration.md) §6.
+
 **Stability.** VS Code releases monthly (1.137.0 read on 13 September
 2026). The MCP configuration reference documents `servers`, `inputs` and
 `sandbox` without deprecations; the hooks page states the format "might
@@ -563,6 +597,43 @@ in the PascalCase payload and the `~/.copilot` directory identify the CLI; a
 **Verdict:** mediated tools by a config write alone, and observed crossings
 with content through `postToolUse`; observed too, once the account allows
 MCP.
+
+**Integration.** `commonmeasure install copilot` writes the server into
+`~/.copilot/mcp-config.json` (`type: local`, `mcp --host copilot-cli`,
+`tools: ["*"]`) and four hooks into `~/.copilot/hooks/commonmeasure.json`
+under the camelCase names (`sessionStart`, `postToolUse` with the matcher
+`web_fetch|web_search`, `userPromptSubmitted`, `agentStop`), each running
+the binary through `exec` with `hook <event> --host copilot-cli`. The hook
+command reads the camelCase payload under `sessionId`, hashes a `web_fetch`
+over `textResultForLlm`, records `web_search` results as retrieved, and
+answers `sessionStart` with the nudge as `additionalContext`
+(`crates/commonmeasure-cli/tests/install_e2e.rs`,
+`crates/commonmeasure-cli/tests/hook_e2e.rs`). The CLI's installed
+JavaScript bundle declares
+`web_fetch`'s arguments as `url`, `raw`, `max_length` and `start_index`,
+names MCP tools `<server>-<tool>` (`github-mcp-server-web_search`), and also
+carries a hosted web search for one model provider, which would not reach a
+local hook. Live, on 14 September 2026, with the Copilot CLI 1.0.83 and the
+registration `install copilot` wrote: `copilot mcp list` printed `User
+servers: commonmeasure (local)`, and `copilot -p "…" --allow-all-tools`
+answered:
+
+```
+! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers
+  are available.
+
+! 1 MCP server was blocked by policy: 'commonmeasure'
+
+Error: Access denied by policy settings (Request ID: E6B1:16ED0E:13A2D68:153908F:6AA826BD)
+```
+
+The CLI's log recorded `Error loading models: Error: 403 "unauthorized: not
+authorized to use this Copilot feature"`; no hook ran and no session record
+was written. `uninstall copilot` removed both entries. Grade: registration
+`fixture-tested`, and read by the CLI `live-verified`; observed
+`spec-verified` on the documented shapes; a call `planned`, needing an
+account whose plan allows MCP. The contract grades each surface in
+[`docs/contracts/host-integration.md`](../contracts/host-integration.md) §6.
 
 ### The GitHub Copilot app
 
@@ -839,15 +910,16 @@ surface has been over the last year.
    unproven.
 5. **VS Code**, Local harness, and the Copilot harness on the same file: a
    command writes the user file; hooks only through Copilot Chat, with
-   matchers ignored and the Claude Code hook file loaded, which needs a
-   decision before any hook is registered there.
+   matchers ignored and the Claude Code hook file loaded; decided: no hooks
+   until a Copilot Chat payload shows a tool result.
 6. **Copilot agent mode in VS Code**: as 5, plus the subscription.
 
 Hosts that cannot be served by the local binary and need a hosted edge, an
 edge reachable over HTTPS from the vendor's cloud:
 
 - Claude in the browser and Claude in Chrome (custom connectors; the
-  desktop's local-MCP bridge is a lead to verify, not a path).
+  desktop's local-MCP bridge announces the local tools and does not carry
+  calls, `live-verified`).
 - ChatGPT on the web and the chat mode of its desktop app (developer-mode
   apps and plugins).
 - Microsoft 365 Copilot (Copilot Studio connector or declarative-agent

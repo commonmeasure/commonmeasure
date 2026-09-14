@@ -1,10 +1,11 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::Money;
 
 /// How hard the operator wants policy enforced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyMode {
     /// Record what happened; refuse nothing.
@@ -47,7 +48,7 @@ pub enum Objective {
 /// An internally tagged enum cannot carry `deny_unknown_fields`, but every
 /// variant's payload is mandatory, so a misspelled key already fails as the
 /// mandatory one gone missing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Constraint {
     AllowedProvider {
@@ -86,7 +87,7 @@ pub enum Constraint {
 }
 
 /// What an access rule does to the sources its pattern matches.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AccessAction {
     /// The host passes host policy: no later access rule and no allowed-host
@@ -133,8 +134,11 @@ impl AccessAction {
 /// wrote as `Docs.Example.COM.` names the host the record calls
 /// `docs.example.com`. An empty or unparseable pattern is refused when it is
 /// read, which is what makes the loader the place a bad rule is caught.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The schema form is the string an operator writes, because that is what
+/// `try_from` parses; the two fields below are the parsed result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
 pub struct HostPattern {
     /// The normalised host, or the normalised suffix for a wildcard; empty
     /// for the pattern that matches every host.

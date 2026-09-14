@@ -15,8 +15,22 @@ engagement, scope and gap are defined in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 ## Where
 
 `$COMMONMEASURE_HOME/sessions/<session-id>.ndjson`, or
-`~/.commonmeasure/sessions/<session-id>.ndjson`. The host supplies the session
-identifier; the MCP server generates one when it does not.
+`~/.commonmeasure/sessions/<session-id>.ndjson`.
+
+A hook takes the session identifier from the host's payload. The MCP server
+takes the first of:
+
+1. `--session`, which the host's registration passes;
+2. `AGENT_SESSION_ID` in the server's environment, which Goose sets for
+   every server it starts, so its records share one log per Goose session;
+3. an identifier the server mints, `local-<milliseconds>-<process id>`.
+
+The identifier names a file, so it must be a plain name: ASCII letters,
+digits, `.`, `_` and `-`, one to 128 characters, not starting with `.`. Any
+other identifier is refused, never cleaned: a hook given one records nothing
+and exits zero, and the MCP server given one fails to start, naming where
+the identifier came from (`crates/commonmeasure-harness/src/session.rs`
+`safe_session`).
 
 One file per session, opened for append. A session spans many short-lived hook
 processes, so `seq` resumes from what is already in the file. Under concurrent
@@ -53,10 +67,10 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `turn_completed` | a hook at the end of a turn (Claude Code: `Stop`) | a turn boundary, the same |
 | `context_snapshot` | a transcript carrying the provider's usage counters and the host's own records of what it assembled, read at the end-of-turn hook (Claude Code: `Stop`) | a context-budget observation at the boundary, with its basis named, and the inventory of the window by category (§Context snapshots) |
 | `nudge_issued` | a hook at session start whose stdout the host adds to context (Claude Code: `SessionStart`) | the standing mediation nudge was emitted for the host to add to the session's context |
-| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side). Absent on an edge that is not enrolled |
-| `credentials_loaded` | nothing; the MCP server writes it at start | the operator credentials file was loaded at server start: its path, digest and variable names, never a value |
+| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side), and whether the hub's key directory lists the key, as the edge last learnt it: `listed_until`, the time the hub stops serving the key's directory proof (its expiry less the 7,200-second margin), or `unlisted` with the reason. The edge keeps what it last learnt in `<home>/directory-listing.json`, bound to the key id, and never in `enrolment.json`, whose shape stays the one every released binary reads. A signed request under a key the directory does not list verifies nowhere. Absent on an edge that is not enrolled |
+| `credentials_loaded` | nothing; the MCP server writes it before the first record a tool call leaves | the operator credentials file was loaded at server start: its path, digest and variable names, never a value |
 | `policy_sync` | a hook at session start (Claude Code: `SessionStart`), or the MCP server's start for a session no hook refreshed | on a managed edge, what refreshing the policy from the hub did for this session: the outcome, the revision in force and whether its envelope has expired (§Policy synchronisation). Absent on a local edge |
-| `client_identified` | the MCP client's `initialize` request; the MCP server writes it before the first record a tool call leaves | how the program on the other end of the stdio pipe named itself: `clientInfo.name` and `clientInfo.version`, with the protocol version it asked for (§Client identity) |
+| `client_identified` | the MCP client's `initialize` request; the MCP server writes it before the first record a tool call leaves | how the program on the other end of the stdio pipe named itself: `clientInfo.name` and `clientInfo.version`, with the protocol version it asked for and the one the server answered with (§Client identity) |
 | `allowance_gap` | nothing; the MCP server writes it | the allowance ledger did not record a settlement or release for a mediated search: the reservation id, the observed charge where a receipt reported one, and the reason; the reservation stays held until the expiry sweep releases it |
 | `evidence_gap` | nothing; the log writes it | a window this log could not record |
 
@@ -89,7 +103,7 @@ could have refused it:
   "principal": "research-agent", "authentication_basis": "os_user",
   "url": "…", "host_name": "…",
   "identity": {"user_agent": "CommonMeasureBot/0.2.0 (+https://…/bot; mailto:…)",
-               "key_id": "…", "signature_agent": "https://…/.well-known/http-message-signatures-directory"},
+               "key_id": "…", "signature_agent": "https://…"},
   "content_hash": "sha256:…", "retrieved_hash": "sha256:…",
   "estimated_tokens": 12, "token_basis": "characters/4",
   "grounded": true, "licence": {"state": "unknown"},
@@ -101,8 +115,14 @@ could have refused it:
 and appears on a mediated fetch that received a body and on no other record.
 `content_hash` beside it covers the text delivered to the agent or withheld
 from it, which for an HTML page is the page's readable text and not its
-markup ([`docs/contracts/processor.md`](processor.md) §Status, `html-text-extractor`). The
-two are equal where the body was delivered as decoded. Where they differ,
+markup ([`docs/contracts/processor.md`](processor.md) §Status, `html-text-extractor`). An
+origin that serves the body under the gzip content coding, which some do
+whatever the request accepts, has `retrieved_hash` over the coded bytes it
+served and `content_hash` over the text taken from what they decode to. The
+two are equal only where the body was served with no content coding and
+delivered as decoded. A body under any other content coding, or one that
+does not decode, delivers nothing: the crossing carries the `failure` that
+names the cause and neither hash. Where the two hashes differ,
 the `processor_invoked` record of the extractor written before the crossing
 carries `retrieved_hash` as its input hash and `content_hash` as its output
 hash, and a reader re-derives the second from the bytes the first names by
@@ -199,10 +219,9 @@ with the reason, rather than yielding an empty result. Codex reaches the
 network by shelling out: its transcripts hold `exec` command text, and a URL
 inside a command is not evidence that anything was retrieved. Importing those
 would fabricate crossings, and the purpose of this store is that its
-crossings are trustworthy. Pi has no web tools of its own; the few
-`ledger_fetch` results in its history were mediated and recorded when they
-happened, and a transcript copy would be a weaker duplicate of an existing
-record.
+crossings are trustworthy. Pi has no web tools of its own; a mediated tool
+result in its history was recorded when it happened, and a transcript copy
+would be a weaker duplicate of an existing record.
 
 `grounded` is true only when page text entered the model's context. `WebFetch`
 grounds. `WebSearch` and third-party MCP results do not: the model saw titles
@@ -314,7 +333,7 @@ published contact details of a public page are not the personal data the
 detector exists to keep out of a model, and the finding, with its
 categories and offsets, is the evidence a reviewer needs. `refuse_on_pii:
 true` in the policy makes `strict` refuse a finding on every source
-(`plugin/README.md` §Policy). Observed and reconstructed crossings
+([`docs/contracts/source-policy.md`](source-policy.md) §Recording). Observed and reconstructed crossings
 never carry one, because nothing judged them before they happened; for the
 same reason the PII detector scans only crossings the mediated path carries,
 and its manifest names that blind spot.
@@ -414,7 +433,8 @@ an allowance: the consultation, the quoted price reserved before the request
 (`decision`: `reserved`, `proceeded_with_breach` or `declined`), and its
 settlement against the receipt. Strict refuses an exhausted or incomparable
 allowance before the request; observe and prefer carry the fetch with the
-breach named. No settlement rail pays a quoted price yet, so the receipt
+breach named. No settlement rail pays a quoted price (`ROADMAP.md`
+§Licensed access through an external settlement rail), so the receipt
 reports no charge, the reservation is released on it, and `paid` says
 nothing was; a rail that pays reconciles the same reservation against what
 it charged. Absent where no licence quoted a price, the operator's terms
@@ -599,35 +619,55 @@ edge was tampered with.
 `host` on every record is the word the registration passed to
 `commonmeasure mcp --host`: `claude-code`, `codex`, `pi`, `claude-desktop`,
 `cursor`, `copilot-cli` or `vscode`. The server refuses any other value at
-start, so a host is never recorded under a default it did not name. The
+start, so a host is never recorded under a default it did not name.
+Observed crossings also carry the hook command's host words, which include
+the browser surfaces `chatgpt-web`, `google-ai-overview` and
+`bing-copilot-search` ([`docs/contracts/host-integration.md`](host-integration.md) §2). The
 same word covers several programs: one `[mcp_servers]` table serves the
 Codex CLI, the ChatGPT desktop app and the Codex IDE extension, and Claude
 Desktop connects its chat and its local agent mode as two clients. What
 tells them apart is the client's own word for itself, the `clientInfo` it
 sends in the protocol's `initialize` request, which the server holds from
-the handshake and records once, before the first record a tool call leaves,
-so a server that is started and never asked for anything leaves no session
-file:
+the handshake and records once, before the first record a tool call leaves:
 
 ```json
 {
   "session_id": "…", "host": "codex", "timestamp": "…",
   "client": {"name": "codex-mcp-client", "version": "0.154.0", "title": "Codex"},
-  "protocol_version": "2025-06-18"
+  "protocol_version": "2025-06-18", "negotiated_protocol_version": "2025-06-18"
 }
 ```
+
+`protocol_version` is the revision the client asked for and
+`negotiated_protocol_version` the one the server answered with, which
+decides what the client could send. The server serves `2025-03-26`,
+`2025-06-18` and `2025-11-25`; it answers a client that asks for one of those
+with it, and any other client with `2025-11-25`, the latest, as the
+protocol's version negotiation states
+(<https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>).
+A client that asked for `2024-11-05` is recorded with the two values
+different.
+
+A server that is started and never asked for anything leaves no session
+file, with or without an operator credentials file, because
+`credentials_loaded` and `client_identified` both wait for the first record
+a tool call leaves and `context_status` leaves none. The exception is an
+edge that is enrolled with a hub or runs managed policy: its server writes
+`edge_identity` and `policy_sync` when it starts, so a server started there
+leaves a file holding those records.
 
 The same `client` object is stamped on every `crossing_mediated` and
 `crossing_refused` record the server writes after it, so one crossing
 answers which program made it without a search back to the session's start.
 `title` and `protocol_version` are present only where the client sent
-them. A client that sends no
+them; `negotiated_protocol_version` is present on every such record. A
+client that sends no
 `clientInfo` leaves no `client_identified` record and no `client` field on
 its crossings; the absence is the fact, and no default name is put in its
 place. Observed and reconstructed crossings never carry the field: no MCP
 client made them.
 
-Names recorded from the hosts probed so far: `codex-mcp-client` (the Codex
+Names recorded from the hosts probed: `codex-mcp-client` (the Codex
 CLI at 0.154.x and the ChatGPT desktop app at 0.153.x, told apart by
 `version`), `claude-ai` and `local-agent-mode-commonmeasure` (Claude
 Desktop's two clients), `cursor-vscode` (Cursor). The relay projects
@@ -638,7 +678,8 @@ neither the record nor the field; what a receiver learns about the host is
 
 The MCP server loads `$COMMONMEASURE_HOME/credentials.env` at start
 (`crates/commonmeasure-supply/src/credentials.rs`) and, when a file was actually
-there, records what it contributed:
+there, records what it contributed before the first record a tool call
+leaves:
 
 ```json
 {
@@ -659,7 +700,10 @@ The record carries only the file's path, digest and variable names; a
 credential value never enters any record. A session whose log holds
 crossings but no `credentials_loaded` event ran on the launching environment
 alone: the absence of the event also answers the provenance question, and a
-session that never crosses does not open a log for this.
+session that never crosses does not open a log for this. Because the
+inference rests on the record always being written, a server that cannot
+append it fails that tool call before fetching anything, naming the log,
+and tries again at the next call.
 
 ## Turn boundaries
 
@@ -948,8 +992,13 @@ hash covers the ingested text, search results do not ground, subagent identity
 survives, private addresses stay out, own tools are not double-recorded, the
 client's `initialize` name and version are recorded once before the first
 crossing and stamped on each mediated crossing and refusal, a client that
-sends none leaves neither, an initialised server that is asked for nothing
-leaves no file, a refusal reaches the agent and the log, no payload makes a hook fail, a turn
+sends none leaves neither, each requested protocol revision is answered as
+version negotiation states, an initialised server that is asked for nothing
+leaves no file with or without a credentials file, the server's session
+identifier comes from `--session`, then `AGENT_SESSION_ID`, then itself, an
+identifier that is not a plain name records nothing from any reader, a
+page served under gzip carries `retrieved_hash` over the coded bytes, a
+refusal reaches the agent and the log, no payload makes a hook fail, a turn
 boundary declares `minimal` and carries the host's turn identifier without
 the prompt, a Stop boundary records the inventory with the three capability
 states apart and the session report attributes the change between two

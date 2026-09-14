@@ -20,6 +20,7 @@
 /// crate's policy file and `commonmeasure-console`'s attribution rules are the artefacts
 /// they were written for.
 pub use commonmeasure_runtime::declaration;
+pub mod browser;
 pub mod declarations;
 pub mod discovery;
 pub mod enrolment;
@@ -43,5 +44,6 @@ pub use hook::{HookInput, HostSurface, capture};
 pub use identity::{EdgeKey, Identity, PresentedIdentity};
 pub use import::known_hosts;
 pub use session::{
-    Crossing, CrossingMode, SessionLog, SessionSummary, boundary_policy, home_dir, summarise,
+    Crossing, CrossingMode, SessionLog, SessionSummary, boundary_policy, home_dir, safe_session,
+    summarise,
 };

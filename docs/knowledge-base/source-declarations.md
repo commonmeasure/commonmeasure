@@ -204,6 +204,11 @@ itself, so a header carrying the full directory URL sends it to that path
 twice and it finds nothing. This runtime sends the origin
 (`crates/commonmeasure-harness/src/identity.rs`).
 
+Cloudflare asks for "one signature per key in your key directory" on the
+directory response and uses only the keys signed for, so each listed key's
+signature is made by that key over the directory's authority, signed on the
+edge and uploaded to the hub (`crates/commonmeasure-harness/src/identity.rs`).
+
 `draft-meunier-webbotauth-registry-03` (26 June 2026) defines a Signature
 Agent Card describing identity, purpose, rate expectations and keys.
 Cloudflare verifies bots this way (documentation updated 1 July 2026). The
@@ -230,5 +235,7 @@ receive. The package is `ROADMAP.md` §Verified fetcher identity.
   requests: <https://github.com/ietf-wg-aipref/drafts/pulls>.
 - CoMP: IAB Tech Lab, Content Monetization Protocols v1.0.
 - C2PA 2.4 and CAWG assertions: <https://c2pa.org>, <https://cawg.io>.
+- Cloudflare's Web Bot Auth reference:
+  <https://developers.cloudflare.com/bots/reference/bot-verification/web-bot-auth/>.
 - Web Bot Auth drafts: <https://datatracker.ietf.org/doc/draft-meunier-webbotauth-httpsig-protocol/>,
   <https://datatracker.ietf.org/doc/draft-meunier-webbotauth-registry/>.

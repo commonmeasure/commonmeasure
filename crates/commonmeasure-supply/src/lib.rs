@@ -632,6 +632,19 @@ pub(crate) fn execute(
             detail: format!("{error:#}"),
         })?;
     let latency_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    // A provider's response is sealed as the exact bytes it served and
+    // replayed by parsing those bytes, so a body the transport decoded from a
+    // content coding is refused here rather than sealed as something the
+    // provider did not send.
+    if let Some(coded) = &response.coded {
+        return Err(SupplyError::Transport {
+            detail: format!(
+                "{endpoint} answered with content encoding {}, which a sealed provider \
+                 response does not accept",
+                coded.coding
+            ),
+        });
+    }
     if !(200..300).contains(&response.status) {
         return Err(SupplyError::Status {
             status: response.status,

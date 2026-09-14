@@ -20,20 +20,23 @@ commonmeasure --version
 `plugin/.claude-plugin/plugin.json` carries the same string, because Claude
 Code reads that manifest and the operator reads the binary;
 `crates/commonmeasure-cli/tests/version_identity.rs` fails when they differ.
+`browser/manifest.json` carries the same version; the harness registration
+test checks it against the binary.
 `plugin/package.sh` names the archive from the version the bundled binary
 reports and refuses a manifest that disagrees. A release tag is the version
-with `v` in front: `v0.3.0` for version `0.3.0`.
+with `v` in front: `v0.3.1` for version `0.3.1`.
 
 ## Cutting a release
 
-Set the version in `Cargo.toml` and `plugin/.claude-plugin/plugin.json`,
+Set the version in `Cargo.toml`, `plugin/.claude-plugin/plugin.json` and
+`browser/manifest.json`, update the workspace packages in `Cargo.lock`,
 write the release notes at `.github/release-notes/v<version>.md` with the
 release's title as the first heading, run the gates, commit, then tag and
 push the tag to the product repository:
 
 ```sh
-git tag -a v0.3.0 -m "commonmeasure 0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "commonmeasure 0.3.1"
+git push origin v0.3.1
 ```
 
 The release workflow (`.github/workflows/release.yml`) runs four jobs:
@@ -78,13 +81,13 @@ curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/downlo
 To pin a release, download the installer into a directory of its own (a
 checkout has an `install.sh` of its own at the root) and name the tag:
 `curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs
-https://github.com/commonmeasure/commonmeasure/releases/download/v0.3.0/install.sh`,
-then `sh /tmp/commonmeasure-release/install.sh --tag v0.3.0`. The pinned
-form is what §The clean-container check runs, and the release run's
-`verify` job ran it on GitHub against the published v0.3.0 release and
-passed. The one-line form was run on macOS from an empty home directory,
-and its output is quoted in [`docs/GETTING-STARTED.md`](GETTING-STARTED.md)
-§2. `crates/commonmeasure-cli/tests/installer.rs` drives both forms and
+https://github.com/commonmeasure/commonmeasure/releases/download/v0.3.1/install.sh`,
+then `sh /tmp/commonmeasure-release/install.sh --tag v0.3.1`. The pinned
+form is what §The clean-container check runs, and each release run's
+`verify` job runs it on GitHub against the release that run published. The
+one-line form was run on macOS from an empty home directory, and its output
+is quoted in [`docs/GETTING-STARTED.md`](GETTING-STARTED.md)
+§1. `crates/commonmeasure-cli/tests/installer.rs` drives both forms and
 every refusal against a loopback origin standing where the release stands.
 
 It detects the platform, downloads `SHA256SUMS` and that platform's binary
@@ -125,8 +128,8 @@ certificates and `git` added and no compiler or Rust toolchain; no token
 is passed in; the installer is the one downloaded from the release.
 
 ```sh
-curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs https://github.com/commonmeasure/commonmeasure/releases/download/v0.3.0/install.sh
-podman run --rm -e TAG=v0.3.0 -e VERSION=0.3.0 -e REPOSITORY=commonmeasure/commonmeasure \
+curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs https://github.com/commonmeasure/commonmeasure/releases/download/v0.3.1/install.sh
+podman run --rm -e TAG=v0.3.1 -e VERSION=0.3.1 -e REPOSITORY=commonmeasure/commonmeasure \
   -v /tmp/commonmeasure-release/install.sh:/install.sh:ro,z \
   docker.io/library/debian:bookworm-slim sh -c '
 set -e
@@ -151,20 +154,20 @@ claude plugin list
 ```
 
 The output shows, in order: no toolchain; `installed
-/root/.local/bin/commonmeasure: commonmeasure 0.3.0, checksum verified`, then
+/root/.local/bin/commonmeasure: commonmeasure 0.3.1, checksum verified`, then
 the note that the directory is not on `PATH`; the archive unpacked with its
-checksum verified; `commonmeasure 0.3.0` from the installed binary; the
+checksum verified; `commonmeasure 0.3.1` from the installed binary; the
 archive's marketplace added and the plugin installed, listed at version
-0.3.0 and enabled; `commonmeasure 0.3.0` from the launcher inside Claude
+0.3.1 and enabled; `commonmeasure 0.3.1` from the launcher inside Claude
 Code's plugin cache, which runs the release's bundled Linux binary; the
 plugin uninstalled and that marketplace removed; the repository added as a
-marketplace and the plugin installed from it, listed at version 0.3.0 and
-enabled; and `commonmeasure 0.3.0` from that launcher, which bundles no
+marketplace and the plugin installed from it, listed at version 0.3.1 and
+enabled; and `commonmeasure 0.3.1` from that launcher, which bundles no
 binary and finds the installed one.
 
 The `verify` job of the release workflow runs the same check on every tag,
 in a Linux x64 container on GitHub against the release the run has just
-published. For v0.3.0 that job ran in the release run and passed.
+published.
 
 What this check covers: the installer, the archive and both marketplace
 routes on Linux, x64 in the workflow and arm64 where the check is run on an

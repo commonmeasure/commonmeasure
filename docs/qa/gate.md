@@ -126,6 +126,7 @@ cargo metadata --no-deps --format-version 1
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --offline -- -D warnings
 cargo test --workspace --offline
+node --test browser/test/
 rg -n 'fixture|mock|fake|stub|dummy' crates demo console docs
 rg -n 'unwrap\(|expect\(|panic!|todo!|unimplemented!' crates --glob '*.rs'
 rg -n 'stale|legacy|deprecated' Cargo.toml crates README.md ARCHITECTURE.md docs

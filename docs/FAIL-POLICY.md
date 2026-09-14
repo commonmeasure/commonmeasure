@@ -267,7 +267,8 @@ trail that repeats an identifier has disclosed the data it exists to detect.
   (`crates/commonmeasure-runtime/src/processor/optimise.rs`)
 - `the_output_is_a_function_of_the_input_under_the_pinned_rules`
   (`crates/commonmeasure-runtime/src/processor/extract.rs`),
-  `an_html_page_is_delivered_as_extracted_text_with_both_hashes_recorded`
+  `an_html_page_is_delivered_as_extracted_text_with_both_hashes_recorded`,
+  `a_gzip_page_is_carried_with_the_retrieved_hash_over_the_coded_bytes`
   (`crates/commonmeasure-cli/tests/mediated_e2e.rs`)
 - `strict_refuses_and_observe_carries_the_same_finding`
   (`crates/commonmeasure-runtime/src/processor/pii.rs`),

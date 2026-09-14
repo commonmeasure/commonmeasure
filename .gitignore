@@ -51,7 +51,8 @@ demo/arc/home/
 # The cited example replays the same four committed recordings, so its
 # sealed responses are equally redacted; committing them keeps the run's
 # strongest checks (the dossier's rechecked-from-bytes citations and the
-# excision half of tests/cited_artefact.rs) alive in a fresh clone.
+# excision half of crates/commonmeasure-runtime/tests/cited_artefact.rs)
+# alive in a fresh clone.
 !demo/output/cited/responses/
 !demo/output/cited/responses/*.json
 # The rankable-evaluation example replays three of the same
@@ -88,6 +89,6 @@ demo/output/live-*/
 plugin/bin/*
 !plugin/bin/commonmeasure-launch
 
-# Python bytecode from docs/guide/build.py
+# Python bytecode from the scripts under demo/ and docs/guide/measurements/
 __pycache__/
 *.pyc

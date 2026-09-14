@@ -47,6 +47,16 @@ pub const ALGORITHM: &str = "ed25519";
 /// verifier tells this signature from any other on the same message.
 pub const TAG: &str = "web-bot-auth";
 
+/// The tag a directory proof carries: the tag a key directory response's
+/// signatures carry (`draft-meunier-http-message-signatures-directory`).
+pub const DIRECTORY_TAG: &str = "http-message-signatures-directory";
+
+/// How far ahead of now a directory proof's expiry must be for the hub to
+/// serve it: two of the directory's one-hour cache ages, so a copy cached
+/// for its full hour still verifies for a further hour. The hub applies the
+/// same margin when it lists keys.
+pub const DIRECTORY_PROOF_MARGIN_SECS: i64 = 7_200;
+
 /// The label the signature is published under. One signature per request, so
 /// the label is fixed.
 pub const SIGNATURE_LABEL: &str = "sig1";
@@ -258,7 +268,7 @@ impl Identity {
         };
         // A revoked key is out of the directory, so a signature under it
         // verifies nowhere. Signing with it would claim an identity the hub
-        // has withdrawn (`ROADMAP.md` §WP-22).
+        // has withdrawn (`ROADMAP.md` §One-command hub enrolment).
         if record.revoked_at.is_some() {
             return Ok(Self::Unsigned {
                 reason: format!(
@@ -389,24 +399,25 @@ impl SigningIdentity {
         request.headers.set(SIGNATURE_AGENT, &agent);
 
         let mut covered = vec![
-            ("@authority".to_owned(), authority_of(url)?),
-            ("signature-agent".to_owned(), agent),
+            (component("@authority"), authority_of(url)?),
+            (component("signature-agent"), agent),
         ];
         for name in cover {
             if let Some(value) = request.headers.get(name) {
-                covered.push((name.to_ascii_lowercase(), value.to_owned()));
+                covered.push((component(&name.to_ascii_lowercase()), value.to_owned()));
             }
         }
 
         let params = signature_params(
             &covered
                 .iter()
-                .map(|(name, _)| name.as_str())
+                .map(|(identifier, _)| identifier.as_str())
                 .collect::<Vec<_>>(),
             created,
             created + SIGNATURE_LIFETIME_SECS,
             &self.key_id,
             &nonce()?,
+            TAG,
         );
         let base = signature_base(&covered, &params);
         let signature = self.key.sign_raw(base.as_bytes());
@@ -420,10 +431,92 @@ impl SigningIdentity {
         );
         Ok(())
     }
+
+    /// Sign this key's agreement to be listed in the key directory served
+    /// from `authority`, valid from `created` for `lifetime_secs`.
+    ///
+    /// A verifier that applies the per-key rule uses a listed key only when
+    /// the directory response carries a signature by that key. The hub
+    /// cannot make one, because the private key never leaves the edge, so
+    /// the edge makes it in advance and uploads it. It covers the authority
+    /// alone, never the body: the body is the whole key set, which changes on
+    /// every enrolment and revocation, and a proof over it could not be made
+    /// before the hub serves it.
+    pub fn directory_proof(
+        &self,
+        authority: &str,
+        created: i64,
+        lifetime_secs: i64,
+    ) -> Result<DirectoryProof, String> {
+        Ok(self.key.directory_proof(
+            &self.key_id,
+            authority,
+            created,
+            created + lifetime_secs,
+            &nonce()?,
+        ))
+    }
+}
+
+/// A signed directory proof as the hub's upload takes it: the parameters
+/// verbatim, which the hub serves without rebuilding, and the signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryProof {
+    /// The `@signature-params` value, served as the key's
+    /// `Signature-Input` member.
+    pub signature_input: String,
+    /// The 64-byte Ed25519 signature, standard base64.
+    pub signature: String,
+    pub created: i64,
+    pub expires: i64,
+}
+
+impl EdgeKey {
+    fn directory_proof(
+        &self,
+        key_id: &str,
+        authority: &str,
+        created: i64,
+        expires: i64,
+        nonce: &str,
+    ) -> DirectoryProof {
+        let covered = [(component_with_req("@authority"), authority.to_owned())];
+        let params = signature_params(
+            &[covered[0].0.as_str()],
+            created,
+            expires,
+            key_id,
+            nonce,
+            DIRECTORY_TAG,
+        );
+        let base = signature_base(&covered, &params);
+        DirectoryProof {
+            signature_input: params,
+            signature: STANDARD.encode(self.sign_raw(base.as_bytes())),
+            created,
+            expires,
+        }
+    }
+}
+
+/// A covered component identifier as RFC 9421 serialises it: the name as a
+/// quoted string.
+#[must_use]
+pub fn component(name: &str) -> String {
+    format!("\"{name}\"")
+}
+
+/// A component identifier with the `req` flag, which names the component of
+/// the request a response answers: `@authority` on a directory response is
+/// the authority the request for the directory reached.
+#[must_use]
+pub fn component_with_req(name: &str) -> String {
+    format!("\"{name}\";req")
 }
 
 /// The signature parameters of the Web Bot Auth profile: the covered
-/// components in order, then the parameters a verifier checks.
+/// component identifiers in order, then the parameters a verifier checks,
+/// ending with `tag`, which says what kind of signature this is.
 #[must_use]
 pub fn signature_params(
     components: &[&str],
@@ -431,26 +524,24 @@ pub fn signature_params(
     expires: i64,
     key_id: &str,
     nonce: &str,
+    tag: &str,
 ) -> String {
-    let listed = components
-        .iter()
-        .map(|name| format!("\"{name}\""))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let listed = components.join(" ");
     format!(
         "({listed});created={created};expires={expires};keyid=\"{key_id}\";alg=\"{ALGORITHM}\";\
-         nonce=\"{nonce}\";tag=\"{TAG}\""
+         nonce=\"{nonce}\";tag=\"{tag}\""
     )
 }
 
-/// The RFC 9421 signature base: one line per covered component, then the
-/// signature parameters. The one construction both sides of every signature
-/// this product makes are checked against.
+/// The RFC 9421 signature base: one line per covered component, by its
+/// serialised identifier, then the signature parameters. The one
+/// construction both sides of every signature this product makes are
+/// checked against.
 #[must_use]
 pub fn signature_base(covered: &[(String, String)], params: &str) -> String {
     let mut base = String::new();
-    for (name, value) in covered {
-        base.push_str(&format!("\"{name}\": {value}\n"));
+    for (identifier, value) in covered {
+        base.push_str(&format!("{identifier}: {value}\n"));
     }
     base.push_str(&format!("\"@signature-params\": {params}"));
     base
@@ -609,11 +700,12 @@ mod tests {
     #[test]
     fn the_signature_base_and_signature_match_the_pinned_vector() {
         let params = signature_params(
-            &["@authority", "signature-agent"],
+            &["\"@authority\"", "\"signature-agent\""],
             1_757_160_000,
             1_757_160_300,
             "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
             "AAAAAAAAAAAAAAAAAAAAAA",
+            TAG,
         );
         assert_eq!(
             params,
@@ -622,9 +714,9 @@ mod tests {
              nonce=\"AAAAAAAAAAAAAAAAAAAAAA\";tag=\"web-bot-auth\""
         );
         let covered = vec![
-            ("@authority".to_owned(), "www.example.org".to_owned()),
+            (component("@authority"), "www.example.org".to_owned()),
             (
-                "signature-agent".to_owned(),
+                component("signature-agent"),
                 "\"https://hub.example\"".to_owned(),
             ),
         ];
@@ -642,9 +734,75 @@ mod tests {
         );
     }
 
+    /// The pinned directory-proof vector, shared with the hub's upload
+    /// check. Same key and method as the request vector above: the base was
+    /// signed with `openssl pkeyutl -sign -rawin` and verified with
+    /// `openssl pkeyutl -verify`. The component list, the `req` flag, the
+    /// parameter order and the tag are all fixed by value here, so a change
+    /// to any of them fails this test and the hub's copy of it.
+    #[test]
+    fn the_directory_proof_matches_the_pinned_vector() {
+        let proof = vector_key().directory_proof(
+            "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            "hub.example",
+            1_757_160_000,
+            1_757_764_800,
+            "AAAAAAAAAAAAAAAAAAAAAA",
+        );
+        let params = "(\"@authority\";req);created=1757160000;expires=1757764800;\
+                      keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\";alg=\"ed25519\";\
+                      nonce=\"AAAAAAAAAAAAAAAAAAAAAA\";tag=\"http-message-signatures-directory\"";
+        assert_eq!(proof.signature_input, params);
+        assert_eq!(
+            signature_base(
+                &[(component_with_req("@authority"), "hub.example".to_owned())],
+                &proof.signature_input
+            ),
+            format!("\"@authority\";req: hub.example\n\"@signature-params\": {params}")
+        );
+        assert_eq!(
+            proof.signature,
+            "DPpR6ACaG9KIFdTCoJ6LPfcAwjHNZ7VTy4BNjPWWjTWujpDFXGzy2UaGRoDza60NBXMlSMUBetggbWYsCLolBA=="
+        );
+        assert_eq!(
+            (proof.created, proof.expires),
+            (1_757_160_000, 1_757_764_800)
+        );
+    }
+
+    /// A proof made through the signing identity carries a fresh nonce and
+    /// the expiry its lifetime implies, and is signed under the enrolled key
+    /// id.
+    #[test]
+    fn a_directory_proof_is_signed_under_the_key_id_with_a_fresh_nonce() {
+        let identity = SigningIdentity {
+            key: vector_key(),
+            key_id: "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k".to_owned(),
+            origin: "https://hub.example".to_owned(),
+            bot_page: "https://hub.example/bot".to_owned(),
+            contact: None,
+        };
+        let first = identity
+            .directory_proof("hub.example", 1_000, 604_800)
+            .expect("sign");
+        let second = identity
+            .directory_proof("hub.example", 1_000, 604_800)
+            .expect("sign");
+        assert_eq!(first.expires, 605_800);
+        assert!(
+            first
+                .signature_input
+                .starts_with("(\"@authority\";req);created=1000;expires=605800;keyid=\"kPrK_"),
+            "{}",
+            first.signature_input
+        );
+        assert_ne!(first.signature_input, second.signature_input, "nonce");
+        assert_ne!(first.signature, second.signature);
+    }
+
     /// The signature covers the telemetry correlation id when the request
     /// carries one, so the id a publisher logs is one the signature protects
-    /// (`ROADMAP.md` §WP-29). A request without one covers two components,
+    /// (`ROADMAP.md` §Verified fetcher identity). A request without one covers two components,
     /// not three: an absent header is never signed as empty.
     #[test]
     fn the_telemetry_id_is_covered_when_the_request_carries_one() {

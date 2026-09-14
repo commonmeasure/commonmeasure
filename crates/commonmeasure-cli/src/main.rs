@@ -18,17 +18,23 @@ use commonmeasure_harness::{
 };
 use commonmeasure_runtime::{RunOptions, load_suite};
 
-/// The hosts the harness commands accept, as `--host` names them.
-/// The hosts whose hook payloads the observed path reads: Claude Code's
-/// shape, and Cursor's mapped onto it.
-const HOSTS: [&str; 4] = ["claude-code", "codex", "pi", "cursor"];
+/// The hosts whose hook payloads the observed path reads, as `--host` names
+/// them: Claude Code's shape, Cursor's and the Copilot CLI's mapped onto it,
+/// and the browser extension's answer message for each browser surface.
+const HOSTS: [&str; 8] = [
+    "claude-code",
+    "codex",
+    "pi",
+    "cursor",
+    "copilot-cli",
+    "chatgpt-web",
+    "google-ai-overview",
+    "bing-copilot-search",
+];
 
-/// The hosts the mediated server accepts under `--host`: the three with a
-/// registration, and the four the host-surfaces investigation found reach
-/// the server through a configuration write, so their sessions record the
-/// host they came from before an `install` for them exists. A value not
-/// listed is refused by the argument parser with this list, never recorded
-/// as `claude-code`.
+/// The hosts the mediated server accepts under `--host`, one per
+/// registration `install` writes. A value not listed is refused by the
+/// argument parser with this list, never recorded as `claude-code`.
 const MCP_HOSTS: [&str; 7] = [
     "claude-code",
     "codex",
@@ -70,6 +76,20 @@ enum PolicyAction {
     /// (docs/contracts/policy-envelope.md). A local edge refuses and makes
     /// no request.
     Sync,
+    /// Load one policy file through the loader every session uses and report
+    /// what it accepted, or the refusal and nothing else. Reads the named
+    /// file and changes nothing: the way to settle whether a policy is
+    /// valid before it is installed or published
+    /// (docs/contracts/source-policy.md).
+    Check {
+        /// The policy document to load.
+        file: PathBuf,
+    },
+    /// Print the JSON Schema of the policy file, derived from the types the
+    /// loader parses with. The structural half of the policy's contract;
+    /// the checks the loader makes after parsing are stated in
+    /// docs/contracts/source-policy.md.
+    Schema,
 }
 
 #[derive(Subcommand)]
@@ -115,9 +135,11 @@ enum Command {
     Hook {
         /// The event, as the host names it (`post-tool-use`).
         event: String,
-        /// Which host is calling: `claude-code`, `codex`, `pi` or `cursor`.
-        /// The payload is read in that host's shape, and a payload of
-        /// another host's shape records nothing.
+        /// Which host is calling: `claude-code`, `codex`, `pi`, `cursor`,
+        /// `copilot-cli`, or a browser surface (`chatgpt-web`,
+        /// `google-ai-overview`, `bing-copilot-search`), whose payload is the
+        /// extension's answer message. The payload is read in that host's
+        /// shape, and a payload of another host's shape records nothing.
         #[arg(long, default_value = "claude-code", value_parser = HOSTS)]
         host: String,
     },
@@ -129,10 +151,21 @@ enum Command {
         /// the protocol's initialize request are recorded beside it.
         #[arg(long, default_value = "claude-code", value_parser = MCP_HOSTS)]
         host: String,
-        /// Session identifier. The host supplies one per conversation; a fresh
-        /// one is generated when it does not.
+        /// Session identifier. The host supplies one per conversation; without
+        /// it, `AGENT_SESSION_ID` from the environment is used, and a fresh
+        /// one is generated when neither is set.
         #[arg(long)]
         session: Option<String>,
+    },
+    /// Speak Chrome's native messaging protocol on stdin and stdout for the
+    /// browser extension: each message is one answer's sources from ChatGPT,
+    /// Google AI Overviews or Bing Copilot Search, recorded as observed
+    /// crossings, and each is answered with what was recorded. Chrome starts
+    /// the binary itself with the extension's origin as the only argument,
+    /// which is read as this command; `install chrome` registers it.
+    NativeHost {
+        /// The calling extension's origin, as Chrome passes it.
+        origin: Option<String>,
     },
     /// Report where provider credentials come from and which providers are
     /// configured. Names variables, paths and digests; never prints a value.
@@ -143,11 +176,16 @@ enum Command {
     /// that lets its non-interactive runs call the tools; Pi gets an
     /// extension that runs the server, because Pi has no MCP client; Claude
     /// Desktop gets the MCP server in its configuration file; Cursor gets
-    /// the MCP server and four hooks in its global files. Only this
-    /// product's entries are written; everything else in the host's files
-    /// is kept as read.
+    /// the MCP server and four hooks in its global files; the Copilot CLI
+    /// gets the MCP server in its user file and four hooks in a hook file
+    /// of this product's own; VS Code gets the MCP server in the user
+    /// mcp.json and no hooks; Chrome gets the native messaging host manifest
+    /// the browser extension reaches the binary through, and Chromium and
+    /// Brave the same where they are set up. Only this product's entries are
+    /// written; everything else in the host's files is kept as read.
     Install {
-        /// The host: `claude`, `codex`, `pi`, `claude-desktop` or `cursor`.
+        /// The host: `claude`, `codex`, `pi`, `claude-desktop`, `cursor`,
+        /// `copilot`, `vscode` or `chrome`.
         host: String,
         /// Register this path instead of the running binary. It must exist;
         /// the registration names it as resolved.
@@ -157,7 +195,8 @@ enum Command {
     /// Remove exactly the entries `install` wrote for a host. The evidence in
     /// the operator home is never touched.
     Uninstall {
-        /// The host: `claude`, `codex`, `pi`, `claude-desktop` or `cursor`.
+        /// The host: `claude`, `codex`, `pi`, `claude-desktop`, `cursor`,
+        /// `copilot`, `vscode` or `chrome`.
         host: String,
     },
     /// Report each host's registration against the machine: what is
@@ -165,8 +204,8 @@ enum Command {
     /// binary reports, whether a session log can be written, and whether the
     /// policy file loads.
     Doctor {
-        /// One host (`claude`, `codex`, `pi`, `claude-desktop` or `cursor`);
-        /// every host when omitted.
+        /// One host (`claude`, `codex`, `pi`, `claude-desktop`, `cursor`,
+        /// `copilot`, `vscode` or `chrome`); every host when omitted.
         host: Option<String>,
     },
     /// Reconstruct crossings from host transcripts for work done before
@@ -197,7 +236,9 @@ enum Command {
         json: bool,
     },
     /// The policy in force: its identity, and, on a managed edge, its
-    /// synchronisation with the pinned signer's desired policy.
+    /// synchronisation with the pinned signer's desired policy; and any
+    /// candidate policy checked against the loader, or the schema of the
+    /// file printed (docs/contracts/source-policy.md).
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
@@ -276,8 +317,6 @@ enum Command {
         #[arg(long)]
         run: Option<PathBuf>,
     },
-    /// Serve the operator console on loopback: Overview, Record, Policy,
-    /// Sources and Compare, rendered from the local evidence logs.
     /// Write the guide's public education pages into a directory, one
     /// self-contained HTML file per source, with every product panel
     /// stripped and no product name in the output; the console serves the
@@ -286,6 +325,8 @@ enum Command {
         /// Directory to write into; created if absent.
         out: PathBuf,
     },
+    /// Serve the operator console on loopback: Overview, Record, Policy,
+    /// Sources and Compare, rendered from the local evidence logs.
     Serve {
         /// Address to listen on. Loopback by default, because the console is
         /// the operator reading their own record. A non-loopback address is
@@ -303,7 +344,18 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Chrome starts a native messaging host with the extension's origin as
+    // the first argument and no subcommand of ours, so that argument alone
+    // selects the native host.
+    let mut arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if arguments
+        .get(1)
+        .and_then(|first| first.to_str())
+        .is_some_and(|first| first.starts_with("chrome-extension://"))
+    {
+        arguments.insert(1, "native-host".into());
+    }
+    let cli = Cli::parse_from(arguments);
     let result = match cli.command {
         Command::Run {
             suite,
@@ -314,6 +366,7 @@ fn main() -> ExitCode {
         Command::Inspect { run } => inspect::inspect(&run),
         Command::Hook { event, host } => return hook(&event, &host),
         Command::Mcp { host, session } => serve_mcp(&host, session.as_deref()),
+        Command::NativeHost { origin: _ } => return native_host(),
         Command::Credentials => credentials_report(),
         Command::Install { host, binary } => install_host(&host, binary.as_deref()),
         Command::Uninstall { host } => uninstall_host(&host),
@@ -324,6 +377,8 @@ fn main() -> ExitCode {
         Command::Policy { action } => match action {
             PolicyAction::Identity => show_policy_identity(),
             PolicyAction::Sync => sync_policy(),
+            PolicyAction::Check { file } => check_policy(&file),
+            PolicyAction::Schema => show_policy_schema(),
         },
         Command::Relay {
             receiver,
@@ -487,27 +542,47 @@ fn write_stdout(out: &str) -> Result<(), String> {
 fn hook(event: &str, host: &str) -> ExitCode {
     let mut raw = String::new();
     let surface = HostSurface::parse(host).unwrap_or(HostSurface::ClaudeCode);
+    // A browser surface's payload is the extension's answer message, which
+    // has no lifecycle: it is recorded at `post-tool-use`, the moment after
+    // the crossing, and every other event records and prints nothing.
+    if surface.is_browser() {
+        if event == "post-tool-use"
+            && std::io::stdin().read_to_string(&mut raw).is_ok()
+            && let Ok(answer) =
+                serde_json::from_str::<commonmeasure_harness::browser::BrowserAnswer>(&raw)
+            && let Ok(home) = home_dir()
+        {
+            let _ = commonmeasure_harness::browser::record(
+                &home,
+                &answer,
+                Some(surface),
+                uuid_like_session,
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
     // The payload in the named host's shape; another host's shape, or no
-    // payload, records nothing. Cursor and VS Code load Claude Code's hook
-    // file and run its commands with their own payloads, which is why the
-    // reader is told which host it is reading.
+    // payload, records nothing. Cursor, VS Code and the Copilot CLI load
+    // Claude Code's hook files and run their commands with their own
+    // payloads, which is why the reader is told which host it is reading.
     let value = match std::io::stdin().read_to_string(&mut raw) {
         Ok(_) => serde_json::from_str::<serde_json::Value>(&raw).ok(),
         Err(_) => None,
     };
-    // Cursor sets CURSOR_PROJECT_DIR for every hook it runs, its own and the
-    // Claude Code ones it loads as third-party hooks; a command told it is
-    // reading Claude Code and running under Cursor reads nothing, whatever
-    // the payload's shape, because Cursor's documentation does not say
-    // which shape those hooks receive.
-    let under_cursor =
-        surface != HostSurface::Cursor && std::env::var_os("CURSOR_PROJECT_DIR").is_some();
-    // Another host's payload, or Cursor's environment, is refused: nothing
-    // is read and, at session start, nothing is printed. A Claude Code
-    // payload that is merely unreadable keeps the nudge, because delivery
-    // is the point and an unreadable payload costs the record and not the
-    // delivery.
-    let refused = under_cursor
+    // Cursor, Gemini CLI, the Devin CLI and Grok Build run Claude Code's hook
+    // commands and set a variable of their own for every hook; a command told
+    // it is reading Claude Code and running under one of them reads nothing,
+    // whatever the payload's shape, because some of them send Claude Code's
+    // shape and the record would name a host that did not run.
+    let under_another_host = surface
+        .foreign_environment(|variable| std::env::var_os(variable).is_some())
+        .is_some();
+    // Another host's payload, or another host's environment, is refused:
+    // nothing is read and, at session start, nothing is printed. A Claude
+    // Code payload that is merely unreadable keeps the nudge, because
+    // delivery is the point and an unreadable payload costs the record and
+    // not the delivery.
+    let refused = under_another_host
         || value
             .as_ref()
             .is_some_and(|value| commonmeasure_harness::HookInput::is_foreign(surface, value));
@@ -535,9 +610,17 @@ fn hook(event: &str, host: &str) -> ExitCode {
         if refused {
             return ExitCode::SUCCESS;
         }
+        // Cursor and the Copilot CLI read a session-start hook's stdout as
+        // JSON, each under its own field name.
         if surface == HostSurface::Cursor {
             let _ = std::io::stdout().write_all(
                 serde_json::json!({"additional_context": commonmeasure_harness::nudge::TEXT})
+                    .to_string()
+                    .as_bytes(),
+            );
+        } else if surface == HostSurface::CopilotCli {
+            let _ = std::io::stdout().write_all(
+                serde_json::json!({"additionalContext": commonmeasure_harness::nudge::TEXT})
                     .to_string()
                     .as_bytes(),
             );
@@ -549,6 +632,12 @@ fn hook(event: &str, host: &str) -> ExitCode {
         {
             let session_id = input.session_id.as_deref().unwrap_or("unknown-session");
             if let Ok(mut log) = SessionLog::open(&home, session_id) {
+                // An enrolled edge whose record says its directory proof is
+                // due renews it beside the policy refresh, inside the same
+                // wait, so the identity record below says whether the key
+                // is listed.
+                let started = std::time::Instant::now();
+                let directory_proof = start_directory_proof_refresh(&home);
                 // A managed edge refreshes its policy first, so the session
                 // runs under the revision the hub desires now and the
                 // records below name that policy. The nudge is already out
@@ -559,6 +648,7 @@ fn hook(event: &str, host: &str) -> ExitCode {
                 {
                     let _ = log.record_policy_sync(surface.id(), "session_start", sync);
                 }
+                finish_directory_proof_refresh(directory_proof, started);
                 // The session starts under a policy, and the record names
                 // which: the identity a mediated crossing in this directory
                 // would meet, or the reason the policy could not be read.
@@ -572,7 +662,8 @@ fn hook(event: &str, host: &str) -> ExitCode {
                 // the moment it enrolled; an unreadable record costs the
                 // line, never the nudge.
                 if let Ok(Some(enrolment)) = commonmeasure_harness::EnrolmentRecord::load(&home) {
-                    let _ = log.record_edge_identity(surface.id(), &enrolment);
+                    let listing = enrolment.listing_at(&home, chrono::Utc::now());
+                    let _ = log.record_edge_identity(surface.id(), &enrolment, &listing);
                 }
             }
         }
@@ -667,6 +758,90 @@ fn hook(event: &str, host: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The largest message accepted from the browser. Chrome allows 64 MiB
+/// towards a host; one answer's sources are a few kilobytes.
+const NATIVE_MESSAGE_MAX: u32 = 8 * 1024 * 1024;
+
+/// Serve the browser extension over Chrome's native messaging framing: each
+/// message is a 32-bit length in native byte order followed by that many
+/// bytes of JSON, in both directions. Each message is answered, and nothing
+/// but framed replies reaches stdout, which Chrome reads as protocol.
+///
+/// Exits zero whatever the messages held, as a hook does: a message that
+/// cannot be recorded is answered with the reason and the browser carries on.
+fn native_host() -> ExitCode {
+    let mut stdin = std::io::stdin().lock();
+    let mut stdout = std::io::stdout().lock();
+    loop {
+        let mut length = [0u8; 4];
+        if stdin.read_exact(&mut length).is_err() {
+            return ExitCode::SUCCESS;
+        }
+        let length = u32::from_ne_bytes(length);
+        if length > NATIVE_MESSAGE_MAX {
+            // The stream cannot be trusted past a length this wrong, so this
+            // answer is the last.
+            let _ = write_native_message(
+                &mut stdout,
+                &serde_json::json!({"recorded": 0, "error": format!(
+                    "a message of {length} bytes exceeds the {NATIVE_MESSAGE_MAX} this host accepts"
+                )}),
+            );
+            return ExitCode::SUCCESS;
+        }
+        let mut body = vec![0u8; length as usize];
+        if stdin.read_exact(&mut body).is_err()
+            || write_native_message(&mut stdout, &native_reply(&body)).is_err()
+        {
+            return ExitCode::SUCCESS;
+        }
+    }
+}
+
+/// The answer to one native message: the recording's outcome, or the
+/// binary's status when the popup asks for it.
+fn native_reply(body: &[u8]) -> serde_json::Value {
+    use commonmeasure_harness::browser;
+    let value: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(value) => value,
+        Err(error) => {
+            return serde_json::json!({"recorded": 0, "error": format!("the message is not JSON: {error}")});
+        }
+    };
+    let home = match home_dir() {
+        Ok(home) => home,
+        Err(error) => return serde_json::json!({"recorded": 0, "error": error.to_string()}),
+    };
+    // The popup asks whether the binary answers and whether it can record.
+    if value["status"] == true {
+        let recording = commonmeasure_harness::registration::recording_line(&home);
+        return serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "recording": recording});
+    }
+    let answer = match serde_json::from_value::<browser::BrowserAnswer>(value) {
+        Ok(answer) => answer,
+        Err(error) => {
+            return serde_json::json!({"recorded": 0, "error": format!("the message is not an answer: {error}")});
+        }
+    };
+    match browser::record(&home, &answer, None, uuid_like_session) {
+        Ok(recorded) => {
+            serde_json::json!({"recorded": recorded.crossings, "session": recorded.session_id})
+        }
+        Err(error) => serde_json::json!({"recorded": 0, "error": error}),
+    }
+}
+
+fn write_native_message(
+    out: &mut impl std::io::Write,
+    reply: &serde_json::Value,
+) -> std::io::Result<()> {
+    let body = reply.to_string();
+    let length = u32::try_from(body.len()).unwrap_or(u32::MAX);
+    out.write_all(&length.to_ne_bytes())?;
+    out.write_all(body.as_bytes())?;
+    out.flush()
+}
+
 fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     // Provider credentials from the operator home, applied here — at process
@@ -675,16 +850,21 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
     // always wins over the file, and a present file that cannot be used
     // fails the mediator loudly, exactly as an invalid policy.json does.
     let credentials = commonmeasure_supply::credentials::apply(&home)?;
-    let session_id = session.map(str::to_owned).unwrap_or_else(uuid_like_session);
+    let session_id = mcp_session_id(session)?;
     // A session's policy is refreshed once, by whichever path opens it
     // first: a session-start hook where the host has one, else this server,
     // before the policy is resolved, so the session runs under the revision
     // the hub desires now. A session whose log already carries the hook's
     // refresh is not refreshed again; a host that registered the server
     // without the hook is, whatever it calls itself.
+    // The directory proof is renewed only when the enrolment record says it
+    // is due, so a server started after a hook that renewed it asks nothing.
+    let started = std::time::Instant::now();
+    let directory_proof = start_directory_proof_refresh(&home);
     let policy_sync = (!SessionLog::holds_event(&home, &session_id, "policy_sync"))
         .then(|| sync_managed_policy(&home, commonmeasure_harness::managed::SESSION_START_BUDGET))
         .flatten();
+    finish_directory_proof_refresh(directory_proof, started);
     // Stdio carries no cwd, but the server inherits the harness's own. It is
     // resolved once, here, so the scope that governs the session and the cwd
     // its crossings record are the same fact.
@@ -707,36 +887,26 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
             })?;
     }
     // An enrolled edge names its key id in every session, whichever path
-    // opened the log. Like credentials_loaded below, this precedes every
-    // crossing, so a failed append is a failed session start.
+    // opened the log. This precedes every crossing, so a failed append is a
+    // failed session start.
     if let Some(enrolment) = commonmeasure_harness::EnrolmentRecord::load(&home)? {
-        log.record_edge_identity(host, &enrolment)
-            .map_err(|error| {
-                format!(
-                    "could not record edge_identity to {}: {error}",
-                    log.path().display()
-                )
-            })?;
+        log.record_edge_identity(
+            host,
+            &enrolment,
+            &enrolment.listing_at(&home, chrono::Utc::now()),
+        )
+        .map_err(|error| {
+            format!(
+                "could not record edge_identity to {}: {error}",
+                log.path().display()
+            )
+        })?;
     }
     // Where each credential came from is evidence — path, digest and names,
-    // never a value. Recorded only when a file was actually loaded: a session
-    // with crossings and no credentials_loaded event ran on the launching
-    // environment alone, so absence still answers the provenance question,
-    // and a session that never crosses is not forced to open a log for this.
+    // never a value — and the server records it before the first record a
+    // tool call leaves, not here, so a server asked for nothing opens no log
+    // (`McpServer::record_session_start`).
     if let Some(loaded) = &credentials.loaded {
-        // This is the one evidence write that precedes every crossing, and the
-        // inference the record promises — no `credentials_loaded` event means
-        // the session ran on the launching environment alone — holds only if
-        // a loaded file always leaves its event. A failed append is therefore
-        // a failed session start, naming the log path, not a session that
-        // quietly runs on credentials the record does not show.
-        log.record_credentials(host, credentials.to_value())
-            .map_err(|error| {
-                format!(
-                    "could not record credentials_loaded to {}: {error}",
-                    log.path().display()
-                )
-            })?;
         // The host reads stdout as protocol, so every human-facing word goes
         // to stderr. A stray println here corrupts the JSON-RPC stream.
         eprintln!(
@@ -819,7 +989,7 @@ fn host_named(name: &str) -> Result<HostSurface, String> {
     HostSurface::parse(name).ok_or_else(|| {
         format!(
             "unknown host {name:?}; the hosts are claude (or claude-code), codex, pi, \
-             claude-desktop and cursor"
+             claude-desktop, cursor, copilot (or copilot-cli), vscode and chrome"
         )
     })
 }
@@ -856,6 +1026,9 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
             HostSurface::Pi,
             HostSurface::ClaudeDesktop,
             HostSurface::Cursor,
+            HostSurface::CopilotCli,
+            HostSurface::VsCode,
+            HostSurface::Chrome,
         ],
     };
     let mut out = format!(
@@ -915,6 +1088,42 @@ fn managed_policy_line(home: &Path) -> Option<String> {
             inspect::text(&management.desired["unavailable"])
         )),
     }
+}
+
+/// The variable Goose sets, in the environment of every stdio server it
+/// starts, to its own session identifier.
+const AGENT_SESSION_ID: &str = "AGENT_SESSION_ID";
+
+/// The mediated server's session identifier, from the first of: the host's
+/// `--session`, `AGENT_SESSION_ID` in the environment, and one minted here.
+/// Taking Goose's identifier puts the records of every server one Goose
+/// session starts in one log. Goose also sends the identifier as
+/// `_meta.agent-session-id` on each request; that is not read, because the
+/// log is opened once per process before any request arrives, and a value
+/// that could differ between requests cannot name it. An identifier that is
+/// not a plain name fails the start, naming where it came from, rather than
+/// being replaced by a minted one that would split the host's session.
+fn mcp_session_id(session: Option<&str>) -> Result<String, String> {
+    let (session_id, source) = match session {
+        Some(session) => (session.to_owned(), "--session"),
+        None => match std::env::var(AGENT_SESSION_ID) {
+            Ok(session) if !session.is_empty() => (session, AGENT_SESSION_ID),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(format!(
+                    "{AGENT_SESSION_ID} is not valid Unicode, so it cannot name a session; \
+                     pass --session"
+                ));
+            }
+            _ => (uuid_like_session(), "the server"),
+        },
+    };
+    if commonmeasure_harness::safe_session(&session_id).is_none() {
+        return Err(format!(
+            "session {session_id:?} from {source} is not a plain identifier: use ASCII \
+             letters, digits, '.', '_' and '-', at most 128 characters, not starting with '.'"
+        ));
+    }
+    Ok(session_id)
 }
 
 /// A session identifier when the host supplies none. Derived from the clock and
@@ -1115,6 +1324,9 @@ fn relay(
                 if let Some(standing) = &failure.standing {
                     write_stdout(&format!("{standing}\n"))?;
                 }
+                if let Some(directory_proof) = &failure.directory_proof {
+                    write_stdout(&format!("{directory_proof}\n"))?;
+                }
                 return Err(failure.delivery_text());
             }
             return Err(format!("{error:#}"));
@@ -1129,6 +1341,9 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
     let mut out = String::new();
     if let Some(standing) = &report.standing {
         out.push_str(&format!("{standing}\n"));
+    }
+    if let Some(directory_proof) = &report.directory_proof {
+        out.push_str(&format!("{directory_proof}\n"));
     }
     out.push_str(&format!(
         "projected {} of {} sessions and {} runs; {} events newly spooled\n",
@@ -1217,6 +1432,7 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
             "  relay.json previously named {replaced}; it now names the hub\n"
         ));
     }
+    out.push_str(&format!("{}\n", report.directory_proof));
     match &report.relay {
         Ok(relay) => {
             out.push_str("first relay run:\n");
@@ -1231,8 +1447,9 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
     }
     // What --managed did, and whether the machine is where the operator
     // asked it to be. A scripted setup reads the exit code, so a pin that
-    // was refused or a first synchronisation that activated nothing exits
-    // non-zero after the account is printed; the enrolment stands either way.
+    // was refused or a first synchronisation that failed exits non-zero.
+    // An organisation awaiting its first revision is enrolled successfully;
+    // its local policy stays in force and it has not converged.
     let mut managed_failure: Option<String> = None;
     match &report.managed {
         None => {}
@@ -1249,14 +1466,16 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
             match commonmeasure_harness::managed::sync(
                 &home,
                 &edge_identity(&home),
-                chrono::Utc::now(),
+                chrono::Utc::now,
             ) {
                 Ok(sync) => {
                     out.push_str("first policy sync:\n");
                     for line in sync_report_text(&sync).lines() {
                         out.push_str(&format!("  {line}\n"));
                     }
-                    if !sync.converged() {
+                    if sync.awaiting_first_revision() {
+                        out.push_str("  managed enrolment complete; waiting for the organisation's first policy revision.\n  Publish a policy in the hub, then run `commonmeasure policy sync`; sessions also refresh automatically.\n");
+                    } else if !sync.converged() {
                         managed_failure = Some(format!(
                             "enrolled and pinned to signer {}, but the first policy \
                              synchronisation did not activate a policy ({}); the local policy \
@@ -1831,6 +2050,45 @@ fn edge_identity(home: &Path) -> commonmeasure_harness::fleet::EdgeIdentity {
     }
 }
 
+/// Renew the enrolled key's directory proof on its own thread when the
+/// enrolment record says one is due, so a session or server start pays for
+/// it inside the wait it already makes for the policy refresh rather than
+/// after it. `None` when nothing is due and no request is made.
+fn start_directory_proof_refresh(
+    home: &Path,
+) -> Option<std::sync::mpsc::Receiver<commonmeasure_relay::ProofRefresh>> {
+    let now = chrono::Utc::now();
+    let due = commonmeasure_harness::EnrolmentRecord::load(home)
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.directory_proof_due_at(home, now));
+    if !due {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let home = home.to_owned();
+    std::thread::spawn(move || {
+        let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+        if let Some(refresh) = commonmeasure_relay::refresh_directory_proof_if_due(&home, budget) {
+            let _ = tx.send(refresh);
+        }
+    });
+    Some(rx)
+}
+
+/// Wait for a renewal started at `started` until the session-start budget
+/// is spent. A renewal still running then is abandoned: its record write is
+/// atomic, and the next start or relay run tries again.
+fn finish_directory_proof_refresh(
+    refresh: Option<std::sync::mpsc::Receiver<commonmeasure_relay::ProofRefresh>>,
+    started: std::time::Instant,
+) {
+    if let Some(refresh) = refresh {
+        let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+        let _ = refresh.recv_timeout(budget.saturating_sub(started.elapsed()));
+    }
+}
+
 /// One synchronisation of managed policy on the paths that run it without
 /// being asked: session start and the relay. `None` on a local edge, where
 /// there is no management request to make. On a managed edge the result is
@@ -1842,7 +2100,7 @@ fn sync_managed_policy(home: &Path, budget: std::time::Duration) -> Option<serde
     match is_managed(home) {
         Ok(false) => None,
         Ok(true) => Some(
-            match sync_within(home, &edge_identity(home), chrono::Utc::now(), budget) {
+            match sync_within(home, &edge_identity(home), chrono::Utc::now, budget) {
                 Ok(report) => report.to_record(),
                 Err(reason) => SyncReport::unavailable(&reason),
             },
@@ -1879,11 +2137,67 @@ fn show_policy_identity() -> Result<(), String> {
     ))
 }
 
+/// Load one candidate policy through the loader and report what it accepted.
+///
+/// The refusal is the loader's own sentence, so an author gets the text the
+/// edge would have produced rather than a second opinion about it. The digest
+/// printed is the digest of the policy in the loader's form, which is what a
+/// fleet-status document reports as applied
+/// (`docs/contracts/canonical-json.md` §Shared policy vectors).
+fn check_policy(file: &Path) -> Result<(), String> {
+    let encoded = std::fs::read(file)
+        .map_err(|error| format!("cannot read the policy at {}: {error}", file.display()))?;
+    let policy = commonmeasure_harness::policy::PolicyDocument::check(&encoded, file)?;
+    let mut out = String::new();
+    let _ = writeln!(out, "accepted      {}", file.display());
+    let _ = writeln!(
+        out,
+        "mode          {}",
+        serde_json::to_value(policy.policy_mode)
+            .ok()
+            .and_then(|mode| mode.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned())
+    );
+    let _ = writeln!(out, "constraints   {}", policy.constraints.len());
+    let _ = writeln!(out, "scopes        {}", policy.scopes.len());
+    for scope in &policy.scopes {
+        let _ = writeln!(
+            out,
+            "  {} — engagement {}, telemetry egress {}",
+            scope.matcher,
+            scope.engagement.as_deref().unwrap_or("none"),
+            if scope.allow_telemetry_egress {
+                "cleared"
+            } else {
+                "not cleared"
+            }
+        );
+    }
+    let _ = writeln!(out, "principals    {}", policy.principals.len());
+    let _ = writeln!(out, "terms         {}", policy.terms.len());
+    let _ = writeln!(
+        out,
+        "digest        {}",
+        commonmeasure_types::canonical::canonical_digest(
+            &serde_json::to_value(&policy)
+                .map_err(|error| format!("cannot serialise the policy: {error}"))?
+        )
+    );
+    write_stdout(&out)
+}
+
+/// The policy file's JSON Schema, in the form committed beside the contract.
+fn show_policy_schema() -> Result<(), String> {
+    let rendered = serde_json::to_string_pretty(&commonmeasure_harness::policy::schema())
+        .map_err(|error| format!("cannot render the schema: {error}"))?;
+    write_stdout(&format!("{rendered}\n"))
+}
+
 /// One synchronisation with the pinned signer's desired policy.
 fn sync_policy() -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     let report =
-        commonmeasure_harness::managed::sync(&home, &edge_identity(&home), chrono::Utc::now())?;
+        commonmeasure_harness::managed::sync(&home, &edge_identity(&home), chrono::Utc::now)?;
     write_stdout(&sync_report_text(&report))?;
     if report.converged() {
         Ok(())

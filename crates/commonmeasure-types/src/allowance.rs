@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::Money;
@@ -7,7 +8,7 @@ use crate::Money;
 /// The calendar unit one allowance covers. Day and month are the two units
 /// the allowance ledger starts with; a new unit is a new variant here and a
 /// new key shape in [`AllowanceDeclaration::period_key`], nowhere else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AllowancePeriod {
     Day,
@@ -35,7 +36,7 @@ impl AllowancePeriod {
 /// wall-clock fact: "which day this purchase falls in" has no answer until a
 /// zone says where midnight is, and defaulting one would move the boundary of
 /// someone's allowance without them declaring it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AllowanceDeclaration {
     pub period: AllowancePeriod,

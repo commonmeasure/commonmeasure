@@ -4,9 +4,11 @@
 //! from the drafts rather than from that module, so a loopback publisher and a
 //! loopback hub in these tests admit a request on the same terms Cloudflare
 //! and the Common Measure Hub do: resolve `keyid` in the directory the
-//! `Signature-Agent` header names, rebuild the RFC 9421 signature base from
-//! the components the request says are covered, and check the Ed25519
-//! signature over it.
+//! `Signature-Agent` header names, use the key only when the directory
+//! response carries a current signature by that key over its own authority
+//! (Cloudflare's per-key rule), rebuild the RFC 9421 signature base from the
+//! components the request says are covered, and check the Ed25519 signature
+//! over it.
 //!
 //! It lives in the tests because nothing the edge ships verifies its own
 //! signatures. The hub's verifier is the other implementation, and the pinned
@@ -40,38 +42,280 @@ impl Verified {
 /// Where a key directory is served under the origin `Signature-Agent` names.
 pub const DIRECTORY_PATH: &str = "/.well-known/http-message-signatures-directory";
 
-/// The public halves a verifier holds, by key id, and the URL this directory
-/// is served at: what a verifier fetches and what it finds there.
-pub struct Directory(HashMap<String, VerifyingKey>, String);
+/// The tag a signature on a key directory response carries.
+pub const DIRECTORY_TAG: &str = "http-message-signatures-directory";
+
+/// A key directory as a hub serves it: the listed keys in order, each with
+/// the proof its holder signed, and the URL it is served at. What a verifier
+/// fetches is [`Directory::response`], and what it may use from that is
+/// [`usable_keys`], so a key that is published without a proof is in the
+/// body and still verifies nothing.
+pub struct Directory {
+    listed: Vec<Listed>,
+    url: String,
+}
+
+struct Listed {
+    key_id: String,
+    x: String,
+    /// The `@signature-params` its holder signed, verbatim, and the
+    /// signature, standard base64. `None` for a key listed with no proof.
+    proof: Option<(String, String)>,
+}
 
 impl Default for Directory {
     fn default() -> Self {
-        Self(
-            HashMap::new(),
-            format!("https://hub.example{DIRECTORY_PATH}"),
-        )
+        Self {
+            listed: Vec::new(),
+            url: format!("https://hub.example{DIRECTORY_PATH}"),
+        }
     }
 }
 
+/// The RFC 7638 thumbprint of an Ed25519 public key, computed here rather
+/// than taken on trust, so a signature can only verify under the id the
+/// directory would really list it as.
+pub fn thumbprint(public_key: &[u8; 32]) -> String {
+    let x = URL_SAFE_NO_PAD.encode(public_key);
+    let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
+    URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(canonical.as_bytes()))
+}
+
 impl Directory {
-    /// Publish a key under its RFC 7638 thumbprint, computed here rather than
-    /// taken on trust, so a signature can only verify under the id the
-    /// directory would really list it as.
-    pub fn publish(&mut self, public_key: &[u8; 32]) -> String {
-        let x = URL_SAFE_NO_PAD.encode(public_key);
-        let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
-        let key_id =
-            URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(canonical.as_bytes()));
-        self.0.insert(
-            key_id.clone(),
-            VerifyingKey::from_bytes(public_key).expect("a valid Ed25519 point"),
-        );
+    /// List a key with the directory proof its holder signed: the
+    /// `Signature-Input` member's parameters verbatim and the signature.
+    /// Returns the key id.
+    pub fn publish(
+        &mut self,
+        public_key: &[u8; 32],
+        signature_input: &str,
+        signature: &str,
+    ) -> String {
+        self.list(
+            public_key,
+            Some((signature_input.to_owned(), signature.to_owned())),
+        )
+    }
+
+    /// List a key with no proof, as a directory that predates the per-key
+    /// rule does.
+    pub fn publish_unsigned(&mut self, public_key: &[u8; 32]) -> String {
+        self.list(public_key, None)
+    }
+
+    fn list(&mut self, public_key: &[u8; 32], proof: Option<(String, String)>) -> String {
+        let key_id = thumbprint(public_key);
+        self.forget(&key_id);
+        self.listed.push(Listed {
+            key_id: key_id.clone(),
+            x: URL_SAFE_NO_PAD.encode(public_key),
+            proof,
+        });
         key_id
     }
 
     pub fn forget(&mut self, key_id: &str) {
-        self.0.remove(key_id);
+        self.listed.retain(|listed| listed.key_id != key_id);
     }
+
+    /// The authority the directory is served from.
+    pub fn authority(&self) -> String {
+        self.url
+            .split_once("://")
+            .and_then(|(_, rest)| rest.split('/').next())
+            .expect("an absolute URL")
+            .to_owned()
+    }
+
+    /// The response a verifier fetching this directory receives: the JWK set
+    /// and, when any key carries a proof, `Signature-Input` and `Signature`
+    /// with one member per such key, labelled at serving time.
+    pub fn response(&self) -> (String, Option<String>, Option<String>) {
+        let keys = self
+            .listed
+            .iter()
+            .map(|listed| {
+                format!(
+                    r#"{{"kty":"OKP","crv":"Ed25519","x":"{}","kid":"{}"}}"#,
+                    listed.x, listed.key_id
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let body = format!(r#"{{"keys":[{keys}]}}"#);
+        let members: Vec<(String, String)> = self
+            .listed
+            .iter()
+            .filter_map(|listed| listed.proof.clone())
+            .collect();
+        if members.is_empty() {
+            return (body, None, None);
+        }
+        let input = members
+            .iter()
+            .enumerate()
+            .map(|(index, (params, _))| format!("binding{index}={params}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let signature = members
+            .iter()
+            .enumerate()
+            .map(|(index, (_, signature))| format!("binding{index}=:{signature}:"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (body, Some(input), Some(signature))
+    }
+}
+
+/// The keys a verifier applying Cloudflare's per-key rule may use from one
+/// directory response served from `authority`: a listed key is usable only
+/// when a `Signature-Input` member names it as `keyid`, covers exactly
+/// `("@authority";req)`, carries the directory tag and Ed25519, is valid at
+/// `now`, and its signature verifies under that key over the base rebuilt
+/// from the served parameters. Every listed key that is not usable is
+/// returned with the reason, so a test can say why a key was refused.
+pub fn usable_keys(
+    body: &str,
+    signature_input: Option<&str>,
+    signature: Option<&str>,
+    authority: &str,
+    now: i64,
+) -> Result<UsableKeys, String> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("the directory is not JSON: {error}"))?;
+    let mut listed = HashMap::new();
+    for key in parsed["keys"]
+        .as_array()
+        .ok_or("the directory has no keys array")?
+    {
+        let (Some(kid), Some(x)) = (key["kid"].as_str(), key["x"].as_str()) else {
+            return Err(format!("a listed key has no kid or x: {key}"));
+        };
+        let raw: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(x)
+            .map_err(|error| format!("x is not base64url: {error}"))?
+            .try_into()
+            .map_err(|_| "x is not 32 bytes".to_owned())?;
+        if thumbprint(&raw) != kid {
+            return Err(format!("kid {kid} is not the thumbprint of its key"));
+        }
+        listed.insert(
+            kid.to_owned(),
+            VerifyingKey::from_bytes(&raw).map_err(|_| format!("{kid} is not an Ed25519 point"))?,
+        );
+    }
+
+    let members = |header: Option<&str>| -> Result<HashMap<String, String>, String> {
+        let Some(header) = header else {
+            return Ok(HashMap::new());
+        };
+        header
+            .split(", ")
+            .map(|member| {
+                member
+                    .split_once('=')
+                    .map(|(label, value)| (label.to_owned(), value.to_owned()))
+                    .ok_or_else(|| format!("a member is not label=value: {member}"))
+            })
+            .collect()
+    };
+    let inputs = members(signature_input)?;
+    let signatures = members(signature)?;
+    if inputs.len() != signatures.len() {
+        return Err(format!(
+            "Signature-Input has {} members and Signature has {}",
+            inputs.len(),
+            signatures.len()
+        ));
+    }
+
+    let mut usable = HashMap::new();
+    let mut refused: HashMap<String, String> = listed
+        .keys()
+        .map(|kid| {
+            (
+                kid.clone(),
+                "no Signature-Input member names this key".to_owned(),
+            )
+        })
+        .collect();
+    for (label, params) in &inputs {
+        let Some(kid) = parameter(params, "keyid") else {
+            continue;
+        };
+        let Some(key) = listed.get(&kid) else {
+            continue;
+        };
+        let checked = (|| -> Result<(), String> {
+            if !params.starts_with(r#"("@authority";req);"#) {
+                return Err(format!(
+                    "the member does not cover exactly (\"@authority\";req): {params}"
+                ));
+            }
+            if !params.contains(&format!(r#";tag="{DIRECTORY_TAG}""#)) {
+                return Err(format!(
+                    "the member is not tagged {DIRECTORY_TAG}: {params}"
+                ));
+            }
+            if !params.contains(r#";alg="ed25519""#) {
+                return Err(format!("the member is not Ed25519: {params}"));
+            }
+            let created = integer(params, "created").ok_or("the member has no created")?;
+            let expires = integer(params, "expires").ok_or("the member has no expires")?;
+            if created > now || expires <= now {
+                return Err(format!(
+                    "the member is not valid now ({created} to {expires})"
+                ));
+            }
+            let encoded = signatures
+                .get(label)
+                .ok_or_else(|| format!("Signature has no member {label}"))?;
+            let bytes: [u8; 64] = STANDARD
+                .decode(encoded.trim_matches(':'))
+                .map_err(|error| format!("the signature is not base64: {error}"))?
+                .try_into()
+                .map_err(|_| "an Ed25519 signature is 64 bytes".to_owned())?;
+            let base = format!("\"@authority\";req: {authority}\n\"@signature-params\": {params}");
+            key.verify(base.as_bytes(), &Signature::from_bytes(&bytes))
+                .map_err(|_| format!("the signature does not verify over the base:\n{base}"))
+        })();
+        match checked {
+            Ok(()) => {
+                refused.remove(&kid);
+                usable.insert(kid, *key);
+            }
+            Err(reason) if !usable.contains_key(&kid) => {
+                refused.insert(kid, reason);
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(UsableKeys {
+        keys: usable,
+        refused,
+    })
+}
+
+/// What one directory response lets a verifier use.
+pub struct UsableKeys {
+    /// The keys whose holders signed their place, by key id.
+    pub keys: HashMap<String, VerifyingKey>,
+    /// Every other listed key, by key id, with why it is not usable.
+    pub refused: HashMap<String, String>,
+}
+
+/// One `;name=integer` signature parameter.
+fn integer(params: &str, name: &str) -> Option<i64> {
+    let at = params.find(&format!(";{name}="))? + name.len() + 2;
+    let rest = &params[at..];
+    rest[..rest.find(';').unwrap_or(rest.len())].parse().ok()
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs() as i64
 }
 
 /// Verify `request`, which reached `authority`.
@@ -147,16 +391,35 @@ pub fn verify(
         ));
     }
     let resolved = format!("{}{DIRECTORY_PATH}", agent.trim_end_matches('/'));
-    if resolved != directory.1 {
+    if resolved != directory.url {
         return Err(format!(
             "Signature-Agent resolves to {resolved}, which is not this directory ({})",
-            directory.1
+            directory.url
         ));
     }
 
-    let key = directory.0.get(&key_id).ok_or_else(|| {
-        format!("keyid {key_id} is not in the directory; a revoked key is not published")
-    })?;
+    // Fetch the directory and keep only the keys whose holders signed their
+    // place in it, as Cloudflare does: a listed key without a proof is not
+    // used.
+    let (body, served_input, served_signature) = directory.response();
+    let UsableKeys {
+        keys: usable,
+        refused,
+    } = usable_keys(
+        &body,
+        served_input.as_deref(),
+        served_signature.as_deref(),
+        &directory.authority(),
+        unix_now(),
+    )?;
+    let key = usable
+        .get(&key_id)
+        .ok_or_else(|| match refused.get(&key_id) {
+            Some(reason) => format!("keyid {key_id} is listed but not usable: {reason}"),
+            None => {
+                format!("keyid {key_id} is not in the directory; a revoked key is not published")
+            }
+        })?;
 
     let mut base = String::new();
     for name in &covered {
@@ -192,17 +455,19 @@ fn parameter(params: &str, name: &str) -> Option<String> {
     Some(rest[..rest.find('"')?].to_owned())
 }
 
-/// Enrol `home` as `commonmeasure connect` does: mint the key, store it, and
-/// write the enrolment record naming where the hub publishes it. Publishes the
-/// public half in `directory` and returns the key id.
+/// Enrol `home` as `commonmeasure connect` does: mint the key, store it,
+/// write the enrolment record naming where the hub publishes it, and sign the
+/// directory proof. Publishes the public half with its proof in `directory`
+/// and returns the key id.
 ///
 /// The files are written through the runtime's own types, so a test can never
 /// enrol an edge into a shape the binary would not itself produce.
 pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Directory) -> String {
     use commonmeasure_harness::enrolment::{
-        EnrolledIdentity, EnrolledOrganization, EnrolmentRecord,
+        DirectoryListing, EnrolledIdentity, EnrolledOrganization, EnrolmentRecord, ProofStatement,
+        timestamp,
     };
-    use commonmeasure_harness::identity::EdgeKey;
+    use commonmeasure_harness::identity::{EdgeKey, Identity};
 
     let key = EdgeKey::generate().expect("a key");
     key.store(home).expect("store the key");
@@ -211,10 +476,10 @@ pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Di
         .expect("the public key")
         .try_into()
         .expect("32 bytes");
-    let key_id = published.publish(&public);
-    assert_eq!(key_id, key.thumbprint(), "the key id is the thumbprint");
+    let key_id = key.thumbprint();
+    assert_eq!(key_id, thumbprint(&public), "the key id is the thumbprint");
 
-    EnrolmentRecord {
+    let record = EnrolmentRecord {
         hub: hub.to_owned(),
         organization: EnrolledOrganization {
             id: "org-1".to_owned(),
@@ -231,11 +496,35 @@ pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Di
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+    };
+    record.store(home).expect("store the enrolment record");
+
+    // The proof the edge uploads at `connect`, made by the edge's own signer,
+    // and the listing `connect` leaves once the hub holds it.
+    let identity = Identity::load(home).expect("the enrolled identity");
+    let signer = identity.signer().expect("an enrolled key signs");
+    let authority = published.authority();
+    let proof = signer
+        .directory_proof(&authority, unix_now(), LIFETIME_SECS)
+        .expect("sign the directory proof");
+    published.publish(&public, &proof.signature_input, &proof.signature);
+    DirectoryListing {
+        key_id: key_id.clone(),
+        checked_at: timestamp(chrono::Utc::now()),
+        stated: Some(ProofStatement {
+            authority,
+            lifetime_secs: LIFETIME_SECS,
+            expires_at: chrono::DateTime::from_timestamp(proof.expires, 0).map(timestamp),
+        }),
+        failure: None,
     }
     .store(home)
-    .expect("store the enrolment record");
+    .expect("store the directory listing");
     key_id
 }
+
+/// The proof lifetime a hub states by default: seven days.
+pub const LIFETIME_SECS: i64 = 604_800;
 
 /// Record the revocation the edge learns on its next relay run, and take the
 /// key out of the directory as the hub does.

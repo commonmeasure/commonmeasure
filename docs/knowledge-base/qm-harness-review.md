@@ -159,7 +159,7 @@ human-written intent (informal prose in `adrs/`), and implementation is done
 by the maintainers' own agents at the maintainers' token expense, inside their
 review gates. Three implications:
 
-- The contribution no longer documents the implementation, so the operator's
+- The contribution does not document the implementation, so the operator's
   evidence trail is the only record of what the implementing agent read,
   fetched and admitted — the session-evidence layer, as applied to the
   authoring process. QM's own audit covers its product's runtime turns, not

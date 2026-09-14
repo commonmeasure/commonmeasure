@@ -7,9 +7,6 @@
 //! The one rule that outranks completeness: **capture must never break the
 //! agent.** Odd input yields no records rather than an error, and the caller
 //! exits zero whatever happens.
-//!
-//! The payload shape and the per-tool grounding policy are raided from AI
-//! Content Diet's `diet-capture`, which established both against live hooks.
 
 use chrono::Utc;
 use commonmeasure_types::LicenceState;
@@ -67,15 +64,21 @@ pub struct HookInput {
 
 /// Fields no Claude Code hook payload carries and other hosts' payloads
 /// do: Cursor's (`conversation_id`, `generation_id`, `cursor_version`,
-/// `workspace_roots`) and the Copilot family's camelCase envelope
-/// (`sessionId`, `toolName`, `toolArgs`). Cursor and VS Code load Claude
-/// Code's hook file and run its commands with payloads of their own, so a
+/// `workspace_roots`), the Copilot CLI's camelCase envelope (`sessionId`,
+/// `toolName`, `toolArgs`, `toolResult`), and the `timestamp` and
+/// `tool_result` of the snake_case envelope the Copilot CLI sends to hooks
+/// configured under Claude Code's event names and VS Code's Copilot Chat
+/// sends to every hook. That snake_case envelope otherwise carries Claude
+/// Code's own field names (`session_id`, `hook_event_name`, `tool_name`,
+/// `tool_input`), and `timestamp` is the one field every documented
+/// Copilot and VS Code payload carries and Claude Code's hooks reference
+/// lists for none. Cursor, VS Code and the Copilot CLI load Claude Code's
+/// hook files and run their commands with payloads of their own, so a
 /// reader told it is reading Claude Code refuses a payload wearing any of
-/// these rather than recording something untrue. Cursor's documentation
-/// does not say whether the Claude Code hooks it loads receive its own
-/// shape or a translated one, so the command also refuses on Cursor's
-/// environment (`CURSOR_PROJECT_DIR`), whatever the payload looks like.
-const FOREIGN_MARKERS: [&str; 7] = [
+/// these rather than recording something untrue. A payload in Claude Code's
+/// own shape from another host is refused on that host's environment
+/// instead ([`FOREIGN_ENVIRONMENT`]).
+const FOREIGN_MARKERS: [&str; 10] = [
     "conversation_id",
     "generation_id",
     "cursor_version",
@@ -83,7 +86,45 @@ const FOREIGN_MARKERS: [&str; 7] = [
     "sessionId",
     "toolName",
     "toolArgs",
+    "toolResult",
+    "timestamp",
+    "tool_result",
 ];
+
+/// Environment variables another host sets for every hook it runs, where that
+/// host also runs the hook commands Claude Code's registration names. Cursor
+/// sets `CURSOR_PROJECT_DIR` and loads Claude Code's hook files as
+/// third-party hooks. Gemini CLI sets `GEMINI_SESSION_ID`, and its `gemini
+/// hooks migrate` copies Claude Code's hooks into its own settings. The Devin
+/// CLI sets `DEVIN_PROJECT_DIR` and runs the hooks in
+/// `~/.claude/settings.json` by default. Grok Build sets `GROK_SESSION_ID` and
+/// scans the same file by default. Gemini CLI and Grok Build also set
+/// `CLAUDE_PROJECT_DIR` for compatibility, so that variable does not identify
+/// Claude Code. The Devin CLI sends Claude Code's own payload shape, so for
+/// these hosts the environment, not the payload, is what tells the reader it
+/// is not reading Claude Code. The reader refuses rather than naming the host
+/// from the variable, which would record a host the command was not told.
+pub const FOREIGN_ENVIRONMENT: [&str; 4] = [
+    "CURSOR_PROJECT_DIR",
+    "GEMINI_SESSION_ID",
+    "DEVIN_PROJECT_DIR",
+    "GROK_SESSION_ID",
+];
+
+impl HostSurface {
+    /// The first of [`FOREIGN_ENVIRONMENT`] set in this process's environment,
+    /// when the reader for this surface must refuse under it. Cursor's reader
+    /// runs under Cursor's own variable, and the Copilot CLI's reader accepts
+    /// only the CLI's own shape, so neither refuses on the environment.
+    pub fn foreign_environment(self, is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
+        if matches!(self, HostSurface::Cursor | HostSurface::CopilotCli) {
+            return None;
+        }
+        FOREIGN_ENVIRONMENT
+            .into_iter()
+            .find(|variable| is_set(variable))
+    }
+}
 
 impl HookInput {
     /// The host's turn identifier under whichever name the host uses.
@@ -96,27 +137,36 @@ impl HookInput {
     /// sent, unless it carries another host's markers. Cursor's payload is
     /// mapped field by field: `conversation_id` is the session,
     /// `generation_id` the turn, `tool_output` the response, and Cursor's
-    /// event names become the ones the capture path matches on.
+    /// event names become the ones the capture path matches on. The Copilot
+    /// CLI's camelCase payload is mapped the same way: `sessionId` is the
+    /// session and `toolResult.textResultForLlm` the response.
     pub fn from_payload(surface: HostSurface, raw: &Value) -> Option<Self> {
         match surface {
             HostSurface::Cursor => Self::from_cursor(raw),
+            HostSurface::CopilotCli => Self::from_copilot(raw),
             _ if Self::is_foreign(surface, raw) => None,
             _ => serde_json::from_value(raw.clone()).ok(),
         }
     }
 
     /// Whether a payload handed to a reader for `surface` is another host's:
-    /// it carries a field only Cursor's or the Copilot family's payloads
-    /// carry. Distinct from a payload that is merely unreadable, because the
-    /// two are answered differently at session start: an unreadable Claude
-    /// Code payload still gets the nudge, a foreign one gets nothing.
+    /// it carries a field only Cursor's, VS Code's or the Copilot CLI's
+    /// payloads carry. Distinct from a payload that is merely unreadable,
+    /// because the two are answered differently at session start: an
+    /// unreadable Claude Code payload still gets the nudge, a foreign one
+    /// gets nothing. The Copilot CLI reader accepts only its own shape, so
+    /// any other JSON object is foreign to it. Cursor's reader maps any
+    /// object and refuses nothing.
     pub fn is_foreign(surface: HostSurface, raw: &Value) -> bool {
-        surface != HostSurface::Cursor
-            && raw.as_object().is_some_and(|object| {
+        match surface {
+            HostSurface::Cursor => false,
+            HostSurface::CopilotCli => raw.is_object() && Self::from_copilot(raw).is_none(),
+            _ => raw.as_object().is_some_and(|object| {
                 FOREIGN_MARKERS
                     .iter()
                     .any(|marker| object.contains_key(*marker))
-            })
+            }),
+        }
     }
 
     fn from_cursor(raw: &Value) -> Option<Self> {
@@ -163,6 +213,56 @@ impl HookInput {
             prompt: text("prompt"),
         })
     }
+
+    /// The Copilot CLI's camelCase payload, the format it sends to hooks
+    /// configured under camelCase event names, which is how `install
+    /// copilot` registers them. Every documented event carries `sessionId`;
+    /// a payload without it, or carrying the snake_case envelope's
+    /// `session_id` or `tool_name`, or Cursor's `conversation_id`, is not
+    /// this shape and is refused. The payload names no event, so the event
+    /// is the command argument's.
+    fn from_copilot(raw: &Value) -> Option<Self> {
+        let object = raw.as_object()?;
+        if ["session_id", "tool_name", "conversation_id"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+        {
+            return None;
+        }
+        let text = |key: &str| object.get(key).and_then(Value::as_str).map(str::to_owned);
+        let session_id = Some(text("sessionId")?);
+        // `toolArgs` is typed `unknown` in the reference; where it arrives
+        // as JSON text it is parsed, as Cursor's is.
+        let tool_input = match object.get("toolArgs") {
+            Some(Value::String(encoded)) => {
+                serde_json::from_str(encoded).unwrap_or_else(|_| Value::String(encoded.clone()))
+            }
+            Some(other) => other.clone(),
+            None => Value::Null,
+        };
+        // `textResultForLlm` is what the model was given, so it is the text
+        // a fetch is hashed over.
+        let tool_response = object
+            .get("toolResult")
+            .and_then(|result| result.get("textResultForLlm"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        Some(Self {
+            session_id,
+            transcript_path: text("transcriptPath"),
+            cwd: text("cwd"),
+            hook_event_name: None,
+            tool_name: text("toolName"),
+            tool_input,
+            tool_response,
+            agent_type: None,
+            agent_id: None,
+            prompt_id: None,
+            turn_id: None,
+            source: text("source"),
+            prompt: text("prompt"),
+        })
+    }
 }
 
 /// Which host observed this. The hosts share the hook envelope, but their
@@ -175,6 +275,18 @@ pub enum HostSurface {
     Pi,
     ClaudeDesktop,
     Cursor,
+    CopilotCli,
+    VsCode,
+    /// ChatGPT on the web, read by the browser extension.
+    ChatgptWeb,
+    /// Google AI Overviews, read by the browser extension.
+    GoogleAiOverview,
+    /// Bing Copilot Search, read by the browser extension.
+    BingCopilotSearch,
+    /// Chrome and the Chromium browsers that read the same native messaging
+    /// manifest: a registration, never the `host` of a record. The three
+    /// surfaces above are what the extension records under.
+    Chrome,
 }
 
 impl HostSurface {
@@ -185,7 +297,24 @@ impl HostSurface {
             HostSurface::Pi => "pi",
             HostSurface::ClaudeDesktop => "claude-desktop",
             HostSurface::Cursor => "cursor",
+            HostSurface::CopilotCli => "copilot-cli",
+            HostSurface::VsCode => "vscode",
+            HostSurface::ChatgptWeb => "chatgpt-web",
+            HostSurface::GoogleAiOverview => "google-ai-overview",
+            HostSurface::BingCopilotSearch => "bing-copilot-search",
+            HostSurface::Chrome => "chrome",
         }
+    }
+
+    /// Whether this is a browser answer surface, whose observed crossings
+    /// come from the extension (`crate::browser`) rather than a hook payload.
+    pub fn is_browser(self) -> bool {
+        matches!(
+            self,
+            HostSurface::ChatgptWeb
+                | HostSurface::GoogleAiOverview
+                | HostSurface::BingCopilotSearch
+        )
     }
 
     pub fn parse(name: &str) -> Option<Self> {
@@ -195,6 +324,12 @@ impl HostSurface {
             "pi" => Some(HostSurface::Pi),
             "claude-desktop" => Some(HostSurface::ClaudeDesktop),
             "cursor" => Some(HostSurface::Cursor),
+            "copilot-cli" | "copilot" => Some(HostSurface::CopilotCli),
+            "vscode" => Some(HostSurface::VsCode),
+            "chatgpt-web" => Some(HostSurface::ChatgptWeb),
+            "google-ai-overview" => Some(HostSurface::GoogleAiOverview),
+            "bing-copilot-search" => Some(HostSurface::BingCopilotSearch),
+            "chrome" => Some(HostSurface::Chrome),
             _ => None,
         }
     }
@@ -223,7 +358,15 @@ pub fn capture(
         .clone()
         .unwrap_or_else(|| "unknown-session".to_owned());
     let tool = input.tool_name.clone().unwrap_or_default();
-    let kind = ToolKind::classify(&tool);
+    // The Copilot CLI names its built-in web tools `web_fetch` and
+    // `web_search` (its hooks reference maps them to Claude Code's
+    // `WebFetch` and `WebSearch`). The mapping is this host's alone, and the
+    // record keeps the host's own name.
+    let kind = match (surface, tool.as_str()) {
+        (HostSurface::CopilotCli, "web_fetch") => ToolKind::WebFetch,
+        (HostSurface::CopilotCli, "web_search") => ToolKind::WebSearch,
+        _ => ToolKind::classify(&tool),
+    };
 
     let crossing =
         |url: &str, hash: Option<String>, tokens: Option<u64>, grounded: bool| Crossing {
@@ -603,7 +746,7 @@ mod tests {
     }
 
     /// The case the internal-supply decision exists for: an internal MCP RAG
-    /// whose result URLs the floor used to drop silently. A named prefix
+    /// whose result URLs the floor would otherwise drop silently. A named prefix
     /// records them; everything private the list does not name stays out of
     /// the record in the same payload.
     #[test]
@@ -703,6 +846,53 @@ mod tests {
                             "tool_name": "WebFetch", "tool_input": {"url": "https://a.example/"},
                             "tool_response": {"result": "text"}});
         assert!(HookInput::from_payload(HostSurface::ClaudeCode, &claude).is_some());
+    }
+
+    /// The Copilot CLI's camelCase `postToolUse` payload maps to the capture
+    /// shape: `web_fetch` is a grounded fetch hashed over
+    /// `textResultForLlm`, recorded under the host's own tool name. Its
+    /// snake_case envelope, and VS Code's, are refused by the Claude Code
+    /// reader and by this one.
+    #[test]
+    fn a_copilot_payload_maps_to_the_capture_shape_and_other_shapes_are_refused() {
+        let raw = json!({
+            "sessionId": "cop-1", "timestamp": 1789400000000i64, "cwd": "/work/project",
+            "toolName": "web_fetch", "toolArgs": {"url": "https://www.example.org/report"},
+            "toolResult": {"resultType": "success", "textResultForLlm": "The report text."}
+        });
+        let input =
+            HookInput::from_payload(HostSurface::CopilotCli, &raw).expect("Copilot's shape");
+        assert_eq!(input.session_id.as_deref(), Some("cop-1"));
+        assert_eq!(input.cwd.as_deref(), Some("/work/project"));
+        let mut input = input;
+        input.hook_event_name = Some("PostToolUse".into());
+        let crossings = capture(&input, HostSurface::CopilotCli, &[]);
+        assert_eq!(crossings.len(), 1);
+        assert_eq!(crossings[0].host, "copilot-cli");
+        assert_eq!(crossings[0].tool.as_deref(), Some("web_fetch"));
+        assert!(crossings[0].grounded);
+        assert_eq!(
+            crossings[0].content_hash.as_deref(),
+            Some(sha256_digest(b"The report text.").as_str())
+        );
+        assert!(
+            capture(&input, HostSurface::ClaudeCode, &[]).is_empty(),
+            "web_fetch is the Copilot CLI's name, not a tool another host is read as having"
+        );
+        assert!(HookInput::from_payload(HostSurface::ClaudeCode, &raw).is_none());
+
+        let snake = json!({
+            "hook_event_name": "PostToolUse", "session_id": "cop-1",
+            "timestamp": "2026-09-14T09:00:00.000Z", "cwd": "/work", "tool_name": "WebFetch",
+            "tool_input": {"url": "https://www.example.org/"},
+            "tool_result": {"result_type": "success", "text_result_for_llm": "text"}
+        });
+        assert!(HookInput::from_payload(HostSurface::ClaudeCode, &snake).is_none());
+        assert!(HookInput::from_payload(HostSurface::CopilotCli, &snake).is_none());
+        let claude = json!({"session_id": "s-1", "hook_event_name": "PostToolUse",
+                            "tool_name": "WebFetch", "tool_input": {"url": "https://a.example/"},
+                            "tool_response": {"result": "text"}});
+        assert!(HookInput::from_payload(HostSurface::CopilotCli, &claude).is_none());
     }
 
     /// Cursor spells an MCP tool `MCP:<tool>`; our own tools under that

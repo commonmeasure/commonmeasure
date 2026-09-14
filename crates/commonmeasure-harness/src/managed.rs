@@ -65,6 +65,12 @@ pub const SESSION_START_BUDGET: Duration = Duration::from_secs(3);
 /// run. The HTTP client's own budget.
 pub const DEFAULT_BUDGET: Duration = commonmeasure_http::CLIENT_TIMEOUT;
 
+/// Accept modest clock skew between the signer and edge without accepting
+/// arbitrarily future-dated policy. Only issue time receives this allowance;
+/// expiry remains strict, and network delay is handled by reading the clock
+/// after the complete response arrives.
+pub const ISSUED_AT_TOLERANCE: chrono::Duration = chrono::Duration::minutes(5);
+
 /// `<home>/deployment.json`: the mode this edge runs in. Absent means
 /// `local`. Unknown fields are load errors, as in every declaration this
 /// runtime reads, because a misspelled `"signer"` must not load as a
@@ -393,12 +399,13 @@ pub fn verify(
             "expires_at is not after issued_at",
         ));
     }
-    if issued_at > now {
+    if issued_at.signed_duration_since(now) > ISSUED_AT_TOLERANCE {
         return Err(Rejection::new(
             "not_yet_valid",
             format!(
-                "the envelope is issued at {}, which is after now",
-                issued_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+                "the envelope is issued at {}, which is more than the {} second clock-skew tolerance after now",
+                issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                ISSUED_AT_TOLERANCE.num_seconds()
             ),
         ));
     }
@@ -578,6 +585,12 @@ impl SyncReport {
         )
     }
 
+    /// Enrolment may finish while the organisation has not published its first
+    /// revision. This is not convergence and cannot clear an applied policy.
+    pub fn awaiting_first_revision(&self) -> bool {
+        self.sync.outcome == "no_revision" && self.applied.is_none()
+    }
+
     /// Whether there is nothing to tell an operator: the desired policy was
     /// already in force and its envelope has not expired.
     pub fn fresh(&self) -> bool {
@@ -629,14 +642,21 @@ pub fn is_managed(home: &Path) -> Result<bool, String> {
 }
 
 /// Fetch the desired envelope, verify it, and activate it or keep the
-/// policy already in force.
+/// policy already in force. The caller supplies a clock, read once for
+/// request signing and again after the complete response arrives for
+/// envelope validity and staleness. A failed request uses the second reading
+/// too; an edge that cannot sign uses only the first.
 ///
 /// `Err` is a refusal to try: a local edge, or a deployment or state file
 /// this runtime cannot read. Everything the hub does or fails to do is an
 /// `Ok` report with its outcome, recorded in the state file so the next
 /// status document carries it.
-pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<SyncReport, String> {
-    sync_within(home, edge, now, DEFAULT_BUDGET)
+pub fn sync(
+    home: &Path,
+    edge: &EdgeIdentity,
+    clock: impl FnMut() -> DateTime<Utc>,
+) -> Result<SyncReport, String> {
+    sync_within(home, edge, clock, DEFAULT_BUDGET)
 }
 
 /// [`sync`] with the time the request may take bounded by `budget`: the
@@ -644,7 +664,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
 pub fn sync_within(
     home: &Path,
     edge: &EdgeIdentity,
-    now: DateTime<Utc>,
+    mut clock: impl FnMut() -> DateTime<Utc>,
     budget: Duration,
 ) -> Result<SyncReport, String> {
     let Deployment::Managed {
@@ -659,6 +679,7 @@ pub fn sync_within(
             Deployment::path(home).display()
         ));
     };
+    let now = clock();
     let at = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
     // A management request on its own path, carrying no telemetry key and no
@@ -710,6 +731,7 @@ pub fn sync_within(
         );
     }
     let sent = send_within(&policy_url, request, budget);
+    let now = clock();
     // The policy file is held exclusively from here to the save, against
     // the console's editor and another synchronisation, so a read, a
     // comparison and a replacement are one step.
@@ -758,9 +780,29 @@ pub fn sync_within(
             now,
         );
     }
-    // An answer that is not an envelope, including the hub's 404 before any
-    // revision is published, is the hub not reached rather than a desired
-    // policy refused.
+    // Match the hub's explicit absence response, not any 404: a wrong URL
+    // or a proxy error must still fail onboarding. No envelope is accepted
+    // and any policy already applied remains in force.
+    if response.status == 404
+        && serde_json::from_slice::<Value>(&response.body).is_ok_and(|body| {
+            body["detail"] == "no policy revision has been published for this organisation"
+        })
+    {
+        return conclude(
+            home,
+            &policy_url,
+            state,
+            Sync {
+                at,
+                outcome: "no_revision".to_owned(),
+                revision: None,
+                digest: None,
+                reason: Some("the hub has not published a policy revision yet; the policy already in force stays".to_owned()),
+            },
+            now,
+        );
+    }
+    // Any other non-envelope response is an unavailable policy endpoint.
     if response.status != 200 {
         return conclude(
             home,
@@ -1427,10 +1469,11 @@ mod tests {
     }
 
     #[test]
-    fn an_envelope_issued_in_the_future_is_not_yet_valid() {
+    fn an_envelope_issued_beyond_the_tolerance_is_not_yet_valid() {
         let hub = hub("hub-1");
         let mut premature = payload(1);
-        premature["issued_at"] = json!("2026-09-06T12:00:01Z");
+        premature["issued_at"] =
+            json!((now() + ISSUED_AT_TOLERANCE + chrono::Duration::seconds(1)).to_rfc3339());
         let rejection = verify(
             &hub.envelope(premature),
             &hub.signer,
@@ -1488,7 +1531,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "accepted");
         assert!(report.converged());
         let applied = report.applied.clone().expect("applied");
@@ -1522,7 +1565,7 @@ mod tests {
         // Rollback: an earlier revision, validly signed, is refused and the
         // applied policy stays.
         *served.lock().unwrap() = hub.envelope(payload(1));
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "rejected");
         assert!(report.sync.reason.as_deref().unwrap().contains("rollback"));
         assert_eq!(report.applied.as_ref().unwrap().revision, 2);
@@ -1540,7 +1583,7 @@ mod tests {
         let mut loose = payload(3);
         loose["policy"] = json!({"policy_mode": "observe"});
         *served.lock().unwrap() = forger.envelope(loose);
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "rejected");
         assert!(
             report
@@ -1562,7 +1605,7 @@ mod tests {
         // reapplied.
         *served.lock().unwrap() = hub.envelope(payload(2));
         assert_eq!(
-            sync(home.path(), &unknown_edge(), now())
+            sync(home.path(), &unknown_edge(), now)
                 .unwrap()
                 .sync
                 .outcome,
@@ -1574,7 +1617,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sync(home.path(), &unknown_edge(), now())
+            sync(home.path(), &unknown_edge(), now)
                 .unwrap()
                 .sync
                 .outcome,
@@ -1592,7 +1635,7 @@ mod tests {
         let mut reused = payload(2);
         reused["policy"] = json!({"policy_mode": "prefer"});
         *served.lock().unwrap() = hub.envelope(reused);
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "rejected");
         assert!(
             report
@@ -1616,7 +1659,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "unreachable");
         assert_eq!(report.applied.as_ref().unwrap().revision, 2);
         let reported = management(home.path(), now());
@@ -1666,7 +1709,7 @@ mod tests {
         std::fs::create_dir_all(&managed).unwrap();
         std::fs::set_permissions(&managed, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-        let error = sync(home.path(), &unknown_edge(), now()).unwrap_err();
+        let error = sync(home.path(), &unknown_edge(), now).unwrap_err();
         std::fs::set_permissions(&managed, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(error.contains("last-known-good"), "{error}");
         assert_eq!(
@@ -1700,9 +1743,73 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "unreachable");
         assert!(report.sync.reason.as_deref().unwrap().contains("404"));
+    }
+
+    #[test]
+    fn no_revision_waits_then_accepts_and_never_erases_the_last_known_good() {
+        use std::sync::{Arc, Mutex};
+        let hub = hub("hub-1");
+        let absent = commonmeasure_http::Response::json(
+            404,
+            r#"{"detail":"no policy revision has been published for this organisation"}"#,
+        );
+        let served = Arc::new(Mutex::new(absent.clone()));
+        let handler = served.clone();
+        let origin = commonmeasure_http::Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(move |_| handler.lock().unwrap().clone())
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        enrol(home.path());
+        std::fs::write(
+            Deployment::path(home.path()),
+            serde_json::to_vec(&Deployment::Managed {
+                signer: hub.signer.clone(),
+                policy_url: format!("{}/policy", origin.url()),
+                organisation: "org-1".to_owned(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let local = br#"{"policy_mode":"strict"}"#;
+        std::fs::write(home.path().join("policy.json"), local).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
+        assert!(report.awaiting_first_revision());
+        assert!(!report.converged());
+        assert_eq!(
+            std::fs::read(home.path().join("policy.json")).unwrap(),
+            local
+        );
+        assert!(!State::last_known_good_path(home.path()).exists());
+
+        *served.lock().unwrap() = commonmeasure_http::Response::new(200, hub.envelope(payload(2)));
+        let accepted = sync(home.path(), &unknown_edge(), now).unwrap();
+        assert!(accepted.converged());
+        let policy = std::fs::read(home.path().join("policy.json")).unwrap();
+        let envelope = std::fs::read(State::last_known_good_path(home.path())).unwrap();
+        *served.lock().unwrap() = absent;
+        let later = now() + chrono::Duration::days(3650);
+        let report = sync(home.path(), &unknown_edge(), || later).unwrap();
+        assert_eq!(report.sync.outcome, "no_revision");
+        assert!(!report.awaiting_first_revision());
+        assert!(!report.converged());
+        assert_eq!(report.applied, accepted.applied);
+        assert!(report.stale_since.is_some());
+        assert_eq!(
+            std::fs::read(home.path().join("policy.json")).unwrap(),
+            policy
+        );
+        assert_eq!(
+            std::fs::read(State::last_known_good_path(home.path())).unwrap(),
+            envelope
+        );
+        assert_eq!(
+            State::read(home.path()).unwrap().last_sync.unwrap().outcome,
+            "no_revision"
+        );
     }
 
     /// A 401 from the policy endpoint is the hub refusing this edge's key,
@@ -1726,7 +1833,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "unauthenticated");
         let reason = report.sync.reason.as_deref().unwrap();
         assert!(
@@ -1739,7 +1846,7 @@ mod tests {
     #[test]
     fn a_local_edge_makes_no_request() {
         let home = tempfile::tempdir().unwrap();
-        let error = sync(home.path(), &unknown_edge(), now()).unwrap_err();
+        let error = sync(home.path(), &unknown_edge(), now).unwrap_err();
         assert!(error.contains("deployment mode is local"), "{error}");
         assert!(!State::path(home.path()).exists(), "nothing was recorded");
     }
@@ -1837,7 +1944,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        let report = sync(home.path(), &unknown_edge(), now).unwrap();
         assert_eq!(report.sync.outcome, "accepted");
         assert_eq!(report.stale_since, None);
         assert!(!report.fresh(), "an activation is worth a line");
@@ -1845,7 +1952,7 @@ mod tests {
         // Two days on: the envelope has expired, the hub still serves it,
         // and nothing relaxes.
         let later = now() + chrono::Duration::days(2);
-        let report = sync(home.path(), &unknown_edge(), later).unwrap();
+        let report = sync(home.path(), &unknown_edge(), || later).unwrap();
         assert_eq!(report.sync.outcome, "rejected");
         assert!(report.sync.reason.as_deref().unwrap().contains("expired"));
         assert_eq!(report.applied.as_ref().unwrap().revision, 2);
@@ -1891,7 +1998,7 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        let report = sync(home.path(), &unknown_edge(), later).unwrap();
+        let report = sync(home.path(), &unknown_edge(), || later).unwrap();
         assert_eq!(report.sync.outcome, "already_applied");
         assert_eq!(report.stale_since, None);
         assert!(report.fresh());

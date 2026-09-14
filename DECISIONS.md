@@ -69,8 +69,7 @@ the history; this document does not repeat it.
   only where a signature travels with it: a request to a supplier's API
   under the operator's own credential names the adapter and its version
   instead, and telemetry delivery and enrolment reach the hub under the
-  operator's ingest key. This replaces the earlier
-  position that the bot registration is the operator's.
+  operator's ingest key.
 - A publisher sees an enrolled edge as a pseudonymous key id, never as an
   operator name. The hub holds the mapping from key id to organisation and
   is the party a publisher complains to; the operator is not disclosed
@@ -133,6 +132,24 @@ the history; this document does not repeat it.
   coordination across operators goes to the hub; the hub is never in the
   decision path for a crossing and its absence never relaxes local policy. A
   feature that needs either invariant broken does not go to the hub.
+- A hosted edge serves the hosts that reach
+  MCP only over HTTPS. It is the edge binary in a service mode, one per
+  organisation, enrolled and managed like any edge, and never part of the
+  hub. The policy engine, the refusal semantics, the record format and the
+  relay are unchanged, and no hub call sits in a crossing's ruling. It
+  speaks Streamable HTTP, and each person authenticates with an access
+  token the hub issues as the authorisation server, under the hub's own
+  sign-in. The token's subject is the principal on every record, under its
+  own authentication basis. A firm's own identity provider reaches the
+  hosted edge only by federation at the hub. Common Measure Ltd operates it
+  in the first instance, on one machine with a durable disk that holds the
+  operator record in the file layout every contract describes, in a cloud
+  project of the organisation's own. Common Measure Ltd therefore holds
+  that organisation's private record, which a local edge never lets leave
+  the firm, and says so in the organisation's agreement. The hub still
+  sees only the cleared projection. The design is
+  `docs/knowledge-base/hosted-edge.md`, and the package is `ROADMAP.md`
+  §The hosted edge.
 
 ## Execution and evidence
 
@@ -164,7 +181,7 @@ the history; this document does not repeat it.
   classification already says, and no second classification exists for
   this rule. The policy switch `refuse_on_pii`, off by default, restores
   the refusal on every source for an operator that wants it
-  (`plugin/README.md` §Policy, `docs/FAIL-POLICY.md` §6).
+  (`docs/contracts/source-policy.md` §Recording, `docs/FAIL-POLICY.md` §6).
 - The private operator evidence log is authoritative. Console views and
   Content Telemetry messages are derived projections with separate access
   and egress policies.
@@ -242,8 +259,8 @@ the history; this document does not repeat it.
   response a hook could attribute to a URL, so an observed matcher there
   could witness only third-party MCP results and none is registered. Codex
   hooks exist and `PostToolUse` carries `tool_response` for MCP tools; the
-  hosted web search still fires none, so the mediated-only reading stands
-  for the host's own fetch. One `[mcp_servers.commonmeasure]` table serves
+  hosted web search fires none, so the host's own fetch is mediated only.
+  One `[mcp_servers.commonmeasure]` table serves
   the Codex CLI, the ChatGPT desktop app and the Codex IDE extension, and
   `install codex` writes `default_tools_approval_mode = "approve"` on it,
   because Codex asks before every MCP call otherwise and its
@@ -262,9 +279,20 @@ the history; this document does not repeat it.
   say which shape, so every hook command the Claude Code registration
   writes names `--host claude-code` and a reader told that refuses a payload
   of another host's shape, and any payload under Cursor's environment
-  variable, recording and printing nothing. Registration files are never
-  deleted by `uninstall`: the host may have written them, so an emptied
-  object stays.
+  variable, recording and printing nothing. A host's own registration
+  files are never deleted by `uninstall`: the host may have written them,
+  so an emptied object stays.
+- The Copilot CLI has both paths: `install copilot` writes the server into
+  `~/.copilot/mcp-config.json`, which the GitHub Copilot app and VS Code's
+  Agent Host also read, and four hooks under the CLI's camelCase names into
+  a hook file of the product's own, `~/.copilot/hooks/commonmeasure.json`,
+  which `uninstall` deletes when nothing else is in it. VS Code is mediated
+  only: `install vscode` writes one `servers` entry in the user `mcp.json`;
+  no hook is registered, because VS Code runs hooks only through the Copilot
+  Chat extension, which loads Claude Code's hook files, ignores matchers and
+  is not documented to carry a tool result. The Claude Code reader refuses
+  the snake_case payload VS Code and the Copilot CLI send by its
+  `timestamp`, which Claude Code never sends.
 - Pi is mediated only, through an extension the binary writes. Pi has no
   MCP client, so the extension is the client: it spawns the mediated server
   from the binary it names and registers the server's tools with Pi under
@@ -441,6 +469,20 @@ the history; this document does not repeat it.
   supplier's name is the one provider fact that crosses, as a custom field
   on the events it served (§Session policy and egress). The ledger itself
   stays local.
+- A principal binding is keyed by an operating-system user id, which each
+  machine assigns, so the same binding distributed to many edges names a
+  different person on each. Until an identity that names the same person on
+  every edge exists, a distributed policy declares no `principals` and an
+  allowance is not authored at the hub. The hub refuses one at publishing,
+  where a policy is written for many machines; the edge does not, because the
+  same file written on the one machine it governs holds a binding correctly
+  (`docs/contracts/source-policy.md` §Policy written for many machines).
+- The source policy's format is published as a contract with a schema
+  derived from the loader's types and vectors checked against the loader and
+  the admission check (`docs/contracts/source-policy.md`). Anything that
+  writes or checks a policy outside this repository is held to those
+  vectors; it does not become a second policy engine, and the schema alone
+  is never taken as validation, because it cannot see the loader's checks.
 - An organisation's add-on mandate is desired state of the same kind as an
   allocation: authored at the hub only inside the signed policy envelope,
   a floor the edge enforces offline and refuses to relax locally, with the
@@ -470,12 +512,19 @@ the history; this document does not repeat it.
   Ed25519), the same mechanism the mediated fetch uses towards publishers
   (`ROADMAP.md` §Verified fetcher identity). There is no second credential
   and no credential field in the deployment file. An edge that is not enrolled, or whose key
-  the hub has revoked, makes no request and records why. The two
-  implementations have not been run against each other; each is exercised
-  against the other's rule and both are pinned to one signature vector.
-- The hub holds an Ed25519 directory-signing key, separate from its
-  policy-envelope signer, and serves the key directory in the signed form
-  the Web Bot Auth draft describes.
+  the hub has revoked, makes no request and records why. Each
+  implementation is exercised against the other's rule and both are pinned
+  to one signature vector.
+- A key is listed in the hub's key directory only with its holder's
+  signature over the directory's authority, signed on the edge and uploaded,
+  because the private key never leaves the edge and Cloudflare uses only the
+  keys a directory response carries a signature by
+  (`crates/commonmeasure-harness/src/identity.rs`). The edge signs a new
+  proof, for the origin it enrolled under and no other, when it reaches the
+  hub at `connect`, a relay run or a session or server start and the held
+  proof is more than a day old. A key with no current proof is not listed,
+  so every verifier reads the same key set, and the hub signs no directory
+  of its own.
 - The hosted tier is one multi-tenant service run by Common Measure Ltd at
   hub.commonmeasure.ai; whether an organisation may run a hub of its own is
   an open decision (§Open decisions).

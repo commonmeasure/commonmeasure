@@ -841,7 +841,7 @@ fn a_symlink_flipped_during_the_walk_cannot_supply_content_from_outside_the_root
 
 /// A corpus entry that is not a regular file is skipped on the strength of the
 /// stat already taken. A FIFO named `pipe.md` measures zero bytes and passes
-/// every size test; reading it blocks until someone writes, which used to hang
+/// every size test; reading it blocks until someone writes, which would hang
 /// the query for ever and leave no record of the run at all.
 #[test]
 #[cfg(unix)]
@@ -909,7 +909,7 @@ fn a_manifest_resolving_outside_the_corpus_root_is_refused() {
 }
 
 /// A manifest that is present but unreadable is an error, not an absence: a
-/// dangling `corpus.json` used to answer "no licence declared", which is the
+/// dangling `corpus.json` read as absent would answer "no licence declared", which is the
 /// silent unknown a malformed manifest is already forbidden from producing.
 #[test]
 #[cfg(unix)]

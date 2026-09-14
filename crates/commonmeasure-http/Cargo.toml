@@ -8,6 +8,10 @@ description = "Blocking HTTP/1.1 client and loopback server over std::net. The r
 
 [dependencies]
 anyhow.workspace = true
+flate2.workspace = true
 url.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true

@@ -67,6 +67,9 @@ Contracts, the authoritative formats:
   reports about the policy it applies.
 - [`docs/contracts/policy-envelope.md`](contracts/policy-envelope.md): signed
   policy distribution.
+- [`docs/contracts/source-policy.md`](contracts/source-policy.md): the policy
+  file, what the loader accepts and refuses, and the schema and vectors
+  published beside it.
 
 Internal, kept in the repository and not published:
 
@@ -104,7 +107,9 @@ and nothing else, so every rule the build needs is here.
    or for the console, and the build ignores it: `guide/guide.css` is the
    stylesheet the console inlines when it serves the guide;
    `guide/measurements/` holds the two scripts and the two JSON results the
-   measurements page describes.
+   measurements page describes; `contracts/source-policy.schema.json` and
+   `contracts/source-policy-vectors.json` are the schema and vectors the
+   source policy contract publishes.
 6. **`docs/qa/` and `docs/knowledge-base/` are not published.** They are
    working documents for people changing the repository. The build excludes
    the two directories, and every page in them also carries `draft: true` in

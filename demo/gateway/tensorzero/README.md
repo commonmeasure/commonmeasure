@@ -3,8 +3,8 @@
 This is the gateway configuration used by the gateway acceptance run. It pins
 one OpenAI model snapshot behind one named provider route. There is no second
 provider, variant, fallback, relay or adaptive router. TensorZero's
-pseudonymous usage analytics is disabled; its optional database-backed
-observability was not enabled for this run.
+pseudonymous usage analytics is disabled, and its optional database-backed
+observability is not enabled.
 
 The exact image identity and observed gateway version are in `image.json`.
 `OPENAI_API_KEY` stays in the ignored repository-root `.env`; Docker receives

@@ -18,6 +18,9 @@ fn run(home: &Path, args: &[&str]) -> Output {
         .env("COMMONMEASURE_HOME", home.join("commonmeasure"))
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
+        .env_remove("COPILOT_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("APPDATA")
         .output()
         .expect("the binary runs")
 }
@@ -465,13 +468,15 @@ fn doctor_names_a_plugin_whose_directories_have_gone() {
     .unwrap();
     std::fs::write(
         plugins.join("known_marketplaces.json"),
-        r#"{"commonmeasure": {"source": {"source": "directory", "path": "/var/home/op/contextops/contextops"}, "installLocation": "/var/home/op/contextops/contextops"}}"#,
+        r#"{"commonmeasure": {"source": {"source": "directory", "path": "/var/home/op/code/commonmeasure"}, "installLocation": "/var/home/op/code/commonmeasure"}}"#,
     )
     .unwrap();
 
     let text = stdout(&run(home.path(), &["doctor", "claude"]));
     assert!(
-        text.contains("its marketplace is recorded at /var/home/op/contextops/contextops, which does not exist"),
+        text.contains(
+            "its marketplace is recorded at /var/home/op/code/commonmeasure, which does not exist"
+        ),
         "{text}"
     );
     assert!(text.contains("failed to load"), "{text}");
@@ -509,6 +514,9 @@ fn an_unknown_host_is_refused_and_an_empty_home_reports_nothing_registered() {
         "pi           not registered",
         "claude-desktop not registered",
         "cursor       not registered",
+        "copilot-cli  not registered",
+        "vscode       not registered",
+        "chrome       not registered",
     ] {
         assert!(text.contains(host), "{text}");
     }
@@ -745,5 +753,339 @@ fn cursor_registration_writes_the_server_and_four_hooks_and_leaves_the_rest_byte
     assert_eq!(
         std::fs::read_to_string(cursor.join("hooks.json")).unwrap(),
         "{\n  \"version\": 1,\n  \"hooks\": {}\n}\n"
+    );
+}
+
+/// One Copilot CLI hook entry as this writer serialises it inside the
+/// hooks file, at the indentation of an event array's element.
+fn copilot_hook_entry(binary: &str, argument: &str, matcher: Option<&str>) -> String {
+    let matcher = matcher
+        .map(|matcher| format!("        \"matcher\": \"{matcher}\",\n"))
+        .unwrap_or_default();
+    format!(
+        "      {{\n        \"type\": \"command\",\n{matcher}        \"exec\": \"{binary}\",\n        \"args\": [\n          \"hook\",\n          \"{argument}\",\n          \"--host\",\n          \"copilot-cli\"\n        ]\n      }}"
+    )
+}
+
+/// `install copilot` adds one `mcpServers` entry to the CLI's user file
+/// beside the operator's server and writes four hooks, under the CLI's
+/// camelCase event names, into a hook file of this product's own. The
+/// written bytes are exact; `uninstall` gives the operator's file back byte
+/// for byte and deletes the hook file, leaving the CLI's hooks directory.
+#[test]
+fn copilot_registration_writes_the_server_and_a_hook_file_and_leaves_the_rest_byte_for_byte() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let copilot = home.path().join(".copilot");
+    std::fs::create_dir_all(&copilot).unwrap();
+    let mcp = copilot.join("mcp-config.json");
+    let hooks = copilot.join("hooks/commonmeasure.json");
+    let mcp_original = "{\n  \"mcpServers\": {\n    \"playwright\": {\n      \"type\": \"local\",\n      \"command\": \"npx\",\n      \"args\": [\n        \"@playwright/mcp@latest\"\n      ],\n      \"tools\": [\n        \"*\"\n      ]\n    }\n  }\n}\n";
+    std::fs::write(&mcp, mcp_original).unwrap();
+    let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_commonmeasure")).unwrap();
+    let binary = binary.to_str().unwrap();
+
+    let output = run(home.path(), &["install", "copilot"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("copilot-cli: MCP server commonmeasure registered in"),
+        "{text}"
+    );
+    assert!(
+        text.contains("four hooks (sessionStart, postToolUse, userPromptSubmitted, agentStop)"),
+        "{text}"
+    );
+    let expected_mcp = format!(
+        "{{\n  \"mcpServers\": {{\n    \"playwright\": {{\n      \"type\": \"local\",\n      \"command\": \"npx\",\n      \"args\": [\n        \"@playwright/mcp@latest\"\n      ],\n      \"tools\": [\n        \"*\"\n      ]\n    }},\n    \"commonmeasure\": {{\n      \"type\": \"local\",\n      \"command\": \"{binary}\",\n      \"args\": [\n        \"mcp\",\n        \"--host\",\n        \"copilot-cli\"\n      ],\n      \"tools\": [\n        \"*\"\n      ]\n    }}\n  }}\n}}\n"
+    );
+    assert_eq!(std::fs::read_to_string(&mcp).unwrap(), expected_mcp);
+    let expected_hooks = format!(
+        "{{\n  \"version\": 1,\n  \"hooks\": {{\n    \"sessionStart\": [\n{}\n    ],\n    \"postToolUse\": [\n{}\n    ],\n    \"userPromptSubmitted\": [\n{}\n    ],\n    \"agentStop\": [\n{}\n    ]\n  }}\n}}\n",
+        copilot_hook_entry(binary, "session-start", None),
+        copilot_hook_entry(binary, "post-tool-use", Some("web_fetch|web_search")),
+        copilot_hook_entry(binary, "user-prompt-submit", None),
+        copilot_hook_entry(binary, "stop", None),
+    );
+    assert_eq!(std::fs::read_to_string(&hooks).unwrap(), expected_hooks);
+
+    // A second install replaces rather than duplicates.
+    assert!(run(home.path(), &["install", "copilot"]).status.success());
+    assert_eq!(std::fs::read_to_string(&mcp).unwrap(), expected_mcp);
+    assert_eq!(std::fs::read_to_string(&hooks).unwrap(), expected_hooks);
+
+    let text = stdout(&run(home.path(), &["doctor", "copilot"]));
+    assert!(text.contains("copilot-cli  registered"), "{text}");
+    assert!(
+        text.contains(
+            "hooks: sessionStart, postToolUse, userPromptSubmitted, agentStop registered in"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("mcp: server commonmeasure registered in"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "binary {binary}: runs, reports commonmeasure {VERSION}"
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains("name different binaries"),
+        "one binary: {text}"
+    );
+    assert!(text.contains("GitHub Copilot app"), "{text}");
+
+    let output = run(home.path(), &["uninstall", "copilot"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("4 hook handler(s) removed"), "{text}");
+    assert_eq!(std::fs::read_to_string(&mcp).unwrap(), mcp_original);
+    assert!(!hooks.exists(), "the hook file was this product's alone");
+    assert!(
+        copilot.join("hooks").is_dir(),
+        "the hooks directory is the CLI's and stays"
+    );
+    assert!(
+        stdout(&run(home.path(), &["doctor", "copilot"])).contains("copilot-cli  not registered")
+    );
+
+    // An entry someone else put into the hook file survives uninstall, and
+    // the file stays for it.
+    assert!(run(home.path(), &["install", "copilot"]).status.success());
+    let mut document = json_at(&hooks);
+    document["hooks"]["agentStop"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, json!({"type": "command", "bash": "./notify.sh"}));
+    std::fs::write(&hooks, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    assert!(run(home.path(), &["uninstall", "copilot"]).status.success());
+    assert_eq!(
+        json_at(&hooks),
+        json!({"version": 1, "hooks": {"agentStop": [{"type": "command", "bash": "./notify.sh"}]}})
+    );
+
+    // A file that did not exist is created by install and left by
+    // uninstall holding the emptied object.
+    std::fs::remove_file(&mcp).unwrap();
+    assert!(run(home.path(), &["install", "copilot"]).status.success());
+    assert!(run(home.path(), &["uninstall", "copilot"]).status.success());
+    assert_eq!(
+        std::fs::read_to_string(&mcp).unwrap(),
+        "{\n  \"mcpServers\": {}\n}\n"
+    );
+}
+
+/// The configuration directory override the Copilot CLI honours is
+/// honoured here too, for both files.
+#[test]
+fn copilot_registration_honours_the_configuration_directory_override() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let elsewhere = home.path().join("elsewhere/copilot");
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["install", "copilot"])
+        .env("HOME", home.path())
+        .env("COMMONMEASURE_HOME", home.path().join("commonmeasure"))
+        .env("COPILOT_HOME", &elsewhere)
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(elsewhere.join("mcp-config.json").exists());
+    assert!(elsewhere.join("hooks/commonmeasure.json").exists());
+    assert!(!home.path().join(".copilot").exists());
+}
+
+/// Where the binary keeps VS Code's user `mcp.json` for a `HOME` on this
+/// platform, mirroring `HostPaths::from_environment`.
+fn vscode_mcp(home: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Code/User/mcp.json")
+    } else if cfg!(windows) {
+        home.join("AppData/Roaming/Code/User/mcp.json")
+    } else {
+        home.join(".config/Code/User/mcp.json")
+    }
+}
+
+/// `install vscode` adds one `servers` entry to VS Code's user `mcp.json`
+/// beside the operator's server and keeps `inputs`; the written bytes are
+/// exact and `uninstall` gives the original bytes back. No hook is written
+/// anywhere. A file VS Code wrote in its own tab indentation keeps its
+/// content, and a file with a comment is refused whole.
+#[test]
+fn vscode_registration_is_one_server_entry_and_leaves_the_rest_byte_for_byte() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let config = vscode_mcp(home.path());
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let original = "{\n  \"servers\": {\n    \"github\": {\n      \"type\": \"http\",\n      \"url\": \"https://api.githubcopilot.com/mcp/\"\n    }\n  },\n  \"inputs\": []\n}\n";
+    std::fs::write(&config, original).unwrap();
+    let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_commonmeasure")).unwrap();
+    let binary = binary.to_str().unwrap();
+
+    let output = run(home.path(), &["install", "vscode"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("vscode: MCP server commonmeasure registered in"),
+        "{text}"
+    );
+    assert!(text.contains("no hook is registered"), "{text}");
+    let expected = format!(
+        "{{\n  \"servers\": {{\n    \"github\": {{\n      \"type\": \"http\",\n      \"url\": \"https://api.githubcopilot.com/mcp/\"\n    }},\n    \"commonmeasure\": {{\n      \"type\": \"stdio\",\n      \"command\": \"{binary}\",\n      \"args\": [\n        \"mcp\",\n        \"--host\",\n        \"vscode\"\n      ]\n    }}\n  }},\n  \"inputs\": []\n}}\n"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), expected);
+    assert!(
+        !home.path().join(".claude").exists() && !home.path().join(".github").exists(),
+        "no hook file is written for VS Code"
+    );
+
+    let text = stdout(&run(home.path(), &["doctor", "vscode"]));
+    assert!(text.contains("vscode       registered"), "{text}");
+    assert!(text.contains(&format!("command {binary}")), "{text}");
+    assert!(text.contains("hooks: none by decision"), "{text}");
+    assert!(!text.contains("names the server too"), "{text}");
+
+    // With the Copilot registration beside it, doctor says the Agent Host
+    // can see the server from both files.
+    assert!(run(home.path(), &["install", "copilot"]).status.success());
+    let text = stdout(&run(home.path(), &["doctor", "vscode"]));
+    assert!(text.contains("names the server too"), "{text}");
+    assert!(run(home.path(), &["uninstall", "copilot"]).status.success());
+
+    let output = run(home.path(), &["uninstall", "vscode"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(
+        stdout(&run(home.path(), &["doctor", "vscode"])).contains("vscode       not registered")
+    );
+
+    // The file as `code --add-mcp` writes it, tab-indented: the content
+    // comes back exactly, in this writer's formatting.
+    let tabbed = "{\n\t\"servers\": {\n\t\t\"other\": {\n\t\t\t\"command\": \"/usr/bin/other\",\n\t\t\t\"args\": []\n\t\t}\n\t},\n\t\"inputs\": []\n}";
+    std::fs::write(&config, tabbed).unwrap();
+    assert!(run(home.path(), &["install", "vscode"]).status.success());
+    assert!(run(home.path(), &["uninstall", "vscode"]).status.success());
+    assert_eq!(
+        json_at(&config),
+        serde_json::from_str::<Value>(tabbed).unwrap()
+    );
+
+    // VS Code accepts comments here; this writer would drop them, so the
+    // file is refused and left as it was.
+    let commented = "{\n  // the operator's note\n  \"servers\": {}\n}\n";
+    std::fs::write(&config, commented).unwrap();
+    let output = run(home.path(), &["install", "vscode"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("allows comments"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), commented);
+}
+
+/// Where a Chromium-family browser keeps its user data for a `HOME` on this
+/// platform, mirroring `HostPaths::from_environment`.
+fn browser_directory(home: &Path, mac: &str, linux: &str) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support").join(mac)
+    } else {
+        home.join(".config").join(linux)
+    }
+}
+
+/// `install chrome` writes one native messaging host manifest, byte for
+/// byte, naming this binary and allowing only the Common Measure extension;
+/// Brave gets the same file because its directory exists and Chromium gets
+/// nothing because its does not. Another host's manifest beside ours is not
+/// touched. `doctor` reads the manifest back and runs the binary it names;
+/// `uninstall` removes exactly the files it wrote.
+#[cfg(unix)]
+#[test]
+fn chrome_registration_writes_the_native_messaging_manifest_byte_for_byte() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let chrome = browser_directory(home.path(), "Google/Chrome", "google-chrome");
+    let brave = browser_directory(
+        home.path(),
+        "BraveSoftware/Brave-Browser",
+        "BraveSoftware/Brave-Browser",
+    );
+    let chromium = browser_directory(home.path(), "Chromium", "chromium");
+    let foreign = chrome.join("NativeMessagingHosts/com.example.other.json");
+    std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+    let foreign_bytes = "{\"name\": \"com.example.other\", \"path\": \"/usr/bin/other\"}";
+    std::fs::write(&foreign, foreign_bytes).unwrap();
+    std::fs::create_dir_all(&brave).unwrap();
+
+    let output = run(home.path(), &["install", "chrome"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("Chromium is not set up here"),
+        "no directory is created for a browser not in use: {text}"
+    );
+
+    let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_commonmeasure")).unwrap();
+    let expected = format!(
+        "{{\n  \"name\": \"ai.commonmeasure.browser\",\n  \"description\": \"Common Measure: records the sources browser AI answers show\",\n  \"path\": {},\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\n    \"chrome-extension://hojjbnoeobjkjklcdhhnncmmojmcneig/\"\n  ]\n}}\n",
+        serde_json::to_string(&binary.to_string_lossy()).unwrap()
+    );
+    let manifest = chrome.join("NativeMessagingHosts/ai.commonmeasure.browser.json");
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), expected);
+    assert_eq!(
+        std::fs::read_to_string(brave.join("NativeMessagingHosts/ai.commonmeasure.browser.json"))
+            .unwrap(),
+        expected
+    );
+    assert!(!chromium.exists());
+    assert_eq!(std::fs::read_to_string(&foreign).unwrap(), foreign_bytes);
+
+    // A second install writes the same bytes again.
+    assert!(run(home.path(), &["install", "chrome"]).status.success());
+    assert_eq!(std::fs::read_to_string(&manifest).unwrap(), expected);
+
+    let output = run(home.path(), &["doctor", "chrome"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("chrome       registered"), "{text}");
+    assert!(
+        text.contains("native messaging: host ai.commonmeasure.browser registered for Chrome"),
+        "{text}"
+    );
+    assert!(
+        text.contains("native messaging: no host ai.commonmeasure.browser for Chromium"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "binary {}: runs, reports commonmeasure {VERSION}",
+            binary.display()
+        )),
+        "{text}"
+    );
+
+    // A browser answer surface is recorded under its own name and is not a
+    // registration of its own.
+    let output = run(home.path(), &["install", "chatgpt-web"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("commonmeasure install chrome"),
+        "{}",
+        stderr(&output)
+    );
+
+    let output = run(home.path(), &["uninstall", "chrome"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!manifest.exists());
+    assert!(
+        !brave
+            .join("NativeMessagingHosts/ai.commonmeasure.browser.json")
+            .exists()
+    );
+    assert_eq!(std::fs::read_to_string(&foreign).unwrap(), foreign_bytes);
+    assert!(manifest.parent().unwrap().is_dir(), "the directory stays");
+    assert!(
+        stdout(&run(home.path(), &["doctor", "chrome"])).contains("chrome       not registered")
     );
 }

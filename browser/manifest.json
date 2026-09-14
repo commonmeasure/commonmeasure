@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Common Measure",
+  "version": "0.3.2",
+  "description": "Records the sources ChatGPT answers, Google AI Overviews and Bing Copilot Search show, as observed crossings in the local Common Measure record.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlQA0FYlBu2tFltdwvPw9vJ3Itjl6x2dBmmGmzmbCCFpzjgV81/Zk6n8W2CYGvmTreTMJt4QJEf7yWSMAuWR+/f+hCFmGZHqJkY6QhDyr2DYADnkqYkGbtsOWnlpQqlcy9XqraFOsdLgXQkQMbVWURRgcPlLQKZAn6eOZC/hioyHV/qRvwlS+fCnWejIYBTKznW++ym3+Um8g/dY04+Qoo4NxDhI9bO/uxaswlo8kdqyTbyemp7ldICb8G39h+lwoYO8c33Eek3Mk+PM+sGSZMjwMxXXrdsOjh4MzFr3ta6Ya/vmcwallxcTzPZyQpysUKb/GxBPQHAx75tlhHg5frwIDAQAB",
+  "permissions": ["nativeMessaging", "storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://www.google.com/search*",
+        "https://www.google.co.uk/search*"
+      ],
+      "js": ["google.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://www.bing.com/search*",
+        "https://bing.com/search*",
+        "https://www.bing.com/copilotsearch*",
+        "https://bing.com/copilotsearch*"
+      ],
+      "js": ["bing.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Common Measure"
+  }
+}

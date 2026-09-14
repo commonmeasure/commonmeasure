@@ -431,7 +431,7 @@ fn acquisition_mode_is_sealed_as_part_of_experiment_identity() {
         .expect("manifest JSON")
     };
     // No replay context and no authority to call out: the run attempts no
-    // acquisition at all, which is the mode that used to share replay's hash.
+    // acquisition at all, which is the mode that must not share replay's hash.
     let unconfigured = {
         let directory = tempfile::tempdir().expect("tempdir");
         let options = RunOptions {
@@ -659,9 +659,10 @@ fn a_capture_answering_another_url_refuses_to_serve() {
 /// limit answers at its own size, and the plan records the shortfall naming
 /// both numbers.
 ///
-/// TollBit publishes a page of 20. A job asking for more used to have its
-/// request quietly reduced, so one plan in a comparison ran at 20 while the
-/// others ran at the job's own size with nothing in the record saying so.
+/// TollBit publishes a page of 20. A job asking for more has its request
+/// reduced to that page; without the gap, one plan in a comparison would run
+/// at 20 while the others ran at the job's own size with nothing in the record
+/// saying so.
 #[test]
 fn a_provider_page_smaller_than_the_job_asked_for_is_recorded_as_a_gap() {
     let mut suite = suite();

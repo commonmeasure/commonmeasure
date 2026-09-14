@@ -3,10 +3,10 @@
 //! A `ContextJob`'s cost cap judges one purchase; an allowance judges a
 //! period of them, so it needs state that survives the process — and state
 //! shared by every process on this machine, because two concurrent buyers
-//! must not each see the full remaining amount (`DECISIONS.md` §Delegated authority and fleet management). The
-//! declaration lives in the operator's policy artefact; this module is the
-//! enforcement side only, and it stays effective offline (`DECISIONS.md`
-//! §2026-08-21).
+//! must not each see the full remaining amount. The declaration lives in the
+//! operator's policy artefact; this module is the enforcement side only, and
+//! it stays effective offline (`DECISIONS.md` §Delegated authority and fleet
+//! management).
 //!
 //! The ledger is an append-only NDJSON file under the operator home,
 //! `allowance/ledger.ndjson`, every mutation taken under an exclusive lock on

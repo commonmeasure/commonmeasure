@@ -68,10 +68,9 @@ pub fn known_hosts() -> Vec<HostHistory> {
             root: home.join(".pi/agent/sessions"),
             importable: Err(
                 "Pi has no web tools of its own, so its transcripts hold no observable \
-                 crossings to reconstruct. The exceptions are a handful of ledger_fetch \
-                 results, but those were mediated crossings, recorded at the time by the \
-                 server that mediated them; reading them back from a transcript would add \
-                 a weaker copy of a record that already exists.",
+                 crossings to reconstruct. A mediated tool result in a Pi transcript was \
+                 recorded at the time by the server that mediated it; reading it back from \
+                 a transcript would add a weaker copy of a record that already exists.",
             ),
         },
     ]
@@ -615,6 +614,6 @@ mod tests {
             .find(|entry| entry.host == HostSurface::Pi)
             .expect("pi is a known host");
         let reason = pi.importable.expect_err("pi is not importable");
-        assert!(reason.contains("ledger_fetch"), "{reason}");
+        assert!(reason.contains("no web tools of its own"), "{reason}");
     }
 }

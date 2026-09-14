@@ -186,7 +186,7 @@ of them supported as stated.
 | Sufficient-context measurement separates retrieval failure from generation failure | **Vendor** (Google) | Automated rater at 93% accuracy; models answer correctly 35–62% of the time on insufficient context; one model's hallucination rate rising 10.2%→66.1% with insufficient context. Google's rater, Google's evaluation, and Google ships retrieval products. It is also the strongest single support the guide gives its own thesis, which is a reason to want it reproduced |
 | Tool-schema compression is worth ~20 points of exact match at tight budgets | **Single study** | +20.5pp at 8,000 tokens against 2.6% uncompressed. May 2026, unreplicated |
 | Context can be cut to ~75% with little loss and ~35% is dangerous | **Single study** | 92.7% success at 75% retention against a 93.8% full-context baseline. The paper was two days old when the guide cited it |
-| Compression and caching work against each other | **Contested, and recently refined** | The guide's chapter 8 argues compressed context is derived, so it cannot live in a stable cached prefix, making the real comparison "compression cost against caching the uncompressed corpus". A July 2026 study measured the trade-off directly and complicates it; see below |
+| Compression and caching work against each other | **Contested, and refined** | The guide's chapter 8 argues compressed context is derived, so it cannot live in a stable cached prefix, making the real comparison "compression cost against caching the uncompressed corpus". A July 2026 study measured the trade-off directly and complicates it; see below |
 
 **The refinement.** A July 2026 paper measured cache hit rates on
 a production API rather than assuming them

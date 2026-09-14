@@ -40,7 +40,7 @@ installation sits. This is not a defect of the catalogue format.
 A skill is supply the operator admits from their own machine, not content a
 supplier serves, so the catalogue names the operator's own paths.
 
-The two skills, both installed as Codex system skills on 6 August 2026:
+The two skills, both installed as Codex system skills:
 
 | Catalogue name | Entrypoint | What it answers |
 |---|---|---|

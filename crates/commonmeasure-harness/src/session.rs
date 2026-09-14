@@ -106,8 +106,10 @@ pub struct Crossing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
     /// SHA-256 over the response body as the origin served it, on a mediated
-    /// fetch that received one. Equal to `content_hash` where the body was
-    /// delivered as decoded; where the two differ, the transform-stage
+    /// fetch that received one: the coded bytes where the origin served the
+    /// body under gzip. Equal to `content_hash` where the body was served
+    /// with no content coding and delivered as decoded; where the two differ,
+    /// the transform-stage
     /// invocation recorded before the crossing carries both and ties them.
     /// Never projected onto the Content Telemetry wire: what a receiver
     /// learns is the hash of what entered context, as before.
@@ -349,6 +351,36 @@ pub fn home_dir() -> std::io::Result<PathBuf> {
     Ok(PathBuf::from(user).join(".commonmeasure"))
 }
 
+/// The longest session identifier accepted, well above a UUID.
+const SESSION_ID_MAX: usize = 128;
+
+/// A session identifier, if it is safe to name a file with: ASCII letters,
+/// digits, `.`, `_` and `-`, one to 128 characters, not starting with `.`.
+///
+/// A hook payload, a page, the command line and the server's environment
+/// each supply session identifiers, and the identifier becomes a file name
+/// under the operator home. Anything but a plain name is refused rather than
+/// cleaned: a path separator would put records outside the sessions
+/// directory, and a cleaned identifier would put one session's records in
+/// another session's log.
+pub fn safe_session(raw: &str) -> Option<&str> {
+    let plain = raw
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (plain && !raw.is_empty() && raw.len() <= SESSION_ID_MAX && !raw.starts_with('.'))
+        .then_some(raw)
+}
+
+fn session_path(home: &Path, session_id: &str) -> std::io::Result<PathBuf> {
+    let session_id = safe_session(session_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("session {session_id:?} is not a plain identifier"),
+        )
+    })?;
+    Ok(home.join("sessions").join(format!("{session_id}.ndjson")))
+}
+
 pub struct SessionLog {
     session_id: String,
     log: EvidenceLog,
@@ -371,8 +403,11 @@ pub struct PromptCursor {
 }
 
 impl SessionLog {
+    /// Open one session's log for append. An identifier that is not a plain
+    /// name ([`safe_session`]) is refused with `InvalidInput` and nothing is
+    /// created.
     pub fn open(home: &Path, session_id: &str) -> std::io::Result<Self> {
-        let path = home.join("sessions").join(format!("{session_id}.ndjson"));
+        let path = session_path(home, session_id)?;
         Ok(Self {
             session_id: session_id.to_owned(),
             log: EvidenceLog::open_append(&path)?,
@@ -502,31 +537,47 @@ impl SessionLog {
     /// key id and says so, so a reader can tell which sessions ran under a
     /// key publishers still honoured. Not written for an edge that is not
     /// enrolled: absence means no network identity, not an unknown one.
+    ///
+    /// The record also says whether the hub's key directory lists the key,
+    /// as this edge last learnt it: `listed_until`, or `unlisted` with the
+    /// reason. A signed request under a key the directory does not list
+    /// verifies nowhere, so a standing key alone does not say that a
+    /// publisher could verify this session's requests.
     pub fn record_edge_identity(
         &mut self,
         host: &str,
         enrolment: &crate::enrolment::EnrolmentRecord,
+        listing: &crate::enrolment::Listing,
     ) -> std::io::Result<u64> {
-        self.log.append(
-            "edge_identity",
-            json!({
-                "session_id": self.session_id,
-                "host": host,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-                "hub": enrolment.hub,
-                "key_id": enrolment.key_id,
-                "standing": enrolment.standing(),
-                "revoked_at": enrolment.revoked_at,
-                "revocation": enrolment.revocation,
-            }),
-        )
+        let now = Utc::now();
+        let mut record = json!({
+            "session_id": self.session_id,
+            "host": host,
+            "timestamp": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "hub": enrolment.hub,
+            "key_id": enrolment.key_id,
+            "standing": enrolment.standing(),
+            "revoked_at": enrolment.revoked_at,
+            "revocation": enrolment.revocation,
+        });
+        match listing {
+            crate::enrolment::Listing::ListedUntil(until) => {
+                record["listed_until"] = json!(crate::enrolment::timestamp(*until));
+            }
+            crate::enrolment::Listing::Unlisted(reason) => {
+                record["unlisted"] = json!(reason);
+            }
+        }
+        self.log.append("edge_identity", record)
     }
 
     /// Whether this session's log already holds a record of `event`. Read
     /// before the log is opened for writing, so a server can tell whether a
     /// hook refreshed the policy for this session before it started.
     pub fn holds_event(home: &Path, session_id: &str, event: &str) -> bool {
-        let path = home.join("sessions").join(format!("{session_id}.ndjson"));
+        let Ok(path) = session_path(home, session_id) else {
+            return false;
+        };
         Self::read(&path)
             .map(|records| records.iter().any(|record| record["event"] == event))
             .unwrap_or(false)
@@ -563,14 +614,15 @@ impl SessionLog {
 
     /// The MCP client's own name and version, as it sent them in the
     /// protocol's `initialize` request, with the protocol version it asked
-    /// for. Written once, before the first crossing, so a session whose
-    /// client named itself to nobody carries no such record and a reader is
-    /// not handed a default name.
+    /// for and the one the server answered with. Written once, before the
+    /// first crossing, so a session whose client named itself to nobody
+    /// carries no such record and a reader is not handed a default name.
     pub fn record_client_identified(
         &mut self,
         host: &str,
         client: &ClientIdentity,
         protocol_version: Option<&str>,
+        negotiated_protocol_version: Option<&str>,
     ) -> std::io::Result<u64> {
         let mut payload = json!({
             "session_id": self.session_id,
@@ -582,6 +634,12 @@ impl SessionLog {
         // null a reader would have to treat as a value.
         if let Some(protocol_version) = protocol_version {
             payload["protocol_version"] = json!(protocol_version);
+        }
+        // What the two ends agreed, which decides what the client could
+        // send; it differs from the request where the client asked for a
+        // revision the server does not serve.
+        if let Some(negotiated) = negotiated_protocol_version {
+            payload["negotiated_protocol_version"] = json!(negotiated);
         }
         self.log.append("client_identified", payload)
     }
@@ -789,6 +847,60 @@ mod tests {
         ]);
         assert_eq!(summary.carried_witnessed(), 2);
         assert_eq!(summary.named_not_read(), 1);
+    }
+
+    /// Only a plain name opens a log. A traversal, a separator, a leading dot,
+    /// an empty or overlong identifier, or a character outside the set is
+    /// refused, and nothing is created anywhere under the home or beside it.
+    #[test]
+    fn a_session_id_that_is_not_a_plain_name_opens_no_log() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().join("home");
+        for refused in [
+            "../../x",
+            "../x",
+            "a/b",
+            "a\\b",
+            "..",
+            ".hidden",
+            "",
+            "sp ace",
+            "nul\0byte",
+            "ünï",
+            &"a".repeat(SESSION_ID_MAX + 1),
+        ] {
+            let error = SessionLog::open(&home, refused)
+                .err()
+                .unwrap_or_else(|| panic!("{refused:?} opened a log"));
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput,
+                "{refused:?}"
+            );
+            assert!(safe_session(refused).is_none(), "{refused:?}");
+            assert!(!SessionLog::holds_event(&home, refused, "policy_sync"));
+        }
+        assert_eq!(
+            std::fs::read_dir(root.path()).unwrap().count(),
+            0,
+            "a refused identifier created something under or beside the home"
+        );
+
+        for accepted in [
+            "s-1",
+            "local-1789404537244-51182",
+            "20260914_1",
+            "8195e8c6-94a2-4f8d-b6ca-545246a50ea6",
+            "a.b",
+            &"a".repeat(SESSION_ID_MAX),
+        ] {
+            let mut log = SessionLog::open(&home, accepted).expect(accepted);
+            log.record_context_snapshot(json!({})).expect("append");
+            assert_eq!(
+                log.path(),
+                home.join("sessions").join(format!("{accepted}.ndjson"))
+            );
+        }
     }
 
     /// An empty log is zero of everything and never a panic or an underflow.

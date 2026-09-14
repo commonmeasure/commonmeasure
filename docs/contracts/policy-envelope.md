@@ -55,8 +55,9 @@ Absent means `local`, which is the state of a fresh checkout.
   says what file it replaced if one was there, and makes a first
   synchronisation; it exits non-zero when the signer could not be read (the
   enrolment stands, the edge stays `local`) or when that synchronisation did
-  not activate a policy. `connect` without the flag leaves the edge in
-  `local`. `commonmeasure disconnect` removes a managed deployment whose
+  not activate a policy, except when the hub explicitly reports no revision
+  and this edge has never applied one (§Cadence and staleness). `connect`
+  without the flag leaves the edge in `local`. `commonmeasure disconnect` removes a managed deployment whose
   `policy_url` is under the hub being left, because the pin could only
   answer `unauthenticated` from then on, and keeps one that names another
   hub.
@@ -129,6 +130,13 @@ already in force keeps governing, as through every other failure.
 
 ## Validation
 
+Validity is checked against the edge clock read after the complete response
+arrives. `issued_at` may be up to five minutes (300 seconds) ahead of that
+clock, inclusive. This bounded tolerance accommodates modest clock skew
+between the signer and edge; request duration is handled by reading the
+clock again, not by the tolerance. `expires_at` has no tolerance: an envelope
+that expires at or before the response-time clock is expired.
+
 An answer that is not `200` with an envelope, including the hub's `404`
 before any revision is published, is recorded as the hub `unreachable`,
 with the status named; nothing is verified from it. An envelope is checked
@@ -142,7 +150,7 @@ that fails, and each failure is recorded as `rejected` with its kind:
 | `bad_signature` | the signature does not verify under the pinned public key over the canonical payload, which is also what a payload edited after signing produces |
 | `wrong_organisation` | `organisation` is not this edge's |
 | `wrong_edge` | `edge_key_id` names another edge, or names any edge and this edge has no key id |
-| `not_yet_valid` | `issued_at` is after now |
+| `not_yet_valid` | `issued_at` is more than the stated tolerance after now; the rejection names the tolerance |
 | `expired` | `expires_at` is not after now |
 | `digest_mismatch` | `digest` is not the digest of `policy` as the envelope carries it |
 | `invalid_policy` | `policy` does not load through the runtime's loader: an unknown field, an empty scope match, an egress clearance without an engagement, any rule the loader enforces |
@@ -186,7 +194,8 @@ did, as one of these outcomes:
 | `reapplied` | the applied revision was written back over a local edit |
 | `already_applied` | the applied revision was offered again and is on disk unchanged |
 | `rejected` | the envelope failed a check named above, or rollback or reuse; `reason` says which |
-| `unreachable` | no envelope was obtained: a transport error or a non-`200` answer, in `reason` |
+| `no_revision` | the hub explicitly reports that the organisation has no published policy revision; nothing is activated or removed |
+| `unreachable` | no envelope was obtained: a transport error or an unexpected non-`200` answer, in `reason` |
 | `unauthenticated` | this edge's key does not authenticate it: no request was made because the edge holds no key to sign with (not enrolled, or a revocation already learnt), or the request was made and the policy endpoint answered 401, which is what a revoked key or a closed organisation answers; `reason` says which |
 
 The fleet-status document carries the last outcome and its reason as
@@ -245,6 +254,36 @@ read at, not a stored flag. The next synchronisation that accepts a later
 revision, or that finds the applied revision renewed with a later expiry,
 clears it.
 
+`connect --managed` succeeds when `no_revision` is reported and no managed
+revision has previously been applied. It says that enrolment is complete and
+policy publication is pending; the policy already on disk stays in force.
+This is not convergence: `policy sync` continues to exit non-zero until a
+revision is accepted. Absence after an applied revision also remains a
+non-zero connect outcome and preserves that revision, its envelope and its
+staleness.
+
+## What a distributed policy carries
+
+The policy in an envelope is a source policy
+([`docs/contracts/source-policy.md`](source-policy.md)) and every edge that
+accepts the envelope enforces the same document. A hub that publishes a
+policy the loader refuses makes every managed edge reject the revision as
+`invalid_policy` and keep the policy in force, so a hub checks a policy
+before publishing it against the loader's checks and the contract's
+vectors, not against the structure alone.
+
+Two fields mean something different on each edge
+([`docs/contracts/source-policy.md`](source-policy.md) §Policy written for
+many machines). A principal binding is keyed by an operating-system user id,
+which each machine assigns, so a distributed binding applies to whoever
+holds that id on each edge. A distributed policy therefore declares no
+`principals` until an identity that names the same person on every edge
+exists. The hub refuses one at publishing; the edge does not refuse one,
+because it cannot tell a policy written for many machines from one written
+for itself. A scope's `match` is compared with each edge's own
+directories, so a distributed scope governs alike only where the
+organisation lays out its directories alike.
+
 ## The hub side
 
 The hub publishes its policy-signing key by key id and public key for
@@ -262,7 +301,10 @@ current envelope at `/api/v1/policy/desired`, and only increases revisions. The 
 verifies the request signature against the keys the organisation has
 enrolled and resolves the organisation from the key id, so the credential
 and the identity are the same thing; it binds the envelope it serves to
-that key id.
+that key id. Before any revision is published it answers HTTP 404 with
+`{"detail":"no policy revision has been published for this organisation"}`.
+The edge recognises that exact detail as `no_revision`; an arbitrary 404,
+malformed body or another status is not evidence of an unpublished policy.
 
 The signature is valid for five minutes from its `created` time
 (`SIGNATURE_LIFETIME_SECS` in `crates/commonmeasure-harness/src/identity.rs`),
@@ -280,9 +322,8 @@ The signed request must reach the hub carrying the authority the edge
 signed. A proxy in front of the hub that rewrites or drops it refuses every
 enrolled edge.
 
-The two halves have not been run against each other: each is tested against
-the other's rule, and one pinned signature vector holds both to the same
-signature base.
+Each half is tested against the other's rule, and one pinned signature
+vector holds both to the same signature base.
 
 ## Conformance
 

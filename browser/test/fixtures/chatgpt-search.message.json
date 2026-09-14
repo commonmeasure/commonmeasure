@@ -1,0 +1,14 @@
+{
+  "host": "chatgpt-web",
+  "retrieved": [
+    "https://www.aljazeera.com/news/2026/6/8/iran/",
+    "https://www.axios.com/2026/06/07/iran/",
+    "https://www.reuters.com/world/deal/",
+    "https://www.theguardian.com/world/live/"
+  ],
+  "cited": [
+    "https://www.reuters.com/world/deal/",
+    "https://www.theguardian.com/world/live/"
+  ],
+  "session": "conv-abc"
+}

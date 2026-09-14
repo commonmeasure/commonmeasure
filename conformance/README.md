@@ -12,9 +12,8 @@ Two gates hold the contract, one per side of the wire:
   corpus is byte-identical to what `commonmeasure_relay::project` emits from fixed
   ledger inputs, and that every document validates against the pinned
   schemas. The relay cannot drift from the corpus without CI saying so.
-- **The receiver** (Common Measure Hub, maintained separately; its
-  `crates/server/tests/conformance.rs`)
-  replays a pinned copy of these files into its real router and database and
+- **The receiver** (Common Measure Hub, maintained separately, in its own
+  conformance test) replays a pinned copy of these files into its real router and database and
   requires the frozen acceptance contract: HTTP 201 with
   `{"status": "ok", "events_created": n}` where `n` counts the batch's
   events on first delivery and `0` on full redelivery. The receiver cannot
@@ -30,8 +29,8 @@ A deliberate wire change is made edge-first:
    `crates/commonmeasure-relay/tests/conformance.rs` green against the pinned schemas.
 2. Regenerate the corpus: `UPDATE_GOLDENS=1 cargo test -p commonmeasure-relay --test
    conformance`, and review the diff, which is the wire change.
-3. Re-pin the hub's copy (`crates/server/tests/fixtures/conformance/`, see
-   its `SOURCE.md`) and make its replay test green in the same hub change.
+3. Re-pin the hub's copy of this corpus and make its replay test green in
+   the same hub change.
 
 Each document is stored as the canonical JSON of the batch
 (`docs/contracts/canonical-json.md`), indented for a reader: the member order

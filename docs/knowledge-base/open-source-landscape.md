@@ -130,7 +130,7 @@ Primary sources:
 - https://github.com/chonkie-inc/chonkie
 - https://github.com/adbar/trafilatura
 
-### The PyPI `commonmeasure` linter
+### The PyPI `contextops` linter
 
 github.com/Abhijeet777ui/contextops is a deterministic, embedding-free
 structural linter for an assembled LLM context payload: four capped penalty
@@ -140,9 +140,10 @@ bloat, tool sprawl), concentration (over-reliance on one source) — summed
 into a single 0–100 score. No model calls, two runtime dependencies,
 actively shipping. Its README lists Claude Code and Codex users under "who it's not for"
 because it cannot intercept a closed host's payload; the harness plugin
-covers exactly that case. It also shares our name, binary name,
-`~/.commonmeasure/` home and `COMMONMEASURE_` prefix
-([`docs/knowledge-base/naming-collision.md`](naming-collision.md) §Practical collisions).
+covers exactly that case. Its name, console script, `~/.contextops/` home
+and `CONTEXTOPS_` prefix are the `contextops` identifier this product keeps
+only inside sealed evidence
+([`docs/knowledge-base/naming-collision.md`](naming-collision.md) §Others using the name).
 
 **Licence bars use.** It is under a Sustainable Use License (fair-code, not
 open source): internal/non-commercial use
@@ -153,9 +154,7 @@ Vendoring, bundling or shipping it as an add-on is prohibited. Internal use
 
 **Recommendation:**
 
-- **Do not vendor or bundle.** The licence forbids it and the name
-  collision makes even an operator-installed integration adapter awkward
-  (two `commonmeasure` binaries on one PATH).
+- **Do not vendor or bundle.** The licence forbids it.
 - **Implement the concepts ourselves where wanted.** The four structural
   analyzers are deterministic, unprotectable ideas that fit the existing
   transform-stage optimiser and our rules — with one deliberate

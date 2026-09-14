@@ -50,9 +50,8 @@ commonmeasure install claude
 Register Claude Code by one route or the other. A machine that holds both
 registrations records every fetch twice, because each carries the same
 hooks; a plugin-only install, or a direct registration alone, records each
-fetch once. `commonmeasure install codex` and `commonmeasure install pi`
-register the tools with those hosts. `commonmeasure doctor` shows what each
-host has. The full walkthrough is
+fetch once. `commonmeasure install <host>` registers the other hosts: Codex,
+Pi, Claude Desktop, Cursor, the Copilot CLI, VS Code and Chrome. `commonmeasure doctor` shows what each host has. The full walkthrough is
 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
 ## One fetch, end to end
@@ -88,7 +87,7 @@ commonmeasure session local-1789308747565-2206
 ```
 
 ```text
-crossings  0 observed, 3 mediated, 0 refused, 0 reconstructed
+crossings  0 observed, 1 mediated, 0 refused, 0 reconstructed
   mediated   grounded  https://fsl.software/FSL-1.1-ALv2.template.md
 ```
 
@@ -110,8 +109,8 @@ that shows the same record.
   really cite it, how much of the question did it cover, how recent is it.
 - **Add-ons.** Extra checks run on the same stream: a prompt-injection
   screen, a personal-data detector, a context optimiser and an
-  answer-fidelity check. Every add-on built into the binary runs; a switch
-  to turn one off per operator is not built yet. Others can be written to
+  answer-fidelity check. Every add-on built into the binary runs; no switch
+  turns one off per operator. Others can be written to
   the same contract ([docs/contracts/processor.md](docs/contracts/processor.md)).
 - **Sources.** Fifteen adapters: twelve web search providers, your own
   document folder, one licensed supplier bought by quote, one licensed
@@ -152,7 +151,7 @@ shows the other commands.
 - [docs/RELEASE.md](docs/RELEASE.md): releases and the installer.
 - [docs/contracts/](docs/contracts/): the formats and interfaces.
 - [docs/READ-A-RUN.md](docs/READ-A-RUN.md) and the other `docs/READ-*.md` pages: how to read the committed demonstrations under [demo/](demo/).
-- [plugin/README.md](plugin/README.md): the Claude Code plugin and policy.
+- [plugin/README.md](plugin/README.md): the Claude Code plugin and every host's registration.
 - [console/README.md](console/README.md): the local web page.
 
 ## Licence

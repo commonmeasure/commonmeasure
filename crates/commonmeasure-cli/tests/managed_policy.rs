@@ -886,3 +886,152 @@ fn a_hub_that_accepts_and_never_answers_costs_a_session_start_its_budget_and_not
     assert_eq!(policy_mode(home.path()), "strict", "nothing relaxed");
     drop(held);
 }
+
+/// Drive the signed transport and policy save with independently pinned
+/// request and response times. The endpoint must authenticate the request
+/// before the clock supplies its response-time reading.
+fn sync_at_times(
+    started: chrono::DateTime<chrono::Utc>,
+    arrived: chrono::DateTime<chrono::Utc>,
+    issued: chrono::DateTime<chrono::Utc>,
+    expires: chrono::DateTime<chrono::Utc>,
+) -> commonmeasure_harness::managed::SyncReport {
+    let signer = Signer::new("hub-policy-clock");
+    let mut envelope: Value =
+        serde_json::from_slice(&signer.envelope(1, serde_json::from_str(STRICT).expect("policy")))
+            .expect("envelope");
+    envelope["payload"]["issued_at"] = json!(issued.to_rfc3339());
+    envelope["payload"]["expires_at"] = json!(expires.to_rfc3339());
+    let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+    let hub = endpoint(
+        signed_by(&signer, &envelope["payload"]),
+        Arc::clone(&directory),
+    );
+    let home = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"policy_mode":"observe"}"#,
+    )
+    .expect("policy");
+    write_deployment(
+        home.path(),
+        &signer,
+        &format!("{}/api/v1/policy/desired", hub.handle.url()),
+    );
+    let key_id = webbotauth::enrol(
+        home.path(),
+        &hub.handle.url(),
+        "https://hub.example",
+        &mut directory.lock().expect("lock"),
+    );
+    let mut readings = 0;
+    let report = commonmeasure_harness::managed::sync(
+        home.path(),
+        &commonmeasure_harness::fleet::EdgeIdentity::KeyId(key_id),
+        || {
+            readings += 1;
+            match readings {
+                1 => {
+                    assert_eq!(hub.requests.load(Ordering::SeqCst), 0);
+                    started
+                }
+                2 => {
+                    assert_eq!(hub.authenticated.lock().expect("lock").len(), 1);
+                    arrived
+                }
+                _ => panic!("unexpected clock reading"),
+            }
+        },
+    )
+    .expect("sync");
+    assert_eq!(
+        readings, 2,
+        "validity needs a fresh clock reading after the fetch"
+    );
+    if report.sync.outcome == "accepted" {
+        assert_eq!(policy_mode(home.path()), "strict");
+        assert_eq!(report.applied.as_ref().expect("applied").revision, 1);
+        assert_eq!(
+            std::fs::read(commonmeasure_harness::managed::State::last_known_good_path(
+                home.path()
+            ))
+            .expect("saved envelope"),
+            *hub.served.lock().expect("lock")
+        );
+    } else {
+        assert_eq!(
+            policy_mode(home.path()),
+            "observe",
+            "a refusal preserves local policy"
+        );
+        assert!(report.applied.is_none());
+    }
+    report
+}
+
+#[test]
+fn an_envelope_issued_during_the_request_is_valid_when_the_response_arrives() {
+    let started = chrono::Utc::now();
+    let arrived = started + chrono::Duration::seconds(1);
+    let report = sync_at_times(
+        started,
+        arrived,
+        arrived,
+        arrived + chrono::Duration::hours(1),
+    );
+    assert_eq!(report.sync.outcome, "accepted", "{:?}", report.sync);
+}
+
+#[test]
+fn an_envelope_issued_within_the_clock_skew_tolerance_is_accepted() {
+    use commonmeasure_harness::managed::ISSUED_AT_TOLERANCE;
+    let now = chrono::Utc::now();
+    for offset in [chrono::Duration::seconds(1), ISSUED_AT_TOLERANCE] {
+        let report = sync_at_times(now, now, now + offset, now + chrono::Duration::hours(1));
+        assert_eq!(report.sync.outcome, "accepted", "{:?}", report.sync);
+    }
+}
+
+#[test]
+fn an_envelope_beyond_the_clock_skew_tolerance_is_rejected_with_the_tolerance() {
+    use commonmeasure_harness::managed::ISSUED_AT_TOLERANCE;
+    let now = chrono::Utc::now();
+    let report = sync_at_times(
+        now,
+        now,
+        now + ISSUED_AT_TOLERANCE + chrono::Duration::nanoseconds(1),
+        now + chrono::Duration::hours(1),
+    );
+    assert_eq!(report.sync.outcome, "rejected");
+    let reason = report.sync.reason.expect("reason");
+    assert!(reason.ends_with("(not_yet_valid)"), "{reason}");
+    assert!(
+        reason.contains(&format!(
+            "{} second clock-skew tolerance",
+            ISSUED_AT_TOLERANCE.num_seconds()
+        )),
+        "{reason}"
+    );
+}
+
+#[test]
+fn an_expired_envelope_has_no_clock_skew_tolerance() {
+    let started = chrono::Utc::now();
+    let arrived = started + chrono::Duration::seconds(1);
+    for expires in [arrived - chrono::Duration::nanoseconds(1), arrived] {
+        let report = sync_at_times(
+            started,
+            arrived,
+            started - chrono::Duration::hours(1),
+            expires,
+        );
+        assert_eq!(report.sync.outcome, "rejected");
+        assert_eq!(
+            report.sync.reason.expect("reason"),
+            format!(
+                "the envelope expired at {} (expired)",
+                expires.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            )
+        );
+    }
+}

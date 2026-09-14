@@ -157,7 +157,7 @@ The pre-image is the result of that resolution and nothing else:
 | `principal` | `{"name", "basis"}` as resolved |
 | `fail_closed` | the refusal reason when the resolution fails closed, else `null` |
 | `allowances` | the bound principal's declarations (`period`, `amount`, `timezone`), sorted by canonical text |
-| `addons` | the active add-on set with its settings; `"unknown"` until add-on management lands, because every processor compiled into the binary runs today and there is no active set to represent |
+| `addons` | the active add-on set with its settings; `"unknown"`, because every processor compiled into the binary runs and there is no active set to represent (`ROADMAP.md` §Add-on management and settings) |
 | `terms` | the effective terms declarations (host normalised the way admission normalises it, `reference`, `requires_reporting`, `access_context` where declared), sorted by canonical text, duplicates removed, because terms govern over a source's published preference |
 
 Left out on purpose: the policy file's path, the asserted principal label,
