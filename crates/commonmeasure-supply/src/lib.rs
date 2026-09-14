@@ -56,7 +56,8 @@ pub use redpine::RedpineAdapter;
 pub use search1api::Search1ApiAdapter;
 pub use serpdive::SerpdiveAdapter;
 pub use skill::{
-    CATALOGUE_VARIABLE, Invocation, LocalSkillAdapter, SKILL_PROVIDER_PREFIX, SkillCatalogue,
+    CATALOGUE_VARIABLE, INTERNAL_PROVIDER, Invocation, LocalSkillAdapter, SKILL_PROVIDER_PREFIX,
+    SkillCatalogue,
 };
 pub use tavily::TavilyAdapter;
 pub use tinyfish::TinyfishAdapter;

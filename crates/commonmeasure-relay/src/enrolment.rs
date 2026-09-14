@@ -27,6 +27,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 use commonmeasure_harness::enrolment::{EnrolledIdentity, EnrolledOrganization, EnrolmentRecord};
 use commonmeasure_harness::identity::EdgeKey;
+use commonmeasure_harness::managed::{Deployment, Signer, policy_url_accepted};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -37,6 +38,45 @@ use crate::config::RelayConfig;
 pub const EXCHANGE_PATH: &str = "/api/v1/enrolment/exchange";
 pub const STATUS_PATH: &str = "/api/v1/enrolment/status";
 pub const DISCONNECT_PATH: &str = "/api/v1/enrolment/disconnect";
+/// Where the hub publishes the policy signer an edge's deployment file pins.
+pub const SIGNER_PATH: &str = "/api/v1/policy/signer";
+
+/// The hub's policy signer as it publishes it for pinning: the key by id
+/// and raw public key, the organisation whose envelopes it signs, and the
+/// path the desired policy is served at (`docs/contracts/policy-envelope.md`
+/// §The hub side).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PolicySigner {
+    pub key_id: String,
+    pub algorithm: String,
+    pub public_key: String,
+    pub organisation: String,
+    /// The path the desired policy is served at, relative to the hub.
+    #[serde(default)]
+    pub policy_path: Option<String>,
+    /// The absolute URL the desired policy is served at, built by the hub
+    /// from its public origin. Preferred over the address the operator
+    /// typed: the hub verifies signatures over that origin alone, so an edge
+    /// that enrolled through an internal address must not pin it.
+    #[serde(default)]
+    pub policy_url: Option<String>,
+}
+
+impl PolicySigner {
+    /// Where the desired policy is fetched from: the hub's own absolute URL
+    /// where it gave one, otherwise the typed address plus the path.
+    fn policy_url_for(&self, hub: &str) -> std::result::Result<String, String> {
+        match (&self.policy_url, &self.policy_path) {
+            (Some(url), _) => Ok(url.clone()),
+            (None, Some(path)) => Ok(format!("{hub}{path}")),
+            (None, None) => Err(
+                "the hub's signer names neither a policy_url nor a policy_path, so there is \
+                 nothing to pin"
+                    .to_owned(),
+            ),
+        }
+    }
+}
 
 /// The hub's answer to the exchange, as documented by the hub.
 #[derive(Debug, Deserialize)]
@@ -48,6 +88,23 @@ struct Enrolled {
     identity: EnrolledIdentity,
     api_key: String,
     telemetry_path: String,
+    /// The policy signer, when the hub includes it in the exchange answer;
+    /// otherwise `connect --managed` reads it from [`SIGNER_PATH`].
+    #[serde(default)]
+    policy_signer: Option<PolicySigner>,
+}
+
+/// What `connect --managed` wrote to `deployment.json`.
+#[derive(Debug, Clone)]
+pub struct ManagedPin {
+    pub key_id: String,
+    pub policy_url: String,
+    pub organisation: String,
+    pub path: PathBuf,
+    /// What `deployment.json` held before this pin replaced it, when a file
+    /// was there: a local deployment, a managed one and its signer, or a
+    /// file this runtime could not read.
+    pub replaced: Option<String>,
 }
 
 /// What `connect` did. The relay run is the probe: the first delivery
@@ -64,6 +121,9 @@ pub struct ConnectReport {
     /// A receiver `relay.json` named before this enrolment replaced it.
     pub replaced_receiver: Option<String>,
     pub relay: std::result::Result<crate::RelayReport, String>,
+    /// `None` unless `--managed` was asked for; then what was pinned, or
+    /// why nothing was and the edge stays in `local` mode.
+    pub managed: Option<std::result::Result<ManagedPin, String>>,
 }
 
 fn normalise_hub(hub: &str) -> Result<String> {
@@ -84,7 +144,7 @@ fn detail_of(body: &[u8]) -> String {
 /// Enrol this edge with `hub` using an owner's token. Refuses when the edge
 /// is already enrolled with a key that stands; a revoked key is replaced by
 /// a fresh pair.
-pub fn connect(home: &Path, hub: &str, token: &str) -> Result<ConnectReport> {
+pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<ConnectReport> {
     let hub = normalise_hub(hub)?;
     let token = token.trim();
     if token.is_empty() {
@@ -155,10 +215,17 @@ pub fn connect(home: &Path, hub: &str, token: &str) -> Result<ConnectReport> {
     let receiver = format!("{hub}{}", enrolled.telemetry_path);
     RelayConfig {
         receiver: receiver.clone(),
-        api_key: Some(enrolled.api_key),
+        api_key: Some(enrolled.api_key.clone()),
     }
     .store(home)
     .map_err(|error| anyhow::anyhow!(error))?;
+
+    // The policy signer, pinned now, while the edge already holds the
+    // credential that reads it: the one extra step a managed machine had
+    // was writing this file by hand from four values an owner read off the
+    // hub. A pin that cannot be made leaves the edge in local mode and says
+    // why; the enrolment stands either way.
+    let managed = managed.then(|| pin_signer(home, &hub, &enrolled));
 
     // The probe: the real relay path, end to end. It delivers what the
     // operator has cleared and nothing else; with nothing cleared it still
@@ -180,7 +247,120 @@ pub fn connect(home: &Path, hub: &str, token: &str) -> Result<ConnectReport> {
         receiver,
         replaced_receiver,
         relay,
+        managed,
     })
+}
+
+/// Read the hub's policy signer under the new ingest key, unless the
+/// exchange answer already carried it, and write `deployment.json` in
+/// `managed` mode pinned to it. The file is read back through the loader
+/// that every synchronisation uses, so a file this runtime would refuse is
+/// never left behind as the deployment.
+fn pin_signer(
+    home: &Path,
+    hub: &str,
+    enrolled: &Enrolled,
+) -> std::result::Result<ManagedPin, String> {
+    let signer = match &enrolled.policy_signer {
+        Some(signer) => signer.clone(),
+        None => fetch_signer(hub, &enrolled.api_key)?,
+    };
+    if signer.organisation != enrolled.organization.id {
+        return Err(format!(
+            "the hub's signer names organisation {} but this edge enrolled in {}; nothing was \
+             pinned",
+            signer.organisation, enrolled.organization.id
+        ));
+    }
+    let path = Deployment::path(home);
+    // Whatever stood in the file is reported, so a pin never silently
+    // replaces a deployment an operator wrote by hand.
+    let replaced = path.exists().then(|| match Deployment::read(home) {
+        Ok(Deployment::Managed {
+            signer: previous,
+            policy_url,
+            ..
+        }) => format!(
+            "a managed deployment pinned to signer {} with policy from {policy_url}",
+            previous.key_id
+        ),
+        Ok(Deployment::Local) => "a local deployment".to_owned(),
+        Err(reason) => format!("a deployment file this runtime could not read ({reason})"),
+    });
+    let policy_url = signer.policy_url_for(hub)?;
+    // The synchronisation-time rule, applied before anything is written: a
+    // hub that names a plain http policy URL off the machine is refused
+    // here, with the enrolment kept and nothing pinned.
+    if let Err(reason) = policy_url_accepted(&policy_url) {
+        return Err(format!(
+            "the hub's signer names a policy URL this runtime will not fetch from ({reason}); \
+             nothing was pinned"
+        ));
+    }
+    let deployment = Deployment::Managed {
+        signer: Signer {
+            key_id: signer.key_id.clone(),
+            algorithm: signer.algorithm.clone(),
+            public_key: signer.public_key.clone(),
+        },
+        policy_url: policy_url.clone(),
+        organisation: signer.organisation.clone(),
+    };
+    let mut encoded = serde_json::to_vec_pretty(&deployment)
+        .map_err(|error| format!("the deployment could not be encoded: {error}"))?;
+    encoded.push(b'\n');
+    // Through a temporary neighbour and a rename, so a synchronisation
+    // reading the file mid-write sees the old deployment or the new one.
+    let temporary = path.with_extension("json.commonmeasure-tmp");
+    std::fs::write(&temporary, encoded)
+        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("cannot replace {}: {error}", path.display()));
+    }
+    if let Err(refused) = Deployment::read(home) {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!(
+            "the hub's signer does not make a deployment this runtime accepts ({refused}); the \
+             file was not kept"
+        ));
+    }
+    Ok(ManagedPin {
+        key_id: signer.key_id,
+        policy_url,
+        organisation: signer.organisation,
+        path,
+        replaced,
+    })
+}
+
+/// `GET <hub>/api/v1/policy/signer` under the ingest key. A hub that does
+/// not let the edge read it says so, and the operator is told what an owner
+/// can read instead.
+fn fetch_signer(hub: &str, api_key: &str) -> std::result::Result<PolicySigner, String> {
+    let mut request = commonmeasure_http::Request::get(SIGNER_PATH);
+    request.headers.set("User-Agent", USER_AGENT);
+    request.headers.set("Accept", "application/json");
+    request.headers.set("X-API-Key", api_key);
+    let response = commonmeasure_http::send(&format!("{hub}{SIGNER_PATH}"), request)
+        .map_err(|error| format!("reach {hub}{SIGNER_PATH}: {error:#}"))?;
+    match response.status {
+        200 => serde_json::from_slice(&response.body).map_err(|error| {
+            format!("{hub}{SIGNER_PATH} answered 200 but not with a signer: {error}")
+        }),
+        401 | 403 => Err(format!(
+            "{hub}{SIGNER_PATH} did not let this edge read the policy signer ({}: {}). An owner \
+             can read that route and write {} by hand, or the hub can allow the ingest key on \
+             it",
+            response.status,
+            detail_of(&response.body),
+            "~/.commonmeasure/deployment.json"
+        )),
+        status => Err(format!(
+            "{hub}{SIGNER_PATH} answered {status}: {}",
+            detail_of(&response.body)
+        )),
+    }
 }
 
 /// The key's standing as the hub answered it on one relay run, or why the
@@ -195,8 +375,10 @@ pub enum Standing {
         revoked_at: String,
         revocation: String,
     },
-    /// The hub refused the ingest key itself: revoked at the hub, or never
-    /// its. Delivery under it fails the same way.
+    /// The hub refused the ingest key itself, which is what a revoked key,
+    /// a closed organisation or a key that was never this hub's answers.
+    /// Delivery under it fails the same way, so the operator reads this
+    /// line before the failure.
     IngestKeyRefused {
         key_id: String,
         detail: String,
@@ -234,8 +416,9 @@ impl std::fmt::Display for Standing {
             ),
             Self::IngestKeyRefused { key_id, detail } => write!(
                 formatter,
-                "edge key {key_id}: the hub refused the ingest key ({detail}); revoke the \
-                 enrolment from the hub and run `commonmeasure connect` again"
+                "edge key {key_id}: revoked, or the ingest key is not this hub's: the hub \
+                 refused it ({detail}) and accepts nothing from this edge. Run `commonmeasure \
+                 disconnect`, then `commonmeasure connect` with a new token, to rejoin"
             ),
             Self::Unchecked { key_id, reason } => write!(
                 formatter,
@@ -331,6 +514,13 @@ pub struct DisconnectReport {
     /// not, in which case the key must be revoked from the hub.
     pub revoked_at_hub: std::result::Result<(), String>,
     pub removed: Vec<PathBuf>,
+    /// The policy URL of a managed deployment under the hub being left,
+    /// removed with the enrolment so the edge does not stay pinned to a hub
+    /// it can no longer authenticate to.
+    pub removed_deployment: Option<String>,
+    /// The policy URL of a managed deployment kept because it names another
+    /// hub; the operator is told rather than second-guessed.
+    pub kept_deployment: Option<String>,
 }
 
 /// Leave the hub: revoke both credentials there when it can be reached, and
@@ -379,11 +569,28 @@ pub fn disconnect(home: &Path) -> Result<DisconnectReport> {
             removed.push(path);
         }
     }
+    // A managed deployment under this hub goes with the enrolment: the
+    // policy endpoint authenticates the edge by the key just given up, so
+    // the pin could only ever answer unauthenticated from here on.
+    let mut removed_deployment = None;
+    let mut kept_deployment = None;
+    if let Ok(Deployment::Managed { policy_url, .. }) = Deployment::read(home) {
+        if policy_url.starts_with(&record.hub) {
+            let path = Deployment::path(home);
+            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+            removed.push(path);
+            removed_deployment = Some(policy_url);
+        } else {
+            kept_deployment = Some(policy_url);
+        }
+    }
     Ok(DisconnectReport {
         hub: record.hub,
         key_id: record.key_id,
         revoked_at_hub,
         removed,
+        removed_deployment,
+        kept_deployment,
     })
 }
 

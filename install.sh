@@ -2,7 +2,7 @@
 # Install the prebuilt `commonmeasure` binary for this platform from a public
 # release of the product repository, github.com/commonmeasure/commonmeasure:
 #
-#   sh install.sh [--tag v0.3.0] [--dir DIR] [--plugin DIR]
+#   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR]
 #
 # A release holds one binary per supported platform, the plugin archive and
 # SHA256SUMS over every asset. The installer picks the binary for this
@@ -162,4 +162,4 @@ if [ -n "$plugin" ]; then
   echo "  cd \"$plugin/commonmeasure-plugin\" && claude plugin marketplace add ./ && claude plugin install commonmeasure@commonmeasure"
 fi
 
-echo "Next: work a session in your host, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine."
+echo "Next: commonmeasure install claude (or codex, pi) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine."

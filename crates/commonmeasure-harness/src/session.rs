@@ -36,6 +36,22 @@ pub enum CrossingMode {
     Reconstructed,
 }
 
+/// How the MCP client named itself in the protocol's `initialize` request:
+/// its `clientInfo.name` and `clientInfo.version`, and `title` where it sent
+/// one. `host` on a record is the registration's `--host` value, the word
+/// the operator's configuration uses; this is the program's own word for
+/// itself, which is what tells the Codex app from the Codex CLI, or Claude
+/// Desktop's chat from its local agent mode, when both are registered the
+/// same way. Recorded once per server process, and stamped on each
+/// mediated crossing so one record answers who made it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientIdentity {
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
 /// One thing the agent read, or was refused.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Crossing {
@@ -44,6 +60,12 @@ pub struct Crossing {
     pub mode: CrossingMode,
     /// `claude-code`, `codex`, or whichever host observed it.
     pub host: String,
+    /// The MCP client's own name and version, on a mediated crossing whose
+    /// client sent them in `initialize`; absent on observed and
+    /// reconstructed crossings, which no MCP client made, and on a mediated
+    /// crossing from a client that named itself to nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<ClientIdentity>,
     /// The host tool that produced it, for an observed crossing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
@@ -498,6 +520,70 @@ impl SessionLog {
                 "revocation": enrolment.revocation,
             }),
         )
+    }
+
+    /// Whether this session's log already holds a record of `event`. Read
+    /// before the log is opened for writing, so a server can tell whether a
+    /// hook refreshed the policy for this session before it started.
+    pub fn holds_event(home: &Path, session_id: &str, event: &str) -> bool {
+        let path = home.join("sessions").join(format!("{session_id}.ndjson"));
+        Self::read(&path)
+            .map(|records| records.iter().any(|record| record["event"] == event))
+            .unwrap_or(false)
+    }
+
+    /// One synchronisation of managed policy run for this session: at
+    /// session start, so the session runs under the policy the hub
+    /// currently desires, or the reason none could be attempted. `trigger`
+    /// names what ran it (`session_start`, `server_start`). The payload is
+    /// `commonmeasure_harness::managed::SyncReport::to_record`; an envelope
+    /// that has expired is on it as `stale_since`
+    /// (`docs/contracts/session-evidence.md` §Policy synchronisation).
+    pub fn record_policy_sync(
+        &mut self,
+        host: &str,
+        trigger: &str,
+        sync: Value,
+    ) -> std::io::Result<u64> {
+        let mut record = json!({
+            "session_id": self.session_id,
+            "host": host,
+            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "trigger": trigger,
+        });
+        if let (Some(record), Some(fields)) = (record.as_object_mut(), sync.as_object()) {
+            record.extend(
+                fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+        self.log.append("policy_sync", record)
+    }
+
+    /// The MCP client's own name and version, as it sent them in the
+    /// protocol's `initialize` request, with the protocol version it asked
+    /// for. Written once, before the first crossing, so a session whose
+    /// client named itself to nobody carries no such record and a reader is
+    /// not handed a default name.
+    pub fn record_client_identified(
+        &mut self,
+        host: &str,
+        client: &ClientIdentity,
+        protocol_version: Option<&str>,
+    ) -> std::io::Result<u64> {
+        let mut payload = json!({
+            "session_id": self.session_id,
+            "host": host,
+            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "client": client,
+        });
+        // Absent when the client named no protocol version, rather than a
+        // null a reader would have to treat as a value.
+        if let Some(protocol_version) = protocol_version {
+            payload["protocol_version"] = json!(protocol_version);
+        }
+        self.log.append("client_identified", payload)
     }
 
     /// Where provider credentials came from at MCP server start: the

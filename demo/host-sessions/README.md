@@ -6,9 +6,10 @@ session evidence log in the shape `docs/contracts/session-evidence.md`
 states: identifiers, URLs, hashes, counters, record kinds and the host's
 own turn identifiers. No prompt, answer or page text is in any of them,
 because the log never holds those. The one edit made after recording is
-that the `cwd` and `transcript` fields carry a neutral home directory in
-place of the recording machine's; every hash, identifier, URL and counter
-is as written. Terms like
+that the `cwd` and `transcript` fields, and in the Codex session the
+operator home named in the identity's `unsigned` reason, carry a neutral
+home directory in place of the recording machine's; every hash, identifier,
+URL and counter is as written. Terms like
 crossing, boundary and mediated are defined in `docs/GLOSSARY.md`.
 
 `crates/commonmeasure-cli/tests/recorded_sessions.rs` copies each directory
@@ -50,6 +51,24 @@ kinds, identifiers, tool, skill and agent names, the model, timestamps and
 counters). The snapshot reader is tested over it, so its category filing,
 its capability states and its compaction count are pinned against real
 host records rather than hand-written ones.
+
+## `codex/`
+
+One Codex CLI session on Codex 0.154.0, registered with
+`commonmeasure install codex`, driven headless (`codex exec`, stdin closed)
+with a build of this tree named by the table. The table carried, beside
+what `install codex` writes, an `env` entry pointing `COMMONMEASURE_HOME`
+at an empty operator home, so the session holds no credentials record and
+no enrolment record; Codex forwards only the variables a table names. One
+turn: `context_fetch` of `https://example.com`.
+
+`local-1789354791021-86116.ndjson` is the MCP server's own session: the
+`client_identified` record with the client's own name
+(`codex-mcp-client`, version 0.154.0, title `Codex`) and the protocol
+version it asked for, the `context_fetch` as `crossing_mediated` with the
+same `client` beside `host: codex`, its three `processor_invoked` records
+and the `manifest_resolved` record for the host. Codex starts the server
+without a session id, so the crossing sits in the server's own log.
 
 ## `pi/`
 

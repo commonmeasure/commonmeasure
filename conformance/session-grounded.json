@@ -66,6 +66,7 @@
       "type": "content_grounded"
     }
   ],
+  "refused": 1,
   "schema_version": "1.0",
   "session_id": "85e0ded3-56e4-5203-9ecd-6b156511cc17",
   "started_at": "2026-08-20T09:00:00.000Z"

@@ -24,6 +24,20 @@ fn hook(home: &Path, event: &str, payload: Value) -> std::process::Output {
     child.wait_with_output().expect("wait")
 }
 
+/// The same, naming the host whose payload shape is on stdin.
+fn hook_as(home: &Path, host: &str, event: &str, payload: Value) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["hook", event, "--host", host])
+        .env("COMMONMEASURE_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary should start");
+    writeln!(child.stdin.as_mut().unwrap(), "{payload}").unwrap();
+    child.wait_with_output().expect("wait")
+}
+
 fn records(home: &Path, session: &str) -> Vec<Value> {
     let path = home.join("sessions").join(format!("{session}.ndjson"));
     let Ok(file) = std::fs::read_to_string(path) else {
@@ -1102,4 +1116,197 @@ mod prompt_sources {
         assert_eq!(c2pa["training_mining"]["cawg.ai_inference"], "notAllowed");
         assert_eq!(record["payload"]["embedded"], "statements read");
     }
+}
+
+/// A Cursor `postToolUse` payload, in Cursor's shape: the session is its
+/// `conversation_id`, the turn its `generation_id`, the output JSON text.
+/// A third-party MCP result is recorded as retrieved, our own tools under
+/// Cursor's `MCP:` spelling are not, and Cursor's stdout is JSON.
+#[test]
+fn a_cursor_post_tool_use_records_under_the_conversation_id_and_answers_json() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let output = hook_as(
+        home.path(),
+        "cursor",
+        "post-tool-use",
+        json!({
+            "conversation_id": "conv-42", "generation_id": "gen-3",
+            "hook_event_name": "postToolUse", "cursor_version": "3.20.17",
+            "workspace_roots": ["/work/project"], "cwd": "/work/project",
+            "tool_name": "MCP:fetch_page",
+            "tool_input": "{\"url\":\"https://www.example.org/report\"}",
+            "tool_output": "{\"content\":[{\"type\":\"text\",\"text\":\"https://www.example.org/report says so\"}]}",
+            "tool_use_id": "t-1", "duration": 40
+        }),
+    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "{}");
+    let recorded = records(home.path(), "conv-42");
+    let crossings: Vec<&Value> = recorded
+        .iter()
+        .filter(|r| r["event"] == "crossing_observed")
+        .collect();
+    assert_eq!(crossings.len(), 1, "{recorded:?}");
+    let payload = &crossings[0]["payload"];
+    assert_eq!(payload["host"], "cursor");
+    assert_eq!(payload["session_id"], "conv-42");
+    assert_eq!(payload["turn_id"], "gen-3");
+    assert_eq!(payload["cwd"], "/work/project");
+    assert_eq!(payload["tool"], "MCP:fetch_page");
+    assert_eq!(payload["url"], "https://www.example.org/report");
+    assert_eq!(payload["grounded"], false);
+
+    let output = hook_as(
+        home.path(),
+        "cursor",
+        "post-tool-use",
+        json!({
+            "conversation_id": "conv-42", "hook_event_name": "postToolUse",
+            "tool_name": "MCP:context_fetch",
+            "tool_input": {"url": "https://www.example.org/other"},
+            "tool_output": "{\"url\":\"https://www.example.org/other\"}"
+        }),
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        records(home.path(), "conv-42")
+            .iter()
+            .filter(|r| r["event"] == "crossing_observed")
+            .count(),
+        1,
+        "our own tool is not observed a second time"
+    );
+}
+
+/// Cursor's session start receives the nudge as `additional_context` and
+/// records the issuance; its prompt hook answers `continue` and leaves the
+/// prompt's sources and a turn boundary; its stop leaves the other boundary.
+#[test]
+fn a_cursor_session_is_nudged_and_bounded_in_cursors_own_shapes() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let output = hook_as(
+        home.path(),
+        "cursor",
+        "session-start",
+        json!({"session_id": "conv-9", "conversation_id": "conv-9",
+               "hook_event_name": "sessionStart", "is_background_agent": false,
+               "composer_mode": "agent", "workspace_roots": ["/work/project"]}),
+    );
+    assert!(output.status.success());
+    let answer: Value = serde_json::from_slice(&output.stdout).expect("JSON for Cursor");
+    assert!(
+        answer["additional_context"]
+            .as_str()
+            .is_some_and(|text| text.contains("context_fetch")),
+        "{answer}"
+    );
+    let output = hook_as(
+        home.path(),
+        "cursor",
+        "user-prompt-submit",
+        json!({"conversation_id": "conv-9", "generation_id": "gen-1",
+               "hook_event_name": "beforeSubmitPrompt",
+               "prompt": "read https://www.example.org/report", "attachments": []}),
+    );
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        r#"{"continue":true}"#
+    );
+    let output = hook_as(
+        home.path(),
+        "cursor",
+        "stop",
+        json!({"conversation_id": "conv-9", "generation_id": "gen-1",
+               "hook_event_name": "stop", "status": "completed", "loop_count": 0}),
+    );
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "{}");
+    let events: Vec<String> = records(home.path(), "conv-9")
+        .iter()
+        .map(|r| r["event"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    for expected in [
+        "nudge_issued",
+        "prompt_sources",
+        "turn_started",
+        "turn_completed",
+    ] {
+        assert!(events.contains(&expected.to_owned()), "{events:?}");
+    }
+    let boundary = records(home.path(), "conv-9")
+        .into_iter()
+        .find(|r| r["event"] == "turn_started")
+        .unwrap();
+    assert_eq!(boundary["payload"]["host"], "cursor");
+    assert_eq!(boundary["payload"]["turn_id"], "gen-1");
+}
+
+/// Cursor and VS Code load Claude Code's hook file and run its commands with
+/// their own payloads. A reader told it is reading Claude Code refuses those
+/// shapes: exit zero, nothing recorded, nothing printed.
+#[test]
+fn the_claude_code_reader_refuses_another_hosts_payload_shape() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cursor = json!({
+        "conversation_id": "conv-7", "generation_id": "gen-2", "hook_event_name": "postToolUse",
+        "cursor_version": "3.20.17", "tool_name": "Shell",
+        "tool_input": {"command": "curl https://www.example.org/"},
+        "tool_output": "{\"exitCode\":0,\"stdout\":\"https://www.example.org/\"}"
+    });
+    let vscode = json!({
+        "sessionId": "vs-1", "timestamp": 1704614400000i64, "cwd": "/work",
+        "toolName": "web_fetch", "toolArgs": {"url": "https://www.example.org/"},
+        "toolResult": {"resultType": "success", "textResultForLlm": "https://www.example.org/"}
+    });
+    for payload in [cursor.clone(), vscode] {
+        let output = hook_as(home.path(), "claude-code", "post-tool-use", payload);
+        assert!(output.status.success(), "the tool call is never failed");
+        assert!(output.stdout.is_empty(), "Claude Code reads nothing here");
+    }
+    // A refused payload at session start gets no nudge either: plain text
+    // on stdout would land in Cursor's JSON reader.
+    let output = hook_as(home.path(), "claude-code", "session-start", cursor);
+    assert!(output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "no nudge for a refused payload: {:?}",
+        output.stdout
+    );
+    // Cursor's documentation does not say which shape the Claude Code hooks
+    // it loads receive, so Cursor's environment alone is a refusal: a
+    // Claude-shaped payload under CURSOR_PROJECT_DIR leaves no record and
+    // no nudge.
+    let claude_shaped = json!({
+        "session_id": "s-under-cursor", "hook_event_name": "PostToolUse", "cwd": "/work",
+        "tool_name": "WebFetch", "tool_input": {"url": "https://www.example.org/"},
+        "tool_response": {"result": "Enough page text to count as grounded."}
+    });
+    for event in ["post-tool-use", "session-start"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["hook", event, "--host", "claude-code"])
+            .env("COMMONMEASURE_HOME", home.path())
+            .env("CURSOR_PROJECT_DIR", "/work")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary should start");
+        writeln!(child.stdin.as_mut().unwrap(), "{claude_shaped}").unwrap();
+        let output = child.wait_with_output().expect("wait");
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty(), "{event}: {:?}", output.stdout);
+    }
+    assert!(
+        !home.path().join("sessions/s-under-cursor.ndjson").exists(),
+        "a Claude-shaped payload under Cursor's environment left a record"
+    );
+    assert!(
+        !home.path().join("sessions").exists()
+            || std::fs::read_dir(home.path().join("sessions"))
+                .unwrap()
+                .next()
+                .is_none(),
+        "a foreign payload must leave no record"
+    );
 }

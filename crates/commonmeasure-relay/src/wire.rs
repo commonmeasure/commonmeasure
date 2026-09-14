@@ -29,6 +29,18 @@ pub struct WireBatch {
     /// Session start, mirrored on the envelope as the standard requires for
     /// batch delivery at Grounding conformance.
     pub started_at: String,
+    /// How many crossings the operator's policy refused in this session,
+    /// counted at projection over the refusals under scopes cleared for
+    /// egress: an integer and nothing else about them, so an organisation
+    /// can see policy enforced without any refused source leaving the
+    /// machine. Present on every batch of a session, absent on a run's
+    /// batches, where the run's own rejected sources are not crossings.
+    /// A receiver keeps the highest value it has seen for a session rather
+    /// than summing, so every batch of a session and every redelivery
+    /// carry the same fact (`docs/contracts/session-evidence.md` §The
+    /// refused count on the wire).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub refused: Option<u64>,
     pub events: Vec<WireEvent>,
 }
 
@@ -77,6 +89,7 @@ impl WireBatch {
             session_id,
             agent_id: agent_id.to_owned(),
             started_at: started_at.to_owned(),
+            refused: None,
             events: Vec::new(),
         }
     }

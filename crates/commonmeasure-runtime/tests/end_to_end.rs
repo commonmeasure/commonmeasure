@@ -575,6 +575,11 @@ fn the_optimiser_reduces_admitted_tokens_without_dropping_a_source() {
 /// parser: only the origin's bytes differ from the recorded corpus, which
 /// deliberately contains none.
 fn body_with_pii() -> Vec<u8> {
+    body_with_pii_at("https://a.example/casework")
+}
+
+/// The same body with the flagged result at a URL of the test's choosing.
+fn body_with_pii_at(url: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "requestId": "test-pii",
         "results": [
@@ -584,7 +589,7 @@ fn body_with_pii() -> Vec<u8> {
                 "text": "The cap is set quarterly by the regulator.",
             },
             {
-                "url": "https://a.example/casework",
+                "url": url,
                 "title": "Casework contact",
                 "text": "Send the meter reading to casework.team@example.co.uk with your \
                          account reference.",
@@ -594,46 +599,35 @@ fn body_with_pii() -> Vec<u8> {
     .expect("serialise")
 }
 
-/// A strict-mode PII hit blocks the source before the model sees it. The
-/// clean source still crosses: the detector refuses sources, not plans.
+/// A strict-mode PII hit on a source a supplier served is recorded and the
+/// source still crosses: a public page's contact details are not what the
+/// detector exists to keep out of a model. The finding is on the record
+/// exactly as a refusing one would be.
 #[test]
-fn a_strict_pii_finding_refuses_the_source_before_inference() {
+fn a_strict_pii_finding_on_a_public_source_is_recorded_and_the_source_carried() {
     let harness = Harness::run_against(&suite(PolicyMode::Strict, vec![]), body_with_pii(), true);
     let plan = harness.plan("exa-only");
 
     assert_eq!(plan["status"], "completed");
-    assert_eq!(plan["source_count"], 1, "only the clean source crossed");
-    assert_eq!(plan["sources"][1]["admitted"], false);
-    assert!(
-        plan["sources"][1]["admission_reason"]
-            .as_str()
-            .unwrap()
-            .contains("PII detector"),
-        "the source names the check that refused it"
-    );
-    let refusal = plan["policy_decisions"]
-        .as_array()
-        .expect("decisions")
-        .iter()
-        .find(|decision| decision["decision"] == "refuse")
-        .expect("the refusal is a policy decision");
-    assert_eq!(refusal["source_url"], "https://a.example/casework");
+    assert_eq!(plan["source_count"], 2, "strict admits the public source");
+    assert_eq!(plan["sources"][1]["admitted"], true);
     assert!(
         harness
             .gaps("exa-only")
-            .contains(&"policy_refused".to_owned())
+            .contains(&"policy_refused".to_owned()),
+        "the finding is recorded whether or not it was enforced"
     );
-
     let detector = plan["processors"]
         .as_array()
         .expect("processors")
         .iter()
         .find(|invocation| {
-            invocation["processor"]["name"] == "pii-detector" && invocation["decision"] == "refuse"
+            invocation["processor"]["name"] == "pii-detector"
+                && invocation["detail"]["categories"]["email_address"] == 1
         })
-        .expect("the refusing invocation is recorded")
+        .expect("the finding is recorded")
         .clone();
-    assert_eq!(detector["detail"]["categories"]["email_address"], 1);
+    assert_eq!(detector["decision"], "admit");
     assert!(
         !detector.to_string().contains("casework.team@example.co.uk"),
         "the identifier itself must never enter the evidence record"
@@ -730,6 +724,10 @@ fn internal_corpus() -> tempfile::TempDir {
 /// Run one suite comparing an open-web `search` plan with an internal `query`
 /// plan, with the corpus at `corpus` and external acquisition as given.
 fn comparison(corpus: &Path, live: bool, with_gateway: bool) -> Harness {
+    comparison_under(corpus, live, with_gateway, PolicyMode::Observe)
+}
+
+fn comparison_under(corpus: &Path, live: bool, with_gateway: bool, mode: PolicyMode) -> Harness {
     let provider = provider_origin(recon_exa_body());
     let (gateway, gateway_calls) = gateway_origin();
     let base_url = provider.url();
@@ -737,7 +735,7 @@ fn comparison(corpus: &Path, live: bool, with_gateway: bool) -> Harness {
     let directory = tempfile::tempdir().expect("tempdir");
     let output = directory.path().join("latest");
 
-    let mut suite = suite(PolicyMode::Observe, vec![]);
+    let mut suite = suite(mode, vec![]);
     suite.providers = vec!["exa".into(), "internal".into()];
     suite.result_limit = 3;
 
@@ -769,6 +767,79 @@ fn comparison(corpus: &Path, live: bool, with_gateway: bool) -> Harness {
         directory,
         summary: report.summary,
     }
+}
+
+/// A supplier can hand back a local or private address, and that source is
+/// internal by the same floor the harness applies: strict refuses a finding
+/// there, as it would on the corpus, and the record says which check did.
+#[test]
+fn a_strict_pii_finding_on_a_private_address_from_a_supplier_refuses_the_source() {
+    let harness = Harness::run_against(
+        &suite(PolicyMode::Strict, vec![]),
+        body_with_pii_at("http://127.0.0.1/casework"),
+        true,
+    );
+    let plan = harness.plan("exa-only");
+    assert_eq!(plan["status"], "completed");
+    assert_eq!(
+        plan["source_count"], 1,
+        "only the public clean source crossed"
+    );
+    assert_eq!(plan["sources"][1]["admitted"], false);
+    assert!(
+        plan["sources"][1]["admission_reason"]
+            .as_str()
+            .unwrap()
+            .contains("PII detector"),
+        "the source names the check that refused it"
+    );
+}
+
+/// The operator's own corpus is internal supply, so a strict-mode PII hit
+/// there refuses the document before the model sees it; the other document
+/// still crosses, and the open-web plan beside it is untouched.
+#[test]
+fn a_strict_pii_finding_on_the_internal_corpus_refuses_the_source_before_inference() {
+    let corpus = internal_corpus();
+    std::fs::write(
+        corpus.path().join("contacts.md"),
+        "# Contacts\n\nThe supplied sources establish who to contact: send readings to \
+         casework.team@example.co.uk.\n",
+    )
+    .expect("doc");
+    let harness = comparison_under(corpus.path(), true, true, PolicyMode::Strict);
+
+    let internal = harness.plan("internal-only");
+    assert_eq!(internal["status"], "completed");
+    let refused: Vec<&Value> = internal["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .filter(|source| source["admitted"] == false)
+        .collect();
+    assert_eq!(refused.len(), 1, "one document carried the identifier");
+    assert!(
+        refused[0]["admission_reason"]
+            .as_str()
+            .unwrap()
+            .contains("PII detector"),
+        "the source names the check that refused it"
+    );
+    let detector = internal["processors"]
+        .as_array()
+        .expect("processors")
+        .iter()
+        .find(|invocation| {
+            invocation["processor"]["name"] == "pii-detector" && invocation["decision"] == "refuse"
+        })
+        .expect("the refusing invocation is recorded")
+        .clone();
+    assert_eq!(detector["detail"]["categories"]["email_address"], 1);
+    assert!(
+        !detector.to_string().contains("casework.team@example.co.uk"),
+        "the identifier itself must never enter the evidence record"
+    );
+    assert_eq!(harness.plan("exa-only")["status"], "completed");
 }
 
 /// The internal-supply acceptance path: one job, an open-web plan and an

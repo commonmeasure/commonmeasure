@@ -946,8 +946,22 @@ impl Execution<'_> {
                 .then_some(envelope.text.as_deref())
                 .flatten();
             let pii_ruling = screenable.map(|text| {
+                // A run's sources come from a supply adapter: the operator's
+                // own corpus is internal, and so is anything a supplier
+                // handed back at a local or private address, by the same
+                // floor the harness applies. Everything else is public. A
+                // job declares no `refuse_on_pii`, so the switch is off here.
+                let source = if acquisition.provider == commonmeasure_supply::INTERNAL_PROVIDER
+                    || commonmeasure_types::address::is_private_address(&envelope.source_url)
+                {
+                    processor::pii::SourceClass::Internal
+                } else {
+                    processor::pii::SourceClass::Public
+                };
                 let (invocation, ruling) = processor::pii::invoke(
                     self.suite.job.policy_mode,
+                    source,
+                    false,
                     &envelope.source_url,
                     &envelope.source_url,
                     text,

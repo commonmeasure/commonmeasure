@@ -55,15 +55,20 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `nudge_issued` | a hook at session start whose stdout the host adds to context (Claude Code: `SessionStart`) | the standing mediation nudge was emitted for the host to add to the session's context |
 | `edge_identity` | a hook at session start (Claude Code: `SessionStart`), on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side). Absent on an edge that is not enrolled |
 | `credentials_loaded` | nothing; the MCP server writes it at start | the operator credentials file was loaded at server start: its path, digest and variable names, never a value |
+| `policy_sync` | a hook at session start (Claude Code: `SessionStart`), or the MCP server's start for a session no hook refreshed | on a managed edge, what refreshing the policy from the hub did for this session: the outcome, the revision in force and whether its envelope has expired (§Policy synchronisation). Absent on a local edge |
+| `client_identified` | the MCP client's `initialize` request; the MCP server writes it before the first record a tool call leaves | how the program on the other end of the stdio pipe named itself: `clientInfo.name` and `clientInfo.version`, with the protocol version it asked for (§Client identity) |
 | `allowance_gap` | nothing; the MCP server writes it | the allowance ledger did not record a settlement or release for a mediated search: the reservation id, the observed charge where a receipt reported one, and the reason; the reservation stays held until the expiry sweep releases it |
 | `evidence_gap` | nothing; the log writes it | a window this log could not record |
 
-A host-policy refusal happens before any bytes move. A PII refusal happens
+A host-policy refusal happens before any bytes move. A processor refusal,
+which is what the PII detector and the injection screen produce, happens
 after the fetch and before the text is returned: the bytes existed, their hash
 is on the refused crossing, and they never entered context (`grounded` is
 false). The two records differ because they are different facts, and both
 are `crossing_refused` because in both cases the mediated path stopped the
-text before it reached the model.
+text before it reached the model. The tool error the agent sees says which:
+`refused before the crossing` for the first, `refused before the content
+entered the context` for the second.
 
 ## Crossing
 
@@ -79,7 +84,7 @@ could have refused it:
 ```json
 {
   "session_id": "…", "timestamp": "…", "mode": "mediated",
-  "host": "claude-code",
+  "host": "codex", "client": {"name": "codex-mcp-client", "version": "0.154.0", "title": "Codex"},
   "cwd": "/home/operator/code/project", "policy_scope": "code/project",
   "principal": "research-agent", "authentication_basis": "os_user",
   "url": "…", "host_name": "…",
@@ -300,7 +305,16 @@ mode chose to carry rather than refuse. The mode decides what happens to a
 breach, never whether it is recorded ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)): under `observe` or
 `prefer` the crossing goes ahead with the broken constraint named here, where
 `strict` would have refused it. A carried PII finding is a breach like any
-other and is recorded in the same field. Observed and reconstructed crossings
+other and is recorded in the same field. Under `strict` a PII finding
+refuses a crossing only where the source is internal or private: a named
+internal prefix, a loopback or private address reached under
+`allow_private_hosts`, or the operator's own corpus. On a public source the
+finding is recorded in `breach` and the crossing is admitted, because the
+published contact details of a public page are not the personal data the
+detector exists to keep out of a model, and the finding, with its
+categories and offsets, is the evidence a reviewer needs. `refuse_on_pii:
+true` in the policy makes `strict` refuse a finding on every source
+(`plugin/README.md` §Policy). Observed and reconstructed crossings
 never carry one, because nothing judged them before they happened; for the
 same reason the PII detector scans only crossings the mediated path carries,
 and its manifest names that blind spot.
@@ -580,6 +594,46 @@ loaded and reports it about itself, so a matching digest on two edges says
 they resolved the same effective policy and nothing about whether either
 edge was tampered with.
 
+## Client identity
+
+`host` on every record is the word the registration passed to
+`commonmeasure mcp --host`: `claude-code`, `codex`, `pi`, `claude-desktop`,
+`cursor`, `copilot-cli` or `vscode`. The server refuses any other value at
+start, so a host is never recorded under a default it did not name. The
+same word covers several programs: one `[mcp_servers]` table serves the
+Codex CLI, the ChatGPT desktop app and the Codex IDE extension, and Claude
+Desktop connects its chat and its local agent mode as two clients. What
+tells them apart is the client's own word for itself, the `clientInfo` it
+sends in the protocol's `initialize` request, which the server holds from
+the handshake and records once, before the first record a tool call leaves,
+so a server that is started and never asked for anything leaves no session
+file:
+
+```json
+{
+  "session_id": "…", "host": "codex", "timestamp": "…",
+  "client": {"name": "codex-mcp-client", "version": "0.154.0", "title": "Codex"},
+  "protocol_version": "2025-06-18"
+}
+```
+
+The same `client` object is stamped on every `crossing_mediated` and
+`crossing_refused` record the server writes after it, so one crossing
+answers which program made it without a search back to the session's start.
+`title` and `protocol_version` are present only where the client sent
+them. A client that sends no
+`clientInfo` leaves no `client_identified` record and no `client` field on
+its crossings; the absence is the fact, and no default name is put in its
+place. Observed and reconstructed crossings never carry the field: no MCP
+client made them.
+
+Names recorded from the hosts probed so far: `codex-mcp-client` (the Codex
+CLI at 0.154.x and the ChatGPT desktop app at 0.153.x, told apart by
+`version`), `claude-ai` and `local-agent-mode-commonmeasure` (Claude
+Desktop's two clients), `cursor-vscode` (Cursor). The relay projects
+neither the record nor the field; what a receiver learns about the host is
+`contextops-host-tool`.
+
 ## Credential provenance
 
 The MCP server loads `$COMMONMEASURE_HOME/credentials.env` at start
@@ -768,6 +822,68 @@ drop between consecutive snapshots and not as its own record. The snapshots
 are boundary observations; this basis cannot claim what happened between two
 of them.
 
+## Policy synchronisation
+
+On a managed edge ([`docs/contracts/policy-envelope.md`](policy-envelope.md)
+§Deployment mode) the policy is refreshed from the hub at session start,
+and the session log records what the refresh did:
+
+```json
+{
+  "session_id": "…", "host": "claude-code", "timestamp": "…",
+  "trigger": "session_start",
+  "policy_url": "https://hub.example/api/v1/policy/desired",
+  "outcome": "already_applied", "revision": 2, "digest": "sha256:…", "reason": null,
+  "applied": {"revision": 2, "digest": "sha256:…", "expires_at": "2026-09-21T01:40:58Z"},
+  "stale_since": null
+}
+```
+
+`trigger` is `session_start` when the session-start hook ran it and
+`server_start` when the MCP server did, which it does for any session whose
+log carries no refresh when it starts, whatever the host; a session is
+refreshed once. The refresh precedes every other record of the session, so
+the `nudge_issued` record and every crossing name the policy the refresh
+left in force. The
+outcomes are the ones the envelope contract enumerates, plus `unavailable`
+when the deployment or state file did not load and nothing was asked of the
+hub. `applied` is the revision in force after the refresh, whatever the
+outcome, and `stale_since` is its envelope's expiry once that has passed:
+the policy stays in force and the record says since when it has been stale
+([`docs/contracts/policy-envelope.md`](policy-envelope.md) §Cadence and
+staleness). A local edge writes no such record, because it makes no
+management request. The refresh the relay runs before delivery writes to
+the managed state file, not to any session.
+
+## The refused count on the wire
+
+The relay never projects a refused crossing: no URL, no reason, no hash of
+the bytes it withheld. What it projects, on every batch of a session it
+delivers, is `refused`: the number of `crossing_refused` records in that
+session whose working directory resolves to a scope cleared for egress, as
+an integer at the top of the batch document and nothing else about them.
+The count exists so an organisation's owner can see that policy was
+enforced across its edges, and it is a count of enforcement, not of
+sources: a refusal to a private address or a named internal prefix is
+counted like any other, because nothing about the address leaves.
+
+The count is the session's running total at the time the batch is
+projected, never a per-batch difference. Every batch of one session
+carries the same value, a later batch for the same session carries the
+later total, and a receiver keeps the larger value it has seen rather than
+summing, so a redelivered batch changes nothing. When a session's total has
+moved since a receiver last accepted a batch for it and there is no new
+event to carry it, the relay sends the session's last delivered event
+again, under its own id, on a batch carrying the new total: the receiver
+already holds the event and takes the larger count, so a refusal after the
+session's last admitted crossing still crosses. The relay keeps the highest
+count each receiver has accepted per session (`relay/refused-delivered.json`)
+and its summary states the totals it put on the wire this run and nothing
+more. A session that was refused and admitted nothing produces no batch and
+its count does not cross; a batch without the field comes from an edge that
+does not report it, which is not the same as a count of zero.
+`conformance/session-refused.json` is the vector.
+
 ## What is deliberately absent
 
 - **Prompts, responses and conversation text.** Records carry identifiers and
@@ -829,8 +945,11 @@ commonmeasure serve              # the session view of the console, on loopback
 shapes a host sends. `crates/commonmeasure-cli/tests/mediated_e2e.rs` drives the MCP
 server over stdio against a real loopback origin. Between them they assert the
 hash covers the ingested text, search results do not ground, subagent identity
-survives, private addresses stay out, own tools are not double-recorded, a
-refusal reaches the agent and the log, no payload makes a hook fail, a turn
+survives, private addresses stay out, own tools are not double-recorded, the
+client's `initialize` name and version are recorded once before the first
+crossing and stamped on each mediated crossing and refusal, a client that
+sends none leaves neither, an initialised server that is asked for nothing
+leaves no file, a refusal reaches the agent and the log, no payload makes a hook fail, a turn
 boundary declares `minimal` and carries the host's turn identifier without
 the prompt, a Stop boundary records the inventory with the three capability
 states apart and the session report attributes the change between two

@@ -43,11 +43,26 @@ pub const SELF_TOOL_PREFIXES: &[&str] = &[
     "mcp__plugin_contextops_contextops__",
 ];
 
+/// The mediated tools by their own names: how Pi registers them, and what
+/// follows Cursor's `MCP:` prefix.
+pub const OWN_TOOL_NAMES: [&str; 3] = ["context_fetch", "context_search", "context_status"];
+
 impl ToolKind {
     pub fn classify(tool_name: &str) -> Self {
         match tool_name {
             "WebFetch" => ToolKind::WebFetch,
             "WebSearch" => ToolKind::WebSearch,
+            name if OWN_TOOL_NAMES.contains(&name) => ToolKind::SelfMediated,
+            // A host that names an MCP tool by its server and tool under
+            // any spelling (`MCP:context_fetch`, `commonmeasure/context_fetch`,
+            // `commonmeasure_context_fetch`) still ends in our tool's name
+            // after a separator; the mediated server recorded that call
+            // already. A third-party tool that happens to share one of the
+            // three names is excluded with it, and the exclusion says so.
+            name if ends_with_own_tool(name) => ToolKind::SelfMediated,
+            // Cursor names an MCP tool `MCP:<tool>` in its hook payloads,
+            // without the server.
+            name if name.starts_with("MCP:") => ToolKind::Mcp,
             // Our own tools are recognised before the general MCP case: a
             // mediated crossing is recorded by the server that carried it, and
             // recording it again from the hook would put the same fetch in the
@@ -67,6 +82,19 @@ impl ToolKind {
             _ => ToolKind::Other,
         }
     }
+}
+
+/// Whether a tool name ends in one of our tools' names after `:`, `_` or
+/// `/`, the separators hosts put between a server and its tool.
+fn ends_with_own_tool(name: &str) -> bool {
+    OWN_TOOL_NAMES.iter().any(|tool| {
+        name.strip_suffix(tool).is_some_and(|prefix| {
+            prefix
+                .chars()
+                .last()
+                .is_some_and(|separator| matches!(separator, ':' | '_' | '/'))
+        })
+    })
 }
 
 /// The host a URL names, or empty when it names none.
@@ -178,7 +206,7 @@ pub fn recordable(raw: &str) -> bool {
     let Ok(parsed) = url::Url::parse(raw) else {
         return false;
     };
-    !is_private(&parsed)
+    !commonmeasure_types::address::is_private(&parsed)
 }
 
 /// The floor with the operator's named exceptions applied.
@@ -197,7 +225,7 @@ pub fn recordable_under(raw: &str, internal_prefixes: &[String]) -> bool {
 /// supply.
 ///
 /// Judged on the parsed URL rather than the spelling that arrived, for the
-/// same reason [`is_private`] judges parsed addresses: `https://host:443/p`,
+/// same reason the privacy floor judges parsed addresses: `https://host:443/p`,
 /// `HTTPS://HOST/p` and `https://host/./p` are one page under three spellings,
 /// and a verbatim comparison stamps two of them public. That is not a missed
 /// record but an egress decision — the `internal` marking is what keeps a
@@ -212,47 +240,6 @@ pub fn matches_internal_prefix(raw: &str, internal_prefixes: &[String]) -> bool 
         .iter()
         .filter_map(|prefix| url::Url::parse(prefix).ok())
         .any(|prefix| parsed.as_str().starts_with(prefix.as_str()))
-}
-
-fn is_private(url: &url::Url) -> bool {
-    if url.scheme() == "file" {
-        return true;
-    }
-    // The parsed host, not `host_str`: an IPv6 host string arrives bracketed
-    // (`[::1]`), and matching the parsed address is what lets the standard
-    // library answer for whole ranges — all of 127.0.0.0/8, not one literal —
-    // while a domain that merely starts with digits (`10.example.com`) stays
-    // the public name it is.
-    match url.host() {
-        None => true,
-        Some(url::Host::Domain(domain)) => {
-            let domain = domain.to_lowercase();
-            domain == "localhost"
-                || domain.ends_with(".localhost")
-                || domain.ends_with(".local")
-                || domain.ends_with(".internal")
-        }
-        Some(url::Host::Ipv4(address)) => is_private_v4(address),
-        Some(url::Host::Ipv6(address)) => {
-            // An IPv4 address carried inside IPv6 is judged as the IPv4
-            // address it names.
-            if let Some(mapped) = address.to_ipv4_mapped() {
-                return is_private_v4(mapped);
-            }
-            address.is_loopback()
-                || address.is_unspecified()
-                || address.is_unique_local()
-                || address.is_unicast_link_local()
-        }
-    }
-}
-
-fn is_private_v4(address: std::net::Ipv4Addr) -> bool {
-    address.is_loopback()
-        || address.is_private()
-        || address.is_link_local()
-        || address.is_unspecified()
-        || address.is_broadcast()
 }
 
 #[cfg(test)]

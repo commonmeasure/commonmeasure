@@ -33,12 +33,16 @@ readable summary of the same values. Nothing is sent anywhere by either.
   "desired": null,
   "applied": {
     "revision": null,
+    "digest": null,
+    "edited_locally": null,
+    "expires_at": null,
+    "stale_since": null,
     "policy_declared": true,
     "policy_digest": "sha256:…",
-    "policy_identity": {"schema": "contextops-policy-identity/v1", "resolver": "1", "digest": "sha256:…"},
+    "policy_identity": {"schema": "contextops-policy-identity/v2", "resolver": "1", "digest": "sha256:…"},
     "principal": {"name": "os-user:1000", "basis": "os_user"}
   },
-  "versions": {"commonmeasure": "0.2.0", "resolver": "1", "identity_schema": "contextops-policy-identity/v1"},
+  "versions": {"commonmeasure": "0.2.0", "resolver": "1", "identity_schema": "contextops-policy-identity/v2"},
   "last_enforcement": {"at": "2026-09-06T09:58:12.411Z", "basis": "the latest mediated or refused crossing in this edge's session logs"},
   "allowances": [
     {"principal": "research-agent", "period": "day", "period_key": "2026-09-06",
@@ -64,6 +68,24 @@ readable summary of the same values. Nothing is sent anywhere by either.
 - `applied.revision` is the desired revision whose policy is the one on
   disk, when the edge activated one; `null` on a local edge and on a
   managed edge that has activated nothing.
+- `applied.digest` is the digest the applied revision's envelope named it
+  by, over the policy as the envelope carried it
+  ([`docs/contracts/policy-envelope.md`](policy-envelope.md) §The envelope),
+  and `applied.edited_locally` says whether the policy file has since been
+  changed away from that revision's policy (the file no longer digests to
+  the loader's form of the policy in the kept envelope); `null` where it
+  cannot be determined. Both are `null` where `applied.revision` is. A
+  receiver compares `applied.digest` with the digest it published, whatever
+  form it published the policy in, and a revision keeps the digest it was
+  published under; `applied.policy_digest` is the loader's digest of the
+  file and agrees with the published digest only where the loader's form
+  was published.
+- `applied.expires_at` is when that revision's envelope expires, as the
+  envelope states; `applied.stale_since` is the same time once it has
+  passed, and `null` before. An expired envelope's policy stays in force
+  and the edge refreshes it at session start and before relay
+  ([`docs/contracts/policy-envelope.md`](policy-envelope.md) §Cadence and
+  staleness). Both are `null` where `applied.revision` is.
 - `applied.policy_declared` says whether a policy file exists.
   `applied.policy_digest` is the declaration's digest (§Policy digest);
   `null` when there is no file, and `null` with `applied.unavailable`
@@ -91,7 +113,13 @@ readable summary of the same values. Nothing is sent anywhere by either.
 What the document never carries: a prompt, an answer, the policy document
 or any rule in it, a scope matcher, an engagement name (governing or
 reported), a working directory, a provider, a quote, a receipt, or
-per-crossing spend.
+per-crossing spend. It carries no count of refused crossings either: that
+count travels on the telemetry wire as `refused` on every batch of a
+session, the session's running total of refused crossings at the time the
+batch is projected and never a per-batch difference, so a receiver keeps
+the larger value it has seen for the session and a redelivery cannot
+double-count ([`docs/contracts/session-evidence.md`](session-evidence.md)
+§The refused count on the wire).
 
 ## Policy digest
 
@@ -100,7 +128,11 @@ the canonical JSON (§Canonical JSON) of the parsed policy file, serialised
 as the loader serialises it on save. Reformatting the file does not move
 it; a distributed copy of the same declaration digests equal. It is not
 the byte-level revision token the policy editor uses to refuse a stale
-save; that token follows the bytes, this one follows the declaration.
+save; that token follows the bytes, this one follows the declaration. Nor
+is it the digest a policy envelope names its revision by, which is over the
+policy as the envelope carries it
+([`docs/contracts/policy-envelope.md`](policy-envelope.md) §The envelope);
+the two agree when the envelope carried the loader's form.
 
 ## Policy identity
 
@@ -111,12 +143,13 @@ The pre-image is the result of that resolution and nothing else:
 
 | Field | What it carries |
 |---|---|
-| `schema` | `contextops-policy-identity/v1` |
+| `schema` | `contextops-policy-identity/v2` |
 | `resolver` | the resolver version, `1` |
 | `mode` | the effective policy mode |
 | `constraints` | the effective set-semantics constraints (every kind but `access_rule`), each as its canonical object with hosts normalised the way admission normalises them, sorted by canonical text, duplicates removed |
 | `access_rules` | the effective access rules in declaration order, each with its `position`, because the first matching rule decides and their order is the policy |
 | `allow_private_hosts` | the effective value |
+| `refuse_on_pii` | the effective value |
 | `record_internal_prefixes` | sorted, duplicates removed |
 | `scope` | the matched scope's `match` string, or `null` |
 | `governing_engagement` | the matched scope's engagement, or `null` |
@@ -160,9 +193,9 @@ those and the document alone it reaches one of four answers:
 
 | Answer | When |
 |---|---|
-| `current` | `applied.revision` equals the desired revision and `applied.policy_digest` equals the desired digest |
+| `current` | `applied.revision` equals the desired revision, `applied.digest` equals the desired digest and `applied.edited_locally` is not `true` (an edge reporting no `applied.digest` is compared on `applied.policy_digest`) |
 | `stale` | `applied.revision` is earlier than the desired revision |
-| `divergent` | `applied.revision` equals the desired revision but the digest differs (the policy was changed on the edge after activation), or `applied.revision` is later than the desired revision |
+| `divergent` | `applied.revision` equals the desired revision but the digest differs or the policy was changed on the edge after activation, or `applied.revision` is later than the desired revision |
 | `unknown` | `applied.revision` is `null` (a local edge, or a managed edge that has activated nothing), or `applied.policy_digest` is `null` (no policy, or one that did not load) |
 
 `crates/commonmeasure-harness/src/fleet.rs` implements this classification

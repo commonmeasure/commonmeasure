@@ -11,7 +11,8 @@ agent system it builds or runs itself. Common Measure is not a harness and not
 an agent framework: it is the component between an agent and the content
 the agent reads. A **harness** is the agent system the operator runs, bought
 or built. A **host** is the specific program the integration attaches to;
-Claude Code, Codex and Pi are the hosts integrated today. Terms like
+Claude Code, Codex, Pi, Claude Desktop and Cursor are the hosts integrated
+today. Terms like
 crossing, admission, principal and scope are defined in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 Every claim below names the code or test it rests on. The binary is
 `commonmeasure` and its home directory is `~/.commonmeasure`.
@@ -43,9 +44,18 @@ nothing; that is the state with no policy file
 (`crates/commonmeasure-harness/src/policy.rs`). `prefer` records and steers; `strict`
 refuses what the rules do not allow ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)).
 
-`--host` accepts `claude-code`, `codex` and `pi` (`crates/commonmeasure-cli/src/main.rs`
-`HOSTS`). An unknown name is rejected by the argument parser; the hook
-command defaults an unparseable surface to Claude Code.
+`--host` on the hook command accepts `claude-code`, `codex` and `pi`
+(`crates/commonmeasure-cli/src/main.rs` `HOSTS`); on the MCP server it also
+accepts `claude-desktop`, `cursor`, `copilot-cli` and `vscode` (`MCP_HOSTS`),
+the hosts that reach the server through a configuration write before an
+`install` for them exists. An unknown name is rejected by the argument
+parser with the list, never recorded under the default; the hook command
+defaults an unparseable surface to Claude Code. The value is the `host` on
+every record. The program's own name and version, from the `clientInfo` it
+sends in the protocol's `initialize` request, are recorded beside it
+([`docs/contracts/session-evidence.md`](session-evidence.md) §Client identity),
+which is what tells the Codex CLI from the ChatGPT desktop app when both
+run from one `[mcp_servers]` table.
 
 The binary writes, checks and removes its own registration with a host
 (`crates/commonmeasure-harness/src/registration.rs`,
@@ -53,9 +63,35 @@ The binary writes, checks and removes its own registration with a host
 
 | Command | Claude Code | Codex | Pi |
 |---|---|---|---|
-| `commonmeasure install <host> [--binary PATH]` | the four hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; the state file is written first and restored if the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured) | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
+| `commonmeasure install <host> [--binary PATH]` | the four hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; the state file is written first and restored if the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured), naming the binary, `mcp --host codex`, and `default_tools_approval_mode = "approve"`, without which Codex asks before every call and its non-interactive runs refuse the tools; the table is read by the Codex CLI, the ChatGPT desktop app and the Codex IDE extension | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
 | `commonmeasure uninstall <host>` | exactly those entries removed; every other key keeps its value | exactly that table removed; every other table, key and comment kept byte for byte | the extension and its directory removed |
-| `commonmeasure doctor [<host>]` | per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist, whether the sessions directory is writable, whether the policy file loads | the same | the same, from the extension's `const BINARY` line |
+| `commonmeasure doctor [<host>]` | per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration), whether the sessions directory is writable, whether the policy file loads | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
+
+Two more hosts take the same commands. `install claude-desktop` writes one
+`mcpServers.commonmeasure` entry (the binary's absolute path, `mcp --host
+claude-desktop`) into Claude Desktop's configuration file
+(`~/Library/Application Support/Claude/claude_desktop_config.json` on
+macOS, `%APPDATA%\Claude\` on Windows, `~/.config/Claude/` elsewhere),
+which the application loads at its next start; Claude Desktop has no hook
+surface, so the registration is mediated only, and the application starts
+one server for its chat client and one for its local agent mode; each
+server that makes a call leaves its own session naming its client, because
+the client's identity is recorded at the first crossing and a server that
+is asked for nothing leaves no file
+([`docs/contracts/session-evidence.md`](session-evidence.md) §Client
+identity). `install cursor` writes the server into `~/.cursor/mcp.json`
+(`type: stdio`, `mcp --host cursor`) and four hooks into
+`~/.cursor/hooks.json` (`sessionStart`, `postToolUse`, `beforeSubmitPrompt`,
+`stop`, each `hook <event> --host cursor`), Cursor's names for the four
+moments the Claude Code registration hooks; `uninstall` removes exactly
+those entries and deletes nothing: the `mcpServers` object, the `hooks`
+object and each file stay, empty where ours was the only entry, because
+the host may have written them; `doctor` reads both back. Both files, and
+Claude Desktop's, are rewritten whole, so every other key keeps its value
+and the file comes back in this writer's formatting. A file the host or
+the operator wrote in another formatting comes back with the same content
+and different bytes; the byte-for-byte round trip holds only for a file
+that was already in this writer's format.
 
 The absolute path is written because a host's hook environment does not
 share the login shell's `PATH`. Replacing the binary at the registered path
@@ -75,7 +111,7 @@ the three integrated hosts provide today.
 
 | Event | Any host must supply | Claude Code | Codex | Pi |
 |---|---|---|---|---|
-| `crossing_observed` | a hook after each tool call, with `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_response` as JSON on stdin; `agent_type`/`agent_id` when the call ran in a subagent; the host's turn identifier where it has one | `PostToolUse` hook, matcher `WebFetch\|WebSearch\|mcp__.*`, written by `install claude` or declared in `plugin/hooks/hooks.json` | none registered: Codex's hooks documentation (`https://learn.chatgpt.com/docs/hooks`) states that hosted tools such as its web search do not use the local tool path and fire no hook, and its shell reaches the web as command text, so a matcher could witness only third-party MCP results; that reading rests on the document, no Codex session having been recorded (`DECISIONS.md` §Integration and ownership) | none: Pi has no web tool of its own to observe |
+| `crossing_observed` | a hook after each tool call, with `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_response` as JSON on stdin; `agent_type`/`agent_id` when the call ran in a subagent; the host's turn identifier where it has one | `PostToolUse` hook, matcher `WebFetch\|WebSearch\|mcp__.*`, written by `install claude` or declared in `plugin/hooks/hooks.json` | none registered: Codex's hooks documentation (`https://learn.chatgpt.com/docs/hooks`) states that hosted tools such as its web search do not use the local tool path and fire no hook, and its shell reaches the web as command text, so a matcher could witness only third-party MCP results; Codex hooks do carry `tool_response` for MCP tools, so a third-party fetch server could be observed, and none is registered (`DECISIONS.md` §Integration and ownership) | none: Pi has no web tool of its own to observe |
 | `crossing_mediated`, `crossing_refused`, `processor_invoked` | run the MCP server and route the agent's fetch and search through its tools; the server takes `cwd` from the directory it was started in | the user-scope entry `install claude` writes, or `.mcp.json` in the plugin | the `[mcp_servers.commonmeasure]` table `install codex` writes | the extension `install pi` writes, which spawns the server with Pi's session id in the session's working directory (`demo/host-sessions/pi/`) |
 | `turn_started` | a hook at prompt submission with `session_id`, `cwd`, `transcript_path` and the host's turn identifier (`prompt_id` or `turn_id`) where it has one | `UserPromptSubmit` hook, `prompt_id` | not registered | not supplied |
 | `prompt_sources` | the same hook with the `prompt` text; without it, every mediated crossing's `named_by` is `unknown` | `UserPromptSubmit` hook, `prompt` | not registered | not supplied |
@@ -84,8 +120,39 @@ the three integrated hosts provide today.
 | `nudge_issued` | a hook at session start whose stdout the host adds to the session's context; `source` names how the session began | `SessionStart` hook | not registered | not supplied |
 | `crossing_reconstructed` | a transcript that records tool results, importable after the fact | `~/.claude/projects` | reported not importable, with the reason | reported not importable, with the reason |
 
+Cursor supplies the observed path's events under its own names and
+shapes, which the hook command reads when told `--host cursor`:
+`postToolUse` carries `tool_name`, `tool_input` and `tool_output` (the
+tool's result as JSON text) for every tool, so a third-party MCP result is
+a `crossing_observed`, retrieved and not grounded, and our own tools under
+Cursor's `MCP:<tool>` spelling are excluded; `beforeSubmitPrompt` carries
+`prompt` and gives `prompt_sources` and `turn_started`; `stop` gives
+`turn_completed`; `sessionStart` receives the nudge as the JSON field
+`additional_context` and gives `nudge_issued`. The session identity is
+Cursor's `conversation_id`, the turn identifier its `generation_id`, the
+working directory its `cwd` or the first of `workspace_roots`. Cursor's
+built-in web tool is not named in its documentation's matcher list, so its
+results are not claimed as observed until a hook has run against one. A
+hook command told `--host claude-code` refuses a payload carrying Cursor's
+or the Copilot family's fields and records nothing, and at session start
+prints nothing, because Cursor and VS Code load Claude Code's hook file
+and run its commands with payloads of their own
+(`crates/commonmeasure-harness/src/hook.rs` `HookInput::from_payload`).
+Cursor's loading of Claude Code hooks is opt-in (its settings' "include
+third-party plugins" switch), and its documentation does not say whether
+those hooks receive Cursor's shape or a translated one; the refusal
+therefore does not rest on the field names alone. Cursor sets
+`CURSOR_PROJECT_DIR` for every hook it runs, and a hook command told
+`--host claude-code` that finds that variable refuses whatever the payload
+looks like. A Claude Code payload that is not JSON still gets the nudge,
+as §2 states; a payload that is JSON and refused gets nothing.
+
 Facts behind the table:
 
+- **Client identity.** The MCP server records the `clientInfo` name and
+  version the client sends in `initialize` once, as `client_identified`,
+  and on each mediated crossing as `client`; a client that sends none
+  leaves neither. `host` stays the registration's word.
 - **Session id.** A hook uses the host's `session_id`; a missing one is
   recorded as `unknown-session`. The MCP server uses `--session` when given
   and otherwise generates `local-<millis>-<pid>` (`main.rs` `uuid_like_session`).
@@ -213,7 +280,14 @@ defines and are never collapsed.
 | Claude Code, mediated (MCP over stdio) | `fixture-tested` | `crates/commonmeasure-cli/tests/mediated_e2e.rs` drives the server against a loopback origin; refusal, hashing, private-address floor and duplicate exclusion are asserted |
 | Claude Code, reconstructed (import) | `fixture-tested` | `crates/commonmeasure-cli/tests/import_e2e.rs` |
 | Claude Code, registration (`install`, `uninstall`, `doctor`) | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` drives the real binary against a home of the test's own; the session a real Claude Code session recorded after `install claude` is `demo/host-sessions/claude-code/`, read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` |
-| Codex, registration and mediated | `spec-verified` | the `[mcp_servers.commonmeasure]` table `install codex` writes matches Codex's configuration reference and is pinned by `crates/commonmeasure-cli/tests/install_e2e.rs`; no Codex session has run against it |
+| Codex CLI, registration and mediated | `fixture-tested` | the `[mcp_servers.commonmeasure]` table `install codex` writes, with `default_tools_approval_mode = "approve"`, is pinned by `crates/commonmeasure-cli/tests/install_e2e.rs`; the session a real Codex CLI run (`codex exec`, client `codex-mcp-client` 0.154.0) recorded through that table, one mediated fetch of `https://example.com`, is `demo/host-sessions/codex/`, read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` |
+| ChatGPT desktop app (Codex), the same registration | `spec-verified` | Codex's documentation states the app reads the same table; no session through the app is recorded here (`docs/knowledge-base/host-surfaces.md` §Codex beyond the CLI) |
+| Claude Desktop, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the `mcpServers` entry around the operator's keys, content-exact, and byte for byte for a file already in this writer's format; the application's own MCP log on one operator machine recorded the server start and tool listing from that entry, which is the operator's record and not committed |
+| Claude Desktop, mediated | `planned` | no session through the application is recorded; the server it starts is the Claude Code one, but the row is earned by a recorded session and none exists |
+| Cursor, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the server and the four hooks around a foreign server and hook, content-exact, and byte for byte for files already in this writer's format; Cursor's own log on one operator machine recorded the server start from `~/.cursor/mcp.json`, not committed |
+| Cursor, mediated | `planned` | no session through Cursor is recorded |
+| Cursor, observed | `spec-verified` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the payload shapes Cursor's hooks documentation states (a third-party MCP result recorded under `conversation_id`, our own tools excluded, the nudge as `additional_context`, the prompt and stop boundaries) and with foreign shapes and Cursor's environment fed to the Claude Code reader; no payload recorded from Cursor exists, so the shapes are the documentation's and not a fixture |
+| Codex IDE extension, the same registration | `spec-verified` | Codex's documentation states the extension reads the same table, and the installed extension's bundle resolves that file; no session through the extension is recorded here |
 | Pi, registration and mediated | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the extension; the session a real Pi session recorded through it is `demo/host-sessions/pi/`, read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` |
 | Screening-proxy socket | `planned` | no implementation |
 | Crates linked directly | no state claimed | the crates are the binary's own dependencies; no external consumer is evidenced |

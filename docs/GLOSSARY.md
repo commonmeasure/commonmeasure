@@ -33,10 +33,14 @@ authoritative technical definitions live in the contracts under
 - **Harness** — the agent system an operator runs, whether bought or built.
   Common Measure is a component inside it, not a harness itself.
 - **Host** — the specific program the product registers with: Claude Code
-  (hooks and the MCP server), Codex (the MCP server) or Pi (an extension
-  that runs the MCP server). A host supplies session identity and, where it
-  can, lifecycle hooks. In session evidence the field `host_name` is the
-  hostname of a source URL, not this host.
+  (hooks and the MCP server), Codex (the MCP server; one table serves the
+  Codex CLI, the ChatGPT desktop app and the Codex IDE extension), Pi (an
+  extension that runs the MCP server), Claude Desktop (the MCP server) or
+  Cursor (the MCP server and hooks). A host supplies session identity
+  and, where it can, lifecycle hooks. In session evidence `host` is the
+  registration's word for the host, `client` is the MCP client's own name
+  and version, and `host_name` is the hostname of a source URL, not this
+  host.
 - **Registration** — the entries a host's own configuration holds naming
   the binary: written by `commonmeasure install <host>`, checked by
   `commonmeasure doctor`, removed by `commonmeasure uninstall <host>`.
@@ -99,6 +103,10 @@ authoritative technical definitions live in the contracts under
   reconstructed. Counts of different grades are never totalled together.
 - **Witnessed** — observed or mediated together: a crossing something was
   watching when it happened, as opposed to one reconstructed afterwards.
+- **Refused count** — the one fact about refused crossings that leaves the
+  machine: a session's running total of them, carried as `refused` on every
+  batch the relay sends for the session, with no address, reason or hash.
+  A receiver keeps the larger value it has seen.
 - **Admission** — the yes/no decision on whether retrieved content may
   enter the model's context window, made by deterministic policy rules.
 - **Access rule** — one ordered host rule in a policy: a host pattern and
@@ -176,6 +184,10 @@ authoritative technical definitions live in the contracts under
   expiry times, the policy and its digest, under an Ed25519 signature. The
   edge validates it through the ordinary policy loader before activating
   it and keeps the last accepted one when anything fails.
+- **Stale (policy)** — the state of a managed edge whose applied envelope
+  has passed its expiry without the hub renewing or replacing it. The
+  policy stays in force unchanged; `status`, `doctor` and the session
+  record say since when, until a refresh clears it.
 
 - **Enrolment** — connecting an edge to the hub (`commonmeasure connect`):
   the edge mints its signing key, the hub registers the public key under

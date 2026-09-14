@@ -25,6 +25,7 @@
       "type": "content_retrieved"
     }
   ],
+  "refused": 0,
   "schema_version": "1.0",
   "session_id": "2b6c28bf-ab4a-5307-a221-86efde7909f7",
   "started_at": "2026-09-09T20:29:30.000Z"

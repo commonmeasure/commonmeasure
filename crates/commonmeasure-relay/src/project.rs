@@ -2,10 +2,12 @@
 //!
 //! What crosses: retrieval and grounding facts with observed evidence behind
 //! them, from witnessed crossings (`observed`, `mediated`) in session logs and
-//! from admitted sources in published runs. What stays home, by construction:
-//! prompts, answers, evaluator output, refused crossings, sources the run
-//! rejected, policy detail, every reconstructed crossing, and every crossing
-//! to a private address or a named internal prefix. A transcript claim must
+//! from admitted sources in published runs, and, per session, how many
+//! crossings policy refused, as a count and nothing else. What stays home, by
+//! construction: prompts, answers, evaluator output, every refused crossing
+//! itself, sources the run rejected, policy detail, every reconstructed
+//! crossing, and every crossing to a private address or a named internal
+//! prefix. A transcript claim must
 //! never arrive at a publisher looking witnessed, and the standard has no
 //! field that could carry the caveat, so reconstructed crossings are not
 //! projected at all rather than projected with a private marking. Internal
@@ -155,6 +157,12 @@ pub fn is_witnessed(record: &Value) -> bool {
     )
 }
 
+/// Whether an evidence record is a crossing policy refused. Nothing of it is
+/// projected; the session's batches carry how many there were.
+pub fn is_refused(record: &Value) -> bool {
+    record["event"] == json!("crossing_refused")
+}
+
 /// One session's projection: the batches to deliver, and where each of their
 /// events came from.
 pub struct SessionProjection {
@@ -166,6 +174,9 @@ pub struct SessionProjection {
     /// instead of re-deriving an event id from the naming scheme above and
     /// owning a second copy of it.
     pub event_positions: Vec<(Uuid, usize)>,
+    /// The refused crossings `may_project` cleared, counted; what every
+    /// batch of this session carries as `refused`.
+    pub refused: u64,
 }
 
 /// Project one session evidence log. Returns no batch when nothing in the log
@@ -174,8 +185,8 @@ pub struct SessionProjection {
 /// transcript. `internal_prefixes` is the operator's `record_internal_prefixes`
 /// list; crossings matching it are operator-record only and never projected.
 ///
-/// `may_project` is asked about each witnessed crossing by its position in
-/// `records`, and it is a filter rather than a shorter list on purpose: the
+/// `may_project` is asked about each witnessed and each refused crossing by
+/// its position in `records`, and it is a filter rather than a shorter list on purpose: the
 /// event ids below are derived from that position, and the relay treats them
 /// as delivery identity across runs. Hand this function a compacted list and
 /// the same crossing changes id whenever anything before it is excluded — an
@@ -190,6 +201,15 @@ pub fn project_session(
 ) -> SessionProjection {
     let mut events = Vec::new();
     let mut event_positions = Vec::new();
+    // Refusals cross as a count and nothing else: a refused crossing has no
+    // event, and the position filter is the same clearance the witnessed
+    // crossings meet, so a refusal in work the operator kept home is not
+    // counted either.
+    let refused = records
+        .iter()
+        .enumerate()
+        .filter(|(position, record)| is_refused(record) && may_project(*position))
+        .count() as u64;
     // The agent identifier is the enrolled edge's key id, read from the
     // session's own `edge_identity` record: the identity that made these
     // requests, whatever the edge's standing by the time the relay runs. A
@@ -310,8 +330,9 @@ pub fn project_session(
         }
     }
     SessionProjection {
-        batches: into_batches(session_uuid(session_id), agent_id, events),
+        batches: into_batches(session_uuid(session_id), agent_id, events, Some(refused)),
         event_positions,
+        refused,
     }
 }
 
@@ -425,13 +446,19 @@ pub fn project_run(summary: &Value, internal_prefixes: &[String]) -> Result<Vec<
             }
         }
     }
-    Ok(into_batches(run_id, EMITTER_ID, events))
+    Ok(into_batches(run_id, EMITTER_ID, events, None))
 }
 
 /// Chunk into standard-conformant batches sharing one session envelope. The
 /// envelope's `started_at` is the earliest event in the projection, which for
-/// a run is the run's own start.
-fn into_batches(session_id: Uuid, agent_id: &str, events: Vec<WireEvent>) -> Vec<WireBatch> {
+/// a run is the run's own start. `refused` is the session's count, repeated
+/// on every batch of it, or `None` for a run.
+fn into_batches(
+    session_id: Uuid,
+    agent_id: &str,
+    events: Vec<WireEvent>,
+    refused: Option<u64>,
+) -> Vec<WireBatch> {
     if events.is_empty() {
         return Vec::new();
     }
@@ -446,6 +473,7 @@ fn into_batches(session_id: Uuid, agent_id: &str, events: Vec<WireEvent>) -> Vec
     while !remaining.is_empty() {
         let tail = remaining.split_off(remaining.len().min(MAX_EVENTS_PER_BATCH));
         let mut batch = WireBatch::new(session_id, agent_id, &started_at);
+        batch.refused = refused;
         batch.events = remaining;
         batches.push(batch);
         remaining = tail;
@@ -798,5 +826,55 @@ mod tests {
                 .sum::<usize>(),
             600
         );
+    }
+
+    /// Refusals cross as a count on the session's batches and nothing else:
+    /// no event carries a refused URL, the count honours the same clearance
+    /// filter the crossings do, and a run's batch carries no count.
+    #[test]
+    fn refusals_cross_as_a_count_and_nothing_else() {
+        let refused = |url: &str| {
+            json!({"event": "crossing_refused", "payload": {
+                "timestamp": "2026-08-02T10:01:00.000Z", "mode": "mediated",
+                "host": "claude-code", "url": url, "grounded": false,
+                "refusal": "access rule 1 (*) refuses host paywall.example.",
+            }})
+        };
+        let records = [
+            crossing("crossing_mediated", "https://a.example/x", true),
+            refused("https://paywall.example/one"),
+            refused("http://127.0.0.1:8080/private"),
+            refused("https://paywall.example/three"),
+        ];
+        let projection = project_session("s", &records, &[], &|_| true);
+        assert_eq!(projection.refused, 3);
+        assert_eq!(projection.batches.len(), 1);
+        assert_eq!(projection.batches[0].refused, Some(3));
+        let text = serde_json::to_string(&projection.batches[0]).unwrap();
+        assert!(!text.contains("paywall.example"), "{text}");
+        assert!(!text.contains("127.0.0.1"), "{text}");
+        assert!(!text.contains("access rule"), "{text}");
+
+        // The same clearance filter: a refusal at a position the caller did
+        // not clear is not counted.
+        let projection = project_session("s", &records, &[], &|position| position != 3);
+        assert_eq!(projection.refused, 2);
+        assert_eq!(projection.batches[0].refused, Some(2));
+
+        // Nothing admitted: no batch, so the count does not cross.
+        let projection = project_session("s", &records[1..], &[], &|_| true);
+        assert_eq!(projection.refused, 3);
+        assert!(projection.batches.is_empty());
+
+        // A run has no refused crossings to count.
+        let summary = json!({
+            "run": {"id": "6e0f9b3a-4c1d-4f2e-8a5b-9d7c2e1f0a3b",
+                    "started_at": "2026-08-20T10:00:00Z"},
+            "plans": [{"id": "p", "sources": [
+                {"admitted": true, "url": "https://a.example/x", "retrieval_rank": 1},
+                {"admitted": false, "url": "https://b.example/y", "retrieval_rank": 2}]}],
+        });
+        let batches = project_run(&summary, &[]).expect("project run");
+        assert_eq!(batches[0].refused, None);
     }
 }

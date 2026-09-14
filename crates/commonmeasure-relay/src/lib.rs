@@ -29,7 +29,8 @@ use spool::{Spool, SpoolEntry};
 use state::RelayState;
 
 pub use enrolment::{
-    ConnectReport, DisconnectReport, Standing, check_standing, connect, disconnect,
+    ConnectReport, DisconnectReport, ManagedPin, PolicySigner, SIGNER_PATH, Standing,
+    check_standing, connect, disconnect,
 };
 pub use state::egress_report;
 
@@ -119,6 +120,12 @@ pub struct RelayReport {
     /// operator cleared these and the wire could not carry them.
     pub sessions_withheld_access_context: usize,
     pub runs_projected: usize,
+    /// The refused counts put on the wire this run: the running total of
+    /// each session for which a batch was enqueued, whether it carried new
+    /// events or only a moved count. A session whose count the receiver
+    /// already holds contributes nothing. The URLs and reasons stay home
+    /// (`docs/contracts/session-evidence.md` §The refused count on the wire).
+    pub refused_reported: u64,
     pub events_enqueued: u64,
     pub batches_delivered: u64,
     pub events_delivered: u64,
@@ -136,6 +143,43 @@ pub struct RelayReport {
     /// the next session's evidence names it.
     pub standing: Option<enrolment::Standing>,
 }
+
+/// A delivery the receiver refused or that never reached it, with the key's
+/// standing as the hub answered it this run. The two are one fact to the
+/// operator: a receiver answering 401 to an edge whose key the hub has
+/// revoked is the revocation, and the standing line says so before the
+/// failure does. The spool keeps every undelivered batch.
+#[derive(Debug)]
+pub struct DeliveryFailure {
+    pub standing: Option<enrolment::Standing>,
+    pub receiver: String,
+    pub spool: PathBuf,
+    pub cause: anyhow::Error,
+}
+
+impl fmt::Display for DeliveryFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(standing) = &self.standing {
+            writeln!(formatter, "{standing}")?;
+        }
+        formatter.write_str(&self.delivery_text())
+    }
+}
+
+impl DeliveryFailure {
+    /// The failure alone, for a caller that has already printed the
+    /// standing on its own line.
+    pub fn delivery_text(&self) -> String {
+        format!(
+            "delivery to {} failed; undelivered batches remain spooled under {}: {:#}",
+            self.receiver,
+            self.spool.display(),
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for DeliveryFailure {}
 
 /// Project, spool and deliver. Everything before the receiver is named fails
 /// without touching disk or network: no configured receiver means no egress
@@ -175,10 +219,33 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     // operator-record only.
     let internal_prefixes: Vec<String> = policy_document.resolve(None).internal_prefixes().to_vec();
 
+    // What has already left, or is spooled to leave, is read before
+    // projection: it decides which events are new, and whether a session's
+    // refused count has moved since a receiver last accepted one.
+    let spool = Spool::open(home)?;
+    let state = RelayState::open(home)?;
+    let mut already: HashSet<Uuid> = state.delivered()?;
+    let mut refused_known: HashMap<Uuid, u64> = state.refused_delivered()?;
+    for (_, entry) in spool.pending()? {
+        already.extend(event_ids(&entry.document));
+        if let (Some(session), Some(refused)) = (
+            wire_session(&entry.document),
+            entry.document["refused"].as_u64(),
+        ) {
+            let known = refused_known.entry(session).or_default();
+            *known = (*known).max(refused);
+        }
+    }
+
     // Project. `clearance_of` accumulates what the report says at the end: the
     // clearance each projected event left under, recorded as the decision is
     // taken and read only after delivery.
     let mut batches = Vec::new();
+    // Batches enqueued for a moved refused count alone: one already-delivered
+    // event under its own id, carrying the session's new count, which the
+    // receiver max-merges. The count travels only on a batch, and a refusal
+    // after a session's last admitted crossing would otherwise never leave.
+    let mut carriers = Vec::new();
     let mut clearance_of: HashMap<Uuid, Clearance> = HashMap::new();
     let session_logs: Vec<PathBuf> = if options.sessions.is_empty() {
         commonmeasure_harness::SessionLog::list(home).context("list sessions")?
@@ -199,6 +266,7 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     let mut sessions_projected = 0usize;
     let mut sessions_withheld = 0usize;
     let mut sessions_withheld_access_context = 0usize;
+    let mut refused_reported = 0u64;
     for path in &session_logs {
         let session_id = path
             .file_stem()
@@ -207,10 +275,14 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         let records = commonmeasure_harness::SessionLog::read(path)
             .with_context(|| format!("read {}", path.display()))?;
         let cleared = egress_clearances(&policy_document, &records);
-        if cleared.is_empty() {
+        if !cleared
+            .keys()
+            .any(|&position| project::is_witnessed(&records[position]))
+        {
             // Nothing here may leave. A session that had crossings to clear and
             // cleared none is the case worth counting; one that never witnessed
-            // a crossing is not withheld, it is empty.
+            // a crossing is not withheld, it is empty. A cleared refusal alone
+            // sends nothing either: its count travels only on a batch.
             if records.iter().any(project::is_witnessed) {
                 sessions_withheld += 1;
             }
@@ -246,6 +318,22 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         }
         if !projected.batches.is_empty() {
             sessions_projected += 1;
+            let wire_session = projected.batches[0].session_id;
+            let has_new = projected
+                .batches
+                .iter()
+                .flat_map(|batch| &batch.events)
+                .any(|event| !already.contains(&event.id));
+            if has_new {
+                refused_reported += projected.refused;
+            } else if projected.refused > refused_known.get(&wire_session).copied().unwrap_or(0) {
+                let last = projected.batches.last().expect("a non-empty projection");
+                let mut carrier = last.clone();
+                carrier.events = vec![last.events.last().expect("a batch has events").clone()];
+                carrier.refused = Some(projected.refused);
+                carriers.push((path.display().to_string(), carrier));
+                refused_reported += projected.refused;
+            }
         }
         batches.extend(
             projected
@@ -283,12 +371,6 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     // id whatever the policy says about the crossings around it, so a re-run
     // enqueues what is genuinely new and nothing else — including a re-run
     // after the operator changed which engagements are cleared.
-    let spool = Spool::open(home)?;
-    let state = RelayState::open(home)?;
-    let mut already: HashSet<Uuid> = state.delivered()?;
-    for (_, entry) in spool.pending()? {
-        already.extend(event_ids(&entry.document));
-    }
     let mut events_enqueued = 0u64;
     for (origin, mut batch) in batches {
         batch.events.retain(|event| !already.contains(&event.id));
@@ -300,6 +382,15 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         spool.enqueue(&SpoolEntry {
             origin,
             document: serde_json::to_value(&batch).context("serialise batch")?,
+        })?;
+    }
+    // A carrier's one event is on the receiver's record by construction;
+    // the batch is enqueued for the count it carries, and counts as no new
+    // event.
+    for (origin, carrier) in carriers {
+        spool.enqueue(&SpoolEntry {
+            origin,
+            document: serde_json::to_value(&carrier).context("serialise batch")?,
         })?;
     }
 
@@ -314,14 +405,22 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
             Ok(acceptance) => acceptance,
             Err(error) => {
                 state.record_failure(&receiver, &format!("{error:#}"))?;
-                return Err(error.context(format!(
-                    "delivery to {receiver} failed; undelivered batches remain spooled under {}",
-                    home.join("relay").join("spool").display()
-                )));
+                return Err(anyhow::Error::new(DeliveryFailure {
+                    standing,
+                    receiver,
+                    spool: home.join("relay").join("spool"),
+                    cause: error,
+                }));
             }
         };
         let ids = event_ids(&entry.document);
         state.record_delivered(&ids)?;
+        if let (Some(session), Some(refused)) = (
+            wire_session(&entry.document),
+            entry.document["refused"].as_u64(),
+        ) {
+            state.record_refused_delivered(session, refused)?;
+        }
         spool.ack_through(index)?;
         batches_delivered += 1;
         events_delivered += ids.len() as u64;
@@ -343,6 +442,7 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         sessions_withheld,
         sessions_withheld_access_context,
         runs_projected,
+        refused_reported,
         events_enqueued,
         batches_delivered,
         events_delivered,
@@ -366,7 +466,8 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
 /// sink's attribution rules, which this crate cannot read and must not
 /// (`DECISIONS.md` §Session policy and egress); the console is where the two are compared.
 ///
-/// Keys are the positions of the cleared crossings **in the log as read**, not
+/// Keys are the positions of the cleared crossings **in the log as read**,
+/// witnessed and refused alike, not
 /// a shorter list of the crossings themselves. Projection derives each event's
 /// id from that position and the relay treats those ids as delivery identity
 /// across runs, so a filtered list would renumber every surviving crossing:
@@ -385,7 +486,7 @@ fn egress_clearances(
     records
         .iter()
         .enumerate()
-        .filter(|(_, record)| project::is_witnessed(record))
+        .filter(|(_, record)| project::is_witnessed(record) || project::is_refused(record))
         .filter_map(|(at, record)| {
             let resolved = policy.resolve(record["payload"]["cwd"].as_str());
             // Clearance implies a named engagement: `allows_telemetry_egress`
@@ -425,6 +526,13 @@ fn access_context_required(
                 .filter(|terms| !terms.access_context.is_empty())
                 .map(|terms| terms.reference.clone())
         })
+}
+
+/// The wire session a spooled batch belongs to.
+fn wire_session(document: &serde_json::Value) -> Option<Uuid> {
+    document["session_id"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
 }
 
 fn event_ids(document: &serde_json::Value) -> Vec<Uuid> {

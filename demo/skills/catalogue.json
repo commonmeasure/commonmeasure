@@ -1,7 +1,7 @@
 {
   "skills": {
     "plugin-creator": {
-      "root": "/home/alexs/.codex/skills/.system/plugin-creator",
+      "root": "/home/op/.codex/skills/.system/plugin-creator",
       "entrypoint": "scripts/validate_plugin.py",
       "interpreter": "/usr/bin/python3",
       "arguments": ["{job}"],
@@ -9,7 +9,7 @@
       "maximum_output_bytes": 262144
     },
     "skill-creator": {
-      "root": "/home/alexs/.codex/skills/.system/skill-creator",
+      "root": "/home/op/.codex/skills/.system/skill-creator",
       "entrypoint": "scripts/quick_validate.py",
       "interpreter": "/usr/bin/python3",
       "arguments": ["{job}"],

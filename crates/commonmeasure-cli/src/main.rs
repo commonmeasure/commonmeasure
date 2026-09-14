@@ -19,7 +19,25 @@ use commonmeasure_harness::{
 use commonmeasure_runtime::{RunOptions, load_suite};
 
 /// The hosts the harness commands accept, as `--host` names them.
-const HOSTS: [&str; 3] = ["claude-code", "codex", "pi"];
+/// The hosts whose hook payloads the observed path reads: Claude Code's
+/// shape, and Cursor's mapped onto it.
+const HOSTS: [&str; 4] = ["claude-code", "codex", "pi", "cursor"];
+
+/// The hosts the mediated server accepts under `--host`: the three with a
+/// registration, and the four the host-surfaces investigation found reach
+/// the server through a configuration write, so their sessions record the
+/// host they came from before an `install` for them exists. A value not
+/// listed is refused by the argument parser with this list, never recorded
+/// as `claude-code`.
+const MCP_HOSTS: [&str; 7] = [
+    "claude-code",
+    "codex",
+    "pi",
+    "claude-desktop",
+    "cursor",
+    "copilot-cli",
+    "vscode",
+];
 
 #[derive(Parser)]
 #[command(
@@ -97,14 +115,19 @@ enum Command {
     Hook {
         /// The event, as the host names it (`post-tool-use`).
         event: String,
-        /// Which host is calling: `claude-code`, `codex` or `pi`.
+        /// Which host is calling: `claude-code`, `codex`, `pi` or `cursor`.
+        /// The payload is read in that host's shape, and a payload of
+        /// another host's shape records nothing.
         #[arg(long, default_value = "claude-code", value_parser = HOSTS)]
         host: String,
     },
     /// Serve the mediated context tools over MCP on stdio.
     Mcp {
-        /// Which host is calling: `claude-code`, `codex` or `pi`.
-        #[arg(long, default_value = "claude-code", value_parser = HOSTS)]
+        /// Which host is calling: `claude-code`, `codex`, `pi`,
+        /// `claude-desktop`, `cursor`, `copilot-cli` or `vscode`. Recorded as
+        /// `host` on every record; the client's own name and version from
+        /// the protocol's initialize request are recorded beside it.
+        #[arg(long, default_value = "claude-code", value_parser = MCP_HOSTS)]
         host: String,
         /// Session identifier. The host supplies one per conversation; a fresh
         /// one is generated when it does not.
@@ -116,11 +139,15 @@ enum Command {
     Credentials,
     /// Register this binary with a host, by absolute path, in the host's own
     /// configuration: Claude Code gets the four hooks and the MCP server at
-    /// user scope; Codex gets the MCP server table; Pi has no MCP surface and
-    /// is refused with the reason. Only this product's entries are written;
-    /// everything else in the host's files is kept as read.
+    /// user scope; Codex gets the MCP server table, with the approval mode
+    /// that lets its non-interactive runs call the tools; Pi gets an
+    /// extension that runs the server, because Pi has no MCP client; Claude
+    /// Desktop gets the MCP server in its configuration file; Cursor gets
+    /// the MCP server and four hooks in its global files. Only this
+    /// product's entries are written; everything else in the host's files
+    /// is kept as read.
     Install {
-        /// The host: `claude`, `codex` or `pi`.
+        /// The host: `claude`, `codex`, `pi`, `claude-desktop` or `cursor`.
         host: String,
         /// Register this path instead of the running binary. It must exist;
         /// the registration names it as resolved.
@@ -130,7 +157,7 @@ enum Command {
     /// Remove exactly the entries `install` wrote for a host. The evidence in
     /// the operator home is never touched.
     Uninstall {
-        /// The host: `claude`, `codex` or `pi`.
+        /// The host: `claude`, `codex`, `pi`, `claude-desktop` or `cursor`.
         host: String,
     },
     /// Report each host's registration against the machine: what is
@@ -138,7 +165,8 @@ enum Command {
     /// binary reports, whether a session log can be written, and whether the
     /// policy file loads.
     Doctor {
-        /// One host (`claude`, `codex` or `pi`); every host when omitted.
+        /// One host (`claude`, `codex`, `pi`, `claude-desktop` or `cursor`);
+        /// every host when omitted.
         host: Option<String>,
     },
     /// Reconstruct crossings from host transcripts for work done before
@@ -218,6 +246,13 @@ enum Command {
         /// short-lived.
         #[arg(long)]
         token: Option<String>,
+        /// Also take the organisation's policy from this hub: read the hub's
+        /// policy signer under the new ingest key, pin it in
+        /// ~/.commonmeasure/deployment.json as `managed`, and make a first
+        /// policy synchronisation. Without it the edge stays in `local`
+        /// mode and enrolment changes no policy.
+        #[arg(long)]
+        managed: bool,
     },
     /// Leave the hub: revoke this edge's key and ingest key there when it
     /// can be reached, and remove ~/.commonmeasure/relay.json, the private
@@ -296,7 +331,11 @@ fn main() -> ExitCode {
             run,
             session,
         } => relay(receiver, api_key, run, session),
-        Command::Connect { hub, token } => connect(hub.as_deref(), token.as_deref()),
+        Command::Connect {
+            hub,
+            token,
+            managed,
+        } => connect(hub.as_deref(), token.as_deref(), managed),
         Command::Disconnect => disconnect(),
         Command::Guide { out } => write_guide(&out),
         Command::Provenance { file, run } => provenance_report(&file, run.as_deref()),
@@ -447,9 +486,43 @@ fn write_stdout(out: &str) -> Result<(), String> {
 /// (`docs/contracts/session-evidence.md` §Where).
 fn hook(event: &str, host: &str) -> ExitCode {
     let mut raw = String::new();
-    let parsed = match std::io::stdin().read_to_string(&mut raw) {
-        Ok(_) => serde_json::from_str::<commonmeasure_harness::HookInput>(&raw).ok(),
+    let surface = HostSurface::parse(host).unwrap_or(HostSurface::ClaudeCode);
+    // The payload in the named host's shape; another host's shape, or no
+    // payload, records nothing. Cursor and VS Code load Claude Code's hook
+    // file and run its commands with their own payloads, which is why the
+    // reader is told which host it is reading.
+    let value = match std::io::stdin().read_to_string(&mut raw) {
+        Ok(_) => serde_json::from_str::<serde_json::Value>(&raw).ok(),
         Err(_) => None,
+    };
+    // Cursor sets CURSOR_PROJECT_DIR for every hook it runs, its own and the
+    // Claude Code ones it loads as third-party hooks; a command told it is
+    // reading Claude Code and running under Cursor reads nothing, whatever
+    // the payload's shape, because Cursor's documentation does not say
+    // which shape those hooks receive.
+    let under_cursor =
+        surface != HostSurface::Cursor && std::env::var_os("CURSOR_PROJECT_DIR").is_some();
+    // Another host's payload, or Cursor's environment, is refused: nothing
+    // is read and, at session start, nothing is printed. A Claude Code
+    // payload that is merely unreadable keeps the nudge, because delivery
+    // is the point and an unreadable payload costs the record and not the
+    // delivery.
+    let refused = under_cursor
+        || value
+            .as_ref()
+            .is_some_and(|value| commonmeasure_harness::HookInput::is_foreign(surface, value));
+    let parsed = value
+        .as_ref()
+        .filter(|_| !refused)
+        .and_then(|value| commonmeasure_harness::HookInput::from_payload(surface, value));
+    // Cursor reads a hook's stdout as JSON: the nudge travels as
+    // `additional_context`, a prompt hook answers `continue`, and the rest
+    // answer an empty object. Claude Code reads plain text at session start
+    // and nothing otherwise.
+    let cursor_answer = |body: &str| {
+        if surface == HostSurface::Cursor {
+            let _ = std::io::stdout().write_all(body.as_bytes());
+        }
     };
 
     // The standing mediation nudge (`commonmeasure_harness::nudge`): the host adds a
@@ -459,13 +532,33 @@ fn hook(event: &str, host: &str) -> ExitCode {
     // unreadable payload, a missing home or an unwritable log costs the
     // record, never the nudge and never the exit code.
     if event == "session-start" {
-        let _ = std::io::stdout().write_all(commonmeasure_harness::nudge::TEXT.as_bytes());
+        if refused {
+            return ExitCode::SUCCESS;
+        }
+        if surface == HostSurface::Cursor {
+            let _ = std::io::stdout().write_all(
+                serde_json::json!({"additional_context": commonmeasure_harness::nudge::TEXT})
+                    .to_string()
+                    .as_bytes(),
+            );
+        } else {
+            let _ = std::io::stdout().write_all(commonmeasure_harness::nudge::TEXT.as_bytes());
+        }
         if let Some(input) = &parsed
             && let Ok(home) = home_dir()
         {
             let session_id = input.session_id.as_deref().unwrap_or("unknown-session");
             if let Ok(mut log) = SessionLog::open(&home, session_id) {
-                let surface = HostSurface::parse(host).unwrap_or(HostSurface::ClaudeCode);
+                // A managed edge refreshes its policy first, so the session
+                // runs under the revision the hub desires now and the
+                // records below name that policy. The nudge is already out
+                // and the exit code is fixed, so a hub that does not answer
+                // costs the wait and nothing else.
+                if let Some(sync) =
+                    sync_managed_policy(&home, commonmeasure_harness::managed::SESSION_START_BUDGET)
+                {
+                    let _ = log.record_policy_sync(surface.id(), "session_start", sync);
+                }
                 // The session starts under a policy, and the record names
                 // which: the identity a mediated crossing in this directory
                 // would meet, or the reason the policy could not be read.
@@ -487,6 +580,11 @@ fn hook(event: &str, host: &str) -> ExitCode {
     }
 
     let Some(mut input) = parsed else {
+        cursor_answer(if event == "user-prompt-submit" {
+            r#"{"continue":true}"#
+        } else {
+            "{}"
+        });
         return ExitCode::SUCCESS;
     };
     if input.hook_event_name.is_none() {
@@ -497,7 +595,13 @@ fn hook(event: &str, host: &str) -> ExitCode {
             other => other.to_owned(),
         });
     }
-    let surface = HostSurface::parse(host).unwrap_or(HostSurface::ClaudeCode);
+    cursor_answer(
+        if input.hook_event_name.as_deref() == Some("UserPromptSubmit") {
+            r#"{"continue":true}"#
+        } else {
+            "{}"
+        },
+    );
     let session_id = input
         .session_id
         .clone()
@@ -571,6 +675,16 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
     // always wins over the file, and a present file that cannot be used
     // fails the mediator loudly, exactly as an invalid policy.json does.
     let credentials = commonmeasure_supply::credentials::apply(&home)?;
+    let session_id = session.map(str::to_owned).unwrap_or_else(uuid_like_session);
+    // A session's policy is refreshed once, by whichever path opens it
+    // first: a session-start hook where the host has one, else this server,
+    // before the policy is resolved, so the session runs under the revision
+    // the hub desires now. A session whose log already carries the hook's
+    // refresh is not refreshed again; a host that registered the server
+    // without the hook is, whatever it calls itself.
+    let policy_sync = (!SessionLog::holds_event(&home, &session_id, "policy_sync"))
+        .then(|| sync_managed_policy(&home, commonmeasure_harness::managed::SESSION_START_BUDGET))
+        .flatten();
     // Stdio carries no cwd, but the server inherits the harness's own. It is
     // resolved once, here, so the scope that governs the session and the cwd
     // its crossings record are the same fact.
@@ -578,12 +692,20 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
         .ok()
         .map(|path| path.display().to_string());
     let policy = SessionPolicy::load(&home, cwd.as_deref())?;
-    let session_id = session.map(str::to_owned).unwrap_or_else(uuid_like_session);
     let mut log = SessionLog::open(&home, &session_id).map_err(|error| error.to_string())?;
     // Every mediated crossing this server records names the policy that
     // ruled on it. The server resolves its policy once, here, and the log
     // stamps that one identity for the life of the process.
     log.set_policy_identity(&policy.identity());
+    if let Some(sync) = policy_sync {
+        log.record_policy_sync(host, "server_start", sync)
+            .map_err(|error| {
+                format!(
+                    "could not record policy_sync to {}: {error}",
+                    log.path().display()
+                )
+            })?;
+    }
     // An enrolled edge names its key id in every session, whichever path
     // opened the log. Like credentials_loaded below, this precedes every
     // crossing, so a failed append is a failed session start.
@@ -695,7 +817,10 @@ fn credentials_report() -> Result<(), String> {
 
 fn host_named(name: &str) -> Result<HostSurface, String> {
     HostSurface::parse(name).ok_or_else(|| {
-        format!("unknown host {name:?}; the hosts are claude (or claude-code), codex and pi")
+        format!(
+            "unknown host {name:?}; the hosts are claude (or claude-code), codex, pi, \
+             claude-desktop and cursor"
+        )
     })
 }
 
@@ -725,7 +850,13 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     let surfaces = match host {
         Some(name) => vec![host_named(name)?],
-        None => vec![HostSurface::ClaudeCode, HostSurface::Codex, HostSurface::Pi],
+        None => vec![
+            HostSurface::ClaudeCode,
+            HostSurface::Codex,
+            HostSurface::Pi,
+            HostSurface::ClaudeDesktop,
+            HostSurface::Cursor,
+        ],
     };
     let mut out = format!(
         "this binary: {} ({})\noperator home: {}\n",
@@ -735,6 +866,9 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
         env!("CARGO_PKG_VERSION"),
         home.display()
     );
+    if let Some(line) = managed_policy_line(&home) {
+        let _ = writeln!(out, "{line}");
+    }
     for surface in surfaces {
         let report = registration::doctor(surface, &paths, &home);
         let _ = writeln!(
@@ -752,6 +886,35 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
         }
     }
     write_stdout(&out)
+}
+
+/// What `doctor` says about managed policy: nothing on a local edge, the
+/// revision in force and its expiry on a managed one, and since when it has
+/// been stale where the hub has not renewed it.
+fn managed_policy_line(home: &Path) -> Option<String> {
+    let management = commonmeasure_harness::managed::management(home, chrono::Utc::now());
+    match management.mode.as_str() {
+        "local" => None,
+        "managed" => Some(
+            match (management.applied_revision, management.applied_expires_at) {
+                (Some(revision), Some(expires_at)) => format!(
+                    "managed policy: revision {revision} in force, expires {expires_at}{}",
+                    stale_note(&serde_json::json!(management.stale_since))
+                ),
+                _ => format!(
+                    "managed policy: no desired revision activated yet; last sync {}",
+                    management.desired["outcome"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "none".to_owned())
+                ),
+            },
+        ),
+        _ => Some(format!(
+            "managed policy: unavailable ({})",
+            inspect::text(&management.desired["unavailable"])
+        )),
+    }
 }
 
 /// A session identifier when the host supplies none. Derived from the clock and
@@ -913,7 +1076,28 @@ fn relay(
     sessions: Vec<String>,
 ) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
-    let report = commonmeasure_relay::relay(
+    // The clearances the relay reads come from the policy on disk, so a
+    // managed edge refreshes it first. Nothing is printed when the desired
+    // policy was already in force and its envelope has not expired.
+    if let Some(sync) = sync_managed_policy(&home, commonmeasure_harness::managed::DEFAULT_BUDGET) {
+        let outcome = sync["outcome"].as_str().unwrap_or_default();
+        let fresh = outcome == "already_applied" && sync["stale_since"].is_null();
+        if !fresh {
+            eprintln!(
+                "commonmeasure: policy sync {outcome}{}{}{}",
+                sync["revision"]
+                    .as_u64()
+                    .map(|revision| format!(" (revision {revision})"))
+                    .unwrap_or_default(),
+                sync["reason"]
+                    .as_str()
+                    .map(|reason| format!(": {reason}"))
+                    .unwrap_or_default(),
+                stale_note(&sync["stale_since"])
+            );
+        }
+    }
+    let report = match commonmeasure_relay::relay(
         &home,
         &commonmeasure_relay::RelayOptions {
             receiver,
@@ -921,8 +1105,21 @@ fn relay(
             runs,
             sessions,
         },
-    )
-    .map_err(|error| format!("{error:#}"))?;
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            // The key's standing is the operator's first fact: a receiver
+            // that answers 401 to a revoked key is the revocation, printed
+            // on its own line before the failure that followed from it.
+            if let Some(failure) = error.downcast_ref::<commonmeasure_relay::DeliveryFailure>() {
+                if let Some(standing) = &failure.standing {
+                    write_stdout(&format!("{standing}\n"))?;
+                }
+                return Err(failure.delivery_text());
+            }
+            return Err(format!("{error:#}"));
+        }
+    };
     write_stdout(&relay_report_text(&report))
 }
 
@@ -963,6 +1160,13 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
     if quiet > 0 {
         out.push_str(&format!("  {quiet} with nothing eligible to project\n"));
     }
+    if report.sessions_projected > 0 {
+        out.push_str(&format!(
+            "  {} refused crossings in the projected sessions, on the wire as a count per \
+             session with no URL and no reason\n",
+            report.refused_reported
+        ));
+    }
     out.push_str(&format!(
         "delivered {} events in {} batches to {} ({} new at the receiver)\n",
         report.events_delivered,
@@ -981,7 +1185,7 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
 
 /// Enrol with a hub. Both the hub and the token must be named: there is no
 /// default hub and no ambient token, and the refusal says which is missing.
-fn connect(hub: Option<&str>, token: Option<&str>) -> Result<(), String> {
+fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), String> {
     let (Some(hub), Some(token)) = (hub, token) else {
         let missing = match (hub, token) {
             (None, None) => "no hub URL and no --token",
@@ -995,8 +1199,8 @@ fn connect(hub: Option<&str>, token: Option<&str>) -> Result<(), String> {
         ));
     };
     let home = home_dir().map_err(|error| error.to_string())?;
-    let report =
-        commonmeasure_relay::connect(&home, hub, token).map_err(|error| format!("{error:#}"))?;
+    let report = commonmeasure_relay::connect(&home, hub, token, managed)
+        .map_err(|error| format!("{error:#}"))?;
     let mut out = format!(
         "enrolled with {} in {} as {}\n  key id   {}\n  receiver {}\n  written  {}, {} and {}\n",
         report.hub,
@@ -1025,7 +1229,68 @@ fn connect(hub: Option<&str>, token: Option<&str>) -> Result<(), String> {
              to retry\n"
         )),
     }
-    write_stdout(&out)
+    // What --managed did, and whether the machine is where the operator
+    // asked it to be. A scripted setup reads the exit code, so a pin that
+    // was refused or a first synchronisation that activated nothing exits
+    // non-zero after the account is printed; the enrolment stands either way.
+    let mut managed_failure: Option<String> = None;
+    match &report.managed {
+        None => {}
+        Some(Ok(pin)) => {
+            out.push_str(&format!(
+                "deployment  managed: signer {} pinned in {}; policy from {}\n",
+                pin.key_id,
+                pin.path.display(),
+                pin.policy_url
+            ));
+            if let Some(previous) = &pin.replaced {
+                out.push_str(&format!("  replaced {previous}\n"));
+            }
+            match commonmeasure_harness::managed::sync(
+                &home,
+                &edge_identity(&home),
+                chrono::Utc::now(),
+            ) {
+                Ok(sync) => {
+                    out.push_str("first policy sync:\n");
+                    for line in sync_report_text(&sync).lines() {
+                        out.push_str(&format!("  {line}\n"));
+                    }
+                    if !sync.converged() {
+                        managed_failure = Some(format!(
+                            "enrolled and pinned to signer {}, but the first policy \
+                             synchronisation did not activate a policy ({}); the local policy \
+                             stays in force until `commonmeasure policy sync` converges",
+                            pin.key_id, sync.sync.outcome
+                        ));
+                    }
+                }
+                Err(error) => {
+                    out.push_str(&format!("first policy sync refused: {error}\n"));
+                    managed_failure = Some(format!(
+                        "enrolled and pinned to signer {}, but the first policy synchronisation \
+                         was refused: {error}",
+                        pin.key_id
+                    ));
+                }
+            }
+        }
+        Some(Err(reason)) => {
+            out.push_str(&format!(
+                "deployment  not pinned: {reason}\n  the enrolment stands and the edge is in \
+                 local mode\n"
+            ));
+            managed_failure = Some(format!(
+                "enrolled, but not managed: {reason}. Run `commonmeasure connect` again with \
+                 --managed once the signer can be read"
+            ));
+        }
+    }
+    write_stdout(&out)?;
+    match managed_failure {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
 }
 
 /// Leave the hub. The local files go either way; whether the hub revoked
@@ -1047,6 +1312,17 @@ fn disconnect() -> Result<(), String> {
     }
     for path in &report.removed {
         out.push_str(&format!("removed {}\n", path.display()));
+    }
+    if let Some(policy_url) = &report.removed_deployment {
+        out.push_str(&format!(
+            "deployment.json pinned this hub's policy ({policy_url}); removed with the \
+             enrolment, so the edge is in local mode\n"
+        ));
+    }
+    if let Some(policy_url) = &report.kept_deployment {
+        out.push_str(&format!(
+            "deployment.json names another hub's policy ({policy_url}); kept\n"
+        ));
     }
     write_stdout(&out)
 }
@@ -1186,6 +1462,21 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
             String::new()
         }
     );
+    // The MCP client's own name and version, where a server in this session
+    // recorded one at initialize, beside the host the registration named.
+    for record in records
+        .iter()
+        .filter(|record| record["event"] == "client_identified")
+    {
+        let client = &record["payload"]["client"];
+        let _ = writeln!(
+            out,
+            "client     {} {} via host {}",
+            client["name"].as_str().unwrap_or("unnamed"),
+            client["version"].as_str().unwrap_or(""),
+            record["payload"]["host"].as_str().unwrap_or("unknown")
+        );
+    }
     // Context snapshots: an observation with a named basis, shown with it.
     // The crossings line beneath joins what this runtime witnessed to the
     // host's totals without claiming the one explains the other.
@@ -1355,12 +1646,13 @@ fn show_status(json: bool) -> Result<(), String> {
     let cwd = std::env::current_dir()
         .ok()
         .map(|path| path.display().to_string());
+    let now = chrono::Utc::now();
     let document = fleet::status(
         &home,
         cwd.as_deref(),
         &edge_identity(&home),
-        &commonmeasure_harness::managed::management(&home),
-        chrono::Utc::now(),
+        &commonmeasure_harness::managed::management(&home, now),
+        now,
     );
     if json {
         return write_stdout(&format!(
@@ -1416,6 +1708,14 @@ fn show_status(json: bool) -> Result<(), String> {
             )
         }
     );
+    if let Some(revision) = applied["revision"].as_u64() {
+        let _ = writeln!(
+            out,
+            "applied revision  {revision}, expires {}{}",
+            inspect::text(&applied["expires_at"]),
+            stale_note(&applied["stale_since"])
+        );
+    }
     match applied["unavailable"].as_str() {
         Some(reason) => {
             let _ = writeln!(out, "policy            unavailable: {reason}");
@@ -1531,6 +1831,38 @@ fn edge_identity(home: &Path) -> commonmeasure_harness::fleet::EdgeIdentity {
     }
 }
 
+/// One synchronisation of managed policy on the paths that run it without
+/// being asked: session start and the relay. `None` on a local edge, where
+/// there is no management request to make. On a managed edge the result is
+/// the record of what happened, including a deployment or state file that
+/// could not be read; the policy on disk keeps governing whatever it says
+/// (`docs/contracts/policy-envelope.md` §Cadence and staleness).
+fn sync_managed_policy(home: &Path, budget: std::time::Duration) -> Option<serde_json::Value> {
+    use commonmeasure_harness::managed::{SyncReport, is_managed, sync_within};
+    match is_managed(home) {
+        Ok(false) => None,
+        Ok(true) => Some(
+            match sync_within(home, &edge_identity(home), chrono::Utc::now(), budget) {
+                Ok(report) => report.to_record(),
+                Err(reason) => SyncReport::unavailable(&reason),
+            },
+        ),
+        Err(reason) => Some(SyncReport::unavailable(&reason)),
+    }
+}
+
+/// The suffix a policy line carries once the applied envelope has expired:
+/// the policy stays in force and the line says since when it has been
+/// stale. Empty while the envelope is current.
+fn stale_note(stale_since: &serde_json::Value) -> String {
+    stale_since
+        .as_str()
+        .map(|since| {
+            format!(" (stale since {since}: the hub has not renewed it; the policy stays in force)")
+        })
+        .unwrap_or_default()
+}
+
 /// The canonical pre-image and its digest, for the reviewer recomputing an
 /// identity by hand.
 fn show_policy_identity() -> Result<(), String> {
@@ -1552,6 +1884,21 @@ fn sync_policy() -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     let report =
         commonmeasure_harness::managed::sync(&home, &edge_identity(&home), chrono::Utc::now())?;
+    write_stdout(&sync_report_text(&report))?;
+    if report.converged() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the desired policy was not activated ({}); the policy already in force stays",
+            report.sync.outcome
+        ))
+    }
+}
+
+/// One synchronisation's report as the operator reads it. Shared by
+/// `policy sync` and `connect --managed`, whose first synchronisation is
+/// the same request.
+fn sync_report_text(report: &commonmeasure_harness::managed::SyncReport) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "policy url    {}", report.policy_url);
     let _ = writeln!(
@@ -1571,8 +1918,12 @@ fn sync_policy() -> Result<(), String> {
         Some(applied) => {
             let _ = writeln!(
                 out,
-                "in force      revision {} ({}), activated {}, expires {}",
-                applied.revision, applied.digest, applied.activated_at, applied.expires_at
+                "in force      revision {} ({}), activated {}, expires {}{}",
+                applied.revision,
+                applied.digest,
+                applied.activated_at,
+                applied.expires_at,
+                stale_note(&serde_json::json!(report.stale_since))
             );
         }
         None => {
@@ -1582,15 +1933,7 @@ fn sync_policy() -> Result<(), String> {
             );
         }
     }
-    write_stdout(&out)?;
-    if report.converged() {
-        Ok(())
-    } else {
-        Err(format!(
-            "the desired policy was not activated ({}); the policy already in force stays",
-            report.sync.outcome
-        ))
-    }
+    out
 }
 
 /// The category inventory of the last snapshot, then what changed between

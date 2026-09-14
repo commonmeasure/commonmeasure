@@ -47,8 +47,10 @@ cargo install --path crates/commonmeasure-cli
 commonmeasure install claude
 ```
 
-Use one route or the other for Claude Code, not both, or every fetch is
-recorded twice. `commonmeasure install codex` and `commonmeasure install pi`
+Register Claude Code by one route or the other. A machine that holds both
+registrations records every fetch twice, because each carries the same
+hooks; a plugin-only install, or a direct registration alone, records each
+fetch once. `commonmeasure install codex` and `commonmeasure install pi`
 register the tools with those hosts. `commonmeasure doctor` shows what each
 host has. The full walkthrough is
 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
@@ -117,7 +119,10 @@ that shows the same record.
   result naming what is missing.
 - **Sending data out.** Nothing leaves your machine by default. One command
   sends a cleared subset of the record to a receiver you name, in the
-  Content Telemetry standard.
+  Content Telemetry standard. In an organisation managed from the hub, the
+  owner clears it in the policy the hub distributes to each machine
+  ([docs/HUB.md](docs/HUB.md); the hub's documentation, at
+  `/docs/policy-distribution` on the hub).
 
 ## Build and test from a checkout
 
@@ -142,6 +147,8 @@ shows the other commands.
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 - [docs/GLOSSARY.md](docs/GLOSSARY.md): every defined term in one line.
 - [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md): the tested walkthrough.
+- [docs/HUB.md](docs/HUB.md): the hub: what leaves a machine, how a machine
+  joins and how policy arrives.
 - [docs/RELEASE.md](docs/RELEASE.md): releases and the installer.
 - [docs/contracts/](docs/contracts/): the formats and interfaces.
 - [docs/READ-A-RUN.md](docs/READ-A-RUN.md) and the other `docs/READ-*.md` pages: how to read the committed demonstrations under [demo/](demo/).

@@ -73,7 +73,7 @@ fn claude_registration_round_trip_touches_only_this_products_entries() {
     assert_eq!(stop[0]["hooks"][0]["command"], "/usr/bin/say done");
     assert_eq!(
         stop[1]["hooks"][0]["command"],
-        format!("\"{}\" hook stop", binary.display()),
+        format!("\"{}\" hook stop --host claude-code", binary.display()),
         "the registration names the resolved absolute path"
     );
     assert_eq!(
@@ -171,12 +171,21 @@ fn an_enabled_plugin_refuses_install_and_is_named_by_doctor() {
         r#"{"enabledPlugins": {"commonmeasure@commonmeasure": true}}"#,
     )
     .unwrap();
+    let plugin_dir = home.path().join("plugin-files");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(
         claude.join("plugins/installed_plugins.json"),
-        r#"{"version": 2, "plugins": {"commonmeasure@commonmeasure": [{"scope": "user", "installPath": "/home/op/.claude/plugins/cache/commonmeasure/commonmeasure/0.2.0", "version": "0.2.0"}]}}"#,
+        format!(
+            r#"{{"version": 2, "plugins": {{"commonmeasure@commonmeasure": [{{"scope": "user", "installPath": "{}", "version": "0.3.0"}}]}}}}"#,
+            plugin_dir.display()
+        ),
     )
     .unwrap();
 
+    // The plugin is enabled and its files are in place, so it loads: a
+    // direct install is refused, and doctor reports the plugin route as the
+    // registration with nothing to warn about, because there is no direct
+    // registration beside it.
     let output = run(home.path(), &["install", "claude"]);
     assert!(!output.status.success());
     let text = stderr(&output);
@@ -188,14 +197,32 @@ fn an_enabled_plugin_refuses_install_and_is_named_by_doctor() {
         !home.path().join(".claude.json").exists(),
         "nothing was written"
     );
-
     let output = run(home.path(), &["doctor", "claude"]);
     let text = stdout(&output);
     assert!(
-        text.contains("plugin commonmeasure@commonmeasure: installed at /home/op/.claude/plugins/cache/commonmeasure/commonmeasure/0.2.0, enabled"),
+        text.contains(&format!(
+            "plugin commonmeasure@commonmeasure: installed at {}, enabled",
+            plugin_dir.display()
+        )),
         "{text}"
     );
-    assert!(text.contains("recorded twice"), "{text}");
+    assert!(text.contains("claude-code  registered"), "{text}");
+    assert!(text.contains("this is the registration"), "{text}");
+    assert!(!text.contains("recorded twice"), "{text}");
+
+    // With the plugin's files gone it loads nothing: doctor says so and
+    // does not count it, and the same predicate lets a direct install
+    // proceed.
+    std::fs::remove_dir_all(&plugin_dir).unwrap();
+    let output = run(home.path(), &["doctor", "claude"]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("does not exist, so the plugin loads nothing"),
+        "{text}"
+    );
+    assert!(text.contains("claude-code  not registered"), "{text}");
+    let output = run(home.path(), &["install", "claude"]);
+    assert!(output.status.success(), "{}", stderr(&output));
 }
 
 /// A registration whose binary has gone is the state this machine was in:
@@ -252,6 +279,10 @@ fn codex_registration_is_one_table_and_leaves_the_rest_byte_for_byte() {
     let output = run(home.path(), &["install", "codex"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
+    assert!(
+        text.contains("default_tools_approval_mode = \"approve\""),
+        "install writes the approval mode Codex needs: {text}"
+    );
     assert!(
         text.contains("[mcp_servers.commonmeasure] registered"),
         "{text}"
@@ -440,7 +471,7 @@ fn doctor_names_a_plugin_whose_directories_have_gone() {
 
     let text = stdout(&run(home.path(), &["doctor", "claude"]));
     assert!(
-        text.contains("its marketplace commonmeasure is recorded at /var/home/op/contextops/contextops, which does not exist"),
+        text.contains("its marketplace is recorded at /var/home/op/contextops/contextops, which does not exist"),
         "{text}"
     );
     assert!(text.contains("failed to load"), "{text}");
@@ -465,9 +496,9 @@ fn doctor_names_a_plugin_whose_directories_have_gone() {
 #[test]
 fn an_unknown_host_is_refused_and_an_empty_home_reports_nothing_registered() {
     let home = tempfile::tempdir().expect("tempdir");
-    let output = run(home.path(), &["install", "cursor"]);
+    let output = run(home.path(), &["install", "windsurf"]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("unknown host \"cursor\""));
+    assert!(stderr(&output).contains("unknown host \"windsurf\""));
 
     let output = run(home.path(), &["doctor"]);
     assert!(output.status.success());
@@ -476,8 +507,243 @@ fn an_unknown_host_is_refused_and_an_empty_home_reports_nothing_registered() {
         "claude-code  not registered",
         "codex        not registered",
         "pi           not registered",
+        "claude-desktop not registered",
+        "cursor       not registered",
     ] {
         assert!(text.contains(host), "{text}");
     }
     assert!(text.contains(&format!("({VERSION})")), "{text}");
+}
+
+/// Where the binary keeps Claude Desktop's file for a `HOME` on this
+/// platform, mirroring `HostPaths::from_environment`.
+fn claude_desktop_config(home: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Claude/claude_desktop_config.json")
+    } else if cfg!(windows) {
+        home.join("AppData/Roaming/Claude/claude_desktop_config.json")
+    } else {
+        home.join(".config/Claude/claude_desktop_config.json")
+    }
+}
+
+/// `install claude-desktop` adds one `mcpServers` key to the application's
+/// own file and keeps every other key; the written bytes are exactly the
+/// file's other keys plus ours, and `uninstall` gives the original bytes
+/// back. `doctor` reads the key and says the host has no hooks.
+#[test]
+fn claude_desktop_registration_is_one_key_and_leaves_the_rest_byte_for_byte() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let config = claude_desktop_config(home.path());
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    // The file as this product's writer serialises it: the operator's keys
+    // in their order, two spaces, a trailing newline; ours is appended.
+    let original = "{\n  \"coworkUserFilesPath\": \"/home/op/Claude\",\n  \"preferences\": {\n    \"sidebarMode\": \"epitaxy\"\n  }\n}\n";
+    std::fs::write(&config, original).unwrap();
+    let binary = env!("CARGO_BIN_EXE_commonmeasure");
+
+    let output = run(home.path(), &["install", "claude-desktop"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("claude-desktop: MCP server commonmeasure registered in"),
+        "{text}"
+    );
+    assert!(
+        text.contains("each that makes a call leaves its own session"),
+        "{text}"
+    );
+    let expected = format!(
+        "{{\n  \"coworkUserFilesPath\": \"/home/op/Claude\",\n  \"preferences\": {{\n    \"sidebarMode\": \"epitaxy\"\n  }},\n  \"mcpServers\": {{\n    \"commonmeasure\": {{\n      \"command\": \"{binary}\",\n      \"args\": [\n        \"mcp\",\n        \"--host\",\n        \"claude-desktop\"\n      ]\n    }}\n  }}\n}}\n"
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), expected);
+
+    let output = run(home.path(), &["doctor", "claude-desktop"]);
+    let text = stdout(&output);
+    assert!(text.contains("claude-desktop registered"), "{text}");
+    assert!(text.contains(&format!("command {binary}")), "{text}");
+    assert!(
+        text.contains("hooks: none; Claude Desktop has no hook surface"),
+        "{text}"
+    );
+    assert!(text.contains("servers: two per launch"), "{text}");
+
+    // Uninstall removes the entry and nothing else: the operator's keys are
+    // back as they were and the emptied `mcpServers` object stays, so the
+    // round trip is content-exact and the file's bytes differ from the
+    // original only by that empty object.
+    let output = run(home.path(), &["uninstall", "claude-desktop"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let after = json_at(&config);
+    assert_eq!(after["coworkUserFilesPath"], "/home/op/Claude");
+    assert_eq!(after["preferences"]["sidebarMode"], "epitaxy");
+    assert_eq!(after["mcpServers"], json!({}), "the emptied object stays");
+    let output = run(home.path(), &["doctor", "claude-desktop"]);
+    assert!(
+        stdout(&output).contains("claude-desktop not registered"),
+        "{}",
+        stdout(&output)
+    );
+
+    // A file that already carried an empty `mcpServers` object, as the
+    // application writes when its last server is removed, comes back byte
+    // for byte, because this writer's format is the one the file was in.
+    let empty_servers = "{\n  \"mcpServers\": {}\n}\n";
+    std::fs::write(&config, empty_servers).unwrap();
+    assert!(
+        run(home.path(), &["install", "claude-desktop"])
+            .status
+            .success()
+    );
+    assert!(
+        run(home.path(), &["uninstall", "claude-desktop"])
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), empty_servers);
+
+    // A file that did not exist is created by install and left by
+    // uninstall, holding the emptied object: nothing is ever deleted.
+    std::fs::remove_file(&config).unwrap();
+    assert!(
+        run(home.path(), &["install", "claude-desktop"])
+            .status
+            .success()
+    );
+    assert!(
+        run(home.path(), &["uninstall", "claude-desktop"])
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), empty_servers);
+}
+
+/// `install cursor` writes the server into `~/.cursor/mcp.json` and four
+/// hooks into `~/.cursor/hooks.json`, each command naming the binary and
+/// `--host cursor`; a foreign server and a foreign hook survive byte for
+/// byte, and `uninstall` gives both original files back.
+#[test]
+fn cursor_registration_writes_the_server_and_four_hooks_and_leaves_the_rest_byte_for_byte() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cursor = home.path().join(".cursor");
+    std::fs::create_dir_all(&cursor).unwrap();
+    let mcp_original = "{\n  \"mcpServers\": {\n    \"linear\": {\n      \"url\": \"https://mcp.linear.app/mcp\"\n    }\n  }\n}\n";
+    let hooks_original = "{\n  \"hooks\": {\n    \"postToolUse\": [\n      {\n        \"command\": \"./hooks/audit.sh\"\n      }\n    ]\n  },\n  \"version\": 1\n}\n";
+    std::fs::write(cursor.join("mcp.json"), mcp_original).unwrap();
+    std::fs::write(cursor.join("hooks.json"), hooks_original).unwrap();
+    let binary = env!("CARGO_BIN_EXE_commonmeasure");
+
+    let output = run(home.path(), &["install", "cursor"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("cursor: MCP server commonmeasure registered in"),
+        "{text}"
+    );
+    assert!(
+        text.contains("four hooks (sessionStart, postToolUse, beforeSubmitPrompt, stop)"),
+        "{text}"
+    );
+
+    let mcp = json_at(&cursor.join("mcp.json"));
+    assert_eq!(
+        mcp["mcpServers"]["linear"]["url"],
+        "https://mcp.linear.app/mcp"
+    );
+    assert_eq!(
+        mcp["mcpServers"]["commonmeasure"],
+        json!({"type": "stdio", "command": binary, "args": ["mcp", "--host", "cursor"]})
+    );
+    let expected_mcp = format!(
+        "{{\n  \"mcpServers\": {{\n    \"linear\": {{\n      \"url\": \"https://mcp.linear.app/mcp\"\n    }},\n    \"commonmeasure\": {{\n      \"type\": \"stdio\",\n      \"command\": \"{binary}\",\n      \"args\": [\n        \"mcp\",\n        \"--host\",\n        \"cursor\"\n      ]\n    }}\n  }}\n}}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("mcp.json")).unwrap(),
+        expected_mcp
+    );
+    let hooks = json_at(&cursor.join("hooks.json"));
+    assert_eq!(hooks["version"], 1);
+    for (event, argument) in [
+        ("sessionStart", "session-start"),
+        ("postToolUse", "post-tool-use"),
+        ("beforeSubmitPrompt", "user-prompt-submit"),
+        ("stop", "stop"),
+    ] {
+        let entries = hooks["hooks"][event].as_array().unwrap();
+        let ours: Vec<&Value> = entries
+            .iter()
+            .filter(|entry| entry["command"].as_str().unwrap().contains("commonmeasure"))
+            .collect();
+        assert_eq!(ours.len(), 1, "{event}");
+        assert_eq!(
+            ours[0]["command"],
+            format!("\"{binary}\" hook {argument} --host cursor")
+        );
+    }
+    assert_eq!(
+        hooks["hooks"]["postToolUse"][0]["command"], "./hooks/audit.sh",
+        "the foreign hook stands first, untouched"
+    );
+
+    let output = run(home.path(), &["doctor", "cursor"]);
+    let text = stdout(&output);
+    assert!(text.contains("cursor       registered"), "{text}");
+    assert!(
+        text.contains("hooks: sessionStart, postToolUse, beforeSubmitPrompt, stop registered in"),
+        "{text}"
+    );
+    assert!(
+        text.contains("mcp: server commonmeasure registered in"),
+        "{text}"
+    );
+
+    // Both originals already held the objects install writes into, in this
+    // writer's format, so the round trip is byte for byte.
+    let output = run(home.path(), &["uninstall", "cursor"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("mcp.json")).unwrap(),
+        mcp_original
+    );
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("hooks.json")).unwrap(),
+        hooks_original
+    );
+    assert!(
+        stdout(&run(home.path(), &["doctor", "cursor"])).contains("cursor       not registered")
+    );
+
+    // Cursor's own empty files survive a round trip unchanged: an
+    // `mcpServers` object with no server, and a hooks file with only its
+    // version. Nothing is deleted; an object install added is left empty.
+    let empty_servers = "{\n  \"mcpServers\": {}\n}\n";
+    let version_only = "{\n  \"version\": 1\n}\n";
+    std::fs::write(cursor.join("mcp.json"), empty_servers).unwrap();
+    std::fs::write(cursor.join("hooks.json"), version_only).unwrap();
+    assert!(run(home.path(), &["install", "cursor"]).status.success());
+    assert!(run(home.path(), &["uninstall", "cursor"]).status.success());
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("mcp.json")).unwrap(),
+        empty_servers
+    );
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("hooks.json")).unwrap(),
+        "{\n  \"version\": 1,\n  \"hooks\": {}\n}\n",
+        "the hooks object install added stays, empty"
+    );
+
+    // Files that did not exist are created by install and left by
+    // uninstall.
+    std::fs::remove_file(cursor.join("mcp.json")).unwrap();
+    std::fs::remove_file(cursor.join("hooks.json")).unwrap();
+    assert!(run(home.path(), &["install", "cursor"]).status.success());
+    assert!(run(home.path(), &["uninstall", "cursor"]).status.success());
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("mcp.json")).unwrap(),
+        empty_servers
+    );
+    assert_eq!(
+        std::fs::read_to_string(cursor.join("hooks.json")).unwrap(),
+        "{\n  \"version\": 1,\n  \"hooks\": {}\n}\n"
+    );
 }

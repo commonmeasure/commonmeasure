@@ -82,11 +82,16 @@ the thumbprint has no canonicaliser of its own on either side.
 
 ## Shared policy vectors
 
-The edge digests a policy after its loader has parsed and re-serialised it;
-the hub digests the policy as it was submitted. The two must produce the same
-digest for the same document, whatever shape that document is in, and these
-two vectors are what each side tests against. The second is the first with a
-defaulted field left out, which is a different document and digests as one.
+Two digests are taken of a policy. The policy envelope names a revision by
+the digest of the policy as the envelope carries it, checked by the edge
+before it parses the policy; the fleet-status document reports the digest
+of the policy as the edge's loader serialises it after parsing
+(`applied.policy_digest`). A hub that stores the loader's form serves one
+document under both digests. These vectors pin each side to the rule, and
+the last pins the loader's form itself, so an edge whose loader changes how
+it serialises a policy fails its own test before a hub that pinned the form
+sees `divergent`. The second vector is the first with a defaulted field left
+out, which is a different document and digests as one.
 
 Written in full:
 
@@ -104,5 +109,22 @@ With `allow_private_hosts` left out:
 
 `sha256:e4d73e9d4be89337df7fe24c7acadb424daf22afea6ff1889271db7d8e8e0141`
 
-A change to either digest is a change to the wire between the two products
-and lands on both sides together.
+A firm's policy as an owner writes it, with every defaulted field left out:
+
+```json
+{"policy_mode":"strict","constraints":[{"kind":"access_rule","host":"www.legislation.gov.uk","action":"allow"},{"kind":"access_rule","host":"www.gov.uk","action":"allow"},{"kind":"access_rule","host":"www.lexisnexis.co.uk","action":"require_licence","licence":"marlow-reid/lexisnexis-subscription-2026"},{"kind":"access_rule","host":"*.theguardian.com","action":"allow"},{"kind":"access_rule","host":"*","action":"refuse"}],"scopes":[{"match":"/matters/confidential-","engagement":"client-confidential","allow_telemetry_egress":false,"constraints":[{"kind":"access_rule","host":"*","action":"refuse"}]},{"match":"/matters/MR-2026-014","engagement":"MR-2026-014","allow_telemetry_egress":true}]}
+```
+
+As written, the digest an envelope carrying it names:
+
+`sha256:3e12b0ad164279bbda19308614de6f0ace54837b087d6b1390437f7140efa379`
+
+In the loader's form, which adds `"allow_private_hosts":false` and
+`"record_internal_prefixes":[]` and nothing else, the digest the fleet-status
+document reports once it is in force:
+
+`sha256:0e7be44df686c8d1e0ad04a1d8c915e48fe3829bbb14345e02539647b982aacd`
+
+A change to any of these digests is a change to the wire between the two
+products and lands on both sides together;
+`crates/commonmeasure-harness/src/policy.rs` holds every vector on this page.

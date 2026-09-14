@@ -222,7 +222,9 @@ forked). Projected batches are spooled durably before any delivery attempt
 and delivered only to an explicitly configured receiver; event identity is
 derived from the evidence record each event projects, so redelivery after a
 crash cannot double-count. No console row is assumed safe for egress:
-reconstructed crossings, refusals and rejected sources are never projected.
+reconstructed crossings, refusals and rejected sources are never projected,
+and of the refusals only a count per session crosses, as an integer on the
+batch (`docs/contracts/session-evidence.md` §The refused count on the wire).
 The console's egress block, and the Overview's hub card that renders it,
 report the configured receiver and delivered counts, or the absence of
 both, and the enrolled key id with its standing.
@@ -290,6 +292,8 @@ The split between edge and hub is fixed by the architecture:
   loader, refuses rollback and expiry, and keeps the last-known-good policy
   across every failure; a local edge makes no management request; an
   invalid or unreachable hub never turns strict policy into observe. The
+  edge refreshes the envelope itself at session start and before relay,
+  and an expired one keeps enforcing while the record says it is stale. The
   edge side is built. The edge authenticates to the hub's endpoint by
   signing the request with its enrolled key, the same signature the
   mediated fetch presents to a publisher (`ROADMAP.md` §Verified fetcher
@@ -356,7 +360,9 @@ alternatives, the commercial objective, evaluator output, the workforce trace
 or rejected private sources, unless a separate contract explicitly requires
 them. It does receive the name of the supplier that served an admitted
 source, as a namespaced custom field, and nothing about what the supplier
-charged (`DECISIONS.md` §Session policy and egress).
+charged, and the number of crossings policy refused in the session, as an
+integer on the batch and nothing else about them (`DECISIONS.md` §Session
+policy and egress).
 
 ## Security and credentials
 

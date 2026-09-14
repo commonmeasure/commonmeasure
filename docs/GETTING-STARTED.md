@@ -1,113 +1,31 @@
 ---
-title: "Getting started: from a clean checkout to your own evidence"
+title: "Getting started: from the installer to your own evidence"
 ---
 
-# Getting started: from a clean checkout to your own evidence
+# Getting started: from the installer to your own evidence
 
-This is the Common Measure walkthrough from `git clone` to an operator console
-showing the first crossing your own agent made. Every command here was run,
-in this order, while the document was written; where output is quoted, it is
-what the command printed. Terms like crossing, run, admission and engagement
+This is the Common Measure walkthrough from the installer to an operator
+console showing the first crossing your own agent made. Nothing before the
+last section needs a checkout or a toolchain. Every command here was run
+while the document was written; where output is quoted, it is what the
+command printed. Terms like crossing, run, admission and engagement
 are defined in [`docs/GLOSSARY.md`](GLOSSARY.md). Two things to know before you start:
 
 - **Nothing needs configuring first.** With no credentials and no policy
-  file, the batch runner publishes a run that names what it could not do,
-  `--replay` drives the whole acquisition path from committed recorded
-  responses, and the plugin records everything a session retrieves.
-  Credentials and policy add capability; their absence is always stated.
+  file, the hooks record everything a session retrieves, and from
+  a checkout the batch runner publishes a run that names what it could not
+  do and `--replay` drives the whole acquisition path from committed
+  recorded responses (§8). Credentials and policy add capability; their
+  absence is always stated.
 - **The model is never Common Measure's.** The harness path uses the host's
   model; the batch path needs `COMMONMEASURE_INFERENCE_ENDPOINT` before any plan
   can complete. Without a gateway, no plan produces an answer.
 
-## 1. Build and run the test suite
+## 1. Install the binary and register it with Claude Code
 
-```sh
-cargo fetch                      # once, online: the dependency crates
-cargo test --workspace --offline
-```
-
-The toolchain is rustc 1.97 or later (`Cargo.toml` `rust-version`). After the
-one fetch the workspace builds and every test passes offline: tests that need
-a network boundary start a real loopback origin and drive the production
-adapters over it, so no external service is involved. The first build takes
-a few minutes.
-
-Then publish a run with nothing configured:
-
-```sh
-cargo run -p commonmeasure-cli -- run demo/jobs/energy-price-cap.json --output /tmp/commonmeasure-empty
-cargo run -p commonmeasure-cli -- inspect /tmp/commonmeasure-empty
-```
-
-`inspect` prints the run dossier: the mode (`no-external-acquisition`), the
-sealed manifest hash, and one block per supply plan, every claim ending with
-a citation into the artefact it was read from ([`docs/READ-A-RUN.md`](READ-A-RUN.md) is the
-five-minute tour of one). Every plan here is `unavailable`, each with a gap
-naming what is missing:
-
-- the provider plans: acquisition was not authorised, because external calls
-  cost money and happen only under `--live` with a credential;
-- every plan: no inference gateway is configured; the gap names
-  `COMMONMEASURE_INFERENCE_ENDPOINT`.
-
-The same unconfigured checkout can still run the whole acquisition path,
-using the recorded provider responses in the repository:
-
-```sh
-cargo run -p commonmeasure-cli -- run demo/jobs/eu-ai-act-replay.json \
-  --replay demo/recon --output /tmp/commonmeasure-replay
-cargo run -p commonmeasure-cli -- inspect /tmp/commonmeasure-replay
-```
-
-This is the replay mode ([`docs/contracts/run-output.md`](contracts/run-output.md)): the committed
-recorded bytes served from loopback origins through the real adapters,
-parsers and policy. No external call is made and no credential is read; a
-provider without a hash-verified recording fails the run. The dossier's
-header states the mode and its meaning:
-
-```text
-mode         replay — provider responses were served from verified recordings over loopback, and
-             no external provider was contacted. Inference is never replayed: an answer can only
-             come from a real gateway call at run time  [s:/run/mode]
-```
-
-and each provider plan's `bytes` line names the recording behind its sealed
-response, for example:
-
-```text
-  bytes        recorded replay, not live capture — the response is the 2026-08-01 recording of
-               https://api.exa.ai/search, served from exa/exa-search.json over loopback; the sealed
-               response hash equals the recorded hash, recomputed here from the sealed bytes, so
-               these are those bytes  [s:/plans/1/acquisition/replay; r:/bindings/0]
-```
-
-Each provider plan acquired, admitted sources, sealed its response bytes and
-is marked `replay-tested` rather than `live-verified`; `replay.json` links
-each sealed response to its recorded source by hash. The plans stay
-`unavailable` for one reason: no inference gateway; the model line and each
-plan's gap say so. TollBit's recorded search returns candidates without
-text, and its refusals and gaps say that too.
-
-With `COMMONMEASURE_INFERENCE_ENDPOINT` set (`demo/gateway/tensorzero/` records
-the reference sidecar), the same command completes real inference over the
-replayed context: fixed supply, varying policy or model configuration. The
-committed example `demo/output/replay/` is such a run.
-
-The committed example in `demo/output/latest/` is a third variant of the
-same replay supply, and it needs no gateway at all:
-`demo/jobs/eu-ai-act-replay-rubric.json` declares a coverage rubric and an
-as-of date, so every plan's admitted window is measured (which declared
-rubric items it covered, at which byte spans, and each part's declared date
-against the reference) and the router selects the plan whose weighted
-coverage and freshness score highest. Its dossier's `selection` line
-explains what was bought, what it covered against which rubric, and why it
-won; `just rubric-example` regenerates it. The committed demonstrations are
-listed in `README.md`.
-
-## 2. Install the binary and register it with Claude Code
-
-Either path ends with `commonmeasure` on your `PATH` and registered with
-Claude Code. The releases and the installer are described in
+The installer ends with `commonmeasure` on your `PATH`; the route from a
+checkout (§8) ends in the same place, and both then register with Claude
+Code the same way. The releases and the installer are described in
 [`docs/RELEASE.md`](RELEASE.md).
 
 ### From a release, with no toolchain
@@ -144,12 +62,6 @@ standing where the release stands
 built and checksummed by the release run; the installer has not been run on
 Windows.
 
-### From this checkout
-
-```sh
-cargo install --path crates/commonmeasure-cli
-```
-
 ### Register with the host
 
 On either path, the binary writes its own registration:
@@ -173,7 +85,12 @@ binary (`plugin/README.md`). Use one route or the other: `install claude`
 refuses while the plugin is enabled, because two registrations record every
 crossing twice. `commonmeasure install codex` and `commonmeasure install
 pi` register the mediated tools with those hosts the same way
-(`plugin/README.md` §Codex and Pi).
+(`plugin/README.md` §Codex and Pi); the Codex table also carries the
+approval mode Codex needs to call the tools without asking, and it serves
+the Codex CLI, the ChatGPT desktop app and the Codex IDE extension alike.
+`commonmeasure install claude-desktop` and `commonmeasure install cursor`
+register with those two applications (`plugin/README.md` §Claude Desktop
+and Cursor).
 
 ### Check what arrived
 
@@ -189,7 +106,7 @@ written, and whether the policy file loads. A registration whose binary has
 gone is reported as not found, which is the one state in which every hook
 exits without recording and nothing in the session says so.
 
-## 3. Record a session of your own work
+## 2. Record a session of your own work
 
 Open a new Claude Code session and work. No other step is needed: the
 observed half needs no credentials and no configuration. A `PostToolUse` hook
@@ -256,7 +173,7 @@ one per server process, alongside the host session's observed record. Both
 appear in the console. The plugin's own tools are excluded from observed
 capture, so a mediated fetch is never double-recorded.
 
-## 4. Credentials, when you want provider search
+## 3. Credentials, when you want provider search
 
 `context_search` and the batch runner's `--live` need provider credentials,
 which live in `~/.commonmeasure/credentials.env` (`$COMMONMEASURE_HOME/credentials.env`)
@@ -306,21 +223,24 @@ One provider needs no credential: `context_search` with
 the same credentials file. Results carry the licence and effective dates
 declared in the corpus's `corpus.json`, and the crossings are recorded only
 when the corpus's `file://` prefix is named in `record_internal_prefixes`
-(§5); without it the agent still gets the result and the record is withheld.
+(§4); without it the agent still gets the result and the record is withheld.
 
-The replay mode needs none of this (§1). A skill needs no credential either,
+The replay mode needs none of this (§8). A skill needs no credential either,
 and is not reachable from a session tool: it is invoked only by a run, only
 with `--live`, and only when `COMMONMEASURE_SKILL_CATALOGUE` names a catalogue
 declaring it (`demo/skills/README.md` is a worked example;
 [`docs/contracts/provider.md`](contracts/provider.md) §Skill supply is the contract).
 
-## 5. Policy: refusing a crossing before it happens
+## 4. Policy: refusing a crossing before it happens
 
 Absent policy means observe: record everything, refuse nothing. To let the
 operator refuse, put a source policy at `~/.commonmeasure/policy.json` (or
 `$COMMONMEASURE_HOME/policy.json`). The repository commits the smallest one
 that reproduces the four fetches of the example,
 [Four fetches, two refused](guide/four-fetches.md): copy it into place.
+The example's records, like the results below, were left by an edge not
+enrolled with a hub, so every request went out unsigned;
+[`docs/HUB.md`](HUB.md) says what enrolment adds.
 
 ```sh
 cp demo/policy/four-fetches.json ~/.commonmeasure/policy.json
@@ -421,7 +341,7 @@ crossings  0 observed, 2 mediated, 2 refused, 0 reconstructed
 grounded   2 put page text into the model's context
 
 policy identity (mediated crossings and boundaries)
-  sha256:b95d3676f225db779a0b19967edd183800f84d9f676b69ce8dcaf98805756ee4  4 record(s)
+  sha256:b39db117d02f79b1974456194076ea75c1a3b954d30bf37dbd47974fdaff97ab  4 record(s)
 
 crossings
   mediated   grounded  https://www.gov.uk/government/organisations
@@ -458,7 +378,7 @@ The same file carries the rest of the declared policy:
   (`plugin/README.md` §Policy).
 - **Engagements** are the names records, policy and reporting are grouped
   under. `allow_telemetry_egress: true` on a scope is the clearance for that
-  engagement's witnessed crossings to leave the machine (§8); without it
+  engagement's witnessed crossings to leave the machine (§7); without it
   nothing leaves.
 - **Principals** are authenticated identities: a `principals` list names
   who may exercise the policy, resolved from an authentication basis the
@@ -472,9 +392,56 @@ The same file carries the rest of the declared policy:
   acquisition is dispatched ([`docs/contracts/run-output.md`](contracts/run-output.md)
   §`acquisition.quote.allowance`).
 
+For a firm the natural shape is one principal per solicitor and one scope
+per matter. Each solicitor works as their own operating-system user on
+their own machine, so the `principals` list binds a policy name to that
+user's numeric id (`id -u` prints it); each matter is an engagement kept in
+its own directory, and a scope matches that directory, names the matter as
+the engagement and carries the clearance for its records to leave. The
+policy for one solicitor and one matter:
+
+```json
+{
+  "policy_mode": "strict",
+  "constraints": [
+    {"kind": "access_rule", "host": "www.legislation.gov.uk", "action": "allow"},
+    {"kind": "access_rule", "host": "*", "action": "refuse"}
+  ],
+  "principals": [
+    {"principal": "solicitor-a", "os_user": 501, "require_scope": true}
+  ],
+  "scopes": [
+    {
+      "match": "/home/solicitor-a/matters/2026-014",
+      "principal": "solicitor-a",
+      "engagement": "matter-2026-014",
+      "allow_telemetry_egress": true
+    }
+  ]
+}
+```
+
+The scope declares no constraints of its own, so the two access rules at
+the top level govern work in the matter directory. `require_scope: true`
+means this solicitor's agent can work only inside a matter directory the
+policy names: outside one, every mediated crossing is refused rather than
+falling back to the top-level rules. A second solicitor is a second
+`principals` entry with their own user id, and a second matter a second
+scope; a directory holding client-confidential material gets a scope whose
+`constraints` refuse every host. What each field does, and what declaring
+any principal changes for every other user of the machine, is
+`plugin/README.md` §Policy.
+
 [`docs/GLOSSARY.md`](GLOSSARY.md) defines each term in one line.
 
-## 6. The console
+Where the file comes from a hub rather than your editor, because
+`deployment.json` pins the hub's signing key, the edge refreshes it at every
+session start and before every relay run, and `commonmeasure doctor` adds a
+line naming the revision in force and its expiry. An envelope that has
+expired keeps enforcing its policy and that line says `stale since` when;
+`plugin/README.md` §Policy has the rest.
+
+## 5. The console
 
 ```sh
 commonmeasure serve
@@ -488,7 +455,7 @@ Policy, Sources, Compare) and what each shows are described in
 `console/README.md`. A published run directory is not rendered by the
 console; `commonmeasure inspect <dir>` prints its dossier.
 
-## 7. Import history from before Common Measure
+## 6. Import history from before Common Measure
 
 Work done before the plugin was installed left host transcripts behind.
 Always look before importing:
@@ -511,10 +478,10 @@ imports what the transcripts evidence. Every imported row is recorded as
 and never counted with witnessed evidence. Import is idempotent: a second run
 imports `0 crossings`.
 
-## 8. Egress, only when you ask for it
+## 7. Egress, only when you ask for it
 
 Everything so far stays on your machine. The one command that can change that
-is the relay, and on a fresh checkout it refuses:
+is the relay, and on a fresh install it refuses:
 
 ```sh
 commonmeasure relay
@@ -537,27 +504,132 @@ commonmeasure: no hub URL and no --token: run `commonmeasure connect <hub-url>
 default hub and nothing was sent
 ```
 
+The hub is the service an organisation's machines enrol with, so that one
+owner can send every machine the same policy and see the cleared evidence
+each one delivers; [`docs/HUB.md`](HUB.md) says what it is and what leaves
+the machine, and the hub's own documentation opens at Start here
+(`/docs/start-here` on the hub).
+
 An owner of your organisation mints the token in the hub's API keys page,
 which prints the `connect` command to run. It exchanges the token for an
 ingest key, written straight into `relay.json`, mints the edge's signing key
 (`edge-key.json`, which never leaves the machine), records the key id the
-hub assigned in `enrolment.json`, and makes a first relay run.
-`commonmeasure disconnect` undoes it. With a receiver named in `relay.json`
+hub assigned in `enrolment.json`, and makes a first relay run. With
+`--managed` it also reads the hub's policy signer under the new ingest key,
+writes `deployment.json` pinned to it, and makes a first policy
+synchronisation, so a machine that takes the organisation's policy from the
+hub needs no file written by hand (`docs/contracts/policy-envelope.md`
+§Deployment mode). `commonmeasure disconnect` undoes the enrolment. With a receiver named in `relay.json`
 (by `connect`, by hand, or with `--receiver`), the relay projects witnessed
-crossings, never reconstructed ones and never refusals, into Content
-Telemetry v1.0 batches, spools them durably, and delivers. What its report states is in `ARCHITECTURE.md`
+crossings, never reconstructed ones and of refusals only a count per
+session, into Content Telemetry v1.0 batches, spools them durably, and
+delivers. What its report states is in `ARCHITECTURE.md`
 §Components (the relay); what may leave and under whose clearance is in
 `DECISIONS.md` §Session policy and egress; the wire format is
 `ARCHITECTURE.md` §Content Telemetry boundary.
 Delivery against a real receiver is exercised by the ignored live test in
 `crates/commonmeasure-cli/tests/relay_e2e.rs`, whose doc comment says how to run it.
 
+## 8. If you build from source
+
+Nothing above needs a checkout. From one, the test suite, a build of the
+binary, the batch runner and the replay mode are available:
+
+```sh
+cargo fetch                      # once, online: the dependency crates
+cargo test --workspace --offline
+```
+
+The toolchain is rustc 1.97 or later (`Cargo.toml` `rust-version`). After the
+one fetch the workspace builds and every test passes offline: tests that need
+a network boundary start a real loopback origin and drive the production
+adapters over it, so no external service is involved. The first build takes
+a few minutes. The same checkout builds the binary the installer would
+have placed, which then registers with a host exactly as in §1:
+
+```sh
+cargo install --path crates/commonmeasure-cli
+```
+
+Then publish a run with nothing configured:
+
+```sh
+cargo run -p commonmeasure-cli -- run demo/jobs/energy-price-cap.json --output /tmp/commonmeasure-empty
+cargo run -p commonmeasure-cli -- inspect /tmp/commonmeasure-empty
+```
+
+`inspect` prints the run dossier: the mode (`no-external-acquisition`), the
+sealed manifest hash, and one block per supply plan, every claim ending with
+a citation into the artefact it was read from ([`docs/READ-A-RUN.md`](READ-A-RUN.md) is the
+five-minute tour of one). Every plan here is `unavailable`, each with a gap
+naming what is missing:
+
+- the provider plans: acquisition was not authorised, because external calls
+  cost money and happen only under `--live` with a credential;
+- every plan: no inference gateway is configured; the gap names
+  `COMMONMEASURE_INFERENCE_ENDPOINT`.
+
+The same unconfigured checkout can still run the whole acquisition path,
+using the recorded provider responses in the repository:
+
+```sh
+cargo run -p commonmeasure-cli -- run demo/jobs/eu-ai-act-replay.json \
+  --replay demo/recon --output /tmp/commonmeasure-replay
+cargo run -p commonmeasure-cli -- inspect /tmp/commonmeasure-replay
+```
+
+This is the replay mode ([`docs/contracts/run-output.md`](contracts/run-output.md)): the committed
+recorded bytes served from loopback origins through the real adapters,
+parsers and policy. No external call is made and no credential is read; a
+provider without a hash-verified recording fails the run. The dossier's
+header states the mode and its meaning:
+
+```text
+mode         replay — provider responses were served from verified recordings over loopback, and
+             no external provider was contacted. Inference is never replayed: an answer can only
+             come from a real gateway call at run time  [s:/run/mode]
+```
+
+and each provider plan's `bytes` line names the recording behind its sealed
+response, for example:
+
+```text
+  bytes        recorded replay, not live capture — the response is the 2026-08-01 recording of
+               https://api.exa.ai/search, served from exa/exa-search.json over loopback; the sealed
+               response hash equals the recorded hash, recomputed here from the sealed bytes, so
+               these are those bytes  [s:/plans/1/acquisition/replay; r:/bindings/0]
+```
+
+Each provider plan acquired, admitted sources, sealed its response bytes and
+is marked `replay-tested` rather than `live-verified`; `replay.json` links
+each sealed response to its recorded source by hash. The plans stay
+`unavailable` for one reason: no inference gateway; the model line and each
+plan's gap say so. TollBit's recorded search returns candidates without
+text, and its refusals and gaps say that too.
+
+With `COMMONMEASURE_INFERENCE_ENDPOINT` set (`demo/gateway/tensorzero/` records
+the reference sidecar), the same command completes real inference over the
+replayed context: fixed supply, varying policy or model configuration. The
+committed example `demo/output/replay/` is such a run.
+
+The committed example in `demo/output/latest/` is a third variant of the
+same replay supply, and it needs no gateway at all:
+`demo/jobs/eu-ai-act-replay-rubric.json` declares a coverage rubric and an
+as-of date, so every plan's admitted window is measured (which declared
+rubric items it covered, at which byte spans, and each part's declared date
+against the reference) and the router selects the plan whose weighted
+coverage and freshness score highest. Its dossier's `selection` line
+explains what was bought, what it covered against which rubric, and why it
+won; `just rubric-example` regenerates it. The committed demonstrations are
+listed in `README.md`.
+
 ---
 
-This walkthrough covered an empty run, a replayed comparison over recorded
-supply, an installed plugin, a session that recorded its own crossings, a
-policy that refused one, a console that shows it back, imported history, and
-an egress boundary that refuses until you name a destination. Absent at this
+This walkthrough covered an installed binary registered with a host, a
+session that recorded its own crossings, a policy that refused one, a
+console that shows it back, imported history, an egress boundary that
+refuses until you name a destination, and, from a checkout, an empty run
+and a replayed comparison over recorded supply. Absent at this
 point: any evaluation beyond the deterministic checks (grounding:
 `demo/jobs/eu-ai-act-replay-cited.json` requests citations; coverage and
 freshness: `demo/jobs/eu-ai-act-replay-rubric.json` declares the rubric and

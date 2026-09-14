@@ -42,18 +42,21 @@ impl Signer {
         encode_hex(self.pair.public_key().as_ref())
     }
 
+    /// The hub publishes a policy in the loader's form and digests what
+    /// it publishes; a policy the loader would not load is carried as
+    /// submitted, and the edge refuses it after the digest is checked.
     fn envelope(&self, revision: u64, policy: Value) -> Vec<u8> {
-        let normalised = serde_json::from_value::<PolicyFile>(policy.clone())
+        let carried = serde_json::from_value::<PolicyFile>(policy.clone())
             .map(|policy| serde_json::to_value(&policy).expect("serialises"))
-            .unwrap_or(policy.clone());
+            .unwrap_or(policy);
         let payload = json!({
             "organisation": "org-1",
             "edge_key_id": null,
             "revision": revision,
             "issued_at": "2026-09-06T00:00:00Z",
             "expires_at": "2099-01-01T00:00:00Z",
-            "policy": policy,
-            "digest": canonical_digest(&normalised),
+            "policy": carried,
+            "digest": canonical_digest(&carried),
         });
         let signature = self.pair.sign(canonical_json(&payload).as_bytes());
         serde_json::to_vec(&json!({
@@ -489,6 +492,264 @@ fn a_managed_edge_activates_the_signed_policy_and_keeps_the_last_known_good_acro
     );
 }
 
+/// A synchronisation the edge runs for itself: the session-start hook and
+/// the MCP server on a host without such a hook each record what the
+/// refresh did; an envelope that has expired keeps enforcing and is reported
+/// stale since its own expiry by `status`, `doctor` and the session record;
+/// the relay's refresh says so on its way; and the hub renewing the
+/// revision clears it without a new revision.
+#[test]
+fn a_session_start_refreshes_the_policy_and_an_expired_envelope_is_enforced_and_reported_stale() {
+    let signer = Signer::new("hub-policy-1");
+    let strict: Value = serde_json::from_str(STRICT).expect("policy");
+    let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+    // An envelope that expires a few seconds after it is accepted: long
+    // enough for two syncs to find it valid, short enough to wait out.
+    let soon = chrono::Utc::now() + chrono::Duration::seconds(8);
+    let short_lived = |signer: &Signer, expires_at: chrono::DateTime<chrono::Utc>| {
+        let carried = serde_json::to_value(
+            serde_json::from_value::<PolicyFile>(strict.clone()).expect("loads"),
+        )
+        .expect("serialises");
+        signed_by(
+            signer,
+            &json!({
+                "organisation": "org-1", "edge_key_id": null, "revision": 1,
+                "issued_at": "2026-09-06T00:00:00Z",
+                "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "policy": carried, "digest": canonical_digest(&carried),
+            }),
+        )
+    };
+    let hub = endpoint(short_lived(&signer, soon), Arc::clone(&directory));
+    let policy_url = format!("{}/api/v1/policy/desired", hub.handle.url());
+    let home = tempfile::tempdir().expect("tempdir");
+    let workspace = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+    )
+    .expect("policy");
+    let page = Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(|_| Response::text(200, "a page"))
+        .expect("spawn");
+    let page_url = format!("{}/page", page.url());
+    write_deployment(home.path(), &signer, &policy_url);
+    webbotauth::enrol(
+        home.path(),
+        &hub.handle.url(),
+        "https://hub.example",
+        &mut directory.lock().expect("lock"),
+    );
+
+    // The session-start hook, as Claude Code runs it: the policy is
+    // activated before the session's first crossing and the log says so.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["hook", "session-start"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the hook starts");
+    writeln!(
+        child.stdin.as_mut().expect("stdin"),
+        "{}",
+        json!({"session_id": "managed-start", "hook_event_name": "SessionStart",
+               "source": "startup", "cwd": workspace.path()})
+    )
+    .expect("write");
+    let hook = child.wait_with_output().expect("wait");
+    assert!(hook.status.success());
+    assert!(
+        String::from_utf8_lossy(&hook.stdout).contains("context_fetch"),
+        "the nudge is still delivered"
+    );
+    let records = session_records(home.path(), "managed-start");
+    let sync = records
+        .iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("the refresh is on the session record");
+    assert_eq!(sync["payload"]["trigger"], "session_start");
+    assert_eq!(sync["payload"]["outcome"], "accepted", "{sync}");
+    assert_eq!(sync["payload"]["applied"]["revision"], 1);
+    assert!(sync["payload"]["stale_since"].is_null());
+    assert_eq!(
+        policy_mode(home.path()),
+        "strict",
+        "activated at session start"
+    );
+    assert!(
+        mediated_fetch_refused(home.path(), &page_url),
+        "the session runs under the refreshed policy"
+    );
+    // The refresh precedes the session's first record, so the nudge
+    // record names the refreshed policy, not the one it replaced.
+    let nudge = records
+        .iter()
+        .find(|record| record["event"] == "nudge_issued")
+        .expect("the nudge issuance is recorded");
+    assert_eq!(
+        nudge["payload"]["policy_identity"],
+        status(home.path(), workspace.path())["applied"]["policy_identity"]["digest"],
+        "the session start names the policy the refresh activated"
+    );
+
+    // The MCP server on a host with no session-start hook does the same at
+    // its start, and says which path ran it.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["mcp", "--host", "codex", "--session", "codex-start"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the server starts");
+    drop(child.stdin.take());
+    assert!(child.wait_with_output().expect("wait").status.success());
+    let records = session_records(home.path(), "codex-start");
+    let sync = records
+        .iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("the server's refresh is on the session record");
+    assert_eq!(sync["payload"]["trigger"], "server_start");
+    assert_eq!(sync["payload"]["outcome"], "already_applied");
+
+    // A session the hook already refreshed is not refreshed again by the
+    // server, whatever host it names; one the hook never saw is, whatever
+    // host it names.
+    for (host, session, refreshes) in [
+        ("claude-code", "managed-start", 1),
+        ("claude-code", "hookless", 1),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["mcp", "--host", host, "--session", session])
+            .env("COMMONMEASURE_HOME", home.path())
+            .current_dir(workspace.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the server starts");
+        drop(child.stdin.take());
+        assert!(child.wait_with_output().expect("wait").status.success());
+        let count = session_records(home.path(), session)
+            .iter()
+            .filter(|record| record["event"] == "policy_sync")
+            .count();
+        assert_eq!(count, refreshes, "session {session} on host {host}");
+    }
+
+    // The envelope expires. Nothing relaxes; everything that reports the
+    // applied revision says since when it has been stale.
+    while chrono::Utc::now() <= soon + chrono::Duration::seconds(1) {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let expires_at = soon.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let stale = status(home.path(), workspace.path());
+    assert_eq!(stale["applied"]["revision"], 1);
+    assert_eq!(stale["applied"]["expires_at"], expires_at);
+    assert_eq!(stale["applied"]["stale_since"], expires_at);
+    assert!(
+        mediated_fetch_refused(home.path(), &page_url),
+        "an expired envelope keeps enforcing"
+    );
+    let readable = run(home.path(), workspace.path(), &["status"]);
+    let text = String::from_utf8_lossy(&readable.stdout);
+    assert!(
+        text.contains(&format!(
+            "applied revision  1, expires {expires_at} (stale since {expires_at}"
+        )),
+        "{text}"
+    );
+    let doctor = run(home.path(), workspace.path(), &["doctor", "codex"]);
+    let text = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        text.contains(&format!(
+            "managed policy: revision 1 in force, expires {expires_at} (stale since {expires_at}"
+        )),
+        "{text}"
+    );
+    // The hub still serves the expired envelope: refused as expired, and the
+    // session record of the next start says stale.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["mcp", "--host", "pi", "--session", "pi-stale"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the server starts");
+    drop(child.stdin.take());
+    assert!(child.wait_with_output().expect("wait").status.success());
+    let sync = session_records(home.path(), "pi-stale")
+        .into_iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("recorded");
+    assert_eq!(sync["payload"]["outcome"], "rejected");
+    assert!(
+        sync["payload"]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("expired")
+    );
+    assert_eq!(sync["payload"]["stale_since"], expires_at);
+
+    // The relay refreshes before it reads clearances, and says so when the
+    // envelope is stale; with nothing cleared it then refuses to send.
+    let receiver = Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(|_| Response::json(201, r#"{"status":"ok","events_created":0}"#))
+        .expect("spawn");
+    let relayed = run(
+        home.path(),
+        workspace.path(),
+        &["relay", "--receiver", &receiver.url()],
+    );
+    let stderr = String::from_utf8_lossy(&relayed.stderr);
+    assert!(
+        stderr.contains("policy sync rejected")
+            && stderr.contains("expired")
+            && stderr.contains(&format!("stale since {expires_at}")),
+        "{stderr}"
+    );
+
+    // The hub renews revision 1 with a later expiry: already applied, no
+    // longer stale, and the relay's refresh has nothing to say.
+    *hub.served.lock().unwrap() =
+        short_lived(&signer, chrono::Utc::now() + chrono::Duration::days(7));
+    let renewed = run(home.path(), workspace.path(), &["policy", "sync"]);
+    assert!(renewed.status.success());
+    let text = String::from_utf8_lossy(&renewed.stdout);
+    assert!(text.contains("outcome       already_applied"), "{text}");
+    assert!(!text.contains("stale since"), "{text}");
+    assert!(status(home.path(), workspace.path())["applied"]["stale_since"].is_null());
+    let relayed = run(
+        home.path(),
+        workspace.path(),
+        &["relay", "--receiver", &receiver.url()],
+    );
+    assert!(
+        !String::from_utf8_lossy(&relayed.stderr).contains("policy sync"),
+        "a fresh envelope is refreshed quietly: {}",
+        String::from_utf8_lossy(&relayed.stderr)
+    );
+}
+
+fn session_records(home: &Path, session: &str) -> Vec<Value> {
+    let path = home.join("sessions").join(format!("{session}.ndjson"));
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("ndjson"))
+        .collect()
+}
+
 fn signed_by(signer: &Signer, payload: &Value) -> Vec<u8> {
     let signature = signer.pair.sign(canonical_json(payload).as_bytes());
     serde_json::to_vec(&json!({
@@ -524,4 +785,104 @@ fn the_printed_pre_image_recomputes_to_the_recorded_identity() {
     let parsed: Value = serde_json::from_str(pre_image).expect("the pre-image is JSON");
     assert_eq!(parsed["addons"], "unknown");
     assert_eq!(parsed["mode"], "strict");
+}
+
+/// A hub that accepts the connection and never answers costs a session
+/// start its budget and nothing else: the hook exits inside it with the
+/// nudge delivered, the server starts inside it with the refresh recorded
+/// as unreachable, and the policy in force keeps governing.
+#[test]
+fn a_hub_that_accepts_and_never_answers_costs_a_session_start_its_budget_and_nothing_else() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let policy_url = format!(
+        "http://{}/api/v1/policy/desired",
+        listener.local_addr().expect("address")
+    );
+    // Accepted connections are held open, so the client waits rather than
+    // being reset.
+    let held: Arc<Mutex<Vec<std::net::TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
+    let keep = Arc::clone(&held);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            keep.lock().expect("lock").push(stream);
+        }
+    });
+    let signer = Signer::new("hub-policy-1");
+    let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+    let home = tempfile::tempdir().expect("tempdir");
+    let workspace = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"policy_mode":"strict","allow_private_hosts":true}"#,
+    )
+    .expect("policy");
+    write_deployment(home.path(), &signer, &policy_url);
+    webbotauth::enrol(
+        home.path(),
+        "http://hub.example",
+        "https://hub.example",
+        &mut directory.lock().expect("lock"),
+    );
+    let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+    let allowance = budget + std::time::Duration::from_secs(3);
+
+    let started = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["hook", "session-start"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the hook starts");
+    writeln!(
+        child.stdin.as_mut().expect("stdin"),
+        "{}",
+        json!({"session_id": "hanging-hub", "hook_event_name": "SessionStart",
+               "source": "startup", "cwd": workspace.path()})
+    )
+    .expect("write");
+    let hook = child.wait_with_output().expect("wait");
+    let elapsed = started.elapsed();
+    assert!(hook.status.success());
+    assert!(
+        elapsed < allowance,
+        "the hook waited {elapsed:?} for a hub that never answered"
+    );
+    assert!(String::from_utf8_lossy(&hook.stdout).contains("context_fetch"));
+    let sync = session_records(home.path(), "hanging-hub")
+        .into_iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("the refresh is recorded");
+    assert_eq!(sync["payload"]["outcome"], "unreachable", "{sync}");
+    assert!(
+        sync["payload"]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("did not answer within"),
+        "{sync}"
+    );
+
+    let started = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["mcp", "--host", "codex", "--session", "hanging-codex"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .current_dir(workspace.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the server starts");
+    drop(child.stdin.take());
+    assert!(child.wait_with_output().expect("wait").status.success());
+    assert!(started.elapsed() < allowance);
+    let sync = session_records(home.path(), "hanging-codex")
+        .into_iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("the refresh is recorded");
+    assert_eq!(sync["payload"]["trigger"], "server_start");
+    assert_eq!(sync["payload"]["outcome"], "unreachable");
+    assert_eq!(policy_mode(home.path()), "strict", "nothing relaxed");
+    drop(held);
 }

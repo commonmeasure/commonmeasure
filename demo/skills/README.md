@@ -30,10 +30,12 @@ declares the two real third-party bundles the run invokes: what to execute,
 with which absolute interpreter, with which arguments, under what timeout and
 output cap.
 
-**It names paths on the machine that produced the run**, so `just
-skills-example` runs only where those paths exist. The bundles are licensed
-third-party content and are not copied into this repository; another
-operator regenerating the run edits `root` for each entry to where their own
+**It names absolute paths on an operator's machine**, so `just
+skills-example` runs only where those paths exist; the committed one names
+a neutral home, and the run record under `demo/output/skills/` shows the
+paths of the machine that produced it. The bundles are licensed
+third-party content and are not copied into this repository; an operator
+regenerating the run edits `root` for each entry to where their own
 installation sits. This is not a defect of the catalogue format.
 A skill is supply the operator admits from their own machine, not content a
 supplier serves, so the catalogue names the operator's own paths.

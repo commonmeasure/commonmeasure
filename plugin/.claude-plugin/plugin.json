@@ -1,7 +1,7 @@
 {
   "name": "commonmeasure",
   "description": "Input control and audit for AI agents. Records the external sources your agent retrieves and grounds on, and offers mediated fetch and search that operator policy can refuse before the crossing.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Common Measure"
   },

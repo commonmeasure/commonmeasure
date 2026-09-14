@@ -76,11 +76,19 @@ bullet names its test or artefact.
   (`docs/contracts/fleet-status.md`, `crates/commonmeasure-harness/src/fleet.rs`,
   `crates/commonmeasure-cli/tests/fleet_status.rs`).
 - Signed policy distribution on the edge: a locally chosen deployment
-  mode, a pinned signer, the envelope validated through the policy loader,
-  rollback and expiry refused, the last-known-good kept and enforced
-  offline (`docs/contracts/policy-envelope.md`,
+  mode, a pinned signer, the envelope's digest checked over the policy as
+  carried and the policy validated through the policy loader, rollback and
+  expiry refused, the last-known-good kept and enforced offline, the
+  envelope refreshed at session start and before relay with each refresh
+  recorded, and an expired envelope enforced and reported stale until the
+  hub renews it (`docs/contracts/policy-envelope.md`,
   `crates/commonmeasure-harness/src/managed.rs`,
   `crates/commonmeasure-cli/tests/managed_policy.rs`).
+- The PII detector's finding recorded on every mediated crossing; refused
+  in `strict` on an internal or private source, admitted with the finding
+  recorded on a public one, and refused everywhere under `refuse_on_pii`
+  (`docs/FAIL-POLICY.md` §6, `crates/commonmeasure-runtime/src/processor/pii.rs`,
+  `crates/commonmeasure-cli/tests/mediated_e2e.rs`).
 - A verifiable network identity: an enrolled edge signs every request it
   makes to a source — the mediated fetch and the `robots.txt`, licence and
   manifest probes beside it — and its managed-policy fetch, with the key
@@ -121,8 +129,10 @@ bullet names its test or artefact.
   (`docs/knowledge-base/provider-verification.md`); a local skill invoked as
   a plan (`demo/output/skills/`).
 - The relay projects cleared, witnessed facts as Content Telemetry v1.0 to
-  one configured receiver, nothing sent by default
-  (`crates/commonmeasure-relay/tests/conformance.rs`).
+  one configured receiver, nothing sent by default, with a count of the
+  session's refused crossings on each batch and nothing else about them
+  (`crates/commonmeasure-relay/tests/conformance.rs`,
+  `conformance/session-refused.json`).
 - Attribution rules project one evidence store per reported engagement at
   read time (`crates/commonmeasure-console/src/attribution.rs`).
 
@@ -1011,20 +1021,20 @@ are on the hub's own board.
   `demo/policy/four-fetches.json` is the smallest source policy under which
   the example's four fetches come out as the page shows (two admitted, one
   refused on the licence's payment term, one refused by an operator rule);
-  `docs/GETTING-STARTED.md` §5 tells the reader to copy it and quotes the
+  `docs/GETTING-STARTED.md` §4 tells the reader to copy it and quotes the
   four results as run; the policy is loaded through the runtime loader,
   ruled on the four hosts, and driven through the real binary against a
   loopback publisher whose `robots.txt` names an RSL licence with a
   subscription payment term (`crates/commonmeasure-cli/tests/demo_policy.rs`).
 - [x] Every platform the release names has had the installer run on it, or
   the release says which have not: the narrowed form landed. `docs/RELEASE.md`
-  and `docs/GETTING-STARTED.md` §2 say the Windows binary is built and
+  and `docs/GETTING-STARTED.md` §1 say the Windows binary is built and
   checksummed by the release run and the installer has not been run on
-  Windows, and §5 of the walkthrough states that a policy declaring
+  Windows, and §4 of the walkthrough states that a policy declaring
   `principals` refuses every mediated crossing on Windows. A Windows
   transcript, when one is made, replaces the first sentence.
 - [ ] The walkthrough reaches a first delivered batch against the hosted
-  hub: `docs/GETTING-STARTED.md` §8 names the hub's address, shows the
+  hub: `docs/GETTING-STARTED.md` §7 names the hub's address, shows the
   smallest scope that clears the reader's working directory for egress, and
   quotes `connect`, one mediated crossing in that scope and a relay run
   delivering one batch, each run in order from a fresh operator home;
@@ -1440,25 +1450,44 @@ mediated tools only, and the record's grade says which. Every finding is
 marked `planned`, `spec-verified` or `live-verified` and never collapsed.
 Depends on WP-21 for the `install <host>` shape.
 
-- [ ] Investigation, one section per host in a host-surfaces document
+- [x] Investigation, one section per host in a host-surfaces document
   under `docs/knowledge-base/`: how the host is configured with
   an MCP server (file, scope, transport), whether it has lifecycle hooks
   and which events carry a tool result, what session identity it exposes,
   whether it has an extension API that can observe tool calls where hooks
   do not exist, and how it identifies itself so `host` in the record is
-  exact. Each section names the document or the live probe it rests on.
+  exact. Each section names the document or the live probe it rests on
+  (`docs/knowledge-base/host-surfaces.md`).
 - [ ] GitHub Copilot: the agent mode inside VS Code and the Copilot CLI,
   as two surfaces; the coding-agent on GitHub as a third, which runs where
   no edge is and is recorded as out of reach unless a hosted edge serves it.
-- [ ] Cursor: its MCP configuration and its hooks, and whether a hook
-  event carries the fetched content or only the call.
+- [x] Cursor: its MCP configuration and its hooks, and whether a hook
+  event carries the fetched content or only the call. `postToolUse`
+  carries every tool's output; `install cursor` writes the server and four
+  hooks, the hook command reads Cursor's shapes under its
+  `conversation_id`. Registration `fixture-tested` in `install_e2e.rs`;
+  observed `spec-verified` in `hook_e2e.rs` on the documented shapes, no
+  payload recorded from Cursor; mediated `planned`, no Cursor session is
+  recorded (`docs/contracts/host-integration.md` §6).
 - [ ] VS Code without Copilot: the workspace and user MCP configuration
   that any MCP-capable extension reads, so one registration serves several
   extensions; which extensions read it is recorded, not assumed.
-- [ ] Codex beyond the CLI: the desktop app and the IDE extension, and
-  whether the CLI registration reaches them.
-- [ ] Claude Desktop: its MCP configuration; no hook surface is expected,
-  and the record says mediated-only if so.
+- [x] Codex beyond the CLI: the desktop app and the IDE extension, and
+  whether the CLI registration reaches them. One table serves all three;
+  `install codex` writes the approval mode Codex needs and the record
+  carries the client's name and version. The CLI: `fixture-tested`, the
+  session one `codex exec` run recorded through that table is
+  `demo/host-sessions/codex/`. The ChatGPT desktop app and the IDE
+  extension: `spec-verified`, the documentation states both read the same
+  table and no session through either is recorded here
+  (`docs/contracts/host-integration.md` §6).
+- [x] Claude Desktop: its MCP configuration; no hook surface is expected,
+  and the record says mediated-only if so. None exists; `install
+  claude-desktop` writes the one entry, registration `fixture-tested` in
+  `install_e2e.rs`; a launch starts two servers, one per client, and each
+  that makes a call leaves its own session naming its client; mediated
+  `planned`, no session through the application is recorded
+  (`docs/contracts/host-integration.md` §6).
 - [ ] Claude in the browser: the web app's remote connectors and the
   browser extension. Both reach tools only over HTTP, so they need the
   mediated tools served as a remote MCP endpoint by an edge running as a

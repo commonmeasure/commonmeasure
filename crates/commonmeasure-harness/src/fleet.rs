@@ -61,6 +61,21 @@ pub struct Management {
     /// activated one. `None` for a local edge and for a managed edge that
     /// has activated nothing yet.
     pub applied_revision: Option<u64>,
+    /// The digest the applied revision's envelope named it by, over the
+    /// policy as the envelope carried it; `None` where `applied_revision`
+    /// is. A receiver compares this with the digest it published.
+    pub applied_digest: Option<String>,
+    /// Whether the policy on disk has been changed since the revision was
+    /// activated: the file no longer digests to the loader's form of the
+    /// revision's policy. `None` where that cannot be determined.
+    pub applied_edited: Option<bool>,
+    /// When the applied envelope expires, as it states; `None` where
+    /// `applied_revision` is.
+    pub applied_expires_at: Option<String>,
+    /// When the applied envelope expired, when it has. The policy it
+    /// carried stays in force; the record says it is stale
+    /// (`docs/contracts/policy-envelope.md` §Cadence and staleness).
+    pub stale_since: Option<String>,
 }
 
 impl Management {
@@ -70,6 +85,10 @@ impl Management {
             mode: "local".to_owned(),
             desired: Value::Null,
             applied_revision: None,
+            applied_digest: None,
+            applied_edited: None,
+            applied_expires_at: None,
+            stale_since: None,
         }
     }
 }
@@ -96,6 +115,10 @@ pub fn status(
             let resolved = document.resolve(cwd);
             json!({
                 "revision": management.applied_revision,
+                "digest": management.applied_digest,
+                "edited_locally": management.applied_edited,
+                "expires_at": management.applied_expires_at,
+                "stale_since": management.stale_since,
                 "policy_declared": document.declared(),
                 "policy_digest": document.digest(),
                 "policy_identity": resolved.identity().to_value(),
@@ -111,6 +134,10 @@ pub fn status(
         // permissive default that was never declared.
         Err(error) => json!({
             "revision": management.applied_revision,
+            "digest": management.applied_digest,
+            "edited_locally": management.applied_edited,
+            "expires_at": management.applied_expires_at,
+            "stale_since": management.stale_since,
             "policy_declared": true,
             "policy_digest": null,
             "policy_identity": null,
@@ -279,7 +306,16 @@ pub fn classify(
             format!("the edge applied revision {revision}; revision {desired_revision} is desired"),
         );
     }
-    if revision == desired_revision && digest == desired_digest {
+    // An edge that reports the digest its envelope named the revision by is
+    // compared on that, whatever form the receiver published the policy in,
+    // and says itself whether the file has moved since; an older edge is
+    // compared on the loader's digest of the file, which agrees only where
+    // the receiver published the loader's form.
+    let (compared, edited) = match applied["digest"].as_str() {
+        Some(named) => (named, applied["edited_locally"] == json!(true)),
+        None => (digest, false),
+    };
+    if revision == desired_revision && compared == desired_digest && !edited {
         return (
             Convergence::Current,
             format!(
@@ -432,6 +468,10 @@ mod tests {
                     mode: "managed".to_owned(),
                     desired: json!({"revision": applied_revision, "outcome": "accepted"}),
                     applied_revision,
+                    applied_digest: None,
+                    applied_edited: None,
+                    applied_expires_at: None,
+                    stale_since: None,
                 },
                 Utc::now(),
             )
@@ -491,5 +531,44 @@ mod tests {
             "2026-09-05T10:00:00.000Z"
         );
         assert!(document["last_enforcement"]["basis"].is_string());
+    }
+
+    /// A revision published in the owner's form is named by that form's
+    /// digest, and an edge reporting it is current on that digest while its
+    /// file still holds the revision's policy, whatever the loader's form
+    /// digests to; a local edit makes it divergent.
+    #[test]
+    fn an_owner_form_revision_is_current_on_the_digest_its_envelope_named() {
+        use commonmeasure_types::canonical::canonical_digest;
+        let home = home_with(Some(r#"{"policy_mode":"strict"}"#));
+        let owner_form = canonical_digest(&json!({"policy_mode": "strict"}));
+        let loader_form = PolicyDocument::read(home.path()).unwrap().digest().unwrap();
+        assert_ne!(owner_form, loader_form);
+        let managed = |edited: bool| {
+            status(
+                home.path(),
+                None,
+                &EdgeIdentity::KeyId("edge-key".to_owned()),
+                &Management {
+                    mode: "managed".to_owned(),
+                    desired: json!({"revision": 7, "outcome": "accepted"}),
+                    applied_revision: Some(7),
+                    applied_digest: Some(owner_form.clone()),
+                    applied_edited: Some(edited),
+                    applied_expires_at: Some("2026-09-21T00:00:00Z".to_owned()),
+                    stale_since: None,
+                },
+                Utc::now(),
+            )
+        };
+        let document = managed(false);
+        assert_eq!(document["applied"]["digest"], owner_form);
+        assert_eq!(document["applied"]["policy_digest"], loader_form);
+        assert_eq!(classify(&document, 7, &owner_form).0, Convergence::Current);
+        assert_eq!(
+            classify(&managed(true), 7, &owner_form).0,
+            Convergence::Divergent
+        );
+        assert_eq!(classify(&document, 8, &owner_form).0, Convergence::Stale);
     }
 }

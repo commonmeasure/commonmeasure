@@ -381,15 +381,76 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
     let supplied_run = commonmeasure_relay::project::project_run(&supplied_run_summary, &[])
         .expect("project supplied run");
 
+    // A session policy refused twice and admitted once: the batch carries
+    // the count and nothing about the two refused sources.
+    let refused_records = [
+        json!({
+            "event": "crossing_refused",
+            "payload": {
+                "timestamp": "2026-08-21T14:00:00Z",
+                "mode": "mediated",
+                "host": "codex",
+                "url": "https://www.lexisnexis.example/research",
+                "grounded": false,
+                "refusal": "access rule 3 requires licence \"firm/subscription\" for host www.lexisnexis.example, and no supplier declared one.",
+                "licence": {"state": "unknown"},
+            },
+        }),
+        json!({
+            "event": "crossing_mediated",
+            "payload": {
+                "timestamp": "2026-08-21T14:01:00Z",
+                "mode": "mediated",
+                "host": "codex",
+                "url": "https://www.legislation.example/ukpga/1954/56",
+                "http_status": 200,
+                "grounded": true,
+                "content_hash":
+                    "sha256:9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab",
+                "estimated_tokens": 5120,
+                "token_basis": "characters/4",
+                "licence": {"state": "unknown"},
+            },
+        }),
+        json!({
+            "event": "crossing_refused",
+            "payload": {
+                "timestamp": "2026-08-21T14:02:00Z",
+                "mode": "mediated",
+                "host": "codex",
+                "url": "https://news.example/paywalled",
+                "http_status": 200,
+                "grounded": false,
+                "refusal": "The licence https://news.example/license.xml permits AI input under payment type subscription, and this edge holds no settlement rail, so the payment term is unmet.",
+                "licence": {"state": "declared", "reference": "https://news.example/license.xml"},
+            },
+        }),
+    ];
+    let refused = commonmeasure_relay::project::project_session(
+        "firm-session-2",
+        &refused_records,
+        &[],
+        &|_| true,
+    )
+    .batches;
+
     let [session_batch] = <[_; 1]>::try_from(session).expect("one session batch");
     let [run_batch] = <[_; 1]>::try_from(run).expect("one run batch");
     let [supplied_batch] = <[_; 1]>::try_from(supplied).expect("one supplied session batch");
     let [supplied_run_batch] = <[_; 1]>::try_from(supplied_run).expect("one supplied run batch");
+    let [refused_batch] = <[_; 1]>::try_from(refused).expect("one refused session batch");
+    assert_eq!(refused_batch.refused, Some(2));
+    assert_eq!(
+        refused_batch.events.len(),
+        2,
+        "one admitted crossing, retrieved and grounded"
+    );
     vec![
         ("session-grounded.json", session_batch),
         ("run-licensed.json", run_batch),
         ("session-supplied.json", supplied_batch),
         ("run-supplied.json", supplied_run_batch),
+        ("session-refused.json", refused_batch),
     ]
 }
 

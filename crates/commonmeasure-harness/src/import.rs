@@ -329,6 +329,7 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
                 timestamp: call.timestamp,
                 mode: CrossingMode::Reconstructed,
                 host: HostSurface::ClaudeCode.id().to_owned(),
+                client: None,
                 tool: Some(call.tool.clone()),
                 agent_type: agent_type.clone(),
                 agent_id: agent_id.clone(),

@@ -13,6 +13,7 @@ use serde_json::Value;
 const CLAUDE_SESSION: &str = "0e680a01-b902-4e86-85dc-4130d88ff14e";
 const CLAUDE_MEDIATED_SESSION: &str = "local-1788698405319-2755715";
 const PI_SESSION: &str = "01a076b1-f309-7744-9398-6b4cad94412e";
+const CODEX_SESSION: &str = "local-1789354791021-86116";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -190,6 +191,49 @@ fn the_recorded_pi_session_holds_one_mediated_crossing_under_pis_session_id() {
     );
     assert!(
         report.contains("mediated   grounded  https://example.com/"),
+        "{report}"
+    );
+}
+
+/// The Codex CLI session: the client named itself, and the one mediated
+/// crossing carries that name beside the host the registration passed.
+#[test]
+fn the_recorded_codex_session_names_its_client_and_holds_one_mediated_crossing() {
+    let home = home_with("codex");
+    let recorded = records(home.path(), CODEX_SESSION);
+    let identified: Vec<&Value> = recorded
+        .iter()
+        .filter(|r| r["event"] == "client_identified")
+        .collect();
+    assert_eq!(identified.len(), 1);
+    assert_eq!(identified[0]["payload"]["host"], "codex");
+    assert_eq!(
+        identified[0]["payload"]["client"]["name"],
+        "codex-mcp-client"
+    );
+    assert_eq!(identified[0]["payload"]["client"]["version"], "0.154.0");
+    assert_eq!(identified[0]["payload"]["protocol_version"], "2025-06-18");
+    let mediated: Vec<&Value> = recorded
+        .iter()
+        .filter(|r| r["event"] == "crossing_mediated")
+        .collect();
+    assert_eq!(mediated.len(), 1);
+    assert_eq!(mediated[0]["payload"]["host"], "codex");
+    assert_eq!(mediated[0]["payload"]["client"]["name"], "codex-mcp-client");
+    assert_eq!(mediated[0]["payload"]["url"], "https://example.com");
+    assert_eq!(mediated[0]["payload"]["grounded"], true);
+    assert_eq!(mediated[0]["payload"]["http_status"], 200);
+    assert!(
+        recorded.iter().all(|r| r["event"] != "crossing_observed"),
+        "Codex registers no hook"
+    );
+    let report = session_report(home.path(), CODEX_SESSION);
+    assert!(
+        report.contains("crossings  0 observed, 1 mediated, 0 refused, 0 reconstructed"),
+        "{report}"
+    );
+    assert!(
+        report.contains("client     codex-mcp-client 0.154.0 via host codex"),
         "{report}"
     );
 }

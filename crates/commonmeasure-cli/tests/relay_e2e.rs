@@ -47,6 +47,39 @@ fn record_crossing_in(home: &Path, session: &str, cwd: &str, url: &str) {
     assert!(child.wait().expect("wait").success());
 }
 
+/// Record one refused crossing straight into a session log, in the shape the
+/// mediated server writes, in a stated working directory.
+fn record_refused_in(home: &Path, session: &str, cwd: &str, url: &str) {
+    let sessions = home.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(sessions.join(format!("{session}.ndjson")))
+        .unwrap();
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "seq": 99,
+            "event": "crossing_refused",
+            "payload": {
+                "session_id": session,
+                "timestamp": "2026-09-13T10:00:00.000Z",
+                "mode": "mediated",
+                "host": "claude-code",
+                "cwd": cwd,
+                "url": url,
+                "host_name": "www.example.com",
+                "grounded": false,
+                "licence": {"state": "unknown"},
+                "refusal": "access rule 1 (*) refuses host www.example.com.",
+            }
+        })
+    )
+    .unwrap();
+}
+
 fn clear_personal_egress(home: &Path) {
     std::fs::write(
         home.join("policy.json"),
@@ -316,11 +349,32 @@ fn the_relay_report_names_the_governing_engagement_that_cleared_what_it_delivere
     )
     .unwrap();
     record_crossing(home.path(), "s-cleared", "https://www.example.com/cleared");
+    // Two refusals in the cleared session and one in the client's: the
+    // cleared session's count crosses, the client's does not, and no
+    // refused URL or reason leaves with either.
+    record_refused_in(
+        home.path(),
+        "s-cleared",
+        "/work/personal",
+        "https://www.example.com/refused-one",
+    );
+    record_refused_in(
+        home.path(),
+        "s-cleared",
+        "/work/personal",
+        "https://www.example.com/refused-two",
+    );
     record_crossing_in(
         home.path(),
         "s-client",
         "/work/client-a",
         "https://www.example.com/client",
+    );
+    record_refused_in(
+        home.path(),
+        "s-client",
+        "/work/client-a",
+        "https://www.example.com/client-refused",
     );
 
     let delivered: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -359,7 +413,25 @@ fn the_relay_report_names_the_governing_engagement_that_cleared_what_it_delivere
         .map(|batch| batch["events"].as_array().map(Vec::len).unwrap_or(0) as u64)
         .sum();
     assert!(received > 0, "the cleared crossing left the machine");
+    assert_eq!(batches.len(), 1, "one session projected, one batch");
+    assert_eq!(
+        batches[0]["refused"], 2,
+        "the cleared session's refusals cross as a count: {}",
+        batches[0]
+    );
+    let wire = batches[0].to_string();
+    assert!(
+        !wire.contains("refused-one") && !wire.contains("access rule"),
+        "{wire}"
+    );
     drop(batches);
+    assert!(
+        report.contains(
+            "2 refused crossings in the projected sessions, on the wire as a count per \
+             session with no URL and no reason"
+        ),
+        "the summary states the count that crossed; got: {report}"
+    );
 
     assert_eq!(
         events_under(&report, "personal"),
@@ -601,4 +673,121 @@ fn run_uuid(marker: &str) -> String {
         &hex[17..20],
         &hex[20..32]
     )
+}
+
+/// A refusal after a session's last admitted crossing still reaches the
+/// receiver across a relay boundary: the count travels only on a batch, so
+/// the session's last delivered event goes again under its own id carrying
+/// the new count, the receiver takes the larger count, and the summary
+/// states what was put on the wire and nothing more.
+#[test]
+fn a_refusal_after_the_last_admitted_crossing_still_reaches_the_receiver() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "s-late", "https://www.example.com/admitted");
+
+    // A receiver that, like a conforming one, counts an event once by its
+    // id, so a carried event is accepted and not created again.
+    let delivered: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured = delivered.clone();
+    let seen: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    let server = commonmeasure_http::Server::bind("127.0.0.1:0").unwrap();
+    let mut receiver = server
+        .spawn(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let mut seen = seen.lock().unwrap();
+            let created = body["events"]
+                .as_array()
+                .map(|events| {
+                    events
+                        .iter()
+                        .filter_map(|event| event["id"].as_str().map(str::to_owned))
+                        .filter(|id| seen.insert(id.clone()))
+                        .count()
+                })
+                .unwrap_or(0);
+            captured.lock().unwrap().push(body);
+            commonmeasure_http::Response::json(
+                201,
+                &json!({"status": "ok", "events_created": created}).to_string(),
+            )
+        })
+        .unwrap();
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+
+    let first = relay(home.path(), &[]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(delivered.lock().unwrap().len(), 1);
+    assert_eq!(delivered.lock().unwrap()[0]["refused"], 0);
+    let first_ids: Vec<Value> = delivered.lock().unwrap()[0]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["id"].clone())
+        .collect();
+
+    // Two refusals after everything admitted has already left.
+    record_refused_in(
+        home.path(),
+        "s-late",
+        "/work/personal",
+        "https://www.example.com/one",
+    );
+    record_refused_in(
+        home.path(),
+        "s-late",
+        "/work/personal",
+        "https://www.example.com/two",
+    );
+    let second = relay(home.path(), &[]);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let report = String::from_utf8_lossy(&second.stdout).to_string();
+    {
+        let batches = delivered.lock().unwrap();
+        assert_eq!(batches.len(), 2, "a batch went for the count alone");
+        let latest = &batches[1];
+        assert_eq!(latest["refused"], 2, "{latest}");
+        let carried: Vec<Value> = latest["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["id"].clone())
+            .collect();
+        assert_eq!(carried.len(), 1);
+        assert_eq!(
+            carried[0],
+            *first_ids.last().unwrap(),
+            "the session's last delivered event, under its own id"
+        );
+        assert!(!latest.to_string().contains("example.com/one"));
+    }
+    assert!(
+        report.contains("2 refused crossings in the projected sessions"),
+        "{report}"
+    );
+    assert!(report.contains("0 new at the receiver"), "{report}");
+
+    // Nothing has moved: nothing goes, and the summary says so.
+    let third = relay(home.path(), &[]);
+    assert!(third.status.success());
+    let report = String::from_utf8_lossy(&third.stdout).to_string();
+    assert_eq!(delivered.lock().unwrap().len(), 2);
+    assert!(
+        report.contains("0 refused crossings in the projected sessions"),
+        "{report}"
+    );
+    receiver.stop();
 }

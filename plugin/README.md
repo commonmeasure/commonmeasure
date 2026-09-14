@@ -48,7 +48,7 @@ no reinstall of the plugin.
 From a release, with no checkout, `install.sh` places the binary and can
 unpack the standalone archive beside it (`docs/RELEASE.md` §Installing from a
 release). From this checkout, with the binary already installed
-(`docs/GETTING-STARTED.md` §2):
+(`docs/GETTING-STARTED.md` §8):
 
 ```sh
 claude plugin marketplace add "$PWD"   # from the repository root
@@ -77,7 +77,7 @@ gives.
 beside it.
 
 For `context_search`, put provider keys in `~/.commonmeasure/credentials.env`
-(`docs/GETTING-STARTED.md` §4; the rules are in `DECISIONS.md` §Integration
+(`docs/GETTING-STARTED.md` §3; the rules are in `DECISIONS.md` §Integration
 and ownership). Check what is configured with:
 
 ```sh
@@ -269,17 +269,30 @@ commonmeasure install codex      # one [mcp_servers.commonmeasure] table in ~/.c
 commonmeasure uninstall codex
 ```
 
+The table names the binary, the arguments `mcp --host codex`, and
+`default_tools_approval_mode = "approve"`. Codex asks before every MCP tool
+call unless the table says otherwise, and its non-interactive runs
+(`codex exec`) refuse a call that would ask, so without that line the
+mediated tools are unusable unattended and cost a click per fetch
+interactively. `doctor codex` reports whether the line is there. One table
+serves three programs: the Codex CLI, the ChatGPT desktop app (which
+carries Codex) and the Codex IDE extension all read `~/.codex/config.toml`
+and start the server from it.
+
 Every Codex session then carries `context_fetch`, `context_search` and
 `context_status` under the same operator policy as Claude Code, with
 crossings recorded as `host: codex` under the server's own `local-*` session
-id. Codex has lifecycle hooks, and Common Measure registers none: Codex's
-hooks documentation states that hosted tools such as its web search do not
-use the local tool path and fire no hook, and its shell reaches the web as
-command text with no response a hook could attribute to a URL, so an
-observed matcher there could witness only third-party MCP results, which
-are retrieved-not-grounded rows. Codex sessions therefore have no observed
-floor, no turn boundaries and no nudge, and the record claims nothing about
-any of them (`DECISIONS.md` §Integration and ownership).
+id, each carrying the client's own name and version (`codex-mcp-client`,
+with the version telling the CLI from the desktop app;
+`docs/contracts/session-evidence.md` §Client identity). Codex has lifecycle
+hooks, and Common Measure registers none: Codex's hooks documentation
+states that hosted tools such as its web search do not use the local tool
+path and fire no hook, and its shell reaches the web as command text with
+no response a hook could attribute to a URL, so an observed matcher there
+could witness only third-party MCP results, which are retrieved-not-grounded
+rows. Codex sessions therefore have no observed floor, no turn boundaries
+and no nudge, and the record claims nothing about any of them
+(`DECISIONS.md` §Integration and ownership).
 
 Pi gets the mediated half through an extension, because Pi has no MCP
 client of its own:
@@ -300,6 +313,48 @@ start leaves the session without the tools and says so once in Pi's
 notifications; nothing answers in its place. Pi has no web tool of its own,
 so there is nothing to observe: no observed floor, no turn boundaries, no
 nudge.
+
+## Claude Desktop and Cursor
+
+Claude Desktop gets the mediated half only, in the application's own file:
+
+```sh
+commonmeasure install claude-desktop   # mcpServers.commonmeasure in claude_desktop_config.json
+commonmeasure uninstall claude-desktop
+```
+
+Claude Desktop loads the entry at its next start and has no hook surface,
+so nothing is observed. It starts one server for its chat client and one
+for its local agent mode; each server that makes a call leaves its own
+session, recorded as `host: claude-desktop` with the client's own name
+(`claude-ai` or `local-agent-mode-commonmeasure`), and a server asked for
+nothing leaves no file; `commonmeasure session` shows which. The
+server's working directory is `/`, so no directory-keyed policy scope
+applies to a Claude Desktop session.
+
+Cursor gets both halves, in its two global files:
+
+```sh
+commonmeasure install cursor    # ~/.cursor/mcp.json and ~/.cursor/hooks.json
+commonmeasure uninstall cursor
+```
+
+The server is `mcp --host cursor`; the hooks are Cursor's `sessionStart`,
+`postToolUse`, `beforeSubmitPrompt` and `stop`, each running `hook <event>
+--host cursor`, the same four moments the Claude Code registration hooks.
+Cursor's `postToolUse` carries every tool's output, so a third-party MCP
+result is an observed crossing under Cursor's `conversation_id`; our own
+tools are not observed a second time; the nudge reaches the session as the
+JSON field Cursor reads at session start. Cursor can load
+`~/.claude/settings.json` hooks too (its settings' "include third-party
+plugins" switch, off by default), and its documentation does not say which
+payload shape those hooks receive, which is why every hook command
+`install claude` writes says `--host claude-code` and the reader refuses a
+payload that is not Claude Code's shape, or any payload when Cursor's
+`CURSOR_PROJECT_DIR` is in the environment, recording and printing
+nothing. `uninstall` for either host deletes no file and leaves the
+`mcpServers` and `hooks` objects in place, empty if ours was the only
+entry.
 
 ## Policy
 
@@ -399,9 +454,12 @@ The actions: `allow` passes the host, including past an `allowed_source_host`
 list that does not name it; `refuse` is a breach; `require_licence` admits
 the source only when the supplier declared exactly the named licence, an
 unknown licence being unknown rather than permitted; `require_mediation`
-is accepted by the loader and met at admission, and no other path reads
-it, so an observed crossing is not checked against it. The order of checks
-at admission is fixed:
+states that a host is to be read only where policy rules before the content
+moves, which every mediated fetch and every batch-run source does, so it
+passes those like `allow`, while an observed crossing, which nothing ruled
+on, is recorded without being checked against it. Set it where the policy
+file should state that intent; where a host must not be read at all, use
+`refuse`. The order of checks at admission is fixed:
 the `denied_source_host` set first, because a denial is absolute and no rule
 allows past it, then the access rules, then the `allowed_source_host` set,
 then `required_licence`. The rules in a scope's `constraints` govern that
@@ -414,6 +472,21 @@ addresses, for an operator running a local documentation server. It is off by
 default and it does **not** affect observed capture, which holds a floor:
 passive capture sees everything and never asks, so localhost, private networks
 and `file://` stay out of the record regardless of this setting.
+
+The PII detector scans the text of every mediated crossing and records what
+it found, as categories and offsets, never the identifiers themselves. What
+`strict` does with a finding depends on where the text came from. On an
+internal or private source (a named internal prefix, a loopback or private
+address reached under `allow_private_hosts`, the operator's own corpus)
+`strict` refuses the crossing, as it does every breach. On a public source
+the crossing is admitted with the finding recorded in `breach`: a public
+page's published contact addresses are not the personal data the detector
+exists to keep out of a model, and a firm whose first admitted source is a
+government page should not find it refused for the department's email
+address. `refuse_on_pii: true`, at the top level or on a scope, restores
+the refusal on every source for an operator that wants it; it is off by
+default. `observe` and `prefer` carry the finding on every source, as they
+carry every breach.
 
 The floor is a default, and there is one way to lower it:
 `record_internal_prefixes` names internal prefixes
@@ -464,6 +537,18 @@ permissive. That includes a key the installed binary does not know: an
 unknown key fails the whole file (`policy.json is not a valid policy: unknown
 field "engagement"`), so a policy written for a newer binary refuses every
 mediated crossing on an older one until that binary is reinstalled.
+
+On a managed edge, one whose `deployment.json` pins a hub's signing key
+(`docs/contracts/policy-envelope.md`), the file is the hub's desired policy
+and the edge keeps it current itself: it fetches the signed envelope once
+at each session's start, through the `SessionStart` hook where the host has
+one and otherwise at the MCP server's start, waiting at most three seconds,
+and again before each `commonmeasure relay`; `commonmeasure policy sync`
+does the same on demand. An
+envelope that has expired keeps enforcing the policy it carried; the
+session record, `doctor` and `status` say `stale since` its expiry until
+the hub renews it or publishes a later revision. Nothing about a refresh is
+said to the agent, and a hub that cannot be reached changes nothing.
 
 ## What this does not contain
 

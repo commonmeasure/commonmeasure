@@ -17,7 +17,10 @@ use chrono::Utc;
 use commonmeasure_http::{Request, Response};
 use commonmeasure_runtime::allowance::{AllowanceContext, GateDecision, Reservation};
 use commonmeasure_runtime::policy::Ruling;
-use commonmeasure_supply::{Acquisition, SupplyError, supplier_from_environment};
+use commonmeasure_runtime::processor::pii::SourceClass;
+use commonmeasure_supply::{
+    Acquisition, INTERNAL_PROVIDER, SupplyError, supplier_from_environment,
+};
 use commonmeasure_types::{
     AcquisitionCharge, ContextEnvelope, ContextJob, Gap, GapReason, LicenceState, PolicyMode,
     ProviderCapability,
@@ -50,6 +53,16 @@ pub struct McpServer {
     session: SessionLog,
     policy: SessionPolicy,
     host: String,
+    /// What the client said about itself in `initialize`, once it has. The
+    /// `--host` value is the registration's word; this is the program's
+    /// own, stamped on every crossing this server records. Held here and
+    /// written to the log only before the first crossing, so a server that
+    /// is started and never asked for anything leaves no session file.
+    client: Option<crate::session::ClientIdentity>,
+    /// The protocol version the client asked for in `initialize`.
+    client_protocol: Option<String>,
+    /// Whether the `client_identified` record has been written.
+    client_recorded: bool,
     /// The directory this server was started in. Stdio carries no cwd, but
     /// the server inherits the harness's, and it is the same directory the
     /// session's policy scope was resolved against.
@@ -97,6 +110,9 @@ impl McpServer {
             session,
             policy,
             host: host.to_owned(),
+            client: None,
+            client_protocol: None,
+            client_recorded: false,
             cwd,
             credentials,
             declarations: DeclarationCache::open(&home),
@@ -156,23 +172,61 @@ impl McpServer {
 
     fn handle_request(&mut self, id: Value, method: &str, params: &Value) -> Value {
         match method {
-            "initialize" => ok_response(
-                id,
-                json!({
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {
-                        "name": "commonmeasure",
-                        "title": "Common Measure mediated context",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    }
-                }),
-            ),
+            "initialize" => {
+                self.identify_client(params);
+                ok_response(
+                    id,
+                    json!({
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {
+                            "name": "commonmeasure",
+                            "title": "Common Measure mediated context",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        }
+                    }),
+                )
+            }
             "ping" => ok_response(id, json!({})),
             "tools/list" => ok_response(id, json!({"tools": tool_definitions()})),
             "tools/call" => self.handle_tool_call(id, params),
             _ => error_response(id, -32601, &format!("method {method} not found")),
         }
+    }
+
+    /// Keep what the client said about itself. A client that sends no
+    /// `clientInfo` leaves no record and no name on its crossings: the
+    /// absence is the fact, and no default is put in its place. Nothing is
+    /// written here: hosts start a server per window or per launch, and a
+    /// server that is never asked for anything must leave no session file.
+    fn identify_client(&mut self, params: &Value) {
+        let info = &params["clientInfo"];
+        let Some(name) = info["name"].as_str() else {
+            return;
+        };
+        self.client = Some(crate::session::ClientIdentity {
+            name: name.to_owned(),
+            version: info["version"].as_str().unwrap_or_default().to_owned(),
+            title: info["title"].as_str().map(str::to_owned),
+        });
+        self.client_protocol = params["protocolVersion"].as_str().map(str::to_owned);
+    }
+
+    /// Write the `client_identified` record once, before the first record a
+    /// tool call leaves, so it precedes every crossing in the log. A failed
+    /// append cannot fail the tool call; the log owes a gap.
+    fn record_client(&mut self) {
+        if self.client_recorded {
+            return;
+        }
+        if let Some(client) = &self.client {
+            let _ = self.session.record_client_identified(
+                &self.host,
+                client,
+                self.client_protocol.as_deref(),
+            );
+        }
+        self.client_recorded = true;
     }
 
     fn handle_tool_call(&mut self, id: Value, params: &Value) -> Value {
@@ -209,6 +263,7 @@ impl McpServer {
     /// `Content-Usage` and `Link` headers are read and ruled on again, so a
     /// statement the page carries can still keep its bytes out of context.
     fn tool_fetch(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.record_client();
         let url = arguments
             .get("url")
             .and_then(Value::as_str)
@@ -519,6 +574,8 @@ impl McpServer {
         // screen; either refusing keeps the bytes out.
         let (pii_invocation, pii) = commonmeasure_runtime::processor::pii::invoke(
             self.policy.mode(),
+            source_class(&self.policy, &final_url, None),
+            self.policy.refuse_on_pii(),
             &final_url,
             &basis,
             &text,
@@ -556,8 +613,13 @@ impl McpServer {
             facts.identity = Some(presented.clone());
             facts.allowance = allowance_record.clone();
             self.record(facts);
+            // The page was fetched: the request left the machine and the
+            // bytes are hashed on the refused crossing. What policy stopped
+            // is the text entering the context, and the wording says that
+            // rather than claiming no request was made.
             return Err(format!(
-                "refused before the crossing: {reason} The finding is recorded in {}.",
+                "refused before the content entered the context: {reason} The page was \
+                 fetched and its hash is on the record; the finding is recorded in {}.",
                 self.session.path().display()
             ));
         }
@@ -917,6 +979,7 @@ impl McpServer {
     }
 
     fn tool_search(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.record_client();
         let query = arguments
             .get("query")
             .and_then(Value::as_str)
@@ -1121,6 +1184,12 @@ impl McpServer {
                 (false, Some(text)) => {
                     let (pii_invocation, pii) = commonmeasure_runtime::processor::pii::invoke(
                         self.policy.mode(),
+                        source_class(
+                            &self.policy,
+                            &envelope.source_url,
+                            Some(&acquisition.provider),
+                        ),
+                        self.policy.refuse_on_pii(),
                         &envelope.source_url,
                         &envelope.source_url,
                         text,
@@ -1254,6 +1323,7 @@ impl McpServer {
         json!({
             "session_id": self.session.session_id(),
             "host": self.host,
+            "client": self.client,
             "evidence": self.session.path().display().to_string(),
             "policy": self.policy.describe(),
             "credentials": self.credentials.to_value(),
@@ -1271,6 +1341,7 @@ impl McpServer {
             timestamp: Utc::now(),
             mode: CrossingMode::Mediated,
             host: self.host.clone(),
+            client: self.client.clone(),
             tool: None,
             agent_type: None,
             agent_id: None,
@@ -1539,6 +1610,22 @@ fn unavailable_credential(provider: &str, variable: &str, path: &std::path::Path
          harness — the environment wins where both name it. No search was attempted.",
         path.display()
     )
+}
+
+/// Where a source stands for the PII detector's strict rule, from the
+/// classification policy already makes and nothing new: a named internal
+/// prefix, a loopback or private address (which the mediated path reaches
+/// only under `allow_private_hosts`) and the operator's own corpus are
+/// internal; everything else is public.
+fn source_class(policy: &SessionPolicy, url: &str, provider: Option<&str>) -> SourceClass {
+    if provider == Some(INTERNAL_PROVIDER)
+        || grounding::matches_internal_prefix(url, policy.internal_prefixes())
+        || !grounding::recordable(url)
+    {
+        SourceClass::Internal
+    } else {
+        SourceClass::Public
+    }
 }
 
 /// Two breaches on one crossing stay two sentences on one record.
@@ -2328,5 +2415,66 @@ mod tests {
         assert!(detail.contains("Money moved"), "{detail}");
         assert!(detail.contains("0.007000 USD"), "{detail}");
         assert!(detail.contains(&reservation.id.to_string()), "{detail}");
+    }
+
+    /// The seam of the PII rule under strict: the public page from the
+    /// partner rehearsal is admitted with the finding recorded; a named
+    /// internal prefix, a private address and the operator's corpus are
+    /// refused; the switch refuses the public page too. A loopback origin
+    /// cannot stand in for a public source here, because the privacy floor
+    /// classifies it as private, so the rule is held at the classifier and
+    /// the processor, and the public case is exercised live.
+    #[test]
+    fn a_public_source_is_admitted_with_the_finding_recorded_and_the_other_classes_are_refused() {
+        use commonmeasure_runtime::processor::pii;
+        let text = "Contact the Land Registry at customersupport@landregistry.gov.uk.";
+        let public = "https://www.gov.uk/government/organisations/land-registry";
+        let (home, strict) = server(
+            r#"{"policy_mode":"strict","allow_private_hosts":true,
+                "record_internal_prefixes":["https://rag.corp.internal/"]}"#,
+        );
+        let rule = |url: &str, provider: Option<&str>| {
+            let class = source_class(&strict.policy, url, provider);
+            let (_, ruling) = pii::invoke(
+                strict.policy.mode(),
+                class,
+                strict.policy.refuse_on_pii(),
+                url,
+                url,
+                text,
+                None,
+            );
+            (class, ruling.is_refusal())
+        };
+        assert_eq!(rule(public, None), (SourceClass::Public, false));
+        assert_eq!(
+            rule("https://rag.corp.internal/contacts", None),
+            (SourceClass::Internal, true)
+        );
+        assert_eq!(
+            rule("http://127.0.0.1:8080/handbook", None),
+            (SourceClass::Internal, true)
+        );
+        assert_eq!(
+            rule("file:///corpus/contacts.md", Some(INTERNAL_PROVIDER)),
+            (SourceClass::Internal, true)
+        );
+        assert_eq!(
+            rule("https://a.example/result", Some("exa")),
+            (SourceClass::Public, false)
+        );
+
+        let (_, switched) = server(r#"{"policy_mode":"strict","refuse_on_pii":true}"#);
+        let (_, ruling) = pii::invoke(
+            switched.policy.mode(),
+            source_class(&switched.policy, public, None),
+            switched.policy.refuse_on_pii(),
+            public,
+            public,
+            text,
+            None,
+        );
+        assert!(ruling.is_refusal(), "the switch refuses the public page");
+        drop(home);
     }
 }

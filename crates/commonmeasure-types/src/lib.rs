@@ -5,6 +5,7 @@
 //! provider's wire format, which is what lets the same types describe a
 //! recorded replay and a live run without either becoming a special case.
 
+pub mod address;
 mod allowance;
 pub mod canonical;
 mod envelope;

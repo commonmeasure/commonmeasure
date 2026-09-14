@@ -68,9 +68,19 @@ fn converse_as_asserted(
     asserted: Option<&str>,
     requests: &[Value],
 ) -> Vec<Value> {
+    converse_as_host(home, cwd, asserted, "claude-code", requests)
+}
+
+fn converse_as_host(
+    home: &Path,
+    cwd: Option<&Path>,
+    asserted: Option<&str>,
+    host: &str,
+    requests: &[Value],
+) -> Vec<Value> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
     command
-        .args(["mcp", "--host", "claude-code", "--session", "test-session"])
+        .args(["mcp", "--host", host, "--session", "test-session"])
         .env("COMMONMEASURE_HOME", home);
     if let Some(asserted) = asserted {
         command.env("COMMONMEASURE_PRINCIPAL", asserted);
@@ -156,6 +166,189 @@ fn cwd_and_asserted_principal_cannot_acquire_another_principals_authority() {
 fn call(name: &str, arguments: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
            "params": {"name": name, "arguments": arguments}})
+}
+
+/// The protocol's handshake, with or without the client naming itself.
+fn initialize(client: Option<Value>) -> Value {
+    let mut params = json!({"protocolVersion": "2025-06-18", "capabilities": {}});
+    if let Some(client) = client {
+        params["clientInfo"] = client;
+    }
+    json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": params})
+}
+
+/// The client's name and version travel from `initialize` to the log: one
+/// `client_identified` record written before the first crossing, and the
+/// same `client` on a carried crossing and on a refused one.
+#[test]
+fn the_clients_initialize_name_is_recorded_once_and_stamped_on_crossings_and_refusals() {
+    let origin = origin("named client");
+    let home = tempfile::tempdir().expect("tempdir");
+    // Loopback is mediated only when the operator allows it; `localhost`
+    // is then refused by name, so one origin serves the carried crossing
+    // (by address) and the refused one (by name).
+    write_policy(
+        home.path(),
+        r#"{"policy_mode":"strict","allow_private_hosts":true,
+            "constraints":[{"kind":"denied_source_host","host":"localhost"}]}"#,
+    );
+    let port = origin.url().rsplit(':').next().expect("port").to_owned();
+    let client = json!({"name": "codex-mcp-client", "version": "0.154.0", "title": "Codex"});
+    let responses = converse(
+        home.path(),
+        &[
+            initialize(Some(client.clone())),
+            call("context_fetch", json!({"url": origin.url()})),
+            call(
+                "context_fetch",
+                json!({"url": format!("http://localhost:{port}/")}),
+            ),
+        ],
+    );
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[1]["result"]["isError"], false);
+    assert_eq!(responses[2]["result"]["isError"], true);
+
+    let recorded = records(home.path());
+    let identified: Vec<&Value> = recorded
+        .iter()
+        .filter(|record| record["event"] == "client_identified")
+        .collect();
+    assert_eq!(identified.len(), 1, "written once, not per call");
+    assert_eq!(identified[0]["payload"]["client"], client);
+    assert_eq!(identified[0]["payload"]["protocol_version"], "2025-06-18");
+    assert_eq!(identified[0]["payload"]["host"], "claude-code");
+    let first_crossing = recorded
+        .iter()
+        .position(|record| {
+            record["event"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("crossing_"))
+        })
+        .expect("a crossing");
+    let identified_at = recorded
+        .iter()
+        .position(|record| record["event"] == "client_identified")
+        .unwrap();
+    assert!(
+        identified_at < first_crossing,
+        "recorded before the first crossing"
+    );
+
+    let crossings = crossings(home.path());
+    assert_eq!(crossings.len(), 2);
+    assert_eq!(crossings[0]["event"], "crossing_mediated");
+    assert_eq!(crossings[0]["payload"]["client"], client);
+    assert_eq!(crossings[1]["event"], "crossing_refused");
+    assert_eq!(crossings[1]["payload"]["client"], client);
+    let status = payload(
+        &converse(
+            home.path(),
+            &[
+                initialize(Some(client.clone())),
+                call("context_status", json!({})),
+            ],
+        )[1],
+    );
+    assert_eq!(status["client"], client);
+}
+
+/// A client that names itself to nobody leaves no `client_identified`
+/// record and no `client` field: the absence is the fact.
+#[test]
+fn a_client_that_sends_no_client_info_leaves_no_client_record_or_field() {
+    let origin = origin("anonymous client");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+    let responses = converse(
+        home.path(),
+        &[
+            initialize(None),
+            call("context_fetch", json!({"url": origin.url()})),
+        ],
+    );
+    assert_eq!(responses[1]["result"]["isError"], false);
+    let recorded = records(home.path());
+    assert!(
+        recorded
+            .iter()
+            .all(|record| record["event"] != "client_identified"),
+        "{recorded:?}"
+    );
+    let crossings = crossings(home.path());
+    assert_eq!(crossings.len(), 1);
+    assert!(
+        crossings[0]["payload"].get("client").is_none(),
+        "{}",
+        crossings[0]
+    );
+}
+
+/// A host starts a server per window or per launch. One that is initialised
+/// and never asked for anything leaves no session file at all.
+#[test]
+fn an_initialised_server_that_is_asked_for_nothing_leaves_no_session_file() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let responses = converse(
+        home.path(),
+        &[initialize(Some(
+            json!({"name": "claude-ai", "version": "0.1.0"}),
+        ))],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_eq!(
+        responses[0]["result"]["serverInfo"]["name"],
+        "commonmeasure"
+    );
+    assert!(
+        !home.path().join("sessions/test-session.ndjson").exists(),
+        "an initialised server that made no crossing wrote a session file"
+    );
+}
+
+/// `--host` takes the hosts that reach the server through a configuration
+/// write, and a session under one records that host; a value the server
+/// does not know is refused at start with the list, never recorded as the
+/// default.
+#[test]
+fn the_host_argument_records_the_named_host_and_refuses_an_unknown_one_with_the_list() {
+    let origin = origin("cursor session");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+    let responses = converse_as_host(
+        home.path(),
+        None,
+        None,
+        "cursor",
+        &[
+            initialize(Some(json!({"name": "cursor-vscode", "version": "1.0.0"}))),
+            call("context_fetch", json!({"url": origin.url()})),
+        ],
+    );
+    assert_eq!(responses[1]["result"]["isError"], false);
+    let crossings = crossings(home.path());
+    assert_eq!(crossings[0]["payload"]["host"], "cursor");
+    assert_eq!(crossings[0]["payload"]["client"]["name"], "cursor-vscode");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["mcp", "--host", "windsurf", "--session", "test-session"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert!(!output.status.success(), "an unknown host must be refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for host in [
+        "claude-code",
+        "codex",
+        "pi",
+        "claude-desktop",
+        "cursor",
+        "copilot-cli",
+        "vscode",
+    ] {
+        assert!(stderr.contains(host), "the refusal lists {host}: {stderr}");
+    }
 }
 
 /// A tool result carries its payload as text inside a content block.
@@ -396,7 +589,7 @@ fn observe_mode_carries_the_crossing_and_still_records_it() {
 /// agent. The refusal, the invocation and the withheld content hash are all
 /// on the record.
 #[test]
-fn a_fetch_carrying_pii_is_refused_in_strict_mode_and_recorded() {
+fn a_fetch_carrying_pii_from_a_private_address_is_refused_in_strict_mode_and_recorded() {
     let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
     let home = tempfile::tempdir().expect("tempdir");
     write_policy(
@@ -411,7 +604,8 @@ fn a_fetch_carrying_pii_is_refused_in_strict_mode_and_recorded() {
     assert_eq!(responses[0]["result"]["isError"], true);
     let error = error_text(&responses[0]);
     assert!(
-        error.contains("refused before the crossing") && error.contains("PII detector"),
+        error.contains("refused before the content entered the context")
+            && error.contains("PII detector"),
         "{error}"
     );
     assert!(
@@ -447,6 +641,86 @@ fn a_fetch_carrying_pii_is_refused_in_strict_mode_and_recorded() {
             .to_string()
             .contains("casework.team@example.co.uk"),
         "the identifier itself must never enter the evidence record"
+    );
+}
+
+/// A named internal prefix is internal supply: under `strict` a finding
+/// there refuses the crossing as a private address does, and the record
+/// carries the finding and the internal stamp.
+#[test]
+fn a_fetch_carrying_pii_from_a_named_internal_prefix_is_refused_in_strict_mode() {
+    let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(
+        home.path(),
+        &format!(
+            r#"{{"policy_mode":"strict","record_internal_prefixes":["{}/"]}}"#,
+            origin.url()
+        ),
+    );
+
+    let responses = converse(
+        home.path(),
+        &[call(
+            "context_fetch",
+            json!({"url": format!("{}/contacts", origin.url())}),
+        )],
+    );
+    assert_eq!(responses[0]["result"]["isError"], true);
+    let error = error_text(&responses[0]);
+    assert!(
+        error.contains("refused before the content entered the context")
+            && error.contains("PII detector"),
+        "{error}"
+    );
+    let recorded = crossings(home.path());
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["event"], "crossing_refused");
+    assert_eq!(recorded[0]["payload"]["internal"], true);
+    assert!(
+        !recorded[0]
+            .to_string()
+            .contains("casework.team@example.co.uk"),
+        "the identifier itself must never enter the evidence record"
+    );
+}
+
+/// `refuse_on_pii` is accepted by the loader, reported by `context_status`,
+/// and refuses a finding with the processor's wording. A loopback origin is
+/// private, which strict refuses without the switch too, so what this holds
+/// is the switch's path through the loader and the ruling; the public case
+/// the switch exists for is held at the seam in
+/// `crates/commonmeasure-harness/src/mcp.rs`.
+#[test]
+fn refuse_on_pii_is_loaded_reported_and_refuses_with_the_processor_wording() {
+    let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
+    let home = tempfile::tempdir().expect("tempdir");
+    write_policy(
+        home.path(),
+        r#"{"policy_mode":"strict","allow_private_hosts":true,"refuse_on_pii":true}"#,
+    );
+
+    let responses = converse(
+        home.path(),
+        &[
+            call("context_status", json!({})),
+            call("context_fetch", json!({"url": origin.url()})),
+        ],
+    );
+    assert_eq!(payload(&responses[0])["policy"]["refuse_on_pii"], true);
+    assert_eq!(responses[1]["result"]["isError"], true);
+    let error = error_text(&responses[1]);
+    assert!(
+        error.contains("refused before the content entered the context")
+            && error.contains("PII detector"),
+        "{error}"
+    );
+    let recorded = crossings(home.path());
+    assert_eq!(recorded[0]["event"], "crossing_refused");
+    assert!(
+        !recorded[0]
+            .to_string()
+            .contains("casework.team@example.co.uk")
     );
 }
 
@@ -517,7 +791,8 @@ fn a_fetch_carrying_an_injection_phrase_is_refused_in_strict_mode_and_recorded()
     assert_eq!(responses[0]["result"]["isError"], true);
     let error = error_text(&responses[0]);
     assert!(
-        error.contains("refused before the crossing") && error.contains("injection screen"),
+        error.contains("refused before the content entered the context")
+            && error.contains("injection screen"),
         "{error}"
     );
 
@@ -1515,7 +1790,7 @@ fn a_mediated_crossing_names_the_policy_identity_status_reports() {
     assert!(reported.starts_with("sha256:"), "{reported}");
     assert_eq!(
         status["policy"]["policy_identity"]["schema"],
-        "contextops-policy-identity/v1"
+        "contextops-policy-identity/v2"
     );
 
     let refused = converse_in(

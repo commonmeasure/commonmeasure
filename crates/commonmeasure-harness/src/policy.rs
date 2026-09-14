@@ -59,6 +59,17 @@ pub struct PolicyFile {
     /// to allow, explicitly.
     #[serde(default)]
     pub allow_private_hosts: bool,
+    /// Whether `strict` refuses a crossing for a PII finding on every
+    /// source. Off by default: a finding on a public source is recorded on
+    /// the crossing and the crossing is admitted, because a public page's
+    /// published contact details are not the personal data the detector
+    /// exists to keep out of a model, and `strict` refuses a finding only
+    /// on an internal or private source. An operator that wants the
+    /// refusal everywhere sets this (`DECISIONS.md` §Execution and
+    /// evidence). Left out of the file when false, so the loader's form of
+    /// a policy that does not set it is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refuse_on_pii: bool,
     /// Internal prefixes whose crossings may be recorded despite the privacy
     /// floor, for observed and mediated capture alike.
     ///
@@ -152,6 +163,10 @@ pub struct PolicyScope {
     pub constraints: Option<Vec<Constraint>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_private_hosts: Option<bool>,
+    /// Whether `strict` refuses a PII finding on every source in this
+    /// scope; inherits the top-level value when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refuse_on_pii: Option<bool>,
     /// Terms this scope holds, replacing the top-level list when present, as
     /// `constraints` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -296,6 +311,7 @@ impl Default for PolicyFile {
             scopes: Vec::new(),
             principals: Vec::new(),
             allow_private_hosts: false,
+            refuse_on_pii: false,
             record_internal_prefixes: Vec::new(),
             terms: Vec::new(),
         }
@@ -949,6 +965,9 @@ impl PolicyDocument {
             if let Some(allow) = overlay.allow_private_hosts {
                 file.allow_private_hosts = allow;
             }
+            if let Some(refuse) = overlay.refuse_on_pii {
+                file.refuse_on_pii = refuse;
+            }
             if let Some(terms) = overlay.terms {
                 file.terms = terms;
             }
@@ -1012,6 +1031,12 @@ impl SessionPolicy {
 
     pub fn mode(&self) -> PolicyMode {
         self.file.policy_mode
+    }
+
+    /// Whether `strict` refuses a PII finding on every source, rather than
+    /// on internal and private sources only ([`PolicyFile::refuse_on_pii`]).
+    pub fn refuse_on_pii(&self) -> bool {
+        self.file.refuse_on_pii
     }
 
     pub fn constraints(&self) -> &[Constraint] {
@@ -1108,6 +1133,7 @@ impl SessionPolicy {
             "allowances": self.allowances,
             "constraints": self.file.constraints,
             "allow_private_hosts": self.file.allow_private_hosts,
+            "refuse_on_pii": self.file.refuse_on_pii,
             // On the status surface deliberately: the console must be able to
             // say what internal supply is being recorded and on whose
             // authority. An empty list is the floor holding everywhere.
@@ -1131,7 +1157,7 @@ impl SessionPolicy {
 /// when a field is added to or removed from the pre-image, because every
 /// digest changes with it and a reader comparing digests across edges has
 /// to know they were computed over the same shape.
-pub const IDENTITY_SCHEMA: &str = "contextops-policy-identity/v1";
+pub const IDENTITY_SCHEMA: &str = "contextops-policy-identity/v2";
 
 /// The version of the resolution [`PolicyDocument::resolve`] performs: which
 /// scope wins, how a principal overlays, when a session fails closed. It
@@ -1277,6 +1303,7 @@ impl SessionPolicy {
             "constraints": constraints,
             "access_rules": access_rules,
             "allow_private_hosts": self.file.allow_private_hosts,
+            "refuse_on_pii": self.file.refuse_on_pii,
             "record_internal_prefixes": prefixes,
             "scope": self.scope,
             "governing_engagement": self.governing_engagement,
@@ -2104,6 +2131,7 @@ mod tests {
                 "mode",
                 "principal",
                 "record_internal_prefixes",
+                "refuse_on_pii",
                 "resolver",
                 "schema",
                 "scope",
@@ -2165,6 +2193,22 @@ mod tests {
             let submitted: Value = serde_json::from_str(text).expect("the vector is json");
             assert_eq!(canonical_digest(&submitted), expected);
         }
+
+        // A firm's policy as an owner writes it: the digest an envelope
+        // names it by, and the digest the fleet-status document reports
+        // once the loader's form is on disk.
+        const OWNER_FORM: &str = r#"{"policy_mode":"strict","constraints":[{"kind":"access_rule","host":"www.legislation.gov.uk","action":"allow"},{"kind":"access_rule","host":"www.gov.uk","action":"allow"},{"kind":"access_rule","host":"www.lexisnexis.co.uk","action":"require_licence","licence":"marlow-reid/lexisnexis-subscription-2026"},{"kind":"access_rule","host":"*.theguardian.com","action":"allow"},{"kind":"access_rule","host":"*","action":"refuse"}],"scopes":[{"match":"/matters/confidential-","engagement":"client-confidential","allow_telemetry_egress":false,"constraints":[{"kind":"access_rule","host":"*","action":"refuse"}]},{"match":"/matters/MR-2026-014","engagement":"MR-2026-014","allow_telemetry_egress":true}]}"#;
+        let owner_form: Value = serde_json::from_str(OWNER_FORM).expect("the vector is json");
+        assert_eq!(
+            canonical_digest(&owner_form),
+            "sha256:3e12b0ad164279bbda19308614de6f0ace54837b087d6b1390437f7140efa379"
+        );
+        let loaded: PolicyFile = serde_json::from_value(owner_form).expect("a policy");
+        assert_eq!(
+            canonical_digest(&serde_json::to_value(&loaded).expect("serialises")),
+            "sha256:0e7be44df686c8d1e0ad04a1d8c915e48fe3829bbb14345e02539647b982aacd",
+            "the loader's form adds only the two defaulted top-level fields"
+        );
 
         // The written-in-full vector is the loader's own save form, so a
         // policy that arrives in it digests the same after the round trip

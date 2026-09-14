@@ -28,6 +28,8 @@ const API_KEY: &str = "ak_hub_issued_secret";
 /// stores it and names it in `Signature-Agent` on every signed request; it
 /// never invents an origin of its own.
 const ORIGIN: &str = "https://hub.example";
+/// The raw Ed25519 public key this hub says it signs policy with, hex.
+const SIGNER_PUBLIC_KEY: &str = "3d6b4ad857f44f933254d7b5b4199800db753f9ec8183f4e0a0772e0031943b7";
 
 /// What the loopback hub saw and how it answers.
 #[derive(Default)]
@@ -38,11 +40,23 @@ struct HubState {
     key_id: Option<String>,
     /// Batches delivered to the telemetry receiver.
     batches: Vec<Value>,
-    /// `X-API-Key` values seen on status and disconnect calls.
+    /// `X-API-Key` values seen on status, disconnect and signer calls.
     status_keys: Vec<Option<String>>,
     disconnect_keys: Vec<Option<String>>,
+    signer_keys: Vec<Option<String>>,
     /// When set, the status route answers a revocation.
     revoked: Option<(&'static str, &'static str)>,
+    /// When set, every route taking the ingest key refuses it with 401,
+    /// which is what a key revoked at the hub or a closed organisation
+    /// answers.
+    refuse_key: bool,
+    /// When set, the signer route answers 401 to the edge, as a hub whose
+    /// signer route takes an owner's session and not an ingest key does.
+    refuse_signer: bool,
+    /// When set, the signer route also carries the absolute `policy_url`
+    /// the hub builds from its public origin, which the edge must prefer to
+    /// the address it typed.
+    signer_policy_url: Option<&'static str>,
 }
 
 fn thumbprint(x: &str) -> String {
@@ -99,7 +113,7 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                 }
                 ("GET", "/api/v1/enrolment/status") => {
                     state.status_keys.push(api_key.clone());
-                    if api_key.as_deref() != Some(API_KEY) {
+                    if api_key.as_deref() != Some(API_KEY) || state.refuse_key {
                         return Response::json(401, r#"{"detail":"a valid credential is required"}"#);
                     }
                     let (revoked_at, revocation) = match state.revoked {
@@ -124,8 +138,27 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                     }
                     Response::new(204, Vec::new())
                 }
+                // The policy signer an edge pins, read under the ingest key
+                // (`docs/contracts/policy-envelope.md` §The hub side).
+                ("GET", "/api/v1/policy/signer") => {
+                    state.signer_keys.push(api_key.clone());
+                    if api_key.as_deref() != Some(API_KEY) || state.refuse_signer {
+                        return Response::json(401, r#"{"detail":"a valid credential is required"}"#);
+                    }
+                    let mut signer = json!({
+                        "algorithm": "ed25519",
+                        "key_id": "hub-policy-test",
+                        "organisation": "11111111-1111-1111-1111-111111111111",
+                        "policy_path": "/api/v1/policy/desired",
+                        "public_key": SIGNER_PUBLIC_KEY,
+                    });
+                    if let Some(url) = state.signer_policy_url {
+                        signer["policy_url"] = json!(url);
+                    }
+                    Response::json(200, &signer.to_string())
+                }
                 ("POST", "/api/v1/telemetry/events") => {
-                    if api_key.as_deref() != Some(API_KEY) {
+                    if api_key.as_deref() != Some(API_KEY) || state.refuse_key {
                         return Response::json(401, r#"{"detail":"a valid credential is required"}"#);
                     }
                     let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -569,6 +602,281 @@ fn disconnect_with_the_hub_unreachable_removes_the_files_and_says_the_key_must_b
 
 /// A token the hub refuses leaves nothing behind: no key, no record, no
 /// relay configuration.
+/// `connect --managed` enrols and, under the ingest key it just received,
+/// reads the hub's policy signer and pins it in `deployment.json`, then
+/// makes a first policy synchronisation. Plain `connect` writes no
+/// deployment file: enrolment alone changes no policy mode.
+#[test]
+fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+
+    let local = tempfile::tempdir().unwrap();
+    let output = commonmeasure(local.path(), &["connect", &hub_url, "--token", TOKEN]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !local.path().join("deployment.json").exists(),
+        "enrolment without --managed pins nothing"
+    );
+    assert!(state.lock().unwrap().signer_keys.is_empty());
+
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &hub_url, "--token", TOKEN, "--managed"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "pinned, but the first synchronisation activated nothing, so the exit says so: {stdout}"
+    );
+
+    let deployment: Value =
+        serde_json::from_slice(&std::fs::read(home.path().join("deployment.json")).unwrap())
+            .unwrap();
+    assert_eq!(deployment["mode"], json!("managed"));
+    assert_eq!(deployment["signer"]["key_id"], json!("hub-policy-test"));
+    assert_eq!(deployment["signer"]["algorithm"], json!("ed25519"));
+    assert_eq!(deployment["signer"]["public_key"], json!(SIGNER_PUBLIC_KEY));
+    assert_eq!(
+        deployment["policy_url"],
+        json!(format!("{hub_url}/api/v1/policy/desired"))
+    );
+    assert_eq!(
+        deployment["organisation"],
+        json!("11111111-1111-1111-1111-111111111111")
+    );
+    assert_eq!(
+        state.lock().unwrap().signer_keys,
+        vec![Some(API_KEY.to_owned())],
+        "the signer was read under the ingest key, not anonymously"
+    );
+
+    // What was said: the pin, and the first synchronisation's outcome. This
+    // hub has published no revision, so its desired route answers 404, the
+    // synchronisation activates nothing, and the command exits non-zero
+    // after the account so a scripted setup sees it; the pin stands.
+    assert!(
+        stdout.contains("deployment  managed: signer hub-policy-test pinned in"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("first policy sync:"), "{stdout}");
+    assert!(stdout.contains("outcome       unreachable"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("did not activate a policy (unreachable)"),
+        "{stderr}"
+    );
+    let output = commonmeasure(home.path(), &["status", "--json"]);
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["deployment_mode"], json!("managed"), "{status}");
+
+    // Leaving the hub takes the deployment pinned to it along.
+    let output = commonmeasure(home.path(), &["disconnect"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !home.path().join("deployment.json").exists(),
+        "the deployment pinned to the hub being left survived disconnect"
+    );
+    assert!(
+        stdout.contains("deployment.json pinned this hub's policy"),
+        "{stdout}"
+    );
+}
+
+/// The hub's signer can carry the absolute `policy_url` built from its
+/// public origin; the edge pins that, not the address it was typed under,
+/// because the policy endpoint verifies signatures over that origin alone.
+#[test]
+fn connect_with_managed_prefers_the_hubs_absolute_policy_url_over_the_typed_address() {
+    let state = Arc::new(Mutex::new(HubState {
+        signer_policy_url: Some("https://hub.example/api/v1/policy/desired"),
+        ..HubState::default()
+    }));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &hub_url, "--token", TOKEN, "--managed"],
+    );
+    let deployment: Value =
+        serde_json::from_slice(&std::fs::read(home.path().join("deployment.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        deployment["policy_url"],
+        json!("https://hub.example/api/v1/policy/desired"),
+        "the hub's own URL, not {hub_url} plus the path"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("policy from https://hub.example/api/v1/policy/desired"),
+        "{stdout}"
+    );
+}
+
+/// A hub whose signer names a plain http policy URL off the machine is
+/// refused at pin time by the rule synchronisation applies: the edge stays
+/// enrolled and local, the exit is non-zero and nothing is pinned.
+#[test]
+fn connect_with_managed_refuses_a_plain_http_policy_url_off_the_machine() {
+    let state = Arc::new(Mutex::new(HubState {
+        signer_policy_url: Some("http://hub.internal/api/v1/policy/desired"),
+        ..HubState::default()
+    }));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &hub_url, "--token", TOKEN, "--managed"],
+    );
+    assert!(!output.status.success(), "a refused pin must exit non-zero");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "policy_url \"http://hub.internal/api/v1/policy/desired\" must be an https URL, or \
+             http to a loopback origin"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !home.path().join("deployment.json").exists(),
+        "nothing was pinned"
+    );
+    assert!(
+        home.path().join("enrolment.json").exists(),
+        "the enrolment stands"
+    );
+}
+
+/// A hub that does not let the ingest key read its signer leaves the edge
+/// enrolled and local, and says so with a non-zero exit: nothing is pinned.
+#[test]
+fn connect_with_managed_against_a_hub_that_refuses_the_signer_enrols_and_exits_non_zero() {
+    let state = Arc::new(Mutex::new(HubState {
+        refuse_signer: true,
+        ..HubState::default()
+    }));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &hub_url, "--token", TOKEN, "--managed"],
+    );
+    assert!(!output.status.success(), "a refused pin must exit non-zero");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
+    assert!(
+        stderr.contains("did not let this edge read the policy signer (401"),
+        "{stderr}"
+    );
+    assert!(
+        !home.path().join("deployment.json").exists(),
+        "nothing was pinned"
+    );
+    assert!(
+        home.path().join("enrolment.json").exists(),
+        "the enrolment stands"
+    );
+    assert_eq!(
+        state.lock().unwrap().signer_keys,
+        vec![Some(API_KEY.to_owned())]
+    );
+}
+
+/// A deployment that names another hub is not this hub's to remove.
+#[test]
+fn disconnect_keeps_a_deployment_pinned_to_another_hub() {
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(home.path(), &["connect", &hub_url, "--token", TOKEN]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::write(
+        home.path().join("deployment.json"),
+        json!({
+            "mode": "managed",
+            "signer": {"key_id": "other-hub-policy", "algorithm": "ed25519",
+                       "public_key": SIGNER_PUBLIC_KEY},
+            "policy_url": "https://other-hub.example/api/v1/policy/desired",
+            "organisation": "11111111-1111-1111-1111-111111111111",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = commonmeasure(home.path(), &["disconnect"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(home.path().join("deployment.json").exists(), "{stdout}");
+    assert!(
+        stdout.contains("deployment.json names another hub's policy"),
+        "{stdout}"
+    );
+}
+
+/// After the hub revokes the key, the status route and the receiver both
+/// answer 401. The relay prints the key's standing, the revocation, on its
+/// own line before the delivery failure, and exits non-zero with the spool
+/// intact.
+#[test]
+fn a_revoked_edges_relay_prints_the_revocation_before_the_delivery_failure() {
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(home.path(), &["connect", &hub_url, "--token", TOKEN]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let key_id = state.lock().unwrap().key_id.clone().unwrap();
+    record_cleared_crossing(home.path(), "s-revoked", "https://www.example.com/page");
+    state.lock().unwrap().refuse_key = true;
+
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(
+        !output.status.success(),
+        "delivery under a refused key must fail"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.starts_with(&format!("edge key {key_id}: revoked")),
+        "the standing comes first, on stdout: {stdout}"
+    );
+    assert!(stderr.contains("delivery to"), "{stderr}");
+    assert!(stderr.contains("401"), "{stderr}");
+    assert!(
+        home.path().join("relay/spool").exists(),
+        "undelivered batches stay spooled"
+    );
+}
+
 #[test]
 fn a_refused_exchange_writes_nothing() {
     let home = tempfile::tempdir().unwrap();

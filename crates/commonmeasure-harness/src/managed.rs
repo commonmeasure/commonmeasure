@@ -17,6 +17,7 @@
 //! is written.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -35,14 +36,34 @@ pub const ENVELOPE: &str = "contextops-policy-envelope/v1";
 /// so a hub can tell a policy fetch from a telemetry delivery in its logs.
 pub const USER_AGENT: &str = concat!("commonmeasure-managed/", env!("CARGO_PKG_VERSION"));
 
-/// The outcome recorded when this edge holds no key to authenticate with. The
-/// hub is not asked at all: it authenticates the edge by the signature, so an
-/// unenrolled edge has nothing to send and nothing to learn from being
-/// refused.
+/// The outcome recorded when this edge's key does not authenticate it: the
+/// edge holds no key to sign with, so the hub is not asked at all, or the
+/// hub answered 401 to the signed request, which is what a revoked key or a
+/// closed organisation answers. Either way the fact is about this edge's
+/// standing, not about the hub being out of reach.
 const UNAUTHENTICATED: &str = "unauthenticated";
 
 /// The one signing algorithm accepted.
 const ED25519: &str = "ed25519";
+
+/// The outcome recorded when the deployment or state file could not be
+/// read, so no synchronisation was attempted. Distinct from `unreachable`:
+/// the hub was never asked.
+const UNAVAILABLE: &str = "unavailable";
+
+/// How long a synchronisation run at session start may wait for the hub,
+/// name resolution included. The host is waiting on the hook or the
+/// server, and a host that gives a server ten seconds to answer its first
+/// request would drop the mediated tools for the whole session if the hub
+/// took that long, so the budget is well inside it; a hub that does not
+/// answer in time is recorded as unreachable and the policy in force keeps
+/// governing.
+pub const SESSION_START_BUDGET: Duration = Duration::from_secs(3);
+
+/// How long a synchronisation may wait for the hub where nothing else is
+/// waiting on it: `policy sync` on demand and the refresh before a relay
+/// run. The HTTP client's own budget.
+pub const DEFAULT_BUDGET: Duration = commonmeasure_http::CLIENT_TIMEOUT;
 
 /// `<home>/deployment.json`: the mode this edge runs in. Absent means
 /// `local`. Unknown fields are load errors, as in every declaration this
@@ -143,6 +164,30 @@ pub struct Signer {
     pub public_key: String,
 }
 
+/// Whether a `policy_url` is one this runtime fetches policy from. The
+/// policy document crosses in the envelope: scope matchers, engagement
+/// names, hosts. It travels under TLS, except to a loopback origin, which
+/// stays on the machine. The rule is applied when a deployment is read and
+/// when `connect --managed` pins one, so a URL the runtime would refuse at
+/// synchronisation time is never written.
+pub fn policy_url_accepted(policy_url: &str) -> Result<(), String> {
+    match url::Url::parse(policy_url) {
+        Ok(url) if url.scheme() == "https" => Ok(()),
+        Ok(url)
+            if url.scheme() == "http"
+                && matches!(
+                    url.host_str(),
+                    Some("127.0.0.1") | Some("localhost") | Some("[::1]")
+                ) =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "policy_url {policy_url:?} must be an https URL, or http to a loopback origin"
+        )),
+    }
+}
+
 impl Deployment {
     pub fn path(home: &Path) -> PathBuf {
         home.join("deployment.json")
@@ -182,23 +227,8 @@ impl Deployment {
                     source.display()
                 ));
             }
-            // The policy document crosses in the envelope: scope matchers,
-            // engagement names, hosts. It travels under TLS, except to a
-            // loopback origin, which stays on the machine.
-            match url::Url::parse(policy_url) {
-                Ok(url) if url.scheme() == "https" => {}
-                Ok(url)
-                    if url.scheme() == "http"
-                        && matches!(
-                            url.host_str(),
-                            Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-                        ) => {}
-                _ => {
-                    return Err(format!(
-                        "{}: policy_url {policy_url:?} must be an https URL, or http to a loopback origin",
-                        source.display()
-                    ));
-                }
+            if let Err(reason) = policy_url_accepted(policy_url) {
+                return Err(format!("{}: {reason}", source.display()));
             }
             if organisation.is_empty() {
                 return Err(format!("{}: organisation is empty", source.display()));
@@ -242,7 +272,15 @@ impl std::fmt::Display for Rejection {
 #[derive(Debug, Clone)]
 pub struct Verified {
     pub revision: u64,
+    /// The digest the envelope names the revision by: over the policy as
+    /// the envelope carries it (`docs/contracts/policy-envelope.md` §The
+    /// envelope).
     pub digest: String,
+    /// The digest of the same policy as the loader serialises it, which is
+    /// what the file on disk digests to once the policy is activated. Equal
+    /// to `digest` when the hub carried the loader's form; used to tell a
+    /// policy still on disk unchanged from one edited locally.
+    pub loader_digest: String,
     pub issued_at: String,
     pub expires_at: String,
     pub signer_key_id: String,
@@ -373,6 +411,21 @@ pub fn verify(
             ),
         ));
     }
+    // The digest is checked over the policy exactly as the envelope carries
+    // it, before the policy is parsed. A hub then names a revision by the
+    // document it published and never has to reproduce this loader's
+    // serialisation, which would drift whenever the policy schema changed.
+    // A policy the loader refuses is still refused, one check later.
+    let digest = canonical_digest(&payload["policy"]);
+    if payload["digest"].as_str() != Some(digest.as_str()) {
+        return Err(Rejection::new(
+            "digest_mismatch",
+            format!(
+                "the policy as carried digests to {digest} and the envelope claims {}",
+                payload["digest"]
+            ),
+        ));
+    }
     let policy: PolicyFile =
         serde_json::from_value(payload["policy"].clone()).map_err(|error| {
             Rejection::new(
@@ -380,19 +433,11 @@ pub fn verify(
                 format!("the policy does not load: {error}"),
             )
         })?;
-    let digest = canonical_digest(&serde_json::to_value(&policy).unwrap_or(Value::Null));
-    if payload["digest"].as_str() != Some(digest.as_str()) {
-        return Err(Rejection::new(
-            "digest_mismatch",
-            format!(
-                "the policy digests to {digest} and the envelope claims {}",
-                payload["digest"]
-            ),
-        ));
-    }
+    let loader_digest = canonical_digest(&serde_json::to_value(&policy).unwrap_or(Value::Null));
     Ok(Verified {
         revision,
         digest,
+        loader_digest,
         issued_at: issued_at.to_rfc3339_opts(SecondsFormat::Secs, true),
         expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
         signer_key_id: key_id.to_owned(),
@@ -432,13 +477,28 @@ pub struct Applied {
     pub signer_key_id: String,
 }
 
+impl Applied {
+    /// When the applied envelope expired, if it has: `expires_at` once it
+    /// is not after `now`. An expired envelope keeps enforcing the policy it
+    /// carried; expiry is a condition for accepting a new envelope, never a
+    /// reason to relax the one in force, so what expiry changes is only what
+    /// the record says (`docs/contracts/policy-envelope.md` §Cadence and
+    /// staleness).
+    pub fn stale_since(&self, now: DateTime<Utc>) -> Option<String> {
+        let expires_at = DateTime::parse_from_rfc3339(&self.expires_at)
+            .ok()?
+            .with_timezone(&Utc);
+        (expires_at <= now).then(|| self.expires_at.clone())
+    }
+}
+
 /// One synchronisation's outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sync {
     pub at: String,
-    /// `accepted`, `reapplied`, `already_applied`, `rejected` or
-    /// `unreachable`.
+    /// `accepted`, `reapplied`, `already_applied`, `rejected`,
+    /// `unreachable` or `unauthenticated`.
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<u64>,
@@ -503,6 +563,10 @@ pub struct SyncReport {
     pub sync: Sync,
     /// The revision in force after this synchronisation, whatever it did.
     pub applied: Option<Applied>,
+    /// When the applied envelope expired, if it has by the end of this
+    /// synchronisation. A successful synchronisation clears it by
+    /// activating or refreshing an envelope that has not expired.
+    pub stale_since: Option<String>,
 }
 
 impl SyncReport {
@@ -513,6 +577,55 @@ impl SyncReport {
             "accepted" | "reapplied" | "already_applied"
         )
     }
+
+    /// Whether there is nothing to tell an operator: the desired policy was
+    /// already in force and its envelope has not expired.
+    pub fn fresh(&self) -> bool {
+        self.sync.outcome == "already_applied" && self.stale_since.is_none()
+    }
+
+    /// The fields a session record of this synchronisation carries
+    /// (`docs/contracts/session-evidence.md` §Policy synchronisation).
+    pub fn to_record(&self) -> Value {
+        json!({
+            "policy_url": self.policy_url,
+            "outcome": self.sync.outcome,
+            "revision": self.sync.revision,
+            "digest": self.sync.digest,
+            "reason": self.sync.reason,
+            "applied": self.applied.as_ref().map(|applied| json!({
+                "revision": applied.revision,
+                "digest": applied.digest,
+                "expires_at": applied.expires_at,
+            })),
+            "stale_since": self.stale_since,
+        })
+    }
+
+    /// The record for a synchronisation that could not be attempted: the
+    /// deployment or state file did not load. Nothing was asked of the hub
+    /// and the policy on disk keeps governing.
+    pub fn unavailable(reason: &str) -> Value {
+        json!({
+            "policy_url": null,
+            "outcome": UNAVAILABLE,
+            "revision": null,
+            "digest": null,
+            "reason": reason,
+            "applied": null,
+            "stale_since": null,
+        })
+    }
+}
+
+/// Whether `<home>/deployment.json` puts this edge under managed policy.
+/// `Err` is a deployment file that does not load, which is reported as
+/// that wherever the mode is reported and is never read as `local`.
+pub fn is_managed(home: &Path) -> Result<bool, String> {
+    Ok(matches!(
+        Deployment::read(home)?,
+        Deployment::Managed { .. }
+    ))
 }
 
 /// Fetch the desired envelope, verify it, and activate it or keep the
@@ -523,6 +636,17 @@ impl SyncReport {
 /// `Ok` report with its outcome, recorded in the state file so the next
 /// status document carries it.
 pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<SyncReport, String> {
+    sync_within(home, edge, now, DEFAULT_BUDGET)
+}
+
+/// [`sync`] with the time the request may take bounded by `budget`: the
+/// session-start form, where a host is waiting.
+pub fn sync_within(
+    home: &Path,
+    edge: &EdgeIdentity,
+    now: DateTime<Utc>,
+    budget: Duration,
+) -> Result<SyncReport, String> {
     let Deployment::Managed {
         signer,
         policy_url,
@@ -564,6 +688,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                      so no request was made; run `commonmeasure connect` to enrol this edge."
                 )),
             },
+            now,
         );
     };
     let mut request = commonmeasure_http::Request::get("/");
@@ -581,9 +706,10 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                 digest: None,
                 reason: Some(format!("the request could not be signed: {reason}")),
             },
+            now,
         );
     }
-    let sent = commonmeasure_http::send(&policy_url, request);
+    let sent = send_within(&policy_url, request, budget);
     // The policy file is held exclusively from here to the save, against
     // the console's editor and another synchronisation, so a read, a
     // comparison and a replacement are one step.
@@ -604,9 +730,34 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                     digest: None,
                     reason: Some(format!("{error:#}")),
                 },
+                now,
             );
         }
     };
+    // A 401 is the hub refusing this edge's key: what a revoked key or a
+    // closed organisation answers. That is this edge's standing, not a hub
+    // out of reach, and an operator sent to look at the hub for an
+    // "unreachable" endpoint would find it answering.
+    if response.status == 401 {
+        return conclude(
+            home,
+            &policy_url,
+            state,
+            Sync {
+                at,
+                outcome: UNAUTHENTICATED.to_owned(),
+                revision: None,
+                digest: None,
+                reason: Some(format!(
+                    "the policy URL answered 401 {}: the hub does not accept this edge's key, \
+                     which is what a revoked key or a closed organisation answers; the next \
+                     relay run reports the key's standing",
+                    response.reason
+                )),
+            },
+            now,
+        );
+    }
     // An answer that is not an envelope, including the hub's 404 before any
     // revision is published, is the hub not reached rather than a desired
     // policy refused.
@@ -625,6 +776,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                     response.status, response.reason
                 )),
             },
+            now,
         );
     }
     let verified = match verify(&response.body, &signer, &organisation, edge, now) {
@@ -645,6 +797,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                     digest: None,
                     reason: Some(rejection.to_string()),
                 },
+                now,
             );
         }
     };
@@ -668,6 +821,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                         verified.revision, applied.revision
                     )),
                 },
+                now,
             );
         }
         if verified.revision == applied.revision && verified.digest != applied.digest {
@@ -686,17 +840,31 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                         applied.revision, applied.digest, verified.digest
                     )),
                 },
+                now,
             );
         }
         if verified.revision == applied.revision {
             let on_disk = PolicyDocument::read(home)
                 .ok()
                 .and_then(|document| document.digest());
-            if on_disk.as_deref() == Some(verified.digest.as_str()) {
+            if on_disk.as_deref() == Some(verified.loader_digest.as_str()) {
+                // The same revision reissued with a later expiry is the hub
+                // renewing it. The window and the envelope are refreshed,
+                // which is what clears a stale record; the policy file is
+                // not touched, because it is already the policy.
+                let mut state = state.clone();
+                if let Some(applied) = state.applied.as_mut()
+                    && (applied.expires_at != verified.expires_at
+                        || applied.issued_at != verified.issued_at)
+                {
+                    declaration::replace(&State::last_known_good_path(home), &response.body)?;
+                    applied.issued_at.clone_from(&verified.issued_at);
+                    applied.expires_at.clone_from(&verified.expires_at);
+                }
                 return conclude(
                     home,
                     &policy_url,
-                    state.clone(),
+                    state,
                     Sync {
                         at,
                         outcome: "already_applied".to_owned(),
@@ -704,6 +872,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                         digest: Some(verified.digest.clone()),
                         reason: None,
                     },
+                    now,
                 );
             }
         }
@@ -729,6 +898,7 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
                     "the policy does not load (invalid_policy): {error}"
                 )),
             },
+            now,
         );
     }
     // The envelope and the state are written before the policy file is
@@ -766,8 +936,42 @@ pub fn sync(home: &Path, edge: &EdgeIdentity, now: DateTime<Utc>) -> Result<Sync
     Ok(SyncReport {
         policy_url,
         sync: state.last_sync.clone().expect("recorded above"),
+        stale_since: state
+            .applied
+            .as_ref()
+            .and_then(|applied| applied.stale_since(now)),
         applied: state.applied,
     })
+}
+
+/// Send one request with name resolution inside the budget as well as the
+/// exchange. The standard resolver has no timeout of its own, so it runs on
+/// a thread that is left behind if it has not answered in time; a resolver
+/// that does not answer within the budget is the hub not reached, recorded
+/// like any other unreachable outcome.
+fn send_within(
+    url: &str,
+    request: commonmeasure_http::Request,
+    budget: Duration,
+) -> Result<commonmeasure_http::Response, String> {
+    let started = std::time::Instant::now();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let target = url.to_owned();
+    std::thread::spawn(move || {
+        let _ = tx.send(commonmeasure_http::resolve(&target));
+    });
+    let addresses = match rx.recv_timeout(budget) {
+        Ok(resolved) => resolved.map_err(|error| format!("{error:#}"))?,
+        Err(_) => {
+            return Err(format!(
+                "name resolution for {url} did not complete within {} s: timed out",
+                budget.as_secs_f32()
+            ));
+        }
+    };
+    let remaining = budget.saturating_sub(started.elapsed());
+    commonmeasure_http::send_to(url, &addresses, request, remaining)
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Record the outcome and report it. The state file is the one place the
@@ -778,28 +982,38 @@ fn conclude(
     policy_url: &str,
     mut state: State,
     sync: Sync,
+    now: DateTime<Utc>,
 ) -> Result<SyncReport, String> {
     state.last_sync = Some(sync.clone());
     state.write(home)?;
     Ok(SyncReport {
         policy_url: policy_url.to_owned(),
         sync,
+        stale_since: state
+            .applied
+            .as_ref()
+            .and_then(|applied| applied.stale_since(now)),
         applied: state.applied,
     })
 }
 
 /// What the fleet-status document reports about this edge's management:
-/// the mode, the last desired revision learned of, the revision applied.
-/// A deployment or state file this runtime cannot read is reported as
-/// that, never as a local edge.
-pub fn management(home: &Path) -> Management {
+/// the mode, the last desired revision learned of, the revision applied
+/// and, at `now`, whether its envelope has expired. A deployment or state
+/// file this runtime cannot read is reported as that, never as a local
+/// edge.
+pub fn management(home: &Path, now: DateTime<Utc>) -> Management {
     let deployment = match Deployment::read(home) {
         Ok(deployment) => deployment,
         Err(error) => {
             return Management {
-                mode: "unavailable".to_owned(),
+                mode: UNAVAILABLE.to_owned(),
                 desired: json!({"unavailable": error}),
                 applied_revision: None,
+                applied_digest: None,
+                applied_edited: None,
+                applied_expires_at: None,
+                stale_since: None,
             };
         }
     };
@@ -810,14 +1024,45 @@ pub fn management(home: &Path) -> Management {
                 mode: "managed".to_owned(),
                 desired: state.desired(),
                 applied_revision: state.applied.as_ref().map(|applied| applied.revision),
+                applied_digest: state.applied.as_ref().map(|applied| applied.digest.clone()),
+                applied_edited: state
+                    .applied
+                    .as_ref()
+                    .and_then(|_| edited_since_activation(home)),
+                applied_expires_at: state
+                    .applied
+                    .as_ref()
+                    .map(|applied| applied.expires_at.clone()),
+                stale_since: state
+                    .applied
+                    .as_ref()
+                    .and_then(|applied| applied.stale_since(now)),
             },
             Err(error) => Management {
                 mode: "managed".to_owned(),
                 desired: json!({"unavailable": error}),
                 applied_revision: None,
+                applied_digest: None,
+                applied_edited: None,
+                applied_expires_at: None,
+                stale_since: None,
             },
         },
     }
+}
+
+/// Whether the policy on disk has moved away from the applied revision's
+/// policy: the loader's form of the policy in the kept envelope digests
+/// differently from the file. `None` where the kept envelope or the file
+/// cannot be read, which the status document reports as not known rather
+/// than as either answer.
+fn edited_since_activation(home: &Path) -> Option<bool> {
+    let kept: Value =
+        serde_json::from_slice(&std::fs::read(State::last_known_good_path(home)).ok()?).ok()?;
+    let policy: PolicyFile = serde_json::from_value(kept["payload"]["policy"].clone()).ok()?;
+    let activated = canonical_digest(&serde_json::to_value(&policy).ok()?);
+    let on_disk = PolicyDocument::read(home).ok()?.digest()?;
+    Some(on_disk != activated)
 }
 
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
@@ -859,13 +1104,9 @@ mod tests {
     impl Hub {
         fn envelope(&self, mut payload: Value) -> Vec<u8> {
             if payload.get("digest").is_none() {
-                // The hub digests the policy as the loader serialises it;
-                // a policy the loader would not load is digested as sent,
-                // and the edge refuses it before the digest is compared.
-                let normalised = serde_json::from_value::<PolicyFile>(payload["policy"].clone())
-                    .map(|policy| serde_json::to_value(&policy).unwrap())
-                    .unwrap_or_else(|_| payload["policy"].clone());
-                payload["digest"] = json!(canonical_digest(&normalised));
+                // The hub digests the policy as it publishes it, in
+                // whatever form the owner wrote it.
+                payload["digest"] = json!(canonical_digest(&payload["policy"]));
             }
             let signature = self.pair.sign(canonical_json(&payload).as_bytes());
             serde_json::to_vec(&json!({
@@ -1132,7 +1373,7 @@ mod tests {
             Deployment::read(home.path()).is_err(),
             "unknown fields are errors"
         );
-        assert_eq!(management(home.path()).mode, "unavailable");
+        assert_eq!(management(home.path(), now()).mode, "unavailable");
 
         // Unknown fields beside a complete declaration, in both modes.
         std::fs::write(
@@ -1253,14 +1494,27 @@ mod tests {
         let applied = report.applied.clone().expect("applied");
         assert_eq!(applied.revision, 2);
         let document = PolicyDocument::read(home.path()).unwrap();
-        assert_eq!(document.digest().as_deref(), Some(applied.digest.as_str()));
+        assert_eq!(
+            applied.digest,
+            canonical_digest(&payload(2)["policy"]),
+            "the revision is named by the digest of the policy as carried"
+        );
+        let loader_form = serde_json::to_value(
+            serde_json::from_value::<PolicyFile>(payload(2)["policy"].clone()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            document.digest().as_deref(),
+            Some(canonical_digest(&loader_form).as_str()),
+            "the file on disk is the loader's form of the same policy"
+        );
         assert_eq!(
             document.resolve(None).mode(),
             crate::policy::PolicyMode::Strict,
             "the distributed policy is the one in force"
         );
         assert!(State::last_known_good_path(home.path()).exists());
-        let reported = management(home.path());
+        let reported = management(home.path(), now());
         assert_eq!(reported.mode, "managed");
         assert_eq!(reported.applied_revision, Some(2));
         assert_eq!(reported.desired["outcome"], "accepted");
@@ -1365,7 +1619,7 @@ mod tests {
         let report = sync(home.path(), &unknown_edge(), now()).unwrap();
         assert_eq!(report.sync.outcome, "unreachable");
         assert_eq!(report.applied.as_ref().unwrap().revision, 2);
-        let reported = management(home.path());
+        let reported = management(home.path(), now());
         assert_eq!(reported.applied_revision, Some(2));
         assert_eq!(reported.desired["outcome"], "unreachable");
         assert_eq!(
@@ -1451,11 +1705,230 @@ mod tests {
         assert!(report.sync.reason.as_deref().unwrap().contains("404"));
     }
 
+    /// A 401 from the policy endpoint is the hub refusing this edge's key,
+    /// recorded as the edge's own standing rather than a hub out of reach.
+    #[test]
+    fn a_401_from_the_policy_endpoint_is_recorded_as_unauthenticated() {
+        let hub = hub("hub-1");
+        let origin = commonmeasure_http::Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(|_| commonmeasure_http::Response::text(401, "a valid credential is required"))
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        enrol(home.path());
+        std::fs::write(
+            Deployment::path(home.path()),
+            serde_json::to_vec(&Deployment::Managed {
+                signer: hub.signer.clone(),
+                policy_url: format!("{}/policy", origin.url()),
+                organisation: "org-1".to_owned(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        assert_eq!(report.sync.outcome, "unauthenticated");
+        let reason = report.sync.reason.as_deref().unwrap();
+        assert!(
+            reason.contains("401") && reason.contains("revoked"),
+            "{reason}"
+        );
+        assert!(State::read(home.path()).unwrap().applied.is_none());
+    }
+
     #[test]
     fn a_local_edge_makes_no_request() {
         let home = tempfile::tempdir().unwrap();
         let error = sync(home.path(), &unknown_edge(), now()).unwrap_err();
         assert!(error.contains("deployment mode is local"), "{error}");
         assert!(!State::path(home.path()).exists(), "nothing was recorded");
+    }
+
+    /// The digest names the policy as the envelope carries it, computed
+    /// before the policy is parsed, so a hub never has to reproduce this
+    /// loader's serialisation. The loader's own digest is kept beside it
+    /// for the comparison with the file on disk, and the two are equal
+    /// exactly when the hub carried the loader's form.
+    #[test]
+    fn the_digest_is_over_the_policy_as_carried_and_the_loader_form_is_kept_beside_it() {
+        let hub = hub("hub-1");
+        // As an owner writes it: defaulted fields left out.
+        let mut written = payload(4);
+        written["policy"] = json!({"policy_mode": "strict"});
+        let verified = verify(
+            &hub.envelope(written.clone()),
+            &hub.signer,
+            "org-1",
+            &unknown_edge(),
+            now(),
+        )
+        .expect("a policy in the owner's form verifies");
+        assert_eq!(
+            verified.digest,
+            canonical_digest(&json!({"policy_mode": "strict"}))
+        );
+        let loader_form = serde_json::to_value(&verified.policy).unwrap();
+        assert_eq!(verified.loader_digest, canonical_digest(&loader_form));
+        assert_ne!(
+            verified.digest, verified.loader_digest,
+            "the loader adds the defaulted fields, so its form digests differently"
+        );
+
+        // As the hub publishes it: the loader's form, digested as carried,
+        // which is the same document under both rules.
+        let mut published = payload(4);
+        published["policy"] = loader_form.clone();
+        let verified = verify(
+            &hub.envelope(published),
+            &hub.signer,
+            "org-1",
+            &unknown_edge(),
+            now(),
+        )
+        .expect("the hub's form verifies");
+        assert_eq!(verified.digest, verified.loader_digest);
+
+        // The loader's digest over a policy carried in another form is no
+        // longer accepted: the digest must be over what is carried.
+        let mut stale_rule = written;
+        stale_rule["digest"] = json!(canonical_digest(&loader_form));
+        let rejection = verify(
+            &hub.envelope(stale_rule),
+            &hub.signer,
+            "org-1",
+            &unknown_edge(),
+            now(),
+        )
+        .unwrap_err();
+        assert_eq!(rejection.kind, "digest_mismatch");
+    }
+
+    /// An expired envelope keeps enforcing the policy it carried, the record
+    /// says since when it has been stale, and the hub renewing the same
+    /// revision with a later expiry clears it without touching the policy
+    /// file.
+    #[test]
+    fn an_expired_envelope_keeps_enforcing_and_is_stale_until_the_hub_renews_it() {
+        use std::sync::{Arc, Mutex};
+        let hub = hub("hub-1");
+        let served: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(hub.envelope(payload(2))));
+        let handler_served = Arc::clone(&served);
+        let origin = commonmeasure_http::Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(move |_| {
+                commonmeasure_http::Response::new(200, handler_served.lock().unwrap().clone())
+            })
+            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        enrol(home.path());
+        std::fs::write(
+            Deployment::path(home.path()),
+            serde_json::to_vec(&Deployment::Managed {
+                signer: hub.signer.clone(),
+                policy_url: format!("{}/policy", origin.url()),
+                organisation: "org-1".to_owned(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"observe"}"#,
+        )
+        .unwrap();
+
+        let report = sync(home.path(), &unknown_edge(), now()).unwrap();
+        assert_eq!(report.sync.outcome, "accepted");
+        assert_eq!(report.stale_since, None);
+        assert!(!report.fresh(), "an activation is worth a line");
+
+        // Two days on: the envelope has expired, the hub still serves it,
+        // and nothing relaxes.
+        let later = now() + chrono::Duration::days(2);
+        let report = sync(home.path(), &unknown_edge(), later).unwrap();
+        assert_eq!(report.sync.outcome, "rejected");
+        assert!(report.sync.reason.as_deref().unwrap().contains("expired"));
+        assert_eq!(report.applied.as_ref().unwrap().revision, 2);
+        assert_eq!(
+            report.stale_since.as_deref(),
+            Some("2026-09-07T00:00:00Z"),
+            "stale since the envelope's own expiry"
+        );
+        assert_eq!(
+            PolicyDocument::read(home.path())
+                .unwrap()
+                .resolve(None)
+                .mode(),
+            crate::policy::PolicyMode::Strict,
+            "the expired envelope's policy stays in force"
+        );
+        let reported = management(home.path(), later);
+        assert_eq!(
+            reported.stale_since.as_deref(),
+            Some("2026-09-07T00:00:00Z")
+        );
+        assert_eq!(
+            reported.applied_expires_at.as_deref(),
+            Some("2026-09-07T00:00:00Z")
+        );
+        assert_eq!(
+            management(home.path(), now()).stale_since,
+            None,
+            "staleness is a fact about now, not a stored flag"
+        );
+        let record = report.to_record();
+        assert_eq!(record["outcome"], "rejected");
+        assert_eq!(record["stale_since"], "2026-09-07T00:00:00Z");
+        assert_eq!(record["applied"]["revision"], 2);
+
+        // The hub renews revision 2: same policy, later expiry. Already
+        // applied, no longer stale, the window refreshed, the file untouched.
+        let mut renewed = payload(2);
+        renewed["issued_at"] = json!("2026-09-08T00:00:00Z");
+        renewed["expires_at"] = json!("2026-09-15T00:00:00Z");
+        *served.lock().unwrap() = hub.envelope(renewed);
+        let before = std::fs::metadata(home.path().join("policy.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let report = sync(home.path(), &unknown_edge(), later).unwrap();
+        assert_eq!(report.sync.outcome, "already_applied");
+        assert_eq!(report.stale_since, None);
+        assert!(report.fresh());
+        assert_eq!(
+            report.applied.as_ref().unwrap().expires_at,
+            "2026-09-15T00:00:00Z"
+        );
+        assert_eq!(
+            std::fs::metadata(home.path().join("policy.json"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before,
+            "the policy file is not rewritten for a renewal"
+        );
+        let kept: Value = serde_json::from_slice(
+            &std::fs::read(State::last_known_good_path(home.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            kept["payload"]["expires_at"], "2026-09-15T00:00:00Z",
+            "the renewed envelope is the one kept"
+        );
+        assert_eq!(management(home.path(), later).stale_since, None);
+    }
+
+    /// A local edge has no synchronisation to run and says so in one
+    /// question; a deployment file that does not load is an outcome of its
+    /// own, never read as local.
+    #[test]
+    fn is_managed_answers_local_managed_and_unavailable() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(is_managed(home.path()), Ok(false));
+        std::fs::write(Deployment::path(home.path()), r#"{"mode":"managed"}"#).unwrap();
+        assert!(is_managed(home.path()).is_err());
+        let record = SyncReport::unavailable("managed mode needs a signer");
+        assert_eq!(record["outcome"], "unavailable");
+        assert_eq!(record["reason"], "managed mode needs a signer");
     }
 }

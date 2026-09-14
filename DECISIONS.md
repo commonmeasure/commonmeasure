@@ -154,6 +154,17 @@ the history; this document does not repeat it.
   (`docs/contracts/session-evidence.md` §Crossing).
 - Capture hooks are best-effort and never interrupt the host agent.
   Unreadable payloads produce no records.
+- A PII finding on a public source is recorded on the crossing, not
+  refused: under `strict` the crossing is admitted with the finding in
+  `breach`, because a public page's published contact details are not the
+  personal data the detector exists to keep out of a model. `strict` still
+  refuses a finding on an internal or private source: a named internal
+  prefix, a loopback or private address reached under `allow_private_hosts`,
+  or the operator's own corpus. "Public" is what the existing source
+  classification already says, and no second classification exists for
+  this rule. The policy switch `refuse_on_pii`, off by default, restores
+  the refusal on every source for an operator that wants it
+  (`plugin/README.md` §Policy, `docs/FAIL-POLICY.md` §6).
 - The private operator evidence log is authoritative. Console views and
   Content Telemetry messages are derived projections with separate access
   and egress policies.
@@ -229,10 +240,31 @@ the history; this document does not repeat it.
   tools such as its web search do not use the local tool path and fire no
   `PostToolUse` hook, and its shell reaches the web as command text with no
   response a hook could attribute to a URL, so an observed matcher there
-  could witness only third-party MCP results and none is registered. That
-  reading rests on the document alone until a Codex session is recorded.
-  Codex sessions have no observed floor, no turn boundaries and no nudge,
-  and the record claims none.
+  could witness only third-party MCP results and none is registered. Codex
+  hooks exist and `PostToolUse` carries `tool_response` for MCP tools; the
+  hosted web search still fires none, so the mediated-only reading stands
+  for the host's own fetch. One `[mcp_servers.commonmeasure]` table serves
+  the Codex CLI, the ChatGPT desktop app and the Codex IDE extension, and
+  `install codex` writes `default_tools_approval_mode = "approve"` on it,
+  because Codex asks before every MCP call otherwise and its
+  non-interactive runs refuse a call that would ask. Codex sessions have no
+  observed floor, no turn boundaries and no nudge, and the record claims
+  none; the record does carry the client's own name and version, which is
+  what tells the three surfaces apart.
+- Claude Desktop is mediated only: it has no hook surface, and it starts one
+  server for its chat client and one for its local agent mode; each server
+  that makes a call leaves its own session naming its client, and the record
+  does not merge them. Cursor has both paths: its hooks carry every tool's output, so the
+  registration writes the four hook moments under Cursor's names and the
+  hook command reads Cursor's payload shape when told `--host cursor`.
+  Cursor (opt-in) and VS Code load Claude Code's hook file and run its
+  commands with payloads of their own, and Cursor's documentation does not
+  say which shape, so every hook command the Claude Code registration
+  writes names `--host claude-code` and a reader told that refuses a payload
+  of another host's shape, and any payload under Cursor's environment
+  variable, recording and printing nothing. Registration files are never
+  deleted by `uninstall`: the host may have written them, so an emptied
+  object stays.
 - Pi is mediated only, through an extension the binary writes. Pi has no
   MCP client, so the extension is the client: it spawns the mediated server
   from the binary it names and registers the server's tools with Pi under
@@ -316,6 +348,12 @@ the history; this document does not repeat it.
   (`schema/SOURCE.md`: consumed, never edited locally) and a privacy decision
   of their own; neither is taken. A hub groups by organisation, API key, wire
   session, agent, host and supplier.
+- A count of refused crossings per session crosses the wire, and nothing
+  else about them: no URL, no reason, no hash. It travels as `refused` on
+  every batch of the session, counting the refusals under scopes cleared
+  for egress, so an organisation's owner can see policy enforced across
+  the firm without any refused source leaving the machine
+  (`docs/contracts/session-evidence.md` §The refused count on the wire).
 - The supplier that served an acquisition crosses the wire, as the
   namespaced custom field `data.commonmeasure-supplier` on the retrieval and
   grounding events of a supplied source (`crates/commonmeasure-relay/src/project.rs`).
@@ -413,6 +451,20 @@ the history; this document does not repeat it.
   manages desired state, rollout and drift; decisions remain local. Remote
   policy is accepted only under a locally chosen deployment mode and a pinned
   trusted signer.
+- A managed edge refreshes its policy envelope itself, at session start and
+  before relay, and records each refresh. An expired envelope keeps
+  enforcing the last accepted policy, and the record says it is stale since
+  the envelope's expiry until the hub renews or replaces it; nothing waits
+  on the refresh and no crossing waits on the hub
+  (`docs/contracts/policy-envelope.md` §Cadence and staleness).
+- A policy envelope names its revision by the digest of the policy as the
+  envelope carries it, checked before the policy is parsed, so the hub never
+  has to reproduce the edge loader's serialisation. The fleet-status
+  document reports that digest as `applied.digest`, beside the loader's
+  digest of the file in force and whether the file was edited since, so a
+  receiver compares like with like whatever form it published; a revision
+  keeps the digest it was published under
+  (`docs/contracts/canonical-json.md` §Shared policy vectors).
 - The edge authenticates to the hub's policy endpoint by signing the
   request with its enrolled key, using HTTP message signatures (RFC 9421,
   Ed25519), the same mechanism the mediated fetch uses towards publishers

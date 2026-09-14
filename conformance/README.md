@@ -46,9 +46,13 @@ others do not (both event kinds, a derived session id, an enrolled edge's
 key id as `agent_id` with the host tool in its namespaced `data` field, the
 emitter id `commonmeasure` on a run, a declared licence, the grounding
 `data` fields, a retrieval carrying the `content_telemetry_id` of the
-fetch's `Content-Telemetry-ID` header, a run projection, and the supplier
+fetch's `Content-Telemetry-ID` header, a run projection, the supplier
 that served a mediated search result or a run's sources in its namespaced
-`data` field). Behavioural
-edge cases — batch splitting at the 500-event cap, refusals, the privacy
+`data` field, and, on every session batch, `refused`: the session's running
+total of crossings policy refused at the time the batch is projected, an
+integer and nothing else about them, which a receiver keeps the larger of
+on redelivery rather than summing; `session-refused.json` exercises it with
+a session that was refused twice and admitted once). Behavioural
+edge cases — batch splitting at the 500-event cap, the privacy
 floor — stay in each side's own test suite; the corpus defines the shape of
 what crosses, not everything about how each side behaves.

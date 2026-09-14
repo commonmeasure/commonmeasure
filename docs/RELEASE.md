@@ -94,7 +94,7 @@ and checks that the installed binary reports the release's version; a
 binary that fails either check is removed. Without `--tag` it installs the
 latest release, found from the redirect the release page answers with. With
 the binary in place, `commonmeasure install claude` registers it with
-Claude Code by absolute path ([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §2).
+Claude Code by absolute path ([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §1).
 `--plugin DIR` also downloads and verifies the plugin archive, unpacks it
 into `DIR` and prints the two commands that install it into Claude Code;
 the archive is the one copy of the plugin that bundles binaries.
@@ -172,5 +172,5 @@ Apple Silicon machine. The macOS arm64 binary is built and run on the
 workflow's macOS runner; the macOS x64, Linux arm64 (in the workflow) and
 Windows binaries are built and checksummed by the same run. The one-line
 installer has been run on macOS Apple silicon from an empty home directory
-([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §2); the installer has
+([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §1); the installer has
 not been run on Windows.

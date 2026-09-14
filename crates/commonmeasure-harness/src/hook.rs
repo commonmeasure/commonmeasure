@@ -65,10 +65,103 @@ pub struct HookInput {
     pub prompt: Option<String>,
 }
 
+/// Fields no Claude Code hook payload carries and other hosts' payloads
+/// do: Cursor's (`conversation_id`, `generation_id`, `cursor_version`,
+/// `workspace_roots`) and the Copilot family's camelCase envelope
+/// (`sessionId`, `toolName`, `toolArgs`). Cursor and VS Code load Claude
+/// Code's hook file and run its commands with payloads of their own, so a
+/// reader told it is reading Claude Code refuses a payload wearing any of
+/// these rather than recording something untrue. Cursor's documentation
+/// does not say whether the Claude Code hooks it loads receive its own
+/// shape or a translated one, so the command also refuses on Cursor's
+/// environment (`CURSOR_PROJECT_DIR`), whatever the payload looks like.
+const FOREIGN_MARKERS: [&str; 7] = [
+    "conversation_id",
+    "generation_id",
+    "cursor_version",
+    "workspace_roots",
+    "sessionId",
+    "toolName",
+    "toolArgs",
+];
+
 impl HookInput {
     /// The host's turn identifier under whichever name the host uses.
     pub fn turn_id(&self) -> Option<&str> {
         self.prompt_id.as_deref().or(self.turn_id.as_deref())
+    }
+
+    /// One host's payload in the shape the capture path reads, or nothing
+    /// when the payload is not that host's. Claude Code's payload is read as
+    /// sent, unless it carries another host's markers. Cursor's payload is
+    /// mapped field by field: `conversation_id` is the session,
+    /// `generation_id` the turn, `tool_output` the response, and Cursor's
+    /// event names become the ones the capture path matches on.
+    pub fn from_payload(surface: HostSurface, raw: &Value) -> Option<Self> {
+        match surface {
+            HostSurface::Cursor => Self::from_cursor(raw),
+            _ if Self::is_foreign(surface, raw) => None,
+            _ => serde_json::from_value(raw.clone()).ok(),
+        }
+    }
+
+    /// Whether a payload handed to a reader for `surface` is another host's:
+    /// it carries a field only Cursor's or the Copilot family's payloads
+    /// carry. Distinct from a payload that is merely unreadable, because the
+    /// two are answered differently at session start: an unreadable Claude
+    /// Code payload still gets the nudge, a foreign one gets nothing.
+    pub fn is_foreign(surface: HostSurface, raw: &Value) -> bool {
+        surface != HostSurface::Cursor
+            && raw.as_object().is_some_and(|object| {
+                FOREIGN_MARKERS
+                    .iter()
+                    .any(|marker| object.contains_key(*marker))
+            })
+    }
+
+    fn from_cursor(raw: &Value) -> Option<Self> {
+        let object = raw.as_object()?;
+        let text = |key: &str| object.get(key).and_then(Value::as_str).map(str::to_owned);
+        // Cursor hands a tool's input and output to `postToolUse` as JSON
+        // text; the capture path reads the structure, so the text is parsed
+        // where it is JSON and kept as a string where it is not.
+        let structured = |key: &str| match object.get(key) {
+            Some(Value::String(encoded)) => {
+                serde_json::from_str(encoded).unwrap_or_else(|_| Value::String(encoded.clone()))
+            }
+            Some(other) => other.clone(),
+            None => Value::Null,
+        };
+        Some(Self {
+            session_id: text("conversation_id").or_else(|| text("session_id")),
+            transcript_path: text("transcript_path"),
+            cwd: text("cwd").or_else(|| {
+                object
+                    .get("workspace_roots")
+                    .and_then(|roots| roots.get(0))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }),
+            hook_event_name: text("hook_event_name").map(|event| {
+                match event.as_str() {
+                    "postToolUse" => "PostToolUse",
+                    "beforeSubmitPrompt" => "UserPromptSubmit",
+                    "sessionStart" => "SessionStart",
+                    "stop" => "Stop",
+                    other => other,
+                }
+                .to_owned()
+            }),
+            tool_name: text("tool_name"),
+            tool_input: structured("tool_input"),
+            tool_response: structured("tool_output"),
+            agent_type: None,
+            agent_id: None,
+            prompt_id: None,
+            turn_id: text("generation_id"),
+            source: None,
+            prompt: text("prompt"),
+        })
     }
 }
 
@@ -80,6 +173,8 @@ pub enum HostSurface {
     ClaudeCode,
     Codex,
     Pi,
+    ClaudeDesktop,
+    Cursor,
 }
 
 impl HostSurface {
@@ -88,6 +183,8 @@ impl HostSurface {
             HostSurface::ClaudeCode => "claude-code",
             HostSurface::Codex => "codex",
             HostSurface::Pi => "pi",
+            HostSurface::ClaudeDesktop => "claude-desktop",
+            HostSurface::Cursor => "cursor",
         }
     }
 
@@ -96,6 +193,8 @@ impl HostSurface {
             "claude-code" | "claude" => Some(HostSurface::ClaudeCode),
             "codex" => Some(HostSurface::Codex),
             "pi" => Some(HostSurface::Pi),
+            "claude-desktop" => Some(HostSurface::ClaudeDesktop),
+            "cursor" => Some(HostSurface::Cursor),
             _ => None,
         }
     }
@@ -132,6 +231,7 @@ pub fn capture(
             timestamp: Utc::now(),
             mode: CrossingMode::Observed,
             host: surface.id().to_owned(),
+            client: None,
             tool: Some(tool.clone()),
             agent_type: input.agent_type.clone(),
             agent_id: input.agent_id.clone(),
@@ -565,6 +665,71 @@ mod tests {
 
     /// Capture must not break the agent. A payload this does not understand
     /// yields no records rather than an error.
+    /// A Cursor payload is read by the Cursor reader and refused by the
+    /// Claude Code one, which the hosts that load Claude Code's hook file
+    /// would otherwise feed it.
+    #[test]
+    fn a_cursor_payload_maps_to_the_capture_shape_and_is_refused_as_claude_code() {
+        let raw = json!({
+            "conversation_id": "conv-1", "generation_id": "gen-7",
+            "hook_event_name": "postToolUse", "cursor_version": "3.20.17",
+            "workspace_roots": ["/work/project"], "tool_name": "MCP:fetch_page",
+            "tool_input": "{\"url\":\"https://www.example.org/report\"}",
+            "tool_output": "{\"content\":[{\"text\":\"see https://www.example.org/report\"}]}",
+            "duration": 12
+        });
+        let input = HookInput::from_payload(HostSurface::Cursor, &raw).expect("Cursor's shape");
+        assert_eq!(input.session_id.as_deref(), Some("conv-1"));
+        assert_eq!(input.turn_id(), Some("gen-7"));
+        assert_eq!(input.cwd.as_deref(), Some("/work/project"));
+        assert_eq!(input.hook_event_name.as_deref(), Some("PostToolUse"));
+        assert_eq!(input.tool_input["url"], "https://www.example.org/report");
+        let crossings = capture(&input, HostSurface::Cursor, &[]);
+        assert_eq!(crossings.len(), 1);
+        assert_eq!(crossings[0].host, "cursor");
+        assert_eq!(crossings[0].session_id, "conv-1");
+        assert_eq!(crossings[0].turn_id.as_deref(), Some("gen-7"));
+        assert!(
+            !crossings[0].grounded,
+            "an MCP result is retrieved, not grounded"
+        );
+        assert!(
+            HookInput::from_payload(HostSurface::ClaudeCode, &raw).is_none(),
+            "a Claude Code reader must not read Cursor's payload"
+        );
+        let vscode = json!({"sessionId": "s", "toolName": "web_fetch", "toolArgs": {}});
+        assert!(HookInput::from_payload(HostSurface::ClaudeCode, &vscode).is_none());
+        let claude = json!({"session_id": "s-1", "hook_event_name": "PostToolUse",
+                            "tool_name": "WebFetch", "tool_input": {"url": "https://a.example/"},
+                            "tool_response": {"result": "text"}});
+        assert!(HookInput::from_payload(HostSurface::ClaudeCode, &claude).is_some());
+    }
+
+    /// Cursor spells an MCP tool `MCP:<tool>`; our own tools under that
+    /// spelling, or bare as Pi registers them, are not observed a second time.
+    #[test]
+    fn our_own_tools_under_cursors_and_pis_spellings_are_not_observed() {
+        for tool in [
+            "MCP:context_fetch",
+            "context_fetch",
+            "MCP:context_status",
+            "commonmeasure/context_fetch",
+            "commonmeasure_context_search",
+            "mcp:commonmeasure:context_status",
+        ] {
+            let raw = json!({
+                "conversation_id": "conv-1", "hook_event_name": "postToolUse",
+                "tool_name": tool, "tool_input": {"url": "https://www.example.org/"},
+                "tool_output": "{\"url\":\"https://www.example.org/\"}"
+            });
+            let input = HookInput::from_payload(HostSurface::Cursor, &raw).unwrap();
+            assert!(
+                capture(&input, HostSurface::Cursor, &[]).is_empty(),
+                "{tool}"
+            );
+        }
+    }
+
     #[test]
     fn malformed_payloads_yield_nothing_rather_than_failing() {
         assert!(capture(&HookInput::default(), HostSurface::ClaudeCode, &[]).is_empty());

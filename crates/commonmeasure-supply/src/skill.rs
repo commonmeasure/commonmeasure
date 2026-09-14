@@ -51,6 +51,10 @@ pub const CATALOGUE_VARIABLE: &str = "COMMONMEASURE_SKILL_CATALOGUE";
 /// the router all work on skills unchanged.
 pub const SKILL_PROVIDER_PREFIX: &str = "skill:";
 
+/// The provider name of the operator's own corpus: internal supply, not a
+/// supplier, wherever a rule tells the two apart.
+pub const INTERNAL_PROVIDER: &str = "internal";
+
 /// The placeholder an operator writes where the job's own value belongs. It
 /// must be a whole argument: a job value spliced into operator text would
 /// arrive with two provenances and one string to record them in.

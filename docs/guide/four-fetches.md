@@ -45,8 +45,10 @@ A few terms recur, and each is defined in one line in the
 - A **processor** is a pluggable check or transform that runs on content
   at a crossing and writes a record of its own each time it runs.
 - The **edge** is the part of Common Measure that runs on the operator's
-  machine. A **hub** is a hosted service an edge can enrol with; the edge
-  in this account is not enrolled, which matters for one of the fetches.
+  machine. A **hub** is the organisation service an edge can enrol with;
+  Common Measure runs one for organisations that want it
+  ([the hub page](../HUB.md)). The edge in this account is not enrolled,
+  which matters for one of the fetches.
 
 ## The setting
 
@@ -320,6 +322,12 @@ what entered the model's context is the whole claim a session makes about a
 source's bytes. Anyone who can obtain the same bytes can check it, and
 nobody can recover the content from the record.
 
+The record proves what text the tool handed the host, not that the
+model's account of it is right. In one recorded session an agent given a
+long statute named the wrong Act from its opening lines, while the record
+held the right address and both hashes; the error was the agent's reading,
+and the record is what let a person check the answer against the page.
+
 `"named_by": "unknown"` on every crossing means these sessions recorded no
 prompt, so the record does not say whether a person or the agent chose each
 address. Where a host reports prompts, that field records the answer.
@@ -340,8 +348,8 @@ text the model read, down to the byte.
 
 ## Where to go next
 
-The [getting started walkthrough](../GETTING-STARTED.md) takes a clean
-checkout through a session that records crossings of your own, a policy
+The [getting started walkthrough](../GETTING-STARTED.md) takes an
+installed binary through a session that records crossings of your own, a policy
 that refuses one, and the console that shows it back. The
 [session evidence contract](../contracts/session-evidence.md) defines every
 field quoted above. The [glossary](../GLOSSARY.md) holds the terms.

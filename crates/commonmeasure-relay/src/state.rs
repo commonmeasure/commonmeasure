@@ -9,12 +9,15 @@
 //! - `receipts.json` — the last delivery outcome, written atomically. This is
 //!   what the console's egress block reports, so it must never say more than
 //!   the index can prove.
+//! - `refused-delivered.json` — per wire session, the highest refused count
+//!   a receiver has accepted on a batch, so a session whose count has moved
+//!   since can be told from one the receiver already has right.
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -37,6 +40,7 @@ pub struct Receipts {
 pub struct RelayState {
     delivered_path: PathBuf,
     receipts_path: PathBuf,
+    refused_path: PathBuf,
 }
 
 impl RelayState {
@@ -46,7 +50,35 @@ impl RelayState {
         Ok(Self {
             delivered_path: dir.join("delivered.idx"),
             receipts_path: dir.join("receipts.json"),
+            refused_path: dir.join("refused-delivered.json"),
         })
+    }
+
+    /// The highest refused count a receiver has accepted for each wire
+    /// session, ever; empty before any delivery.
+    pub fn refused_delivered(&self) -> Result<HashMap<Uuid, u64>> {
+        match std::fs::read(&self.refused_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("parse refused-delivered.json"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(error) => Err(error).context("read refused-delivered.json"),
+        }
+    }
+
+    /// Record that a receiver accepted a batch carrying `refused` for
+    /// `session`, keeping the larger of what it held and this, as the
+    /// receiver does. Written atomically after the event ids are recorded.
+    pub fn record_refused_delivered(&self, session: Uuid, refused: u64) -> Result<()> {
+        let mut known = self.refused_delivered()?;
+        let entry = known.entry(session).or_default();
+        *entry = (*entry).max(refused);
+        let tmp = self.refused_path.with_extension("json.tmp");
+        std::fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&known).context("serialise refused-delivered")?,
+        )
+        .context("write refused-delivered tmp")?;
+        std::fs::rename(&tmp, &self.refused_path).context("rename refused-delivered into place")?;
+        Ok(())
     }
 
     /// Every event id a receiver has acknowledged, ever.

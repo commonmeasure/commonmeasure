@@ -13,15 +13,17 @@ make the second possible are stated at the end of this page.
 
 Start with the example, [Four fetches, two refused](guide/four-fetches.md),
 which follows one agent through four recorded fetches, then the
-[getting started walkthrough](GETTING-STARTED.md), which takes a clean
-checkout to a session that records crossings of your own.
+[getting started walkthrough](GETTING-STARTED.md), which takes an
+installed binary to a session that records crossings of your own.
 
 Product:
 
 - [`docs/GLOSSARY.md`](GLOSSARY.md): every defined term in one line.
 - [`docs/GETTING-STARTED.md`](GETTING-STARTED.md): the tested walkthrough from
-  a clean checkout through install, a recorded session, policy, the console,
-  import and the egress boundary.
+  the installer through registration, a recorded session, policy, the
+  console, import, the egress boundary and a build from source.
+- [`docs/HUB.md`](HUB.md): the hub: what it is, what leaves a machine and
+  what never does, how a machine joins and how policy arrives.
 - [`docs/RELEASE.md`](RELEASE.md): how a release is cut, what it holds, and the
   installer.
 - [`docs/FAIL-POLICY.md`](FAIL-POLICY.md): what the product does when a

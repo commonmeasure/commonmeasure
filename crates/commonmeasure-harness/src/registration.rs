@@ -54,6 +54,15 @@ pub const SERVER_NAME: &str = "commonmeasure";
 /// twice, so `install claude` refuses while one is enabled.
 const PLUGIN_PREFIXES: [&str; 2] = ["commonmeasure@", "contextops@"];
 
+/// The approval mode `install codex` writes on the server's table. Codex
+/// asks before every MCP tool call unless the table says otherwise, and its
+/// non-interactive runs (`codex exec`) refuse a call that would ask: with
+/// no mode set they answer "MCP tool call requires approval, but approval
+/// policy is never". `approve` approves every call on this server. The
+/// `auto` mode hands the call to Codex's automatic reviewer, which refused
+/// the mediated tools when tried, so it is not the value written.
+pub const CODEX_APPROVAL_MODE: &str = "approve";
+
 /// The observed path's hooks: the host event, the event name the `hook`
 /// subcommand takes, and the tool matcher where the event has one.
 pub const CLAUDE_HOOKS: [(&str, &str, Option<&str>); 4] = [
@@ -76,7 +85,25 @@ pub struct HostPaths {
     pub claude_plugins: PathBuf,
     pub codex_config: PathBuf,
     pub pi_extension: PathBuf,
+    /// Claude Desktop's configuration file, the one its Developer settings
+    /// open: `mcpServers` is its only surface for a local server.
+    pub claude_desktop_config: PathBuf,
+    /// Cursor's global MCP file and its global hooks file, both under the
+    /// user's `.cursor` directory.
+    pub cursor_mcp: PathBuf,
+    pub cursor_hooks: PathBuf,
 }
+
+/// The observed path's hooks for Cursor: Cursor's event name and the event
+/// name the `hook` subcommand takes. The same four moments as Claude Code's
+/// (`CLAUDE_HOOKS`), under Cursor's names; `postToolUse` fires for every
+/// tool, and the payload reader tells our own tools from the rest.
+pub const CURSOR_HOOKS: [(&str, &str); 4] = [
+    ("sessionStart", "session-start"),
+    ("postToolUse", "post-tool-use"),
+    ("beforeSubmitPrompt", "user-prompt-submit"),
+    ("stop", "stop"),
+];
 
 /// The extension `install pi` writes, with the binary's path substituted
 /// where the marker stands.
@@ -119,12 +146,34 @@ impl HostPaths {
             .filter(|dir| !dir.trim().is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".pi/agent"));
+        // Claude Desktop keeps its file where the platform keeps
+        // application data; there is no override of its own.
+        let claude_desktop_config = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/Claude/claude_desktop_config.json")
+        } else if cfg!(windows) {
+            std::env::var("APPDATA")
+                .ok()
+                .filter(|dir| !dir.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData/Roaming"))
+                .join("Claude/claude_desktop_config.json")
+        } else {
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .filter(|dir| !dir.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"))
+                .join("Claude/claude_desktop_config.json")
+        };
         Ok(Self {
             claude_settings,
             claude_state,
             claude_plugins,
             codex_config: codex_home.join("config.toml"),
             pi_extension: pi_agent.join("extensions/commonmeasure/index.ts"),
+            claude_desktop_config,
+            cursor_mcp: home.join(".cursor/mcp.json"),
+            cursor_hooks: home.join(".cursor/hooks.json"),
         })
     }
 }
@@ -260,18 +309,74 @@ fn strip_our_hooks(entries: &mut Vec<Value>) -> usize {
     removed
 }
 
-fn enabled_plugin(settings: &Value) -> Option<String> {
-    settings["enabledPlugins"].as_object().and_then(|plugins| {
-        plugins
-            .iter()
-            .find(|(name, enabled)| {
-                PLUGIN_PREFIXES
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix))
-                    && **enabled == Value::Bool(true)
-            })
-            .map(|(name, _)| name.clone())
-    })
+/// One Common Measure plugin Claude Code has installed, as its plugin
+/// files record it.
+struct PluginInstall {
+    name: String,
+    /// The install path Claude Code recorded, when it recorded one.
+    path: Option<String>,
+    /// Where the marketplace it came from is recorded, when it is.
+    marketplace_location: Option<String>,
+    enabled: bool,
+}
+
+impl PluginInstall {
+    /// Whether Claude Code runs this plugin's hooks and MCP entry: enabled,
+    /// and its files and its marketplace still where they were recorded.
+    /// The one predicate behind both `install claude`'s refusal and
+    /// `doctor`'s report, so the two never disagree about the same state.
+    fn loads(&self) -> bool {
+        self.enabled
+            && self
+                .path
+                .as_deref()
+                .is_none_or(|path| Path::new(path).is_dir())
+            && self
+                .marketplace_location
+                .as_deref()
+                .is_none_or(|location| Path::new(location).is_dir())
+    }
+}
+
+/// Every Common Measure plugin in Claude Code's plugin files, in file order.
+fn installed_plugins(paths: &HostPaths, settings: &Value) -> Vec<PluginInstall> {
+    let installed = paths.claude_plugins.join("installed_plugins.json");
+    let Ok(text) = std::fs::read_to_string(&installed) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(plugins) = value["plugins"].as_object() else {
+        return Vec::new();
+    };
+    let marketplaces =
+        std::fs::read_to_string(paths.claude_plugins.join("known_marketplaces.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or(Value::Null);
+    plugins
+        .iter()
+        .filter(|(name, _)| {
+            PLUGIN_PREFIXES
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
+        .map(|(name, installs)| PluginInstall {
+            name: name.clone(),
+            path: installs
+                .as_array()
+                .and_then(|installs| installs.first())
+                .and_then(|install| install["installPath"].as_str())
+                .map(str::to_owned),
+            marketplace_location: name
+                .split('@')
+                .nth(1)
+                .and_then(|marketplace| marketplaces[marketplace]["installLocation"].as_str())
+                .map(str::to_owned),
+            enabled: settings["enabledPlugins"][name] == Value::Bool(true),
+        })
+        .collect()
 }
 
 /// Register the product with one host. Returns one line per surface
@@ -285,6 +390,8 @@ pub fn install(
         HostSurface::ClaudeCode => install_claude(binary, paths),
         HostSurface::Codex => install_codex(binary, paths),
         HostSurface::Pi => install_pi(binary, paths),
+        HostSurface::ClaudeDesktop => install_claude_desktop(binary, paths),
+        HostSurface::Cursor => install_cursor(binary, paths),
     }
 }
 
@@ -295,7 +402,221 @@ pub fn uninstall(surface: HostSurface, paths: &HostPaths) -> Result<Vec<String>,
         HostSurface::ClaudeCode => uninstall_claude(paths),
         HostSurface::Codex => uninstall_codex(paths),
         HostSurface::Pi => uninstall_pi(paths),
+        HostSurface::ClaudeDesktop => uninstall_claude_desktop(paths),
+        HostSurface::Cursor => uninstall_cursor(paths),
     }
+}
+
+/// The JSON file a host keeps its MCP servers in (`mcpServers` for Claude
+/// Desktop and Cursor), with our entry added or removed and every other key
+/// kept. Nothing is ever deleted: a removal leaves the `mcpServers` object
+/// in place, empty if ours was its only entry, because the file and that
+/// object may be the host's own and a file that vanished would be the
+/// host's loss. Returns whether our entry was there.
+fn set_json_server(path: &Path, server: Option<Value>) -> Result<bool, String> {
+    let mut document = read_json(path)?;
+    let servers = document
+        .as_object_mut()
+        .expect("read_json returns an object")
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}));
+    let Some(servers) = servers.as_object_mut() else {
+        return Err(format!(
+            "{} holds an \"mcpServers\" value that is not an object, so nothing is written to it",
+            path.display()
+        ));
+    };
+    let had = servers.contains_key(SERVER_NAME);
+    match server {
+        Some(server) => {
+            servers.insert(SERVER_NAME.to_owned(), server);
+        }
+        None => {
+            servers.remove(SERVER_NAME);
+        }
+    }
+    write_json(path, &document)?;
+    Ok(had)
+}
+
+fn install_claude_desktop(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
+    set_json_server(
+        &paths.claude_desktop_config,
+        Some(json!({
+            "command": binary.to_string_lossy(),
+            "args": ["mcp", "--host", "claude-desktop"],
+        })),
+    )?;
+    Ok(vec![
+        format!(
+            "claude-desktop: MCP server {SERVER_NAME} registered in {}, naming {}; Claude Desktop \
+             loads it at its next start",
+            paths.claude_desktop_config.display(),
+            binary.display()
+        ),
+        "claude-desktop: mediated only. Claude Desktop has no hook surface, so nothing is \
+         observed"
+            .to_owned(),
+        "claude-desktop: the application starts one server for its chat client and one for \
+         its local agent mode; each that makes a call leaves its own session naming its \
+         client (claude-ai, local-agent-mode-commonmeasure), and commonmeasure session shows \
+         which"
+            .to_owned(),
+    ])
+}
+
+fn uninstall_claude_desktop(paths: &HostPaths) -> Result<Vec<String>, String> {
+    let had = set_json_server(&paths.claude_desktop_config, None)?;
+    Ok(vec![
+        if had {
+            format!(
+                "claude-desktop: MCP server {SERVER_NAME} removed from {}; the file and its \
+                 mcpServers object stay, empty if ours was the only entry",
+                paths.claude_desktop_config.display()
+            )
+        } else {
+            format!(
+                "claude-desktop: no MCP server {SERVER_NAME} in {}",
+                paths.claude_desktop_config.display()
+            )
+        },
+        "the evidence in the operator home is untouched".to_owned(),
+    ])
+}
+
+/// Cursor reads `~/.cursor/hooks.json` for hooks and `~/.cursor/mcp.json`
+/// for servers. The server is written first and taken back if the hooks
+/// write fails, as for Claude Code: hooks with no server would record
+/// without mediating.
+fn install_cursor(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
+    let quoted = shell_quoted(binary);
+    let mut hooks_document = read_json(&paths.cursor_hooks)?;
+    let root = hooks_document
+        .as_object_mut()
+        .expect("read_json returns an object");
+    root.entry("version").or_insert(json!(1));
+    let hooks = root.entry("hooks").or_insert_with(|| json!({}));
+    let Some(hooks) = hooks.as_object_mut() else {
+        return Err(format!(
+            "{} holds a \"hooks\" value that is not an object, so nothing is written to it",
+            paths.cursor_hooks.display()
+        ));
+    };
+    for (event, argument) in CURSOR_HOOKS {
+        let entries = hooks.entry(event).or_insert_with(|| json!([]));
+        let Some(entries) = entries.as_array_mut() else {
+            return Err(format!(
+                "{} holds a \"hooks.{event}\" value that is not an array, so nothing is \
+                 written to it",
+                paths.cursor_hooks.display()
+            ));
+        };
+        strip_cursor_hooks(entries);
+        entries.push(json!({"command": format!("{quoted} hook {argument} --host cursor")}));
+    }
+
+    let previous_mcp = match std::fs::read(&paths.cursor_mcp) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "cannot read {}: {error}",
+                paths.cursor_mcp.display()
+            ));
+        }
+    };
+    set_json_server(
+        &paths.cursor_mcp,
+        Some(json!({
+            "type": "stdio",
+            "command": binary.to_string_lossy(),
+            "args": ["mcp", "--host", "cursor"],
+        })),
+    )?;
+    if let Err(error) = write_json(&paths.cursor_hooks, &hooks_document) {
+        let restored = match previous_mcp {
+            Some(bytes) => std::fs::write(&paths.cursor_mcp, bytes),
+            None => std::fs::remove_file(&paths.cursor_mcp),
+        };
+        return Err(match restored {
+            Ok(()) => format!(
+                "{error}; {} was restored, so nothing is registered",
+                paths.cursor_mcp.display()
+            ),
+            Err(restore_error) => format!(
+                "{error}; and {} could not be restored ({restore_error}), so the MCP server is \
+                 registered with no hooks: run commonmeasure uninstall cursor",
+                paths.cursor_mcp.display()
+            ),
+        });
+    }
+    Ok(vec![
+        format!(
+            "cursor: MCP server {SERVER_NAME} registered in {}, naming {}",
+            paths.cursor_mcp.display(),
+            binary.display()
+        ),
+        format!(
+            "cursor: four hooks (sessionStart, postToolUse, beforeSubmitPrompt, stop) \
+             registered in {}, each naming the same binary; Cursor reloads the file on save",
+            paths.cursor_hooks.display()
+        ),
+        "cursor: observed crossings come from postToolUse, which carries every tool's output; \
+         the session is Cursor's conversation_id"
+            .to_owned(),
+    ])
+}
+
+/// Remove this product's handlers from one Cursor event's entries. Cursor's
+/// entries are flat `{"command": …}` objects, unlike Claude Code's nested
+/// ones.
+fn strip_cursor_hooks(entries: &mut Vec<Value>) -> usize {
+    let before = entries.len();
+    entries.retain(|entry| !entry["command"].as_str().is_some_and(is_our_hook_command));
+    before - entries.len()
+}
+
+fn uninstall_cursor(paths: &HostPaths) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    let mut hooks_document = read_json(&paths.cursor_hooks)?;
+    let mut removed = 0;
+    if let Some(hooks) = hooks_document["hooks"].as_object_mut() {
+        for (event, _) in CURSOR_HOOKS {
+            if let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) {
+                removed += strip_cursor_hooks(entries);
+            }
+        }
+        hooks.retain(|_, entries| entries.as_array().is_none_or(|e| !e.is_empty()));
+    }
+    if removed > 0 {
+        // Nothing is deleted: an event array we emptied goes, the `hooks`
+        // object and the file stay, because either may be Cursor's own.
+        write_json(&paths.cursor_hooks, &hooks_document)?;
+        lines.push(format!(
+            "cursor: {removed} hook handler(s) removed from {}; the file stays",
+            paths.cursor_hooks.display()
+        ));
+    } else {
+        lines.push(format!(
+            "cursor: no hook of this product in {}",
+            paths.cursor_hooks.display()
+        ));
+    }
+    let had = set_json_server(&paths.cursor_mcp, None)?;
+    lines.push(if had {
+        format!(
+            "cursor: MCP server {SERVER_NAME} removed from {}; the file and its mcpServers \
+             object stay, empty if ours was the only entry",
+            paths.cursor_mcp.display()
+        )
+    } else {
+        format!(
+            "cursor: no MCP server {SERVER_NAME} in {}",
+            paths.cursor_mcp.display()
+        )
+    });
+    lines.push("the evidence in the operator home is untouched".to_owned());
+    Ok(lines)
 }
 
 /// The binary's path as a JSON string literal, which is also a TypeScript
@@ -360,12 +681,17 @@ fn pi_extension_binary(text: &str) -> Option<String> {
 
 fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
     let mut settings = read_json(&paths.claude_settings)?;
-    if let Some(plugin) = enabled_plugin(&settings) {
+    if let Some(plugin) = installed_plugins(paths, &settings)
+        .into_iter()
+        .find(PluginInstall::loads)
+    {
         return Err(format!(
-            "the plugin {plugin} is enabled in {}. A direct registration beside it would \
-             record every crossing twice when the plugin loads. Disable it first: claude plugin \
-             disable {plugin}. Nothing was written.",
-            paths.claude_settings.display()
+            "the plugin {} is enabled in {} and its files are in place, so Claude Code runs its \
+             hooks. A direct registration beside it would record every crossing twice. Disable \
+             it first: claude plugin disable {}. Nothing was written.",
+            plugin.name,
+            paths.claude_settings.display(),
+            plugin.name
         ));
     }
     let quoted = shell_quoted(binary);
@@ -394,8 +720,11 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
             ));
         };
         strip_our_hooks(entries);
+        // `--host claude-code` is spelt out because Cursor and VS Code load
+        // this file and run its commands with payloads of their own; the
+        // reader told it is reading Claude Code refuses those.
         let mut entry = json!({
-            "hooks": [{"type": "command", "command": format!("{quoted} hook {argument}")}]
+            "hooks": [{"type": "command", "command": format!("{quoted} hook {argument} --host claude-code")}]
         });
         if let Some(matcher) = matcher {
             entry["matcher"] = json!(matcher);
@@ -559,6 +888,7 @@ fn install_codex(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String
         args.push(argument);
     }
     server["args"] = toml_edit::value(args);
+    server["default_tools_approval_mode"] = toml_edit::value(CODEX_APPROVAL_MODE);
     servers[SERVER_NAME] = toml_edit::Item::Table(server);
     write_atomically(&paths.codex_config, document.to_string().as_bytes())?;
     Ok(vec![
@@ -566,6 +896,11 @@ fn install_codex(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String
             "codex: [mcp_servers.{SERVER_NAME}] registered in {}, naming {}",
             paths.codex_config.display(),
             binary.display()
+        ),
+        format!(
+            "codex: default_tools_approval_mode = \"{CODEX_APPROVAL_MODE}\", so Codex calls the \
+             tools without asking and its non-interactive runs can use them; the same table \
+             serves the Codex CLI, the ChatGPT desktop app and the IDE extension"
         ),
         "codex: mediated only. Codex's hosted web search fires no hook and its shell reaches \
          the web as command text, so no observed matcher is registered"
@@ -680,42 +1015,28 @@ fn home_lines(home: &Path) -> Vec<String> {
     lines
 }
 
-fn plugin_lines(paths: &HostPaths, settings: &Value) -> Vec<String> {
+/// What the plugin route says for Claude Code: one line per Common Measure
+/// plugin Claude Code has installed, and whether one of them loads, which
+/// is a registration in its own right. The double-recording warning is
+/// given only when a direct registration stands beside a plugin that
+/// loads, because that is the only state in which two sets of hooks fire
+/// for one crossing.
+fn plugin_lines(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<String>, bool) {
     let mut lines = Vec::new();
-    let installed = paths.claude_plugins.join("installed_plugins.json");
-    let Ok(text) = std::fs::read_to_string(&installed) else {
-        return lines;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return lines;
-    };
-    let Some(plugins) = value["plugins"].as_object() else {
-        return lines;
-    };
-    let marketplaces =
-        std::fs::read_to_string(paths.claude_plugins.join("known_marketplaces.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .unwrap_or(Value::Null);
-    for (name, installs) in plugins {
-        if !PLUGIN_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-        {
-            continue;
-        }
-        let enabled = settings["enabledPlugins"][name] == Value::Bool(true);
-        let path = installs
-            .as_array()
-            .and_then(|installs| installs.first())
-            .and_then(|install| install["installPath"].as_str());
+    let mut registers = false;
+    for plugin in installed_plugins(paths, settings) {
+        let name = &plugin.name;
         lines.push(format!(
             "plugin {name}: installed at {}, {} in {}",
-            path.unwrap_or("an unrecorded path"),
-            if enabled { "enabled" } else { "disabled" },
+            plugin.path.as_deref().unwrap_or("an unrecorded path"),
+            if plugin.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             paths.claude_settings.display()
         ));
-        if let Some(path) = path
+        if let Some(path) = &plugin.path
             && !Path::new(path).is_dir()
         {
             lines.push(format!(
@@ -726,26 +1047,32 @@ fn plugin_lines(paths: &HostPaths, settings: &Value) -> Vec<String> {
         // The marketplace the plugin was installed from must still exist
         // where Claude Code recorded it: a moved directory makes the host
         // report the plugin as failed to load, and every hook stays silent.
-        if let Some(marketplace) = name.split('@').nth(1) {
-            let location = marketplaces[marketplace]["installLocation"].as_str();
-            if let Some(location) = location
-                && !Path::new(location).is_dir()
-            {
+        if let Some(location) = &plugin.marketplace_location
+            && !Path::new(location).is_dir()
+        {
+            lines.push(format!(
+                "plugin {name}: its marketplace is recorded at {location}, which does not \
+                 exist; Claude Code reports the plugin as failed to load and none of its hooks \
+                 fires"
+            ));
+        }
+        if plugin.loads() {
+            registers = true;
+            if direct {
                 lines.push(format!(
-                    "plugin {name}: its marketplace {marketplace} is recorded at {location}, \
-                     which does not exist; Claude Code reports the plugin as failed to load \
-                     and none of its hooks fires"
+                    "plugin {name}: its hooks fire beside the direct registration and a \
+                     crossing is recorded twice; keep one of the two (claude plugin disable \
+                     {name}, or commonmeasure uninstall claude)"
+                ));
+            } else {
+                lines.push(format!(
+                    "plugin {name}: this is the registration; its hooks and its MCP entry \
+                     are what Claude Code runs"
                 ));
             }
         }
-        if enabled {
-            lines.push(format!(
-                "plugin {name}: while it loads, its hooks fire beside any direct registration \
-                 and a crossing is recorded twice; keep one of the two"
-            ));
-        }
     }
-    lines
+    (lines, registers)
 }
 
 /// Read one host's registration back and check it against the machine.
@@ -754,6 +1081,157 @@ pub fn doctor(surface: HostSurface, paths: &HostPaths, home: &Path) -> HostRepor
         HostSurface::ClaudeCode => doctor_claude(paths, home),
         HostSurface::Codex => doctor_codex(paths, home),
         HostSurface::Pi => doctor_pi(paths, home),
+        HostSurface::ClaudeDesktop => doctor_claude_desktop(paths, home),
+        HostSurface::Cursor => doctor_cursor(paths, home),
+    }
+}
+
+/// The command a host's `mcpServers` entry names, when the entry is ours.
+fn json_server_command(path: &Path) -> Result<Option<String>, String> {
+    let document = read_json(path)?;
+    Ok(document["mcpServers"][SERVER_NAME]
+        .as_object()
+        .and_then(|server| server.get("command"))
+        .and_then(Value::as_str)
+        .map(str::to_owned))
+}
+
+fn doctor_claude_desktop(paths: &HostPaths, home: &Path) -> HostReport {
+    let mut lines = Vec::new();
+    let command = match json_server_command(&paths.claude_desktop_config) {
+        Ok(command) => command,
+        Err(error) => {
+            return HostReport {
+                host: "claude-desktop",
+                registered: false,
+                lines: vec![format!("mcp: {error}")],
+            };
+        }
+    };
+    match &command {
+        Some(command) => {
+            lines.push(format!(
+                "mcp: server {SERVER_NAME} registered in {}, command {command}",
+                paths.claude_desktop_config.display()
+            ));
+            lines.push(binary_line(command));
+        }
+        None => lines.push(format!(
+            "mcp: no server {SERVER_NAME} in {}",
+            paths.claude_desktop_config.display()
+        )),
+    }
+    lines.push(
+        "hooks: none; Claude Desktop has no hook surface, so crossings are mediated or nothing"
+            .to_owned(),
+    );
+    lines.push(
+        "servers: two per launch, one for the chat client and one for the local agent mode; \
+         each that makes a call leaves its own session naming its client"
+            .to_owned(),
+    );
+    lines.extend(home_lines(home));
+    HostReport {
+        host: "claude-desktop",
+        registered: command.is_some(),
+        lines,
+    }
+}
+
+fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
+    let mut lines = Vec::new();
+    let mut binaries: Vec<String> = Vec::new();
+    let hooks_document = match read_json(&paths.cursor_hooks) {
+        Ok(document) => document,
+        Err(error) => {
+            return HostReport {
+                host: "cursor",
+                registered: false,
+                lines: vec![format!("hooks: {error}")],
+            };
+        }
+    };
+    let mut hooked = Vec::new();
+    for (event, _) in CURSOR_HOOKS {
+        let commands: Vec<String> = hooks_document["hooks"][event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["command"].as_str())
+            .filter(|command| is_our_hook_command(command))
+            .map(program_of)
+            .collect();
+        if !commands.is_empty() {
+            hooked.push(event);
+        }
+        for program in commands {
+            if !binaries.contains(&program) {
+                binaries.push(program);
+            }
+        }
+    }
+    if hooked.is_empty() {
+        lines.push(format!(
+            "hooks: none of this product in {}",
+            paths.cursor_hooks.display()
+        ));
+    } else {
+        lines.push(format!(
+            "hooks: {} registered in {}{}",
+            hooked.join(", "),
+            paths.cursor_hooks.display(),
+            if hooked.len() < CURSOR_HOOKS.len() {
+                format!(
+                    " (missing {})",
+                    CURSOR_HOOKS
+                        .iter()
+                        .map(|(event, _)| *event)
+                        .filter(|event| !hooked.contains(event))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                String::new()
+            }
+        ));
+    }
+    let command = match json_server_command(&paths.cursor_mcp) {
+        Ok(command) => command,
+        Err(error) => {
+            lines.push(format!("mcp: {error}"));
+            None
+        }
+    };
+    match &command {
+        Some(command) => {
+            lines.push(format!(
+                "mcp: server {SERVER_NAME} registered in {}, command {command}",
+                paths.cursor_mcp.display()
+            ));
+            if !binaries.contains(command) {
+                binaries.push(command.clone());
+            }
+        }
+        None => lines.push(format!(
+            "mcp: no server {SERVER_NAME} in {}",
+            paths.cursor_mcp.display()
+        )),
+    }
+    if binaries.len() > 1 {
+        lines.push(
+            "the hooks and the MCP server name different binaries; a session records under one \
+             version and mediates under another"
+                .to_owned(),
+        );
+    }
+    for binary in &binaries {
+        lines.push(binary_line(binary));
+    }
+    lines.extend(home_lines(home));
+    HostReport {
+        host: "cursor",
+        registered: !hooked.is_empty() || command.is_some(),
+        lines,
     }
 }
 
@@ -894,25 +1372,26 @@ fn doctor_claude(paths: &HostPaths, home: &Path) -> HostReport {
     for binary in &binaries {
         lines.push(binary_line(binary));
     }
-    lines.extend(plugin_lines(paths, &settings));
+    let direct = !hooked.is_empty() || server.is_some();
+    let (plugin, plugin_registers) = plugin_lines(paths, &settings, direct);
+    lines.extend(plugin);
     lines.extend(home_lines(home));
     HostReport {
         host: "claude-code",
-        registered: !hooked.is_empty() || server.is_some(),
+        registered: direct || plugin_registers,
         lines,
     }
 }
 
 fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
     let mut lines = Vec::new();
-    let command = match read_toml(&paths.codex_config) {
+    let server = match read_toml(&paths.codex_config) {
         Ok(document) => document
             .get("mcp_servers")
             .and_then(toml_edit::Item::as_table)
             .and_then(|servers| servers.get(SERVER_NAME))
-            .and_then(|server| server.get("command"))
-            .and_then(toml_edit::Item::as_str)
-            .map(str::to_owned),
+            .and_then(toml_edit::Item::as_table)
+            .cloned(),
         Err(error) => {
             return HostReport {
                 host: "codex",
@@ -921,6 +1400,11 @@ fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
             };
         }
     };
+    let command = server
+        .as_ref()
+        .and_then(|server| server.get("command"))
+        .and_then(toml_edit::Item::as_str)
+        .map(str::to_owned);
     match &command {
         Some(command) => {
             lines.push(format!(
@@ -928,6 +1412,26 @@ fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
                 paths.codex_config.display()
             ));
             lines.push(binary_line(command));
+            let approval = server
+                .as_ref()
+                .and_then(|server| server.get("default_tools_approval_mode"))
+                .and_then(toml_edit::Item::as_str);
+            lines.push(match approval {
+                Some(mode) if mode == CODEX_APPROVAL_MODE => format!(
+                    "approval: default_tools_approval_mode = \"{mode}\"; Codex calls the tools \
+                     without asking, in the CLI, the ChatGPT desktop app and the IDE extension"
+                ),
+                Some(mode) => format!(
+                    "approval: default_tools_approval_mode = \"{mode}\", not the \
+                     \"{CODEX_APPROVAL_MODE}\" install writes; Codex may ask before each call or \
+                     refuse it in a non-interactive run"
+                ),
+                None => format!(
+                    "approval: no default_tools_approval_mode on the table; Codex asks before \
+                     each call and codex exec refuses them; run commonmeasure install codex to \
+                     write \"{CODEX_APPROVAL_MODE}\""
+                ),
+            });
         }
         None => lines.push(format!(
             "mcp: no [mcp_servers.{SERVER_NAME}] in {}",
@@ -958,6 +1462,9 @@ mod tests {
             claude_plugins: directory.join(".claude/plugins"),
             codex_config: directory.join(".codex/config.toml"),
             pi_extension: directory.join(".pi/agent/extensions/commonmeasure/index.ts"),
+            claude_desktop_config: directory.join("Claude/claude_desktop_config.json"),
+            cursor_mcp: directory.join(".cursor/mcp.json"),
+            cursor_hooks: directory.join(".cursor/hooks.json"),
         }
     }
 
@@ -1030,7 +1537,10 @@ mod tests {
         assert_eq!(post[1]["matcher"], "WebFetch|WebSearch|mcp__.*");
         assert_eq!(
             post[1]["hooks"][0]["command"],
-            format!("\"{}\" hook post-tool-use", binary.display())
+            format!(
+                "\"{}\" hook post-tool-use --host claude-code",
+                binary.display()
+            )
         );
         assert_eq!(settings["hooks"]["Stop"].as_array().unwrap().len(), 1);
         let state = read_json(&paths.claude_state).unwrap();
@@ -1065,6 +1575,17 @@ mod tests {
             r#"{"enabledPlugins": {"commonmeasure@commonmeasure": true}}"#,
         )
         .unwrap();
+        let plugin_dir = directory.path().join("plugin-files");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::create_dir_all(&paths.claude_plugins).unwrap();
+        std::fs::write(
+            paths.claude_plugins.join("installed_plugins.json"),
+            format!(
+                r#"{{"version": 2, "plugins": {{"commonmeasure@commonmeasure": [{{"scope": "user", "installPath": "{}", "version": "0.3.0"}}]}}}}"#,
+                plugin_dir.display()
+            ),
+        )
+        .unwrap();
         let binary = directory.path().join("commonmeasure");
         std::fs::write(&binary, b"").unwrap();
         let error = install_claude(&binary, &paths).expect_err("refuses");
@@ -1094,8 +1615,22 @@ mod tests {
             "{text}"
         );
         assert!(
+            text.contains("default_tools_approval_mode = \"approve\""),
+            "the approval mode Codex's non-interactive runs need: {text}"
+        );
+        assert!(
             !text.contains("\n[mcp_servers]\n"),
             "the parent table stays implicit: {text}"
+        );
+        let report = doctor_codex(&paths, directory.path());
+        assert!(report.registered);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("approval: default_tools_approval_mode = \"approve\"")),
+            "{:?}",
+            report.lines
         );
 
         uninstall_codex(&paths).expect("uninstalls");
@@ -1103,5 +1638,140 @@ mod tests {
             std::fs::read_to_string(&paths.codex_config).unwrap(),
             original
         );
+    }
+
+    /// A table without the approval mode, as an older install wrote it, is
+    /// registered but reported as one Codex will ask about on every call.
+    #[test]
+    fn the_codex_doctor_names_a_missing_approval_mode() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        std::fs::create_dir_all(directory.path().join(".codex")).unwrap();
+        std::fs::write(
+            &paths.codex_config,
+            "[mcp_servers.commonmeasure]\ncommand = \"/usr/bin/commonmeasure\"\nargs = [\"mcp\", \"--host\", \"codex\"]\n",
+        )
+        .unwrap();
+        let report = doctor_codex(&paths, directory.path());
+        assert!(report.registered);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("approval: no default_tools_approval_mode")),
+            "{:?}",
+            report.lines
+        );
+    }
+
+    /// A table carrying a different approval mode is registered, and the
+    /// doctor says which mode it found and which install writes.
+    #[test]
+    fn the_codex_doctor_names_an_approval_mode_that_is_not_the_one_install_writes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        std::fs::create_dir_all(directory.path().join(".codex")).unwrap();
+        std::fs::write(
+            &paths.codex_config,
+            "[mcp_servers.commonmeasure]\ncommand = \"/usr/bin/commonmeasure\"\nargs = [\"mcp\", \"--host\", \"codex\"]\ndefault_tools_approval_mode = \"prompt\"\n",
+        )
+        .unwrap();
+        let report = doctor_codex(&paths, directory.path());
+        assert!(report.registered);
+        assert!(
+            report.lines.iter().any(|line| {
+                line.contains(
+                    "approval: default_tools_approval_mode = \"prompt\", not the \"approve\" install writes",
+                )
+            }),
+            "{:?}",
+            report.lines
+        );
+    }
+
+    /// An enabled plugin whose files exist is the registration for Claude
+    /// Code on its own; beside a direct registration it is the second of
+    /// two, and only then is the double-recording warning given. The same
+    /// predicate refuses a direct install beside it.
+    #[test]
+    fn an_enabled_plugin_registers_alone_and_warns_only_beside_a_direct_registration() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        let plugin_dir = directory.path().join("plugin-files");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::create_dir_all(&paths.claude_plugins).unwrap();
+        std::fs::write(
+            &paths.claude_settings,
+            r#"{"enabledPlugins": {"commonmeasure@commonmeasure": true}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            paths.claude_plugins.join("installed_plugins.json"),
+            format!(
+                r#"{{"version": 2, "plugins": {{"commonmeasure@commonmeasure": [{{"scope": "user", "installPath": "{}", "version": "0.3.0"}}]}}}}"#,
+                plugin_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let report = doctor_claude(&paths, directory.path());
+        assert!(report.registered, "{:?}", report.lines);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("this is the registration")),
+            "{:?}",
+            report.lines
+        );
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.contains("recorded twice")),
+            "{:?}",
+            report.lines
+        );
+
+        // A direct MCP registration written beside it: now two routes.
+        std::fs::write(
+            &paths.claude_state,
+            r#"{"mcpServers": {"commonmeasure": {"command": "/usr/bin/commonmeasure", "args": ["mcp", "--host", "claude-code"]}}}"#,
+        )
+        .unwrap();
+        let report = doctor_claude(&paths, directory.path());
+        assert!(report.registered);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("recorded twice")),
+            "{:?}",
+            report.lines
+        );
+
+        // install refuses on the same predicate the doctor reports on; with
+        // the plugin's files gone it does not load, doctor says so, and a
+        // direct install proceeds.
+        let binary = directory.path().join("commonmeasure");
+        std::fs::write(&binary, b"").unwrap();
+        std::fs::remove_file(&paths.claude_state).unwrap();
+        let error = install_claude(&binary, &paths).expect_err("refuses beside a loading plugin");
+        assert!(
+            error.contains("claude plugin disable commonmeasure@commonmeasure"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(&plugin_dir).unwrap();
+        let report = doctor_claude(&paths, directory.path());
+        assert!(!report.registered, "{:?}", report.lines);
+        assert!(
+            report
+                .lines
+                .iter()
+                .any(|line| line.contains("loads nothing")),
+            "{:?}",
+            report.lines
+        );
+        install_claude(&binary, &paths).expect("installs beside a plugin that does not load");
     }
 }
