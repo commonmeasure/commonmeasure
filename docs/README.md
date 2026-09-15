@@ -47,8 +47,8 @@ Guide:
   what should enter a context window and how to know it helped.
 - [`docs/guide/state-of-the-evidence.md`](guide/state-of-the-evidence.md): the
   evidence behind the guide, graded claim by claim.
-- [`docs/guide/untrusted-context.md`](guide/untrusted-context.md): prompt
-  injection, defences, liability and the records operators need.
+- [How agents use outside content](guide/untrusted-context.md): permission,
+  reliability, prompt injection and the records operators and publishers need.
 - [`docs/guide/measurements/README.md`](guide/measurements/README.md): the original
   measurements the guide reports, and how to rerun them.
 

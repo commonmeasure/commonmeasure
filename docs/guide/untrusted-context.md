@@ -1,55 +1,62 @@
 ---
-title: "Untrusted context: a working guide"
+title: "How agents use outside content"
 ---
 
-# Untrusted context: a working guide
+# How agents use outside content
 
-An agent reads a licensed news article while preparing a briefing. The article may
-be reliable evidence about an event, and the licence may permit quotation. Neither
-gives a sentence inside the article permission to make the agent send an email or
-disclose a private document. For instruction handling, this is what *untrusted*
-means: the material has no authority of its own to direct the agent. It is not a
-judgement about the publisher's honesty or the quality of its reporting.
+An agent using outside content needs to establish whether it may use that
+material, whether it is suitable evidence for the task, and how to handle any
+instructions it contains. Knowing the publisher, obtaining a licence and checking
+for harmful instructions each help with part of that work, but none establishes
+all of it. A licensed article can be out of date, an accurate passage can be
+misrepresented in a summary, and a useful document can contain an instruction the
+agent has no authority to carry out.
 
-Four questions help keep those decisions separate:
+The term *untrusted context* describes that last concern. Context is the material
+supplied to a model as it decides what to say or do. Calling outside material
+*untrusted* means that the system must not treat instructions within it as
+commands merely because the agent has read them. It says nothing by itself about
+the publisher's honesty, the accuracy of the content or permission to use it.
+An agent can rely on a newspaper's reporting when preparing a briefing without
+giving the article's author control over its email or access to private files.
 
-- Where did the material come from, and how did it reach the system?
-- Is it reliable evidence for this question?
-- On what basis may the system use it this way?
-- What may it cause the system to do?
+*Unlicensed* means that no licence covers the particular use. Paying a supplier
+for access does not necessarily provide permission to reuse everything it
+returns. The operator needs to establish a basis for the intended activity,
+whether a direct agreement, a public licence or an applicable exception.
+Where that basis has not been established, the uncertainty needs to remain
+visible rather than being treated as permission.
 
-Licensing directly from a provider establishes a relationship with a named supplier
-and an agreement on how its content may be used, with possible provisions for
-attribution, updates and corrections. What the agreement covers depends on the
-provider’s authority and its terms: buying access to a search API does not
-necessarily provide a licence to reuse everything it returns.
+Publisher conditions need attention even when the content has no authority to
+instruct the agent. A licence may require attribution or usage reporting, for
+example. The operator must assess those conditions and arrange to meet them if
+it relies on that licence. A reporting condition does not itself authorise an
+agent to disclose private session data to an address found in a document. The
+application needs an authorised recipient and a decision about what may be sent;
+if it cannot meet the condition, it must decline that licensing route or establish
+another basis for use.
 
-Direct licensing is one basis for lawful use; public licences or an applicable
-exception may also provide a basis. Whatever the basis, permission to use material
-does not establish its accuracy or give it authority to direct the agent.
+Describing material as *dangerous* requires an account of the possible harm and
+how it could occur. A request embedded in a support ticket could cause an agent
+to disclose a secret if it follows the request. Misleading evidence could distort
+an answer without asking the agent to take any forbidden action. Even accurate
+reporting can produce a misleading briefing if a summary omits its date or turns
+a tentative proposal into an established fact. These failures require different
+controls: restrictions on actions, assessment of evidence, and checks that the
+answer represents its sources faithfully.
 
-The distinction matters whenever an agent can act on what it reads. A support
-ticket might contain useful facts alongside an instruction to copy a database
-secret into its reply. If the agent treats that sentence as an instruction, the
-ticket's author gains some of the operator's authority. A reported Supabase MCP
-demonstration followed this pattern: the coding agent held a service role key,
-read a ticket and wrote secrets back into it.[^18] This is prompt injection. The
-same boundary matters for material supplied by a known or licensed provider.
-
-There is another way to mishandle the news article: the agent can produce a
-misleading summary of accurate reporting. Security teams, publishers and
-news-integrity teams need a connected account of acquisition, transformation and
-use to investigate these different failures. That account should show what entered
-the model's context—the material it draws on while deciding what to say or do—what
-actions followed, and what the reader eventually saw. Each question still needs
-its own controls and evidence.
+This guide follows content from its source through retrieval, the agent's actions
+and the answer shown to the reader. It examines permission and publisher
+conditions alongside prompt injection and the quality of the resulting answer,
+then considers what records allow operators and publishers to investigate what
+happened.
 
 Sources checked on **14 September 2026**, with the rights-signals and news-integrity
 material checked on **15 September 2026**.
 
 ## Contents
 
-1. [Where untrusted content enters](#1-where-untrusted-content-enters)
+1. [How outside content reaches an agent](#1-where-untrusted-content-enters)
 2. [How content redirects an agent](#2-injection-methods-and-results)
 3. [Defences and their limits](#3-defences)
 4. [Standards, regulation and rights signals](#4-standards-and-regulation)
@@ -63,20 +70,15 @@ material checked on **15 September 2026**.
 12. [Disclosures](#disclosures)
 13. [Sources](#sources)
 
-## 1. Where untrusted content enters
+<a id="1-where-untrusted-content-enters"></a>
 
-The ticket example is a case of indirect prompt injection: an attacker places
-instructions in material the agent encounters while doing an authorised task. Unlike
-a request from the user, those instructions arrive inside something the agent was
-supposed to read as evidence. Web pages, search results, email, documents and tool
-responses all provide routes in. Images, audio, video and persistent memory can
-carry the problem too.[^1][^8]
+## 1. How outside content reaches an agent
 
-The NCSC describes the underlying difficulty as the absence of an enforced security
-boundary between instructions and data inside an LLM prompt. OWASP's term,
-context-window pooling, describes different sources becoming part of the same token
-stream. Labelling a passage as untrusted can help a model interpret it, but the
-label alone does not enforce what the system may do with it.[^1][^2]
+Agents acquire material through web pages, search results, email, documents and
+tool responses. Images, audio, video and persistent memory can also supply
+information that influences their work.[^1][^8] The route matters because a search
+snippet, a retrieved page and a supplier's generated answer can represent the
+same source differently, with different terms and different evidence of origin.
 
 ### Control over search results
 
@@ -150,6 +152,21 @@ basis for use. The record should explain that decision.
 <a id="2-injection-methods-and-results"></a>
 
 ## 2. How content redirects an agent
+
+Prompt injection occurs when someone tries to redirect an agent through
+instructions placed in material it reads. A support ticket might contain useful
+facts alongside a request to copy a database secret into the reply. If the agent
+follows that request using its own access, the ticket's author has caused it to
+act without the user's authority. A reported Supabase MCP demonstration followed
+this pattern: the coding agent held a service role key, read a ticket and wrote
+secrets back into it.[^18] This is indirect prompt injection because the request
+arrives through task material rather than directly from the user.
+
+The NCSC describes the underlying difficulty as the absence of an enforced security
+boundary between instructions and data inside an LLM prompt. OWASP's term,
+context-window pooling, describes different sources becoming part of the same token
+stream. Labelling a passage as untrusted can help a model interpret it, but the
+label alone does not enforce what the system may do with it.[^1][^2]
 
 ### How the attacks work
 
@@ -275,12 +292,12 @@ the reader receives a different claim. Repeated summaries can also make one
 uncertain account look independently corroborated if they obscure their common
 origin.
 
-Checking this answer means asking three separate questions: was the source
-accurate, did the answer represent it faithfully, and did the answer include the
-context needed for the reader's question? A faithful quotation from an old article
-may still give a misleading answer about the present. A citation also needs to
-support the particular claim beside it; a link to a respected publisher is
-insufficient on its own.
+Checking the answer requires comparing its claims with the source and assessing
+whether the source is accurate and relevant to the reader's question. A faithful
+quotation from an old article may still give a misleading answer about the
+present, so preserving the wording alone is insufficient. Each citation needs to
+support the particular claim beside it, including any qualifications that affect
+its meaning.
 
 Direct supply agreements can support full-text access, stable article identifiers,
 quotation permissions and correction feeds. To measure whether those arrangements
