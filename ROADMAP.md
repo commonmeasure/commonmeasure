@@ -17,31 +17,38 @@ product on both sides: the edge they install without help, and the hub they
 enrol with without talking to Common Measure. Each entry names the package
 it serves; a hub-side entry is on the hub's own board and has no box here.
 
-1. The hub hosted at one public address, multi-tenant under Common Measure
-   Ltd's own cloud account, serving the `CommonMeasureBot` identity
-   documents from `https://hub.commonmeasure.ai`, the identity origin chosen
-   once for every enrolled edge. Hub board. Nothing after enrolment can be
-   exercised until it exists.
-2. Self-serve onboarding at the hub: sign in, create an organisation, land
-   on the enrolment page. Hub board.
-3. WP-45: the walkthrough run to a first delivered batch against the hosted
-   hub, with the hub's client pages served by the hub.
-4. WP-44, boxes one to three: content owners, the report and unattributed
-   hosts as screens.
-5. WP-19, last box: managed policy run end to end against the hosted hub.
-6. WP-46: the hosted edge, serving the mediated tools over HTTPS to the
-   hosts that reach MCP only remotely. It follows the stranger's path
-   because a hosted edge is an enrolled, managed edge whose users sign in
-   through the hub, so it needs the hosted hub, onboarding and managed
-   policy of entries 1, 2 and 5 working first.
+1. Complete hosted deployment acceptance: verify the running revision,
+   forwarding and enrolment through `https://hub.commonmeasure.ai`. The
+   service exists; the operations repository records the deployed release.
+   The hub board owns the remaining hosted acceptance.
+2. Release and verify the policy-first onboarding and invited pilot-team
+   changes. New organisations start on Policy, then enrol after publishing;
+   invited members join without an administrator changing a commercial tier.
+   Local handler and HTTP flows pass; hosted verification remains open on
+   the hub board.
+3. WP-45: run the walkthrough to a first delivered batch against the hosted
+   hub. Publish the minimal test-directory policy before managed connection.
+   Publish and verify the client guides on the product website before the
+   hub's documentation redirects are deployed.
+4. WP-19, last box: managed policy run end to end against the hosted hub.
+   The local real-hub rollout, captured-envelope rollback replay and
+   unavailable-management enforcement are recorded under `demo/enrolment/`.
+5. Record an operator's assessment of what the record helped them do and
+   whether they would repeat the workflow (§Acceptance gate). Fix any
+   blocking record-display gap the trial exposes; WP-41 records the completed
+   console integration.
+6. WP-46: the hosted edge, serving the mediated tools over HTTPS to hosts
+   that reach MCP only remotely. It requires hosted enrolment, onboarding
+   and managed policy to work first.
 
 Packages not on this path are under §Deferred packages, each with the reason
 it waits.
 
 ## What is built
 
-The core manages and measures every piece of content an agent takes in. Each
-bullet names its test or artefact.
+The core controls mediated acquisition, records supported host observations
+and measures outcomes where the required evidence is available. Each bullet
+names its test or artefact; coverage outside those paths remains unavailable.
 
 ### Access rules: which content an agent may take in
 
@@ -171,6 +178,20 @@ bullet names its test or artefact.
   them (`crates/commonmeasure-runtime/src/processor/fidelity.rs`,
   `crates/commonmeasure-runtime/src/processor/judge.rs`, `demo/output/cited/`).
 
+### Directory reporting consent
+
+Implemented and locally integration-tested: CLI, local MCP, packaged Claude
+command and installed Codex skill select a canonical directory for local-only
+recording or Hub reporting. Managed reporting additionally requires owner
+approval and a signed per-edge grant, with a maximum 24-hour validity window.
+Source admission remains governed by source policy; confidential scopes and
+local-only ancestors veto reporting. Resolver identity is version 2.
+
+`docs/contracts/directory-enrolment.md` owns the behaviour. The real local
+Hub/Postgres and edge integration test covers approval, private evidence
+withholding, delivery, revocation and expiry. Interactive host invocation and
+hosted first-delivery acceptance remain open under WP-45 and WP-19.
+
 ### Distribution: the binary without a checkout
 
 - One version identity: the workspace manifest, reported by the binary and
@@ -220,7 +241,29 @@ are WP-34.
 
 ## Acceptance gate
 
-The first version passes when every line below passes. The state of each:
+The release candidate must demonstrate this operator workflow:
+
+- Install and register one supported host using the documented path; name the
+  tested version and platform.
+- Select one test directory and explicit policy. A real mediated fetch admits
+  an eligible source and refuses a source the enforced policy forbids.
+- Inspect a local record that explains the outcome and records bytes, source,
+  costs or unknowns accurately. Unselected/private work is not uploaded.
+- If hub reporting is offered, publish the policy before managed connection,
+  enrol, explicitly clear the test directory and see the first delivery in
+  the correct organisation. Invited pilot teams need no pricing negotiation.
+- Record an operator's assessment of what the record helped them do and whether
+  they would repeat the workflow. A demo run does not establish customer value.
+
+This workflow is not yet signed off end to end: WP-45, the hub onboarding item
+and the operator trial own the outstanding evidence. Existing technical
+acceptance below remains valid for its named claims. Deferred features do not
+become release requirements merely because they appear in this document.
+
+### Routing and protocol evidence
+
+Each line supports its corresponding claim; not every research extension is
+required for the first operator workflow. The state of each:
 
 - at least three open-web providers and one licensed provider run through the
   same contract — **passed for delivery, not for price**: twelve open-web
@@ -252,7 +295,7 @@ The first version passes when every line below passes. The state of each:
   different data products — **passed**: `conformance/` holds the projection;
   `docs/contracts/session-evidence.md` states what never leaves.
 
-The gate fails if the provider comparison cannot be made fair, the
+A claim of improved routing fails if the provider comparison cannot be made fair, the
 evaluation does not change a routing decision, or a fixed default performs
 as well as the router after accounting for complexity. Out of the first
 version: auctions and supplier bidding; settlement, custody or publisher
@@ -261,11 +304,16 @@ scheduling; a consumer browser product.
 
 ## What is not built
 
+- Scoped operator assessments of the basis for use, and preservation of
+  supported embedded credentials before acquisition transforms remove them
+  (WP-30).
+- A news evaluation separating factual accuracy, faithful representation,
+  citation support and completeness (WP-26), and local links from observed
+  citations and display to corrections and notices (WP-32).
 - Usage reporting to the content sources that require it (WP-23).
-- WP-19's synchronisation against the hosted hub, recorded in this
-  repository. The edge signs the request with its enrolled key and a
-  loopback endpoint verifies it as the hub does; no transcript of a run
-  against the hub is committed.
+- WP-19's synchronisation against the hosted hub. A real local Hub run is
+  recorded in `demo/enrolment/local-managed-run.txt`; hosted acceptance
+  remains open.
 - Console editing of policy fields beyond the mode and the denied hosts:
   access rules, scopes, principals, allowances, clearance and recordable
   prefixes are edited by hand.
@@ -294,13 +342,11 @@ scheduling; a consumer browser product.
   Code, the ChatGPT desktop app, the Codex IDE extension or any browser
   answer surface; `install` for Gemini CLI and Goose; and Claude in the
   browser (WP-39, WP-46).
-- The console's API and its screens agreeing, with this month's crossing
-  evidence on a screen (WP-41).
 - A read-only management surface an agent can ask about its own record
   (WP-42).
 - Fleet status delivered to a hub and shown there (WP-43).
-- The hub's screens for content owners, delivery, policy revisions and
-  unattributed hosts (WP-44).
+- The hub's onward-delivery screen (WP-44). Content owners, reports,
+  unattributed hosts and policy revisions have screens.
 - A charge in currency is observed for one provider (Exa); the rest quote a
   published price, and Redpine's funded price is unknown.
 - Relay delivery cadence: retry, backoff and dead-letter for spooled Content
@@ -323,6 +369,64 @@ scheduling; a consumer browser product.
   owner dashboards and agent reconciliation. Owners are served by the
   conforming consumers they choose; the edge reports to them and the hub
   delivers onward to them.
+
+## Completed console integration
+
+### WP-41: the console's API and its screens agree
+
+The console renders the forecast, provider list and comparison results from
+shared JSON projections. Its writes negotiate HTML or JSON through the same
+origin guard and runtime loaders. The Budget screen exposes the recorded
+footprint, declared caps and principal allowance standing; Record details
+show the evidence each crossing carries and its referenced manifest. The
+Overview names the complete recorded history its refusal count covers.
+
+- [x] `GET /api/policy/forecast` answers the value `console::forecast::forecast`
+  builds, and `forecast_fragment` renders that value and computes nothing of its
+  own; the fragment keeps its "nothing is saved" statement and its principal
+  caveat.
+- [x] `GET /api/providers` answers the `{name, connected}` list the Sources
+  screen is passed, and the screen renders that answer.
+- [x] `POST /api/compare` answers the per-provider result values the Compare
+  screen renders, under the same `Origin` guard and the same injected runner, so
+  the screen and the route cannot make different calls.
+- [x] The four write routes answer JSON to a request that asks for it and HTML
+  otherwise, carrying the outcome kind, its status, the notice and the revision
+  now in force; every negative-path test in
+  `crates/commonmeasure-cli/tests/serve_e2e.rs` gains its JSON twin.
+- [x] A budget screen renders `/api/budget`: per-engagement footprint with the
+  charge absence stated as the projection states it, the declared caps from the
+  policy panel's own projection, and every declared principal allowance with its
+  ledger standing. `crates/commonmeasure-console/src/console/budget.rs`'s module
+  documentation names the screen that exists.
+- [x] The Record pane renders both hashes, the HTTP status and the identity a
+  mediated crossing presented, and an observed crossing's content hash alone
+  with no status and no identity, asserted against the log the real binary
+  wrote (`crates/commonmeasure-cli/tests/serve_e2e.rs`,
+  `the_record_pane_shows_the_hashes_status_and_identity_the_record_carries`).
+- [x] The Record detail renders the rest of what a mediated crossing carries:
+  the statements with their sources, the group that governed, the effective
+  preference per category, operator terms where they governed, `named_by`, the
+  manifest outcome and its probes from the referenced `manifest_resolved`
+  record, the reporting ruling with the receiver or its absence, the
+  `Content-Telemetry-ID`, and the allowance decision and its settlement. A
+  field the record does not carry is absent, never rendered as unknown or zero
+  (`docs/FAIL-POLICY.md` §7).
+- [x] The Overview's refusal line counts the window it names, or names the window
+  it counts.
+
+**Acceptance evidence:** `crates/commonmeasure-cli/tests/serve_e2e.rs` drives
+the real binary for forecast and provider projection parity, the real
+Redpine adapter's unsupported-search result in Compare, form/JSON file and
+revision parity, concurrent revision conflicts, JSON origin refusals and a
+forecast evidence-read failure that retains HTTP 500. A loopback publisher
+passes declarations and discovery through the production readers; separate
+crossings exercise the allowance reservation and settlement, and the
+operator-terms override with its reporting ruling. Terms bypass allowance
+consultation, so those facts are never invented on the same crossing. The
+same test checks the Budget screen against the policy projection and real
+ledger, including an unreadable ledger.
+
 
 ## Open packages
 
@@ -366,10 +470,13 @@ request and records why.
 - [x] Policy fetch and status kept off the telemetry receiver path.
 - [ ] Exercised against the self-hosted and managed hub shapes; an
   unavailable or compromised hub gains no access to the operator record and
-  is never needed for a crossing. The edge half is exercised against a
-  loopback endpoint that verifies the request signature as the hub does
-  (`crates/commonmeasure-cli/tests/managed_policy.rs`); no transcript of a
-  run against the hub is committed here.
+  is never needed for a crossing. `demo/enrolment/local-managed-run.txt`
+  records the released 0.3.2 edge against a real local Hub: initial policy
+  before enrolment, signed rollout, selected-session delivery and withholding
+  an unselected session. The Hub's exact earlier signed envelope is refused
+  through a loopback replay, and last-known-good policy still refuses a
+  source when that management endpoint is unavailable. This establishes
+  the local shape; the hosted run remains open.
 
 **Acceptance evidence:** signed rollout from desired to applied, visible
 drift before convergence, rollback refused, a complete offline
@@ -642,6 +749,10 @@ A first-party add-on: an output-stage processor that builds a C2PA manifest
 for an output from the sealed source record, using the C2PA Rust SDK
 (`docs/knowledge-base/source-declarations.md` §C2PA).
 
+Reading and preserving credentials before acquisition transforms remove
+them is separate work under WP-30. Output signing and pasted-text readback
+do not establish that path.
+
 - [x] Every grounded source is an ingredient referenced by content hash with
   its grade (`docs/GLOSSARY.md` §Grade), so a mediated ruling and an
   observed witness are never one claim
@@ -689,14 +800,30 @@ grounding evaluator is the deterministic first step.
 - [x] An optional model judge measured for agreement against the
   deterministic checks; its verdict is never ground truth
   (`crates/commonmeasure-runtime/src/processor/judge.rs`, `demo/output/cited/`).
-- [ ] Only `supported` verdicts may project as telemetry (WP-32).
+- [ ] Projection of supported quotation evidence under WP-32. A claim
+  verdict alone does not establish reproduction or observed display;
+  citation and display evidence remain separate from assessed support.
+- [ ] A news evaluation through the acquisition, extraction and answer
+  path: hold the question and answer model fixed, vary source access or
+  extraction, and assess factual accuracy, faithful representation, citation
+  support and completeness separately. Cover loss of a date or qualification,
+  a proposal presented as a decision, an accurate but outdated quotation,
+  and repeated summaries mistaken for independent corroboration. Record
+  expected judgements and their evidence, evaluator disagreements and
+  unavailable results. Controlled examples establish these failure cases;
+  claims that a licensing arrangement improves answers require a comparison
+  using the actual access it provides. Scope follows
+  [the guide's news example](docs/guide/untrusted-context.md#when-accurate-reporting-becomes-a-misleading-answer).
 
-**Acceptance evidence:** a committed run with a `supported` verdict on a
-mid-text span, and a judge agreement figure beside the deterministic
-verdicts: `demo/output/cited/`. In that run the model's prose paraphrases
-the sources it cites, so the verifier finds no verbatim-supported claim and
-the judge calls every claim supported; the agreement figure records that
-disagreement rather than resolving it.
+**Acceptance evidence:** `demo/output/cited/summary.json` records six
+supported citation quotes across the Exa, Firecrawl and Tavily plans. The
+separate fidelity verifier marks one of Exa's two prose claims supported;
+both claims in each of the Firecrawl and Tavily plans are unsupported. The
+judge calls all six claims supported, giving agreement of 0.5 for Exa and
+0.0 for Firecrawl and Tavily. The no-context plan has no supported claim and
+the judge abstains. These are span-matching and judge-agreement results;
+the news evaluation above remains open and needs a recorded comparison
+with evidence for each of its four measures.
 
 ### WP-27: host observation gaps
 
@@ -846,7 +973,8 @@ in `crates/commonmeasure-cli/tests/connect_e2e.rs` asserts.
 ### WP-30: source preferences and the named source
 
 Read what a source declares about AI use, record it beside the crossing,
-and record who named the source. The mechanisms, their standing and how the
+record who named the source, and distinguish declarations from the operator's
+assessed basis for use. The mechanisms, their standing and how the
 edge reads each are `docs/knowledge-base/source-declarations.md`; the rules
 are `DECISIONS.md` §Source declarations.
 
@@ -873,6 +1001,42 @@ are `DECISIONS.md` §Source declarations.
   every mode; the rule is not confirmed, and the record names the group
   that governed so it can be applied later
   (`crates/commonmeasure-cli/tests/mediated_e2e.rs`).
+- [ ] Scoped basis for use: record the source declaration separately from
+  the operator's assessment, the claimed issuer and authority evidence where
+  relevant, agreement or public licence reference and version, or applicable exception,
+  and the content and intended uses covered. Preserve the deciding policy
+  rule, outcome and reason; unresolved applicability stays unresolved. Current
+  host-level terms override source statements without these scope checks.
+  Extend the source-policy and session-evidence contracts, schema and loader
+  together so an assessment governs only within its recorded scope. Acceptance
+  covers a matching agreement, content or use outside its scope, a public
+  licence, an operator-assessed exception and an unresolved basis through the
+  real mediated path. Supplier API access alone must not imply reuse rights
+  over all returned content. The operator supplies the assessment; the product
+  applies policy without deciding legal entitlement.
+- [ ] Preserve supported embedded credentials before extraction or
+  sanitising removes them on the mediated acquisition path. Record the
+  verification result and credential reference alongside hashes of the
+  received and delivered content and the transformation method/version.
+  Keep invalid, untrusted and unavailable results distinct. Acceptance sends
+  text with embedded credentials through the real fetch and transform path,
+  verifies before removal, and checks that the record retains the result;
+  tampered and unsupported inputs must not acquire a trusted result. Existing
+  pasted-content reading and WP-25's output signing do not establish this
+  path. Coordinate the processor and session-evidence contract changes with
+  implementation.
+- [ ] Robots attribution and redirect scope: the source record and the
+  agent-facing explanation name the requested URL, governing `robots.txt`
+  URL, matched group and access rule, and policy mode and outcome. A
+  wildcard rule must be identified as such. Evaluate each redirect hop
+  against its own applicable rules; a shortener's disallow must not be
+  attributed to the destination page. When policy refuses a hop, stop
+  before requesting it; being a redirect is no exemption. An independently
+  obtained destination URL receives its own check. Acceptance uses loopback
+  origins through the real mediated fetch path, covering a wildcard
+  disallow, a more-specific path allow, a `CommonMeasureBot` group, and
+  allowed and disallowed destinations across policy modes. Assert both the
+  requests actually made and the attribution in the record and explanation.
 - [x] Who named the source: the `UserPromptSubmit` hook hashes every URL in
   the prompt and stores no text; each mediated crossing carries `named_by:
   user | agent | unknown` (`crates/commonmeasure-harness/src/prompt.rs`,
@@ -900,7 +1064,8 @@ are `DECISIONS.md` §Source declarations.
 produces a recorded statement with its origin named, a `strict` withholding
 that leaves the bytes out of context and says so, and a `named_by: user`
 crossing from a pasted URL; every new path has a real-binary test and a
-negative test.
+negative test. The scoped-assessment and credential-preservation extensions
+need the additional cases above before their boxes can be checked.
 
 ### WP-40: canonical JSON at every sealing point
 
@@ -948,83 +1113,26 @@ c2pa crate enabling serde_json's insertion-order maps; the conformance test
 and the hub's re-pinned corpus pass; one policy digested on the edge and on
 the hub is equal.
 
-### WP-41: the console's API and its screens agree
-
-The console is documented as rendered "from the same JSON values the `/api/*`
-routes serve" (`ARCHITECTURE.md` §Console and relay, `DECISIONS.md` §Execution
-and evidence). It is not, in both directions. Three screens compute values no
-route serves; one route serves a value no screen renders; and most of the
-fields WP-23, WP-29 and WP-30 put on every mediated crossing appear on no
-screen. This package makes the sentence true and puts this month's evidence in
-front of the operator. It adds no capability and no write the console does not already have.
-
-- [ ] `GET /api/policy/forecast` answers the value `console::forecast::forecast`
-  builds, and `forecast_fragment` renders that value and computes nothing of its
-  own; the fragment keeps its "nothing is saved" statement and its principal
-  caveat.
-- [ ] `GET /api/providers` answers the `{name, connected}` list the Sources
-  screen is passed, and the screen renders that answer.
-- [ ] `POST /api/compare` answers the per-provider result values the Compare
-  screen renders, under the same `Origin` guard and the same injected runner, so
-  the screen and the route cannot make different calls.
-- [ ] The four write routes answer JSON to a request that asks for it and HTML
-  otherwise, carrying the outcome kind, its status, the notice and the revision
-  now in force; every negative-path test in
-  `crates/commonmeasure-cli/tests/serve_e2e.rs` gains its JSON twin.
-- [ ] A budget screen renders `/api/budget`: per-engagement footprint with the
-  charge absence stated as the projection states it, the declared caps from the
-  policy panel's own projection, and every declared principal allowance with its
-  ledger standing. `crates/commonmeasure-console/src/console/budget.rs`'s module
-  documentation names the screen that exists.
-- [x] The Record pane renders both hashes, the HTTP status and the identity a
-  mediated crossing presented, and an observed crossing's content hash alone
-  with no status and no identity, asserted against the log the real binary
-  wrote (`crates/commonmeasure-cli/tests/serve_e2e.rs`,
-  `the_record_pane_shows_the_hashes_status_and_identity_the_record_carries`).
-- [ ] The Record detail renders the rest of what a mediated crossing carries:
-  the statements with their sources, the group that governed, the effective
-  preference per category, operator terms where they governed, `named_by`, the
-  manifest outcome and its probes from the referenced `manifest_resolved`
-  record, the reporting ruling with the receiver or its absence, the
-  `Content-Telemetry-ID`, and the allowance decision and its settlement. A
-  field the record does not carry is absent, never rendered as unknown or zero
-  (`docs/FAIL-POLICY.md` §7).
-- [ ] The Overview's refusal line counts the window it names, or names the window
-  it counts.
-
-**Acceptance evidence:** for each of the three new read routes, a test in
-`crates/commonmeasure-cli/tests/serve_e2e.rs` that drives the real binary,
-asserts the route's JSON and asserts the rendered screen carries the same values;
-a session fixture whose mediated crossing carries a disallow statement, an
-operator-terms override, a resolved manifest, a reporting ruling and an allowance
-reservation, with the detail pane asserted to name each; and a policy write
-driven twice, once as a form and once as JSON, reaching the same file state and
-the same revision.
-
 ### WP-44: the hub's operator screens
 
-The hub's product capabilities are API-first and three of them have no screen:
-content owners and their reports, onward delivery, and the unattributed hosts
-no registration claims. The client documentation instructs
-`curl` for each. The buyer is a platform or risk owner, not an engineer with a
-terminal, and the report is a hand-over artefact they have to produce on request.
-The handlers, scopes and tests exist; this package is the SvelteKit half and adds
-no route.
-Box four, onward delivery as a screen, waits until an operator asks for it;
-the first three are on the path in §Next. Policy revisions have a screen at
+Content owners, per-owner reports and unattributed hosts have screens.
+Their six page-flow tests against the real Hub handlers passed on
+14 September 2026 (`commonmeasure-hub`, `web/src/routes/(app)/owners/`).
+The report download is compared with the API's bytes. Onward delivery as a
+screen waits until an operator asks for it. Policy revisions have a screen at
 the hub: the ordered history, the current revision's digest and publisher,
 a builder that composes the next revision and checks it against
 `docs/contracts/source-policy.md` before it is published, and each edge's
 last fetch.
 
-- [ ] Content owners: register an owner, add and remove hosts with the stated
+- [x] Content owners: register an owner, add and remove hosts with the stated
   basis, see which hosts resolve to each, and see the refusal when a host is
   already claimed. The `basis` is shown as recorded and unverified, as the API
   states it.
-- [ ] The report: generated for one owner, shown on the page and downloadable as
+- [x] The report: generated for one owner, shown on the page and downloadable as
   the JSON the API serves, with `resolution` and the URL bound stated on the page
   and no session identifier or engagement anywhere in it.
-- [ ] Unattributed hosts: the list by event count, with the registration action
+- [x] Unattributed hosts: the list by event count, with the registration action
   beside each, so claiming a host is one step from seeing it.
 - [ ] Onward delivery: per owner, the destination and the credential it was given
   (never revealed back), queued, delivered and dead counts, the dead letters with
@@ -1046,7 +1154,7 @@ crossing, reproduces the example and enrols with the hosted hub with no
 step that needs a person from Common Measure, a private repository or a
 credential handed out; every failure names its cause and the next action;
 the documents answer the question a stranger has at each step. The hub's
-halves (the hosted service, onboarding, the client pages served by the hub)
+halves (the hosted service, onboarding, the client pages on the product website)
 are on the hub's own board.
 
 - [x] The example reproduced from a committed policy:
@@ -1181,6 +1289,7 @@ These packages are not on the path in §Next. Each keeps its boxes and its
 acceptance criteria, and moves back to §Open packages when it is picked up.
 The sentence under each heading says why it waits.
 
+
 ### WP-31: the demonstration for the IETF AI-preferences working group
 
 Waits behind the hosted hub: it is not on the stranger's path, and its
@@ -1257,8 +1366,10 @@ recipient-facing surface. Every event this projection emits is backed by a
 sealed local run: a reproduction event resolves to a dossier line, a byte
 span into retained window text, and hashes a third party can recompute. The
 boundary it respects is `ARCHITECTURE.md` §Content Telemetry boundary.
-The committed cited run (`demo/output/cited/`) carries the `supported`
-verdicts on mid-text spans this projection draws from.
+The committed cited run (`demo/output/cited/`) carries six citation quotes
+supported by the grounding evaluator with matched spans. These supply quotation
+evidence; the separate fidelity verifier supports only one prose claim
+(WP-26). Neither result establishes what a downstream application displayed.
 
 - [ ] The relay's conformance tests extended to the three event shapes
   against the pinned v1.0 schemas (`schema/SOURCE.md`).
@@ -1267,21 +1378,35 @@ verdicts on mid-text spans this projection draws from.
 
   | Evaluator fact | Projected event | Key fields |
   |---|---|---|
-  | `supported` verdict | `content_reproduced` | `reproduction_type` from an exact compare (`verbatim` on a byte-for-byte match, else `near_verbatim`; the fold admits only case); `reproduced_hash` over the quote as produced; `content_hash` of the matched window part, correlating to the `content_grounded` event already emitted; `reproduced_chars` |
-  | Parsed `CITATION:` line behind a `supported` verdict | `content_cited` | `citation_type: direct_quote`; `excerpt_hash` equal to `reproduced_hash`; shared `output_element_id`; `citation_id` linking the pair |
-  | `contradicted`, `uncovered`, `unavailable` verdicts | nothing | negative verdicts are evaluator output and stay local |
+  | Grounding evaluator's `supported` verdict with a matched quote span | `content_reproduced` | `reproduction_type` from an exact compare (`verbatim` on a byte-for-byte match, else `near_verbatim`; the fold admits only case); `reproduced_hash` over the quote as produced; `content_hash` of the matched window part, correlating to the `content_grounded` event already emitted; `reproduced_chars` |
+  | Parsed `CITATION:` line with that supported quotation evidence | `content_cited` | `citation_type: direct_quote`; `excerpt_hash` equal to `reproduced_hash`; shared `output_element_id`; `citation_id` linking the pair |
+  | Unsupported, contradicted, uncovered or unavailable assessment | nothing from the assessment alone | verdicts stay local; separately witnessed citation or display remains an independent fact |
   | Paraphrase | nothing | the evaluator cannot see paraphrase, so it never manufactures a reproduction claim |
   | Console or harness rendering a source or excerpt | `content_presented` | `presentation_kind` and `presentation_type` per surface; only for surfaces this product renders, never inferred for a downstream UI |
 
 - [ ] Nothing emitted for outputs this product did not mediate, and no
   verification or detection role: third-party corroboration of reproduced
   content belongs to verification tooling.
+- [ ] Local application evidence linking an output claim and its citation
+  or display to the relevant article identifier/version, intake record where
+  one exists, and any correction or notice. Record what was witnessed,
+  the notice received, the source version checked and the change or unresolved
+  outcome, under the existing retention and disclosure boundaries. A false
+  citation remains investigable even when no source was retrieved or no
+  reproduction was supported. Downstream display is unavailable unless the
+  application supplies evidence. Acceptance covers a supported quotation,
+  a false citation with no retrieval, a misleading claim corrected after
+  notice, and absent display evidence. These local facts do not create new
+  wire events or clear private evidence for disclosure; any projection must
+  have an applicable standard mapping and separate egress clearance.
 
 **Acceptance evidence:** a conformance test derives the expected event set
 for a committed cited run from `summary.json` alone and matches the relay's
 projection exactly, the discipline of
 `crates/commonmeasure-relay/tests/conformance.rs`. An event the run cannot
-re-derive is a defect.
+re-derive is a defect. The application-evidence extension additionally needs
+the local investigation cases above; conformance alone does not establish
+that workflow.
 
 ### WP-33: licensed access through an external settlement rail
 
@@ -1793,25 +1918,27 @@ recomputed by hand from the stored document.
 
 ## Definition of done
 
-- No mock, fake backend or test-only implementation stands in for product
-  code (`AGENTS.md`); recorded bytes may be served across a real transport
-  boundary; a real-binary or real-service test covers every main path and a
-  negative test protects each policy.
-- Claims use the vocabulary of `docs/contracts/provider.md`; no metric
-  represents unknown as zero (`docs/FAIL-POLICY.md` §7).
-- `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
-  --offline -- -D warnings` and `cargo test --workspace --offline` pass.
-- A human can follow one run from named inputs to evidence without reading
-  source; README, architecture, contracts, CLI help and console agree; no
-  stale document, dead code or generated artefact remains; no credentials or
-  licensed bodies enter git.
-- A package that changes the run or manifest contract re-validates the live
-  path before it closes; a `live-verified` claim goes stale when the contract
-  moves.
-- The QA gate (`docs/qa/gate.md`) runs after each package; open findings go
-  to `docs/qa/OPEN.md`.
+- The agreed user path works and the evidence supports its claims. Real
+  integrations are verified through their real seams; focused test doubles
+  may exercise unit behaviour and failures without claiming live integration.
+- Enforced boundaries have relevant negative coverage. Unknown measurements
+  stay unknown and gaps are named (`docs/FAIL-POLICY.md`).
+- Run checks appropriate to the change, as `AGENTS.md` and `docs/qa/gate.md`
+  describe. Full workspace checks apply to release candidates and broad
+  changes, not every prose edit. Report what was not verified.
+- Update affected contracts, docs, UI and roadmap with the implementation.
+  The lead verifies the integrated result before closing a cross-agent task.
+  Preserve useful rationale and evidence; remove duplicated progress notes.
+- Revalidate a live claim when its affected path or contract changes before
+  describing that changed path as live-verified.
+- Review the diff and affected behaviour. Independent review applies to
+  release candidates and material security, policy or evidence changes;
+  unresolved findings belong in `docs/qa/OPEN.md`. P2 work does not block.
 
 ## Handoff template
+
+Optional fields for a useful handoff; headings and order are not enforced.
+The lead also names the revision integrated and remaining cross-repository work.
 
 ```text
 Agent/persona:

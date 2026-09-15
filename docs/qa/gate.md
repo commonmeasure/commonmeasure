@@ -5,168 +5,109 @@ draft: true
 
 # The QA gate
 
-The gate runs after each work package and before a release checkpoint
-(`ROADMAP.md` §Definition of done). Open findings live in `OPEN.md`.
+## Scope and trigger
 
-## Mission
+Review the diff and affected behaviour for every change. A full independent
+review is required for a release candidate or a material change to
+authentication, tenancy, policy enforcement, evidence integrity or destructive
+data handling. A package number, new view or documentation edit alone does
+not trigger a whole-repository review. Include adjacent code where a shared
+invariant may be affected; expand further when findings justify it.
 
-Independently decide whether the repository is a small, truthful and
-technically sound base for the product `PRODUCT.md` describes.
+The lead identifies the scope, revision and principal user path. When an
+independent review is required, use another reviewer or a fresh-context agent;
+the author does not certify their own independence. Existing user authority
+covers work within scope; do not add an approval round merely to accept
+routine findings or fixes.
 
-Reject mocks, generated ceremony, duplicated systems, unsupported claims and
-abstractions without current value.
+## Review and remediation
 
-## Independence
-
-Your first pass is read-only. Do not edit, stage or commit. Do not begin with the
-landing's handoff; inspect the repository and evidence
-first, then use the handoff only to check omissions.
-
-Every finding must identify exact evidence, observable consequence, the simpler
-correction and the test or run that would close it. Remediation happens only
-after findings are reviewed and accepted.
+A requested read-only review stays read-only. Otherwise findings can be fixed
+within the authorised task, with a separate verification of the resulting
+diff. Investigate evidence before adopting a handoff's conclusions; use the
+handoff to locate changes and assumptions without treating it as proof.
 
 ## Read and inspect
 
-Read completely:
+Read `AGENTS.md`, the affected `ROADMAP.md` entries, and the relevant
+parts of `PRODUCT.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `docs/FAIL-POLICY.md`
+and contracts. Inspect the changed code and the dependencies its behaviour
+reaches. Do not reread every document or inspect every crate for a local edit.
 
-1. `AGENTS.md`
-2. `ROADMAP.md`
-3. `PRODUCT.md`
-4. `ARCHITECTURE.md`
-5. `README.md`
-6. `DECISIONS.md`
-7. [`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)
-8. provider, experiment, processor, run-output and session-evidence contracts
-10. provider verification and recon notes
+## Review questions
 
-Inspect all Rust, manifests, tests, runnable commands, retained artefacts,
-console behaviour and the complete diff from the previous accepted baseline.
+- Does the principal user path work? Are its claims supported by evidence?
+- Does enforced policy stay enforced? Do authentication, tenant isolation,
+  data egress and deletion preserve the stated boundaries?
+- Are unknown measurements distinct from zero, and requested routes distinct
+  from executed routes? Are gaps and degraded modes visible?
+- Are live and replay integration claims exercised through the real path?
+  Focused test doubles are valid for unit tests and controlled failures, but
+  do not prove external integration.
+- Does the change introduce a concrete durability, resource, concurrency or
+  compatibility risk? Is a simpler design sufficient for current use?
+- Do affected docs, UI, contracts and roadmap agree with the implementation?
+  Is a proposal being presented as shipped behaviour?
+- Does new or edited text follow `AGENTS.md` writing rules? Flag mannered
+  prose, self-praise, filler and UX narration. Fix within scope; style alone
+  is P2 and does not justify a wider copy sweep or release block.
+- Do tests catch a meaningful regression? Avoid assertions that merely freeze
+  explanatory prose or copy the implementation. Use stable codes, values,
+  side effects and accessible controls where appropriate.
 
-## Review lenses
+## Severity and blocking
 
-### Execution truth
+- **P0:** demonstrated secret/customer-data exposure, cross-tenant access,
+  destructive data loss, fabricated evidence or an enforced boundary bypass.
+- **P1:** a broken principal path or material correctness, durability or
+  security risk in the affected scope, supported by a concrete failure
+  scenario. A missing test is P1 only when it leaves such a risk unresolved.
+- **P2:** maintainability, duplication, style, minor docs or additional test
+  coverage without a material failure in the current scope. Record it for
+  later; it does not block delivery.
 
-- Does any mock, fake backend, embedded response, constant score or test-only
-  implementation stand in for a claimed integration?
-- Can a “live”, “replay” or “run” command silently downgrade?
-- Are requested routes presented as executed routes?
-- Are unknown measurements represented as zero or fabricated values?
-- Does every UI action do what its label says?
+**PASS** means the reviewed scope has no unresolved P0/P1 and its required
+acceptance evidence is available. **BLOCK** names the concrete failure or
+missing critical evidence preventing the scoped claim. Scope the verdict:
+a deployment acceptance gap can block deployment without blocking unrelated
+local development. Existing findings elsewhere remain on the QA list and
+are not silently dismissed. Release review covers the paths actually offered.
 
-### Integration
+Clearly deferred or unavailable features are not defects. Simplifying a
+claim to match real behaviour is valid when it preserves the agreed release
+scope; do not lower the scope silently to obtain PASS.
 
-- Is there one coherent dependency path rather than parallel `commonmeasure-*` and copied
-  subsystems?
-- Does every retained crate and abstraction have a real current consumer or an
-  external protocol boundary?
-- Do recorded bytes pass through the same real parsing and policy path intended
-  for live data?
-- Do tests drive real binaries/processes and actual storage/transport boundaries
-  where integration is claimed?
+## Validation
 
-### Simplification
+Choose checks according to the affected behaviour:
 
-- Find duplicate types, conversion layers, needless traits, speculative
-  generality, dead dependencies, copied CLIs and unused provider implementations.
-- Prefer deletion or direct code when an abstraction has one internal consumer.
-- Distinguish genuine domain variation from abstraction added for appearance.
+- For prose-only changes, check links, examples and consistency. No complete
+  application build or database suite is needed.
+- For code changes, run relevant tests and formatting/Clippy checks on the
+  affected crates; exercise real transport and storage for integration claims.
+- For release candidates or broad changes, run workspace formatting, Clippy
+  with warnings denied and offline tests, plus browser tests when affected.
+- Run the documented principal path when its behaviour or contract changes.
+  Revalidate affected live claims before continuing to label them live-verified.
 
-### Rust quality
+An unavailable environment is reported as unverified evidence, not a code
+failure or a pass. Use authorised live calls within the task's scope and
+budget. Ask only for missing authority for external effects or spending,
+destructive operations, or an unresolved material product decision; a read-only
+public documentation fetch does not need a new approval solely for being live.
 
-- Check ownership and lifetimes, error types and context, panic/`unwrap` paths,
-  resource cleanup, atomic/durable writes, concurrency assumptions and command
-  execution.
-- Check idiomatic naming, module boundaries and dependency choices.
-- Public APIs and non-obvious invariants must be documented; comments explain
-  why, not mechanics.
+## Findings and handoff
 
-### Human inspectability
+`OPEN.md` owns unresolved defects. Record a finding directly during an
+ordinary engineering task; no separate permission is needed. In a read-only
+review, return findings to the caller without editing files. Each finding
+names severity, the affected claim, exact evidence, observable consequence,
+proposed correction and how to verify closure. Reuse an existing finding
+rather than opening a duplicate. Preserve identifiers when closing or
+retiring findings, with the fixing revision or reason.
 
-A sceptical human must be able to answer from local artefacts:
-
-- What command ran and with which sealed inputs?
-- Which exact bytes were retrieved and admitted?
-- Which content or skill route was requested and actually executed?
-- What entered inference, and which model/provider actually ran?
-- What did it cost in money, latency and tokens?
-- Why was a route selected, refused or unavailable?
-- Which evidence supports each output claim?
-
-### Documentation consistency
-
-Check that product, architecture, roadmap, contracts, Cargo graph, CLI help,
-console language and verification badges describe the same system.
-
-## Severity and gate
-
-- **P0:** false success/evidence claim, hidden mock or downgrade, lost evidence,
-  secret exposure, or no real path where one is claimed.
-- **P1:** disconnected/duplicated architecture, incorrect unknown handling,
-  misleading UI/docs, unsafe durability or error behaviour.
-- **P2:** maintainability, documentation, idiom or test-coverage weakness that
-  does not falsify the current claim.
-
-Verdict:
-
-- **PASS:** no open P0/P1 findings and acceptance evidence is reproducible.
-- **BLOCK:** any open P0/P1 finding, or the principal path cannot be inspected.
-
-Absence of a feature is not a defect when it is labelled unavailable or future.
-
-## Commands
-
-Run at minimum:
-
-```sh
-git status --short
-git diff --check
-git diff --stat
-cargo metadata --no-deps --format-version 1
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --offline -- -D warnings
-cargo test --workspace --offline
-node --test browser/test/
-rg -n 'fixture|mock|fake|stub|dummy' crates demo console docs
-rg -n 'unwrap\(|expect\(|panic!|todo!|unimplemented!' crates --glob '*.rs'
-rg -n 'stale|legacy|deprecated' Cargo.toml crates README.md ARCHITECTURE.md docs
-cargo run -p commonmeasure-cli -- run demo/jobs/energy-price-cap.json --output /tmp/qa-run
-cargo run -p commonmeasure-cli -- inspect /tmp/qa-run
-```
-
-Run the documented CLI and manual walkthrough. If the environment prevents a
-real socket/process check, report that limitation separately; do not call it a
-code failure and do not substitute a mock.
-
-## Report
-
-Return proposed Markdown. After the findings are reviewed and accepted, add
-each open one as a self-contained row in [`docs/qa/OPEN.md`](OPEN.md); the report
-itself is not kept in the repository.
-
-For each finding record:
-
-```text
-ID and severity:
-Claim:
-Evidence (file:line or command output):
-Consequence:
-Simpler correction:
-Evidence required to close:
-Status: open | accepted | resolved | rejected with reason
-```
-
-End with:
-
-- PASS or BLOCK;
-- commands and results;
-- principal path actually demonstrated;
-- claims deliberately unavailable;
-- ordered remediation list;
-- areas not inspected.
-
-## Stop conditions
-
-Stop and ask if review would require a paid/live call, destructive remediation,
-or a product decision not already in the canonical documents. Otherwise finish
-the read-only gate even when the verdict is BLOCK.
+Summarise the reviewed revision and scope, verdict, checks actually run,
+remaining gaps and next action. No mandatory report template. Keep a dated
+review snapshot only when it preserves useful reasoning or evidence; link it
+to current status. The lead updates the owning docs and roadmap after the
+integrated change is verified, following `AGENTS.md`.

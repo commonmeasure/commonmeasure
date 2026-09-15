@@ -791,3 +791,445 @@ fn a_refusal_after_the_last_admitted_crossing_still_reaches_the_receiver() {
     );
     receiver.stop();
 }
+
+/// Include directories as well as file bytes: even creating an empty relay
+/// directory violates a forecast's promise to leave the operator home alone.
+fn home_snapshot(home: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    fn visit(
+        root: &Path,
+        path: &Path,
+        entries: &mut std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in std::fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if path.is_dir() {
+                entries.insert(relative, None);
+                visit(root, &path, entries);
+            } else {
+                entries.insert(relative, Some(std::fs::read(path).unwrap()));
+            }
+        }
+    }
+    let mut entries = std::collections::BTreeMap::new();
+    visit(home, home, &mut entries);
+    entries
+}
+
+fn capture_relay(bodies: Arc<Mutex<Vec<Value>>>) -> commonmeasure_http::ServerHandle {
+    commonmeasure_http::Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let events = body["events"].as_array().map(Vec::len).unwrap_or(0);
+            bodies.lock().unwrap().push(body);
+            commonmeasure_http::Response::json(
+                201,
+                &json!({"status": "ok", "events_created": events}).to_string(),
+            )
+        })
+        .unwrap()
+}
+
+fn relay_text(home: &Path, args: &[&str]) -> String {
+    let output = relay(home, args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn dry_run_matches_delivery_and_leaves_the_whole_home_unchanged() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "forecast", "https://www.example.com/page");
+    record_crossing_in(
+        home.path(),
+        "withheld",
+        "/work/private",
+        "https://private.example/page",
+    );
+    record_refused_in(
+        home.path(),
+        "forecast",
+        "/work/personal",
+        "https://refused.example/page",
+    );
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    let before = home_snapshot(home.path());
+    let forecast = relay_text(home.path(), &["--receiver", &url, "--dry-run"]);
+    assert_eq!(before, home_snapshot(home.path()));
+    assert!(bodies.lock().unwrap().is_empty());
+    let expected = format!(
+        concat!(
+            "dry run: nothing was sent; no state was changed\n",
+            "projected 1 of 2 sessions and 0 runs; 2 events would be newly spooled\n",
+            "  1 withheld: no crossing cleared to leave\n",
+            "  1 refused crossings in the projected sessions, on the wire as a count per session with no URL and no reason\n",
+            "would deliver 2 events in 1 batches to {} (new at the receiver: unknown)\n",
+            "  2 under governing engagement personal\n",
+            "hosts that would leave:\n",
+            "  www.example.com\n"
+        ),
+        url
+    );
+    assert_eq!(forecast, expected);
+    let delivered = relay_text(home.path(), &["--receiver", &url]);
+    assert!(
+        delivered.contains("projected 1 of 2 sessions and 0 runs; 2 events newly spooled"),
+        "{delivered}"
+    );
+    assert!(
+        delivered.contains("delivered 2 events in 1 batches"),
+        "{delivered}"
+    );
+    assert!(
+        delivered.contains("  2 under governing engagement personal"),
+        "{delivered}"
+    );
+    assert_eq!(
+        bodies.lock().unwrap()[0]["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(bodies.lock().unwrap()[0]["refused"], 1);
+    let after_delivery = home_snapshot(home.path());
+    let empty = relay_text(home.path(), &["--receiver", &url, "--dry-run"]);
+    assert!(
+        empty.contains("would deliver 0 events in 0 batches"),
+        "{empty}"
+    );
+    assert!(empty.ends_with("hosts that would leave: none\n"), "{empty}");
+    assert_eq!(after_delivery, home_snapshot(home.path()));
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+    receiver.stop();
+}
+
+#[test]
+fn dry_run_of_a_draft_clears_more_events_without_writing() {
+    let home = tempfile::tempdir().unwrap();
+    let drafts = tempfile::tempdir().unwrap();
+    let draft = drafts.path().join("draft.json");
+    clear_personal_egress(home.path());
+    record_crossing_in(
+        home.path(),
+        "draft",
+        "/work/client",
+        "https://client.example/page",
+    );
+    std::fs::write(&draft, r#"{"scopes":[{"match":"/work/client","engagement":"client","allow_telemetry_egress":true}]}"#).unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    let before = home_snapshot(home.path());
+    let current = relay_text(home.path(), &["--receiver", &url, "--dry-run"]);
+    let forecast = relay_text(
+        home.path(),
+        &[
+            "--receiver",
+            &url,
+            "--dry-run",
+            "--policy",
+            draft.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        current.contains("would deliver 0 events in 0 batches"),
+        "{current}"
+    );
+    assert!(
+        forecast.contains("would deliver 2 events in 1 batches"),
+        "{forecast}"
+    );
+    assert!(
+        forecast.contains("  2 under governing engagement client"),
+        "{forecast}"
+    );
+    assert!(
+        forecast.ends_with("hosts that would leave:\n  client.example\n"),
+        "{forecast}"
+    );
+    assert_eq!(before, home_snapshot(home.path()));
+    assert!(bodies.lock().unwrap().is_empty());
+    receiver.stop();
+}
+
+#[test]
+fn dry_run_rejects_unreadable_and_invalid_drafts_with_the_reason_and_sends_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "invalid-draft", "https://www.example.com/page");
+    let draft = home.path().join("draft.json");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    for (bytes, reason) in [
+        (None, "cannot read"),
+        (Some("{"), "not a valid policy"),
+        (
+            Some(
+                r#"{"scopes":[{"match":"","engagement":"client","allow_telemetry_egress":true}]}"#,
+            ),
+            "empty",
+        ),
+    ] {
+        if let Some(bytes) = bytes {
+            std::fs::write(&draft, bytes).unwrap();
+        }
+        let before = home_snapshot(home.path());
+        let output = relay(
+            home.path(),
+            &[
+                "--receiver",
+                &receiver.url(),
+                "--dry-run",
+                "--policy",
+                draft.to_str().unwrap(),
+            ],
+        );
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(reason) && error.contains("draft.json"),
+            "{error}"
+        );
+        assert_eq!(before, home_snapshot(home.path()));
+        assert!(bodies.lock().unwrap().is_empty());
+    }
+    receiver.stop();
+}
+
+/// Use the real enrolment record and session-start hook to append the identity
+/// a resumed session gains. No enrolment or hub integration is claimed here.
+fn resume_with_identity(home: &Path, session: &str, hub: &str) -> String {
+    let key = commonmeasure_harness::identity::EdgeKey::generate().unwrap();
+    key.store(home).unwrap();
+    let key_id = key.thumbprint();
+    std::fs::write(
+        home.join("enrolment.json"),
+        json!({
+            "hub": hub, "organization": {"id": "relay-test", "name": "Relay test"},
+            "name": "relay-test", "key_id": key_id,
+            "identity": {"origin": hub, "bot_page": format!("{hub}/bot")},
+            "enrolled_at": "2026-09-01T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["hook", "session-start"])
+        .env("COMMONMEASURE_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.as_mut().unwrap(), "{}", json!({
+        "session_id": session, "hook_event_name": "SessionStart", "source": "resume", "cwd": "/work/personal"
+    })).unwrap();
+    assert!(child.wait().unwrap().success());
+    let records = commonmeasure_harness::SessionLog::read(
+        &home.join("sessions").join(format!("{session}.ndjson")),
+    )
+    .unwrap();
+    assert!(
+        records
+            .iter()
+            .any(|record| record["event"] == "edge_identity"
+                && record["payload"]["key_id"] == key_id)
+    );
+    key_id
+}
+
+#[test]
+fn resumed_session_keeps_its_first_agent_at_the_receiver_and_empty_runs_keep_the_pin() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "resumed", "https://www.example.com/first");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    relay_text(home.path(), &["--receiver", &url]);
+    let pin_path = home.path().join("relay/session-agents.json");
+    let pin = std::fs::read(&pin_path).unwrap();
+    let empty = relay_text(home.path(), &["--receiver", &url]);
+    assert!(empty.contains("delivered 0 events in 0 batches"), "{empty}");
+    assert_eq!(pin, std::fs::read(&pin_path).unwrap());
+    let key_id = resume_with_identity(home.path(), "resumed", &url);
+    record_crossing(home.path(), "resumed", "https://www.example.com/second");
+    relay_text(home.path(), &["--receiver", &url]);
+    let captured = bodies.lock().unwrap();
+    let batches: Vec<_> = captured
+        .iter()
+        .filter(|body| body["document_type"] == "event_batch")
+        .collect();
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0]["session_id"], batches[1]["session_id"]);
+    assert_eq!(batches[0]["agent_id"], "commonmeasure");
+    assert_eq!(batches[1]["agent_id"], "commonmeasure");
+    assert_ne!(batches[1]["agent_id"], key_id);
+    assert_eq!(
+        batches[1]["events"][0]["content_url"],
+        "https://www.example.com/second"
+    );
+    drop(captured);
+    assert_eq!(pin, std::fs::read(pin_path).unwrap());
+    receiver.stop();
+}
+
+#[test]
+fn retained_spool_recovers_the_agent_for_a_session_delivered_before_pins_exist() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "upgrade", "https://www.example.com/first");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    relay_text(home.path(), &["--receiver", &url]);
+    std::fs::remove_file(home.path().join("relay/session-agents.json")).unwrap();
+    resume_with_identity(home.path(), "upgrade", &url);
+    record_crossing(home.path(), "upgrade", "https://www.example.com/second");
+    relay_text(home.path(), &["--receiver", &url]);
+    let captured = bodies.lock().unwrap();
+    let batches: Vec<_> = captured
+        .iter()
+        .filter(|body| body["document_type"] == "event_batch")
+        .collect();
+    assert_eq!(batches.len(), 2);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch["agent_id"] == "commonmeasure")
+    );
+    assert_eq!(batches[0]["session_id"], batches[1]["session_id"]);
+    drop(captured);
+    receiver.stop();
+}
+
+#[test]
+fn dry_run_of_an_empty_home_prints_zero_and_creates_no_relay_state() {
+    let home = tempfile::tempdir().unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    let before = home_snapshot(home.path());
+    let text = relay_text(home.path(), &["--receiver", &url, "--dry-run"]);
+    assert_eq!(
+        text,
+        format!(
+            concat!(
+                "dry run: nothing was sent; no state was changed\n",
+                "projected 0 of 0 sessions and 0 runs; 0 events would be newly spooled\n",
+                "would deliver 0 events in 0 batches to {} (new at the receiver: unknown)\n",
+                "hosts that would leave: none\n"
+            ),
+            url
+        )
+    );
+    assert_eq!(before, home_snapshot(home.path()));
+    assert!(bodies.lock().unwrap().is_empty());
+    receiver.stop();
+}
+
+#[test]
+fn dry_run_refreshes_neither_managed_policy_nor_enrolment() {
+    let home = tempfile::tempdir().unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    resume_with_identity(home.path(), "managed-forecast", &url);
+    clear_personal_egress(home.path());
+    record_crossing(
+        home.path(),
+        "managed-forecast",
+        "https://www.example.com/page",
+    );
+    std::fs::write(home.path().join("deployment.json"), json!({
+        "mode": "managed",
+        "signer": {"key_id": "forecast-signer", "algorithm": "ed25519",
+                   "public_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"},
+        "policy_url": format!("{url}/api/v1/policy/desired"),
+        "organisation": "relay-test"
+    }).to_string()).unwrap();
+    let before = home_snapshot(home.path());
+    let text = relay_text(
+        home.path(),
+        &[
+            "--receiver",
+            &url,
+            "--api-key",
+            "loopback-test-key",
+            "--dry-run",
+        ],
+    );
+    assert!(
+        text.contains("would deliver 2 events in 1 batches"),
+        "{text}"
+    );
+    assert_eq!(before, home_snapshot(home.path()));
+    assert!(
+        bodies.lock().unwrap().is_empty(),
+        "no policy, standing or delivery request"
+    );
+    receiver.stop();
+}
+
+#[test]
+fn dry_run_includes_pending_batches_and_a_failed_attempt_keeps_its_agent_on_retry() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "retry", "https://www.example.com/first");
+    let mut refusing = commonmeasure_http::Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(|_| {
+            commonmeasure_http::Response::json(503, r#"{"detail":"temporarily unavailable"}"#)
+        })
+        .unwrap();
+    let failed = relay(home.path(), &["--receiver", &refusing.url()]);
+    assert!(!failed.status.success());
+    refusing.stop();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let url = receiver.url();
+    resume_with_identity(home.path(), "retry", &url);
+    record_crossing(home.path(), "retry", "https://second.example/second");
+    let before = home_snapshot(home.path());
+    let forecast = relay_text(home.path(), &["--receiver", &url, "--dry-run"]);
+    assert!(
+        forecast.contains("2 events would be newly spooled"),
+        "{forecast}"
+    );
+    assert!(
+        forecast.contains("would deliver 4 events in 2 batches"),
+        "{forecast}"
+    );
+    assert!(
+        forecast.ends_with("hosts that would leave:\n  second.example\n  www.example.com\n"),
+        "{forecast}"
+    );
+    assert_eq!(before, home_snapshot(home.path()));
+    assert!(bodies.lock().unwrap().is_empty());
+    let delivered = relay_text(home.path(), &["--receiver", &url]);
+    assert!(
+        delivered.contains("delivered 4 events in 2 batches"),
+        "{delivered}"
+    );
+    let captured = bodies.lock().unwrap();
+    let batches: Vec<_> = captured
+        .iter()
+        .filter(|body| body["document_type"] == "event_batch")
+        .collect();
+    assert_eq!(batches.len(), 2);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch["agent_id"] == "commonmeasure")
+    );
+    drop(captured);
+    receiver.stop();
+}

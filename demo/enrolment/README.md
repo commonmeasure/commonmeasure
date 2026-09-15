@@ -1,5 +1,42 @@
 # Enrolment against a real hub
 
+## Managed policy and selected-directory delivery
+
+`local-managed-run.txt` records the released 0.3.2 edge against the real
+local Hub server on 14 September 2026. It includes executable hashes. A
+synthetic owner session was seeded in an isolated Postgres database; this
+does not establish hosted sign-in or a real agent-host interaction. The
+MCP client identifies itself as `pilot-acceptance-driver`.
+
+The run publishes initial policy before managed connection, fetches the
+public Common Measure site and refuses `example.com`, delivers the selected
+session's retrieval and grounding events, and withholds a session from an
+unselected directory. A repeated relay adds nothing. Revision 2 is published
+and applied; the exact earlier signed envelope is then served through a
+loopback replay endpoint and refused as a rollback. With that endpoint
+unavailable, revision 2 still refuses the source. The test edge disconnects.
+
+To reproduce, build the Hub server and migrate an isolated local test
+database using the Hub's recipes. Then run from the edge repository:
+
+```sh
+python3 demo/enrolment/local-managed.py \
+  --database-url postgresql:///cm_pilot_acceptance_20260914 \
+  --hub-binary /path/to/commonmeasure-hub/target/debug/commonmeasure-hub-server
+```
+
+The command was run with a local Hub binary path and a new output directory
+under `/tmp`; the path above is a placeholder. `--edge` selects another
+edge executable. The driver starts its own Hub process and uses a fresh
+operator home. Raw evidence stays in the temporary directory it prints;
+only the redacted transcript belongs here. The selected directory is a
+unique synthetic path under the existing substring policy contract.
+
+Hosted acceptance, a fresh-machine installer run and the operator's
+assessment remain open in `ROADMAP.md` WP-19/WP-45 and §Acceptance gate.
+
+## Enrolment, revocation and disconnect
+
 `real-hub-run.txt` is the transcript of the ignored live test
 `a_real_hub_enrols_revokes_and_disconnects_this_edge` in
 `crates/commonmeasure-cli/tests/connect_e2e.rs`, run against a

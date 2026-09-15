@@ -467,12 +467,23 @@ is built. `licence.state` is
 URL where an RSL licence's terms were read, and `unknown` otherwise. Reaching
 a page is not permission.
 
+This is a host-level declaration, not evidence that the runtime checked the
+issuer's authority or the agreement's scope. A separate operator assessment
+with version, covered content and uses is planned under `ROADMAP.md` WP-30.
+The existing record has no fields for that assessment. WP-30 also owns the
+planned verification and preservation of embedded credentials before an
+acquisition transform removes them; the pasted-content reader below does
+not establish that path.
+
 ## Manifest discovery
 
 After a mediated fetch succeeds, the server resolves the host's Content
 Telemetry discovery manifest (`/.well-known/content-telemetry.json`,
 standard section 8) and writes a `manifest_resolved` record; the crossing
-carries the record's `seq` as `manifest_record`
+carries the record's `seq` as `manifest_record`. Concurrent writers can reuse
+sequence numbers. The console displays manifest details only for a unique
+preceding reference with the crossing's host; missing, foreign or ambiguous
+references are labelled unavailable or ambiguous
 (`crates/commonmeasure-harness/src/manifest.rs`,
 `crates/commonmeasure-harness/src/discovery.rs`). The manifest identifies an
 owner and its telemetry endpoint and carries no demand, so discovery never
@@ -899,6 +910,16 @@ staleness). A local edge writes no such record, because it makes no
 management request. The refresh the relay runs before delivery writes to
 the managed state file, not to any session.
 
+## The agent id on the wire
+
+The relay initially takes `agent_id` from the session's first `edge_identity`
+record, or uses `commonmeasure` when there is none. It pins that value per
+wire session in `relay/session-agents.json` before the first delivery attempt,
+so every later batch and retry keeps the same id even when the session resumes
+or compacts after enrolment. Retained spool batches supply the first id for
+sessions delivered before a pin exists; a relay run with nothing to deliver
+keeps all pins. The pin is private relay state and adds no wire field.
+
 ## The refused count on the wire
 
 The relay never projects a refused crossing: no URL, no reason, no hash of
@@ -1009,3 +1030,14 @@ the real sessions committed under `demo/host-sessions/` and pins the report
 over them, and the snapshot reader is tested over that Claude Code session's
 transcript with its text replaced by same-length filler
 (`crates/commonmeasure-harness/tests/recorded/claude-code-transcript.jsonl`).
+
+
+## Directory reporting consent
+
+After directory enrolment, the relay requires current local root permission
+and, on a managed edge, its current signed grant, alongside source-policy
+clearance and the privacy floor. The check applies to new projection and queued
+batches immediately before delivery. Opt-in includes existing eligible witnessed
+evidence; opt-out preserves the original record and does not recall deliveries.
+No field is added to Content Telemetry. See
+[directory enrolment](directory-enrolment.md).

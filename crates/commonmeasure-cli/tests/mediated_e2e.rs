@@ -1343,7 +1343,15 @@ fn the_server_completes_the_handshake_and_lists_its_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(tools, ["context_fetch", "context_search", "context_status"]);
+    assert_eq!(
+        tools,
+        [
+            "context_fetch",
+            "context_search",
+            "context_status",
+            "context_enrol"
+        ]
+    );
 }
 
 /// A confused host must not take the mediator down with it: outliving one bad

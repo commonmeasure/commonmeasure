@@ -239,6 +239,12 @@ the source publishes, and the crossing's licence is the reference.
 usage to, never a person. The host is compared as a host pattern's is, and
 matched exactly: a subdomain needs its own entry.
 
+The current entry has no fields for issuer authority, agreement version,
+covered content or permitted uses, or an operator-assessed exception. It
+therefore records the operator's host-level declaration without checking
+those limits. The scoped basis-for-use extension is planned in `ROADMAP.md`
+WP-30; its fields are not part of this contract or accepted by the loader.
+
 ## What the loader refuses
 
 A policy is refused in two stages, and the whole file is refused at the
@@ -397,3 +403,14 @@ until an identity that names the same person on every machine exists, and
 its scopes are written against a directory layout the organisation keeps.
 [`docs/contracts/policy-envelope.md`](policy-envelope.md) §What a distributed
 policy carries states the same for the hub.
+
+
+## Directory selection and managed reporting
+
+Directory enrolment does not edit this schema or a managed policy file.
+A separate local root selection and signed edge-bound reporting grant narrow
+egress. Every winning false scope vetoes reporting, including an omitted bool;
+grants never replace admission rules. Absolute existing directory matchers
+also recognise canonical targets, and conflicting symlink/worktree scopes fail
+closed. Resolver version 2 records these semantics. See
+[directory enrolment](directory-enrolment.md).

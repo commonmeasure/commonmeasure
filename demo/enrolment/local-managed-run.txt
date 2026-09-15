@@ -1,0 +1,94 @@
+Local real-hub managed-policy acceptance; synthetic owner session seeded in isolated Postgres.
+This run does not establish hosted sign-in, installation, or a real agent-host interaction.
+commonmeasure 0.3.2
+Edge executable SHA-256: a1ee5a1550c6458c620d2c89ac4a73582b15ecd706254b6f7d783b6ec489c02a
+Hub executable SHA-256: db614e34e78ed4b409809733cff1b661fd457895a47665df8d30852e60fc91b8
+Hub origin: http://127.0.0.1:57347
+Organisation: c47c7421-71fb-451d-a397-4954f943516a
+MCP client: pilot-acceptance-driver; host argument claude-code is a transport test label.
+$ commonmeasure policy check <test>/candidate.json
+accepted      <test>/candidate.json
+mode          strict
+constraints   1
+scopes        1
+  <test>/selected-project — engagement pilot, telemetry egress cleared
+principals    0
+terms         0
+digest        sha256:031f9675ae330d1fe8b40adf71a1f5ddc38b9b540ac2621aa592dbc8a221569a
+Published revision before enrolment: {"digest": "sha256:031f9675ae330d1fe8b40adf71a1f5ddc38b9b540ac2621aa592dbc8a221569a", "revision": 1}
+$ commonmeasure connect <hub> --token <redacted> --managed
+enrolled with http://127.0.0.1:57347 in Pilot acceptance as pilot-acceptance
+  key id   55L3CSOgpc5voVVi3nVF3EVAiUv5w6ysdB4Np5Cp5wk
+  receiver http://127.0.0.1:57347/api/v1/telemetry
+  written  <test>/edge/edge-key.json, <test>/edge/enrolment.json and <test>/edge/relay.json
+directory proof: signed and accepted by the hub; the key directory lists this key until 2026-09-21T21:32:28.000Z
+first relay run:
+  edge key 55L3CSOgpc5voVVi3nVF3EVAiUv5w6ysdB4Np5Cp5wk: enrolled
+  directory proof: current, nothing sent; the key directory lists this key until 2026-09-21T21:32:28.000Z
+  projected 0 of 0 sessions and 0 runs; 0 events newly spooled
+  delivered 0 events in 0 batches to http://127.0.0.1:57347/api/v1/telemetry (0 new at the receiver)
+deployment  managed: signer hub-policy-9294cf262e21 pinned in <test>/edge/deployment.json; policy from http://127.0.0.1:57347/api/v1/policy/desired
+first policy sync:
+  policy url    http://127.0.0.1:57347/api/v1/policy/desired
+  outcome       accepted (revision 1)
+  in force      revision 1 (sha256:031f9675ae330d1fe8b40adf71a1f5ddc38b9b540ac2621aa592dbc8a221569a), activated 2026-09-14T23:32:28.995Z, expires 2026-09-21T23:32:28Z
+Applied revision and digest: {"revision": 1, "digest": "sha256:031f9675ae330d1fe8b40adf71a1f5ddc38b9b540ac2621aa592dbc8a221569a", "edited_locally": false, "expires_at": "2026-09-21T23:32:28Z", "stale_since": null, "policy_declared": true, "policy_digest": "sha256:031f9675ae330d1fe8b40adf71a1f5ddc38b9b540ac2621aa592dbc8a221569a", "policy_identity": {"schema": "contextops-policy-identity/v2", "resolver": "1", "digest": "sha256:797153abda41466b019f1d2155f4d2b3ca8cbf51a6fb3abb321f51838da1a4c0"}, "principal": {"name": "os-user:501", "basis": "os_user"}}
+MCP context_fetch https://commonmeasure.ai/: admitted; session pilot-selected
+Record: {"content_hash": "sha256:bd56d8d57d1633120d0d1336d64522ae63f49c9fd05d3904be790a6c6d19b1df", "retrieved_hash": "sha256:d00e53a5ba1cf393121af28b1847a7a39b65103bcf088d471680578bc3c4e03b", "http_status": 200, "policy_identity": "sha256:797153abda41466b019f1d2155f4d2b3ca8cbf51a6fb3abb321f51838da1a4c0"}
+MCP context_fetch https://example.com/: refused; session pilot-selected
+Record: {"refusal": "The job denies host example.com.", "policy_identity": "sha256:797153abda41466b019f1d2155f4d2b3ca8cbf51a6fb3abb321f51838da1a4c0"}
+MCP context_fetch https://commonmeasure.ai/: admitted; session pilot-private
+Record: {"content_hash": "sha256:bd56d8d57d1633120d0d1336d64522ae63f49c9fd05d3904be790a6c6d19b1df", "retrieved_hash": "sha256:d00e53a5ba1cf393121af28b1847a7a39b65103bcf088d471680578bc3c4e03b", "http_status": 200, "policy_identity": "sha256:c641ebb755e52dac807a1e724b7e8fe459f8abffc18a63a07c7fea7a6c0c8539"}
+$ commonmeasure relay
+edge key 55L3CSOgpc5voVVi3nVF3EVAiUv5w6ysdB4Np5Cp5wk: enrolled
+directory proof: current, nothing sent; the key directory lists this key until 2026-09-21T21:32:28.000Z
+projected 1 of 2 sessions and 0 runs; 2 events newly spooled
+  1 withheld: no crossing cleared to leave
+  1 refused crossings in the projected sessions, on the wire as a count per session with no URL and no reason
+delivered 2 events in 1 batches to http://127.0.0.1:57347/api/v1/telemetry (2 new at the receiver)
+  2 under governing engagement pilot
+Hub summary: {"agents": 1, "content_grounded": 1, "content_hosts": 1, "content_retrieved": 1, "daily": [{"content_grounded": 1, "content_retrieved": 1, "day": "2026-09-14"}], "daily_window_days": 30, "hosts_limit": 20, "last_received_at": "2026-09-14T23:32:31.401331Z", "refused": 1, "refused_reporting_sessions": 1, "sessions": 1, "sessions_limit": 50}
+$ commonmeasure relay
+edge key 55L3CSOgpc5voVVi3nVF3EVAiUv5w6ysdB4Np5Cp5wk: enrolled
+directory proof: current, nothing sent; the key directory lists this key until 2026-09-21T21:32:28.000Z
+projected 1 of 2 sessions and 0 runs; 0 events newly spooled
+  1 withheld: no crossing cleared to leave
+  0 refused crossings in the projected sessions, on the wire as a count per session with no URL and no reason
+delivered 0 events in 0 batches to http://127.0.0.1:57347/api/v1/telemetry (0 new at the receiver)
+Repeated relay: no events newly spooled; retrieval count unchanged. This does not exercise receiver deduplication.
+Desired revision 2; applied revision 1 before sync.
+$ commonmeasure policy sync
+policy url    http://127.0.0.1:57347/api/v1/policy/desired
+outcome       accepted (revision 2)
+in force      revision 2 (sha256:6bd32238a2175b16a97b9c7b2dc70c24e25a38ec5f526bcedfae9f28cf24f177), activated 2026-09-14T23:32:31.485Z, expires 2026-09-21T23:32:31Z
+MCP context_fetch https://commonmeasure.ai/: refused; session pilot-updated
+Record: {"refusal": "The job denies host commonmeasure.ai.", "policy_identity": "sha256:5f4e1fc3563e9c79718629c9298edb57724dc086fc17c9a7714c32fc9b464aa9"}
+$ commonmeasure policy sync
+policy url    http://127.0.0.1:57382/api/v1/policy/desired
+outcome       rejected (revision 1)
+reason        rollback refused: revision 1 is earlier than the applied revision 2
+in force      revision 2 (sha256:6bd32238a2175b16a97b9c7b2dc70c24e25a38ec5f526bcedfae9f28cf24f177), activated 2026-09-14T23:32:31.485Z, expires 2026-09-21T23:32:31Z
+commonmeasure: the desired policy was not activated (rejected); the policy already in force stays
+Rollback replay: exact revision-1 envelope from the real hub, replayed through loopback HTTP; signer and organisation unchanged.
+$ commonmeasure policy sync
+policy url    http://127.0.0.1:57382/api/v1/policy/desired
+outcome       unreachable
+reason        connect 127.0.0.1:57382: Connection refused (os error 61)
+in force      revision 2 (sha256:6bd32238a2175b16a97b9c7b2dc70c24e25a38ec5f526bcedfae9f28cf24f177), activated 2026-09-14T23:32:31.485Z, expires 2026-09-21T23:32:31Z
+commonmeasure: the desired policy was not activated (unreachable); the policy already in force stays
+MCP context_fetch https://commonmeasure.ai/: refused; session pilot-offline
+Record: {"refusal": "The job denies host commonmeasure.ai.", "policy_identity": "sha256:5f4e1fc3563e9c79718629c9298edb57724dc086fc17c9a7714c32fc9b464aa9"}
+Unavailable management endpoint: last-known-good revision still enforces the source refusal.
+$ commonmeasure policy sync
+policy url    http://127.0.0.1:57347/api/v1/policy/desired
+outcome       already_applied (revision 2)
+in force      revision 2 (sha256:6bd32238a2175b16a97b9c7b2dc70c24e25a38ec5f526bcedfae9f28cf24f177), activated 2026-09-14T23:32:31.485Z, expires 2026-09-21T23:32:32Z
+$ commonmeasure disconnect
+revoked edge key 55L3CSOgpc5voVVi3nVF3EVAiUv5w6ysdB4Np5Cp5wk and its ingest key at http://127.0.0.1:57347
+removed <test>/edge/relay.json
+removed <test>/edge/edge-key.json
+removed <test>/edge/enrolment.json
+removed <test>/edge/directory-listing.json
+removed <test>/edge/deployment.json
+deployment.json pinned this hub's policy (http://127.0.0.1:57347/api/v1/policy/desired); removed with the enrolment, so the edge is in local mode
+PASS: local hub rollout, clearance, delivery, repeated relay, rollback replay and unavailable-management enforcement.

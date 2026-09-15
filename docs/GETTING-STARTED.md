@@ -523,9 +523,48 @@ each one delivers; [`docs/HUB.md`](HUB.md) says what it is and what leaves
 the machine, and the hub's own documentation opens at Start here
 (`/docs/start-here` on the hub).
 
-An owner of your organisation mints the token in the hub's API keys page,
-which prints the `connect` command to run. It exchanges the token for an
-ingest key, written straight into `relay.json`, mints the edge's signing key
+For Common Measure's hosted service, open
+[Common Measure Hub](https://hub.commonmeasure.ai). Before connecting a
+managed edge, publish its initial policy on **Policy**. Use a fresh test
+directory and explicitly choose whether its source-use records may leave
+the machine. For example, replace the path below with the full path of
+that directory:
+
+```json
+{
+  "policy_mode": "observe",
+  "scopes": [
+    {
+      "match": "/tmp/commonmeasure-pilot",
+      "engagement": "pilot",
+      "allow_telemetry_egress": true
+    }
+  ]
+}
+```
+
+This enables eligible reporting for the selected scope. The existing
+`match` field is a substring match: choose a unique path and check that
+an unrelated directory does not contain it. Other directories remain
+uncleared. Managed policy replaces the edge's policy, so use a separate
+test edge if existing work requires other rules.
+
+After publishing, open **API keys**, select the member whose machine is
+being enrolled, mint a token and run the printed `connect --managed`
+command. A successful enrolment is not proof of a successful policy sync:
+check that it reports the published revision. If enrolment succeeded before
+a policy existed, publish the policy and run `commonmeasure policy sync`;
+the spent token cannot be reused.
+
+From the selected directory, start a new session in the registered host,
+use `context_fetch` to read `https://commonmeasure.ai/`, then run
+`commonmeasure relay`. Check the delivered batch in **Fleet evidence**.
+The policy-before-connect and delivery sequence has been exercised against
+a real local Hub (`demo/enrolment/local-managed-run.txt`); a complete hosted
+walkthrough remains unverified. No hosted output is quoted here.
+
+Connecting exchanges the token for an ingest key, written straight into
+`relay.json`, mints the edge's signing key
 (`edge-key.json`, which never leaves the machine), records the key id the
 hub assigned in `enrolment.json`, signs and uploads the proof that lists the
 key in the hub's key directory, and makes a first relay run. With
@@ -652,3 +691,42 @@ until you configure one (`demo/gateway/tensorzero/`). A licensed fetch is
 committed as a replay (`demo/output/redpine-replay/`); a live one needs a
 Redpine credential. Each absence appears in the evidence as a named gap;
 `ROADMAP.md` is the status board.
+
+
+## Directory enrolment from an agent session
+
+Invoke `/commonmeasure:enrol` with the Claude plugin, or install the Codex
+surface with `commonmeasure install codex` and invoke `$commonmeasure-enrol`.
+The agent shows its actual project directory and existing edge identity, then
+asks for a project name and local recording or permitted Hub reporting.
+
+The CLI uses the current directory by default; automation can name it explicitly:
+
+```sh
+commonmeasure enrol --directory /path/to/project
+commonmeasure enrol --directory /path/to/project --name "My project" --reporting local
+commonmeasure enrol --directory /path/to/project --name "My project" --reporting hub --include-history
+```
+
+Hub reporting covers that canonical root and descendants, including existing
+eligible witnessed evidence. Similarly named siblings and related Git worktrees
+are separate. A local-only ancestor blocks reporting below it. Source restrictions
+and confidential exclusions still apply; private and internal evidence stays local.
+
+A disconnected edge uses `commonmeasure connect <named-hub> --token <token>
+--managed`. Keep the token outside agent conversation text. A managed directory
+request appears on the connected Hub's **Project reporting** page. An owner
+approves it, then `commonmeasure enrol --sync` fetches policy and reporting
+grants. Pending approval, expired grants and a policy withholding reporting are
+reported explicitly.
+
+Verify the returned policy and directory, make a permitted retrieval, inspect
+`commonmeasure relay --dry-run`, then run `commonmeasure relay` when authorised.
+Its delivered counts are separate from local evidence and zero eligible events.
+If the MCP process started in another directory, restart it in the host project
+before claiming that its retrievals use this setup.
+
+`commonmeasure enrol --remove` stops local reporting without deleting evidence,
+removing keys or disconnecting the edge. Already delivered events remain at the
+receiver. See the [directory enrolment contract](contracts/directory-enrolment.md)
+for expiry, worktree handling and compatibility with older binaries.

@@ -27,6 +27,7 @@ pub enum Section {
     Policy,
     Sources,
     Compare,
+    Budget,
 }
 
 impl Section {
@@ -37,6 +38,7 @@ impl Section {
             Section::Policy => "policy",
             Section::Sources => "sources",
             Section::Compare => "compare",
+            Section::Budget => "budget",
         }
     }
 
@@ -47,6 +49,7 @@ impl Section {
             Section::Policy => "Policy",
             Section::Sources => "Sources",
             Section::Compare => "Compare",
+            Section::Budget => "Budget",
         }
     }
 
@@ -57,12 +60,13 @@ impl Section {
         }
     }
 
-    const ALL: [Section; 5] = [
+    const ALL: [Section; 6] = [
         Section::Overview,
         Section::Record,
         Section::Policy,
         Section::Sources,
         Section::Compare,
+        Section::Budget,
     ];
 }
 
@@ -247,7 +251,7 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
             div class="metrics" {
                 (metric(&(witnessed + reconstructed).to_string(), "crossings recorded", ""))
                 (metric(&witnessed.to_string(), "witnessed by Common Measure", "act"))
-                (metric(&refused.to_string(), "refused by your policy", "stop"))
+                (metric(&refused.to_string(), "refused by your policy · all recorded history", "stop"))
                 (metric(&cleared.to_string(), "cleared to the hub", ""))
             }
             div class="cards grid-2" {
@@ -465,7 +469,7 @@ fn detail_body(id: &str, records: &Value) -> Markup {
         @if crossings.is_empty() {
             p class="muted" { "This session recorded no crossings." }
         } @else {
-            @for crossing in &crossings { (crossing_card(crossing)) }
+            @for crossing in &crossings { (crossing_card(crossing, recs)) }
         }
         @if let Some(line) = other_records(&recs.iter().collect::<Vec<_>>()) {
             p class="muted" { (line) }
@@ -516,7 +520,7 @@ fn other_records(records: &[&Value]) -> Option<String> {
 /// the text delivered, the HTTP status and the identity the request presented.
 /// A field the record does not carry is absent, never "unknown" or zero: an
 /// observed crossing carries a content hash and nothing else of these.
-fn crossing_card(record: &Value) -> Markup {
+fn crossing_card(record: &Value, records: &[Value]) -> Markup {
     let payload = record.get("payload").unwrap_or(&Value::Null);
     let url = str_of(payload.get("url"), "");
     let host = payload
@@ -538,6 +542,8 @@ fn crossing_card(record: &Value) -> Markup {
                     span class="cx-badges" { span class="badge b-refused" { "refused" } }
                 }
                 div class="cx-line2" { span class="stop" { (reason) } }
+                (record_fields(payload))
+                (crossing_evidence(record, records))
             }
         },
         None => {
@@ -558,6 +564,7 @@ fn crossing_card(record: &Value) -> Markup {
                         span class="mono" { "licence: " (licence) }
                     }
                     (record_fields(payload))
+                    (crossing_evidence(record, records))
                     // The origin's own refusal, kept apart from the operator's
                     // policy refusal above and from a transport failure: all
                     // three leave a crossing with no content, and a reader has
@@ -598,6 +605,107 @@ fn record_fields(payload: &Value) -> Markup {
             }
         }
     }
+}
+
+/// Structured evidence stays in its recorded shape. Missing fields produce no
+/// row; explicit nulls state absence and never become measurements.
+fn evidence_value(value: &Value) -> Markup {
+    match value {
+        Value::Object(fields) => html! { dl {
+            @for (key, value) in fields { dt { (key.replace('_', " ")) } dd { (evidence_value(value)) } }
+        } },
+        Value::Array(values) => {
+            html! { ul { @for value in values { li { (evidence_value(value)) } } } }
+        }
+        Value::String(value) => html! { (value) },
+        Value::Null => html! { "absent" },
+        other => html! { (other) },
+    }
+}
+
+fn crossing_evidence(crossing: &Value, records: &[Value]) -> Markup {
+    let payload = &crossing["payload"];
+    // Concurrent writers may reuse sequence numbers. Only a unique preceding
+    // reference to this host can establish which manifest the crossing used.
+    let manifest = payload.get("manifest_record").and_then(|reference| {
+        let mut candidates = records
+            .iter()
+            .take_while(|r| !std::ptr::eq(*r, crossing))
+            .filter(|r| r["event"] == "manifest_resolved" && r.get("seq") == Some(reference));
+        let record = candidates.next()?;
+        (candidates.next().is_none()
+            && record["payload"]["host"].as_str()
+                == payload["url"]
+                    .as_str()
+                    .map(commonmeasure_harness::grounding::host_of)
+                    .as_deref())
+        .then_some(record)
+    });
+    html! {
+        dl class="cx-fields" {
+            @for (key, label) in [("declarations", "Source declarations"), ("named_by", "Named by"),
+                ("content_telemetry_id", "Content-Telemetry-ID"), ("allowance", "Allowance"),
+                ("breach", "Policy breach"), ("failure", "Transport failure")] {
+                @if let Some(value) = payload.get(key).filter(|v| !v.is_null()) {
+                    div { dt { (label) } dd { (evidence_value(value)) } }
+                }
+            }
+            @if payload["declarations"].get("reporting").is_some_and(|r| r.is_object() && r.get("receiver").is_none_or(Value::is_null)) {
+                div { dt { "Reporting ruling" } dd { "Reporting receiver: absent from this ruling." } }
+            }
+            @if let Some(reference) = payload.get("manifest_record").filter(|v| !v.is_null()) {
+                div { dt { "Manifest record" } dd {
+                    (reference)
+                    @if let Some(record) = manifest {
+                        (evidence_value(&record["payload"]))
+                    } @else {
+                        p class="muted" { "The referenced manifest record is unavailable or ambiguous in this session." }
+                    }
+                } }
+            }
+        }
+    }
+}
+
+/// Render the budget API projection without recomputing spend or policy caps.
+pub fn budget_page(budget: &Value, read: ReadFrom<'_>) -> String {
+    shell(Some(Section::Budget), html! {
+        (topbar("Budget", html! { "Read from " (read.sessions) " at " (read.at) "." }))
+        section class="screen" {
+            h2 { "Recorded footprint by engagement" }
+            p class="callout" { (str_of(budget["acquisition_charge"].get("reason"), "")) }
+            @for row in budget["engagements"].as_array().into_iter().flatten() {
+                div class="card" {
+                    h3 { (str_of(row.get("engagement"), "")) }
+                    dl class="cx-fields" {
+                        @for (key, label) in [("witnessed", "Witnessed crossings"), ("reconstructed", "Reconstructed crossings"),
+                            ("refused", "Refused crossings"), ("estimated_tokens", "Estimated tokens"),
+                            ("token_basis", "Token basis"), ("estimated_tokens_by_basis", "Estimates by basis"),
+                            ("total_withheld", "Why the total is withheld"), ("crossings_without_estimate", "Crossings without an estimate"),
+                            ("declared_cap", "Declared acquisition cap (not a periodic allowance)")] {
+                            @if let Some(value) = row.get(key) {
+                                div { dt { (label) } dd { (evidence_value(value)) } }
+                            }
+                        }
+                        div { dt { "Acquisition charge" } dd { "Not recorded per engagement." } }
+                    }
+                }
+            }
+            h2 { "Principal allowances" }
+            p class="callout" { "Declarations from policy.json; standing from allowance/ledger.ndjson. Principal allowances are independent of the engagement filter." }
+            (evidence_value(&budget["allowances"]))
+        }
+    }).into_string()
+}
+
+/// Render the same comparison outcome returned to a JSON client.
+pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
+    shell(Some(Section::Compare), html! {
+        p class="callout" role="status" data-outcome=(str_of(result.get("kind"), "")) {
+            (str_of(result.get("notice"), ""))
+        }
+        (compare(result["query"].as_str(), result["results"].as_array().map(Vec::as_slice).unwrap_or(&[]), providers))
+    }).into_string()
 }
 
 /// The Policy screen: what governs the next crossing, and the three edits the
@@ -1081,7 +1189,7 @@ fn source_row(provider: &Value) -> Markup {
         .unwrap_or(false);
     let avatar: String = name.chars().take(2).collect();
     html! {
-        div class="src" {
+        div class="src" data-provider=(name) {
             div class="src-avatar" aria-hidden="true" { (avatar) }
             div class="src-body" {
                 div class="src-name" { (provider_title(name)) }

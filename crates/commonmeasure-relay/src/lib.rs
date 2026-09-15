@@ -17,7 +17,7 @@ pub mod spool;
 pub mod state;
 pub mod wire;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +37,10 @@ pub use state::egress_report;
 
 #[derive(Debug, Default)]
 pub struct RelayOptions {
+    /// Forecast the same projection and pending delivery without network or writes.
+    pub dry_run: bool,
+    /// Draft policy to forecast; valid only with `dry_run`.
+    pub policy: Option<PathBuf>,
     /// Receiver base URL; overrides `relay.json` for this invocation.
     pub receiver: Option<String>,
     /// API key; overrides `relay.json` for this invocation.
@@ -102,6 +106,10 @@ pub struct DeliveredUnderClearance {
 
 #[derive(Debug)]
 pub struct RelayReport {
+    /// Counts describe projected delivery, not acknowledgements, when true.
+    pub dry_run: bool,
+    /// Distinct outgoing source hosts, held only in memory for a dry run.
+    pub hosts: BTreeSet<String>,
     pub receiver: String,
     /// Session logs read this invocation. `sessions_projected` and
     /// `sessions_withheld` are disjoint subsets of it; the remainder held
@@ -131,8 +139,9 @@ pub struct RelayReport {
     pub batches_delivered: u64,
     pub events_delivered: u64,
     /// Events the receiver newly recorded. Lower than `events_delivered` on a
-    /// redelivery, and that difference is the idempotency working.
-    pub events_new_at_receiver: u64,
+    /// redelivery, and that difference is the idempotency working. Unknown
+    /// during a dry run because no receiver has acknowledged the events.
+    pub events_new_at_receiver: Option<u64>,
     /// `events_delivered` split by the clearance each event left under,
     /// ordered by [`Clearance`]. A report of what happened: it is computed from
     /// the clearance decisions after they are taken and is never an input to
@@ -194,6 +203,10 @@ impl std::error::Error for DeliveryFailure {}
 /// without touching disk or network: no configured receiver means no egress
 /// and no relay state.
 pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
+    anyhow::ensure!(
+        options.dry_run || options.policy.is_none(),
+        "--policy requires --dry-run"
+    );
     let configured = RelayConfig::load(home).map_err(|error| anyhow::anyhow!(error))?;
     let receiver = options
         .receiver
@@ -214,10 +227,15 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
 
     // The enrolled key's standing, asked before anything is delivered:
     // a revocation is learnt on the next relay run, which is this one. The
-    // same answer keeps a standing key's directory proof current.
-    let (standing, directory_proof) = match enrolment::check_standing(home, api_key.as_deref())? {
-        Some(check) => (Some(check.standing), check.directory_proof),
-        None => (None, None),
+    // same answer keeps a standing key's directory proof current. A forecast
+    // checks neither, because both can change local state.
+    let (standing, directory_proof) = if options.dry_run {
+        (None, None)
+    } else {
+        match enrolment::check_standing(home, api_key.as_deref())? {
+            Some(check) => (Some(check.standing), check.directory_proof),
+            None => (None, None),
+        }
     };
 
     // The same policy.json the capture paths read, held for the whole
@@ -225,8 +243,21 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     // a policy edited while the relay runs cannot change its later answers.
     // A policy file that cannot be read is an error here, not a silently
     // unfiltered projection.
-    let policy_document = commonmeasure_harness::policy::PolicyDocument::read(home)
-        .map_err(|error| anyhow::anyhow!("{error}; nothing was projected and nothing was sent"))?;
+    if !options.dry_run
+        && let Err(error) = commonmeasure_harness::directory::sync(home)
+    {
+        eprintln!(
+            "commonmeasure: directory grant refresh failed; cached grants retain their original expiry: {error}"
+        );
+    }
+    let directory_selection = commonmeasure_harness::directory::Registry::read(home)
+        .map_err(anyhow::Error::msg)?
+        .is_some();
+    let policy_document = match &options.policy {
+        Some(path) => commonmeasure_harness::policy::PolicyDocument::read_file(path),
+        None => commonmeasure_harness::policy::PolicyDocument::read(home),
+    }
+    .map_err(|error| anyhow::anyhow!("{error}; nothing was projected and nothing was sent"))?;
     // The operator's named internal prefixes. At capture they lower the
     // privacy floor; at egress they are an exclusion — internal crossings are
     // operator-record only.
@@ -235,11 +266,26 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     // What has already left, or is spooled to leave, is read before
     // projection: it decides which events are new, and whether a session's
     // refused count has moved since a receiver last accepted one.
-    let spool = Spool::open(home)?;
-    let state = RelayState::open(home)?;
+    let (spool, state) = if options.dry_run {
+        (Spool::read_only(home), RelayState::read_only(home))
+    } else {
+        (Spool::open(home)?, RelayState::open(home)?)
+    };
+    let mut agents = state.session_agents()?;
+    // The spool retains acknowledged documents. Recover their first identity
+    // when upgrading a home that has delivered sessions but has no pins yet.
+    for (_, entry) in spool.entries()? {
+        if let (Some(session), Some(agent)) = (
+            wire_session(&entry.document),
+            entry.document["agent_id"].as_str(),
+        ) {
+            agents.entry(session).or_insert_with(|| agent.to_owned());
+        }
+    }
+    let mut pending = spool.pending()?;
     let mut already: HashSet<Uuid> = state.delivered()?;
     let mut refused_known: HashMap<Uuid, u64> = state.refused_delivered()?;
-    for (_, entry) in spool.pending()? {
+    for (_, entry) in &pending {
         already.extend(event_ids(&entry.document));
         if let (Some(session), Some(refused)) = (
             wire_session(&entry.document),
@@ -392,19 +438,42 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         }
         already.extend(batch.events.iter().map(|event| event.id));
         events_enqueued += batch.events.len() as u64;
-        spool.enqueue(&SpoolEntry {
+        batch.agent_id = agents
+            .entry(batch.session_id)
+            .or_insert(batch.agent_id)
+            .clone();
+        let entry = SpoolEntry {
             origin,
             document: serde_json::to_value(&batch).context("serialise batch")?,
-        })?;
+            directory_selection,
+        };
+        if options.dry_run {
+            pending.push((0, entry));
+        } else {
+            spool.enqueue(&entry)?;
+        }
     }
     // A carrier's one event is on the receiver's record by construction;
     // the batch is enqueued for the count it carries, and counts as no new
     // event.
-    for (origin, carrier) in carriers {
-        spool.enqueue(&SpoolEntry {
+    for (origin, mut carrier) in carriers {
+        carrier.agent_id = agents
+            .entry(carrier.session_id)
+            .or_insert(carrier.agent_id)
+            .clone();
+        let entry = SpoolEntry {
             origin,
             document: serde_json::to_value(&carrier).context("serialise batch")?,
-        })?;
+            directory_selection,
+        };
+        if options.dry_run {
+            pending.push((0, entry));
+        } else {
+            spool.enqueue(&entry)?;
+        }
+    }
+    if !options.dry_run {
+        pending = spool.pending()?;
     }
 
     // Deliver everything pending, oldest first. A failure stops here and the
@@ -413,29 +482,75 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
     let mut events_delivered = 0u64;
     let mut events_new_at_receiver = 0u64;
     let mut delivered_by_clearance: BTreeMap<Clearance, u64> = BTreeMap::new();
-    for (index, entry) in spool.pending()? {
-        let acceptance = match client::deliver(&receiver, api_key.as_deref(), &entry.document) {
-            Ok(acceptance) => acceptance,
-            Err(error) => {
-                state.record_failure(&receiver, &format!("{error:#}"))?;
-                return Err(anyhow::Error::new(DeliveryFailure {
-                    standing,
-                    directory_proof,
-                    receiver,
-                    spool: home.join("relay").join("spool"),
-                    cause: error,
-                }));
-            }
+    let mut hosts = BTreeSet::new();
+    for (index, mut entry) in pending {
+        // Re-read consent, grant expiry and source policy before every delivery.
+        // Hold selection's lock across the send: opt-out completes after any
+        // already-running delivery, and every subsequent send sees the opt-out.
+        let _consent = if options.dry_run {
+            // A forecast sends nothing and must not create even a lock file.
+            None
+        } else {
+            Some(
+                commonmeasure_harness::declaration::lock(&home.join("directories.lock"))
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            )
         };
-        let ids = event_ids(&entry.document);
-        state.record_delivered(&ids)?;
-        if let (Some(session), Some(refused)) = (
-            wire_session(&entry.document),
-            entry.document["refused"].as_u64(),
-        ) {
-            state.record_refused_delivered(session, refused)?;
+        let selection_active = commonmeasure_harness::directory::Registry::read(home)
+            .map_err(anyhow::Error::msg)?
+            .is_some();
+        if selection_active || entry.directory_selection {
+            recheck_directory_batch(home, &mut entry)?;
+            if event_ids(&entry.document).is_empty() {
+                // The immutable spool and original evidence remain on disk.
+                // If later cleared again, projection can enqueue these ids anew.
+                if !options.dry_run {
+                    spool.ack_through(index)?;
+                }
+                continue;
+            }
         }
-        spool.ack_through(index)?;
+        let session = wire_session(&entry.document).context("spooled batch has no session id")?;
+        let agent = agents
+            .get(&session)
+            .context("spooled batch has no agent id")?;
+        entry.document["agent_id"] = serde_json::Value::String(agent.clone());
+        let ids = event_ids(&entry.document);
+        if options.dry_run {
+            for event in entry.document["events"].as_array().into_iter().flatten() {
+                if let Some(url) = event["content_url"].as_str() {
+                    let host = commonmeasure_harness::grounding::host_of(url);
+                    if !host.is_empty() {
+                        hosts.insert(host);
+                    }
+                }
+            }
+        } else {
+            state.pin_session_agent(session, agent)?;
+            let acceptance = match client::deliver(&receiver, api_key.as_deref(), &entry.document) {
+                Ok(acceptance) => acceptance,
+                Err(error) => {
+                    state.record_failure(&receiver, &format!("{error:#}"))?;
+                    return Err(anyhow::Error::new(DeliveryFailure {
+                        standing,
+                        directory_proof,
+                        receiver,
+                        spool: home.join("relay").join("spool"),
+                        cause: error,
+                    }));
+                }
+            };
+            state.record_delivered(&ids)?;
+            if let (Some(session), Some(refused)) = (
+                wire_session(&entry.document),
+                entry.document["refused"].as_u64(),
+            ) {
+                state.record_refused_delivered(session, refused)?;
+            }
+            spool.ack_through(index)?;
+            events_new_at_receiver += acceptance.events_created;
+            state.record_success(&receiver)?;
+        }
         batches_delivered += 1;
         events_delivered += ids.len() as u64;
         for id in &ids {
@@ -445,11 +560,11 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
                 .unwrap_or(Clearance::SpooledBeforeThisRun);
             *delivered_by_clearance.entry(clearance).or_default() += 1;
         }
-        events_new_at_receiver += acceptance.events_created;
-        state.record_success(&receiver)?;
     }
 
     Ok(RelayReport {
+        dry_run: options.dry_run,
+        hosts,
         receiver,
         sessions_read: session_logs.len(),
         sessions_projected,
@@ -460,7 +575,7 @@ pub fn relay(home: &Path, options: &RelayOptions) -> Result<RelayReport> {
         events_enqueued,
         batches_delivered,
         events_delivered,
-        events_new_at_receiver,
+        events_new_at_receiver: (!options.dry_run).then_some(events_new_at_receiver),
         delivered_by_clearance: delivered_by_clearance
             .into_iter()
             .map(|(clearance, events)| DeliveredUnderClearance { clearance, events })
@@ -558,4 +673,64 @@ fn event_ids(document: &serde_json::Value) -> Vec<Uuid> {
         .filter_map(|event| event["id"].as_str())
         .filter_map(|id| Uuid::parse_str(id).ok())
         .collect()
+}
+
+/// Re-project a queued session against current permission, preserving stable event
+/// ids. Missing source evidence cannot authorise a previously queued disclosure.
+fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<()> {
+    if commonmeasure_harness::directory::Registry::read(home)
+        .map_err(anyhow::Error::msg)?
+        .is_none()
+    {
+        // Provenance still requires consent even if both the registry and its
+        // persistent mode marker have been lost. Legacy scopes cannot replace it.
+        // Keep the batch pending as well: acknowledging it would allow its
+        // historical events to be projected again under legacy scopes later.
+        anyhow::bail!(
+            "queued directory reporting requires local consent state; re-enrol the directory before retrying"
+        );
+    }
+    let source = Path::new(&entry.origin);
+    let session_directory = home
+        .join("sessions")
+        .canonicalize()
+        .context("session evidence directory unavailable for queued reporting")?;
+    let original = source
+        .canonicalize()
+        .context("queued reporting source evidence unavailable")?;
+    if original.parent() != Some(session_directory.as_path()) {
+        // Batch runs have no directory binding. Selecting directories does not
+        // implicitly approve old run batches or arbitrary spool origins.
+        entry.document["events"] = serde_json::json!([]);
+        return Ok(());
+    }
+    let id = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("invalid session source")?;
+    let records = commonmeasure_harness::SessionLog::read(&original)?;
+    let policy =
+        commonmeasure_harness::policy::PolicyDocument::read(home).map_err(anyhow::Error::msg)?;
+    let cleared = egress_clearances(&policy, &records);
+    let prefixes = policy.resolve(None).internal_prefixes().to_vec();
+    let projected =
+        project::project_session(id, &records, &prefixes, &|at| cleared.contains_key(&at));
+    let mut permitted: HashSet<Uuid> = projected
+        .event_positions
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    if access_context_required(&policy, &records, &cleared).is_some() {
+        permitted.clear();
+    }
+    if let Some(events) = entry.document["events"].as_array_mut() {
+        events.retain(|event| {
+            event["id"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .is_some_and(|id| permitted.contains(&id))
+        });
+    }
+    entry.document["refused"] = serde_json::json!(projected.refused);
+    Ok(())
 }

@@ -92,3 +92,6 @@ plugin/bin/*
 # Python bytecode from the scripts under demo/ and docs/guide/measurements/
 __pycache__/
 *.pyc
+
+# Local Cloudflare deployment cache.
+.wrangler/

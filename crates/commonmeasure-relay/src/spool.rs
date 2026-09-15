@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
 pub struct SpoolEntry {
     pub origin: String,
     pub document: Value,
+    /// Local consent provenance, never sent to the receiver. Legacy batches
+    /// without this field retain their original behaviour in legacy homes.
+    #[serde(default)]
+    pub directory_selection: bool,
 }
 
 pub struct Spool {
@@ -34,10 +38,16 @@ impl Spool {
     pub fn open(home: &Path) -> Result<Spool> {
         let dir = home.join("relay").join("spool");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        Ok(Spool {
+        Ok(Self::read_only(home))
+    }
+
+    /// Locate the spool without creating any directories or files.
+    pub fn read_only(home: &Path) -> Self {
+        let dir = home.join("relay").join("spool");
+        Self {
             queue_path: dir.join("outbound.ndjson"),
             ack_path: dir.join("outbound.ack"),
-        })
+        }
     }
 
     /// Enqueue one batch durably. Returns its spool index.
@@ -56,7 +66,16 @@ impl Spool {
 
     /// Batches enqueued but not yet acknowledged, with their indices.
     pub fn pending(&self) -> Result<Vec<(u64, SpoolEntry)>> {
-        let acked = self.acked()?;
+        self.entries_from(self.acked()?)
+    }
+
+    /// Retained batches, including acknowledged ones, preserve the first
+    /// identity sent for a session before separate identity pins existed.
+    pub fn entries(&self) -> Result<Vec<(u64, SpoolEntry)>> {
+        self.entries_from(0)
+    }
+
+    fn entries_from(&self, first: u64) -> Result<Vec<(u64, SpoolEntry)>> {
         if !self.queue_path.exists() {
             return Ok(Vec::new());
         }
@@ -65,7 +84,7 @@ impl Spool {
         for (index, line) in BufReader::new(file).lines().enumerate() {
             let index = index as u64;
             let line = line.context("read spool line")?;
-            if index < acked || line.trim().is_empty() {
+            if index < first || line.trim().is_empty() {
                 continue;
             }
             let entry: SpoolEntry =

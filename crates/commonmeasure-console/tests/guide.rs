@@ -13,6 +13,10 @@ fn evidence() -> &'static str {
     console_page("state-of-the-evidence").expect("the companion renders")
 }
 
+fn untrusted() -> &'static str {
+    console_page("untrusted-context").expect("the untrusted-context guide renders")
+}
+
 /// Every `href="#…"` in the sidebar, in order.
 fn sidebar_anchors(page: &str) -> Vec<&str> {
     let nav_start = page.find("<nav class=\"toc\"").expect("a sidebar");
@@ -26,7 +30,7 @@ fn sidebar_anchors(page: &str) -> Vec<&str> {
 
 #[test]
 fn every_sidebar_entry_resolves_to_a_heading_in_the_body() {
-    for page in [guide(), evidence()] {
+    for page in [guide(), evidence(), untrusted()] {
         let anchors = sidebar_anchors(page);
         assert!(anchors.len() > 3, "the sidebar lists the chapters");
         for anchor in anchors {
@@ -72,7 +76,7 @@ fn every_footnote_reference_resolves_and_the_notes_are_one_numbered_list() {
 
 #[test]
 fn tables_scroll_inside_their_own_box() {
-    for page in [guide(), evidence()] {
+    for page in [guide(), evidence(), untrusted()] {
         let tables = page.matches("<table>").count();
         assert!(tables > 0);
         assert_eq!(
@@ -96,7 +100,7 @@ fn the_two_documents_link_each_other_by_console_route() {
 
 #[test]
 fn a_page_is_self_contained() {
-    for page in [guide(), evidence()] {
+    for page in [guide(), evidence(), untrusted()] {
         assert!(!page.contains("<script"));
         assert!(!page.contains("<link "));
         assert_eq!(page.matches("<style>").count(), 1);
@@ -142,6 +146,8 @@ fn a_product_panel_becomes_an_aside_in_the_console_and_is_absent_in_public() {
     let source = commonmeasure_console::guide::Source {
         name: "panel",
         markdown: "# A title\n\n*A standfirst.*\n\n## One\n\nBody.\n\n> **What this means for Common Measure**\n>\n> The panel text.\n\n## Two\n\nMore.\n",
+        current_to: "1 January 2026",
+        links_checked: false,
     };
     let console = render(&source, Variant::Console);
     assert!(
@@ -152,4 +158,64 @@ fn a_product_panel_becomes_an_aside_in_the_console_and_is_absent_in_public() {
     let public = render(&source, Variant::Public);
     assert!(!public.contains("panel text"));
     assert!(!public.to_lowercase().contains("common measure"));
+}
+
+#[test]
+fn the_untrusted_context_guide_resolves_its_footnotes() {
+    let page = untrusted();
+    let source = SOURCES
+        .iter()
+        .find(|source| source.name == "untrusted-context")
+        .expect("the source is registered");
+    let definitions = page.matches("<li id=\"fn:").count();
+    assert!(definitions > 100, "the guide carries its references");
+    assert_eq!(
+        definitions,
+        source
+            .markdown
+            .lines()
+            .filter(|l| l.starts_with("[^"))
+            .count()
+    );
+    for definition in page.split("<li id=\"fn:").skip(1) {
+        let label = definition.split('"').next().unwrap_or_default();
+        assert!(
+            page.contains(&format!("href=\"#fn:{label}\"")),
+            "footnote {label} is defined but never referenced"
+        );
+    }
+}
+
+#[test]
+fn the_masthead_states_each_guide_s_own_date_and_claims_a_link_check_only_when_run() {
+    assert!(guide().contains("<b>Research current to</b>4 August 2026"));
+    assert!(guide().contains(", all link-checked</span>"));
+    assert!(untrusted().contains("<b>Research current to</b>15 September 2026"));
+    assert!(!untrusted().contains(", all link-checked</span>"));
+}
+
+#[test]
+fn the_public_untrusted_context_page_strips_its_panels() {
+    let pages = public_pages().expect("the public build names no product");
+    let page = pages
+        .iter()
+        .find(|page| page.name == "untrusted-context")
+        .expect("the public build includes the guide");
+    assert!(!page.html.contains("<aside class=\"implication\">"));
+}
+
+#[test]
+fn explicitly_marked_product_sections_only_appear_in_the_console() {
+    let source = commonmeasure_console::guide::Source {
+        name: "section",
+        markdown: "# Guide\n\nIntroduction.\n\n## Shared\n\nBefore.\n\n<!-- product-only:start -->\n\n## Product\n\nCommon Measure details.\n\n<!-- product-only:end -->\n\n## After\n\nRetained evidence.\n",
+        current_to: "15 September 2026",
+        links_checked: false,
+    };
+    let console = render(&source, Variant::Console);
+    let public = render(&source, Variant::Public);
+    assert!(console.contains("Common Measure details."));
+    assert!(!public.contains("Common Measure details."));
+    assert!(!public.contains("id=\"product\""));
+    assert!(public.contains("Before.") && public.contains("Retained evidence."));
 }

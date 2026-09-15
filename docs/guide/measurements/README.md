@@ -4,13 +4,14 @@ title: Measurements behind the guide
 
 # Measurements behind the guide
 
-Two things the guide states as measured rather than cited. The repository can
-rerun the file-density measurement and the source-overlap analysis. The
+Three measurements support the guide: token density by file type, the cost of
+raw HTML, and overlap between search providers. The repository can rerun the
+file-density measurement and the source-overlap analysis. The
 raw-HTML figures cannot be reproduced exactly because their original inputs
 are not retained; the script can only repeat the method on newly saved pages.
 
-Neither needs the Common Measure binary. Both need Python 3 and a virtual
-environment:
+The two scripts need Python 3 and a virtual environment; neither needs the
+Common Measure binary:
 
 ```sh
 python3 -m venv .venv

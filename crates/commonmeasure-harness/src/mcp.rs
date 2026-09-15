@@ -270,12 +270,20 @@ impl McpServer {
                     id,
                     json!({
                         "protocolVersion": negotiated,
-                        "capabilities": {"tools": {}},
+                        "capabilities": {"tools": {}, "prompts": {}},
                         "serverInfo": server_info,
                     }),
                 )
             }
             "ping" => ok_response(id, json!({})),
+            "prompts/list" => ok_response(
+                id,
+                json!({"prompts": [{"name": "commonmeasure_enrol", "description": "Enrol the current agent project directory. The client must expose MCP prompts explicitly."}]}),
+            ),
+            "prompts/get" if params["name"] == "commonmeasure_enrol" => ok_response(
+                id,
+                json!({"messages": [{"role": "user", "content": {"type": "text", "text": include_str!("../../../plugin/commands/enrol.md")}}]}),
+            ),
             "tools/list" => ok_response(id, json!({"tools": tool_definitions()})),
             "tools/call" => self.handle_tool_call(id, params),
             _ => error_response(id, -32601, &format!("method {method} not found")),
@@ -352,6 +360,7 @@ impl McpServer {
             "context_fetch" => self.tool_fetch(&arguments),
             "context_search" => self.tool_search(&arguments),
             "context_status" => Ok(self.tool_status()),
+            "context_enrol" => self.tool_enrol(&arguments),
             other => Err(format!("unknown tool {other}")),
         };
         // A tool failure is a tool result, not a protocol error: the host's
@@ -1387,6 +1396,68 @@ impl McpServer {
         })
     }
 
+    fn tool_enrol(&mut self, arguments: &Value) -> Result<Value, String> {
+        use crate::directory;
+        let named = arguments["directory"]
+            .as_str()
+            .ok_or("name the actual host project directory explicitly")?;
+        let root = directory::selected(std::path::Path::new(named))?;
+        let server = self
+            .cwd
+            .as_deref()
+            .ok_or("MCP process directory is unknown")?;
+        if directory::selected(std::path::Path::new(server))? != root {
+            return Err(format!(
+                "MCP process directory {server} differs from selected {}; restart this server in the host project before claiming governance",
+                root.display()
+            ));
+        }
+        let home = self
+            .session
+            .path()
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or("session home unavailable")?
+            .to_path_buf();
+        match arguments["action"].as_str().unwrap_or("status") {
+            "status" => {}
+            "sync" => directory::sync_all(&home)?,
+            "enrol" => {
+                let name = arguments["name"].as_str().ok_or("ask for a project name")?;
+                let reporting = match arguments["reporting"].as_str() {
+                    Some("hub") => true,
+                    Some("local") => false,
+                    _ => return Err("ask for local recording or hub reporting".into()),
+                };
+                if reporting && arguments["include_history"] != true {
+                    return Err("reporting covers this canonical root and descendants, including existing eligible witnessed evidence; include_history must confirm this coverage".into());
+                }
+                let project = directory::Registry::enrol(&home, &root, name, reporting)?;
+                if reporting && crate::managed::is_managed(&home)? {
+                    directory::request(&home, &project)?;
+                    directory::sync(&home)?;
+                }
+            }
+            "remove" => {
+                let registry =
+                    directory::Registry::read(&home)?.ok_or("directory is not enrolled")?;
+                let project = registry
+                    .matching(named)
+                    .ok_or("directory is not enrolled")?;
+                if project.root != root {
+                    return Err("remove reporting at the enrolled root".into());
+                }
+                let project = directory::Registry::enrol(&home, &root, &project.name, false)?;
+                if crate::managed::is_managed(&home)? {
+                    let _ = directory::request(&home, &project);
+                }
+            }
+            _ => return Err("action must be status, enrol, remove or sync".into()),
+        }
+        self.policy = SessionPolicy::load(&home, self.cwd.as_deref())?;
+        directory::status(&home, &root)
+    }
+
     fn tool_status(&self) -> Value {
         // Only providers this surface can actually reach: those whose
         // declared capability `context_search` can dispatch (`search`, or
@@ -1437,6 +1508,7 @@ impl McpServer {
             .collect();
         json!({
             "session_id": self.session.session_id(),
+            "cwd": self.cwd,
             "host": self.host,
             "client": self.client,
             "evidence": self.session.path().display().to_string(),
@@ -1943,6 +2015,14 @@ fn tool_definitions() -> Value {
             "name": "context_status",
             "description": "The current session, where its evidence is written, the operator's source policy, and which providers are configured.",
             "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "context_enrol",
+            "description": "Explicitly enrol, inspect, sync or remove reporting for the actual agent project. Ask for project name and local/hub reporting; explain canonical root and descendants and historical evidence before enabling hub reporting. No new shell or filesystem permissions are granted.",
+            "inputSchema": {"type": "object", "properties": {
+                "directory": {"type": "string"}, "action": {"type": "string", "enum": ["status", "enrol", "remove", "sync"]},
+                "name": {"type": "string"}, "reporting": {"type": "string", "enum": ["local", "hub"]}, "include_history": {"type": "boolean"}
+            }, "required": ["directory"]}
         }
     ])
 }

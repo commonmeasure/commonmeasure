@@ -9,19 +9,16 @@ without having to find and ask every past contributor.
 
 ## How to contribute
 
-1. Read `AGENTS.md` first: it states the repository rules, including no mocks
-   or fake implementations, British English, and plain prose. `PRODUCT.md`,
+1. Read `AGENTS.md` first: it states the repository rules, including truthful
+   integration evidence, coordination and proportional validation. `PRODUCT.md`,
    `DECISIONS.md` and `ROADMAP.md` say what the product is, what constrains
    it and what is open.
 2. Open a pull request against `main`. Keep it to one change with a commit
    message that states the fact and its reason.
-3. Run the gates before you ask for review:
-
-   ```sh
-   cargo fmt --all -- --check
-   cargo clippy --workspace --all-targets --offline -- -D warnings
-   cargo test --workspace --offline
-   ```
+3. Run the checks appropriate to your change, following `AGENTS.md`
+   §Verification. Include the commands, results and remaining gaps in the
+   pull request. Full workspace checks apply to release candidates and broad
+   changes; prose edits need relevant documentation checks.
 
 4. On your first pull request a check asks you to accept the contributor
    licence agreement below. Accept it by posting this comment on the pull

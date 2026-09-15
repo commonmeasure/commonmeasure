@@ -4,10 +4,8 @@ title: Documentation
 
 # Documentation
 
-These pages are the one source of the product's documentation. They are read
-in the repository and they are published as the documentation section of the
-product's website, which is built from this directory alone. The rules that
-make the second possible are stated at the end of this page.
+Install and use Common Measure, understand its source records, and connect
+your machines to Common Measure Hub.
 
 ## Pages
 
@@ -15,6 +13,9 @@ Start with the example, [Four fetches, two refused](guide/four-fetches.md),
 which follows one agent through four recorded fetches, then the
 [getting started walkthrough](GETTING-STARTED.md), which takes an
 installed binary to a session that records crossings of your own.
+
+For Common Measure Hub, follow [Start here](https://commonmeasure.ai/docs/hub/start-here/)
+from sign-in to your first delivery, or [connect an existing edge](https://commonmeasure.ai/docs/hub/connect-commonmeasure/).
 
 Product:
 
@@ -46,7 +47,9 @@ Guide:
   what should enter a context window and how to know it helped.
 - [`docs/guide/state-of-the-evidence.md`](guide/state-of-the-evidence.md): the
   evidence behind the guide, graded claim by claim.
-- [`docs/guide/measurements/README.md`](guide/measurements/README.md): the two
+- [`docs/guide/untrusted-context.md`](guide/untrusted-context.md): prompt
+  injection, defences, liability and the records operators need.
+- [`docs/guide/measurements/README.md`](guide/measurements/README.md): the original
   measurements the guide reports, and how to rerun them.
 
 Contracts, the authoritative formats:
@@ -79,8 +82,10 @@ Internal, kept in the repository and not published:
 
 ## Rules for the website build
 
-The website's documentation section is built from a copy of this directory
-and nothing else, so every rule the build needs is here.
+The website imports this directory for edge documentation and the
+Common Measure Hub repository's `commonmeasure-hub/docs/client/` for Hub guides. Both use the
+same navigation and search at https://commonmeasure.ai/docs/. The rules
+below govern this repository's pages.
 
 1. **Every page is Markdown with front matter.** Each `.md` file opens with a
    YAML block carrying `title`, and optionally `description`. The first line

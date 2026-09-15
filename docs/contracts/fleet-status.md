@@ -223,3 +223,13 @@ policy distribution can never carry a crossing.
 against two edge homes: a policy edit both edges are in moves the
 identity, an edit to a scope neither is in does not, and the receiver's
 four answers are reached from the documents alone.
+
+
+## Directory resolver version
+
+Directory enrolment advances the effective-policy resolver to version `2`:
+canonical directory identity, conservative linked-worktree checks, and separate
+local/signed reporting clearance. Source-policy declaration digests and the
+fleet-status schema remain unchanged. Directory status exposes the independent
+grant revision and expiry; these are never presented as source-policy revisions.
+See [directory enrolment](directory-enrolment.md).

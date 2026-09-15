@@ -841,7 +841,7 @@ fn a_two_hundred_with_an_html_body_fails_and_leaves_the_batch_deliverable() {
     )
     .expect("the true receiver must still be reachable");
     assert_eq!(recovered.events_delivered, 2);
-    assert_eq!(recovered.events_new_at_receiver, 2);
+    assert_eq!(recovered.events_new_at_receiver, Some(2));
     assert_eq!(bodies.lock().unwrap().len(), 1, "one real delivery");
     real.stop();
 }
@@ -1111,6 +1111,7 @@ fn a_supplied_result_names_its_supplier_at_the_receiver_and_a_fetch_does_not() {
             api_key: Some("key".to_owned()),
             runs: Vec::new(),
             sessions: Vec::new(),
+            ..Default::default()
         },
     )
     .expect("relay");
@@ -1173,6 +1174,7 @@ fn the_retrieved_hash_stays_off_the_wire() {
             api_key: Some("key".to_owned()),
             runs: Vec::new(),
             sessions: Vec::new(),
+            ..Default::default()
         },
     )
     .expect("relay");

@@ -2,14 +2,13 @@
 
 Input control and audit for AI agents.
 
-Common Measure sits between an AI agent and everything it reads. It decides,
-before the agent reads a page, whether the agent may read it under your
-rules on sources, licences and spend. It writes down where every piece of
-content came from, what it cost and a hash of exactly what the model saw,
-so a person or a regulator can check the record without trusting a
-dashboard or reading a transcript. It measures whether the content helped,
-so you can tell what the agent needed and did not get, and which route to
-use next time.
+Common Measure applies your rules on sources, licences and spend to content
+an AI agent acquires through its mediated tools. It records where that
+content came from, its cost or an explicit unknown, and a hash of the text
+delivered to context. Hooks record supported host activity after the event;
+the source record distinguishes that observation from mediated acquisition
+and names unavailable evidence. Batch comparisons measure whether content
+helped, so you can assess what the agent needed and which route to use next.
 
 It is one component you build into your own agent system. It is not a
 harness, not an agent framework, not a model gateway and not a content

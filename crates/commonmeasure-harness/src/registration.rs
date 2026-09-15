@@ -103,6 +103,8 @@ pub struct HostPaths {
     pub claude_state: PathBuf,
     pub claude_plugins: PathBuf,
     pub codex_config: PathBuf,
+    /// User-scoped skill directory documented by current Codex hosts.
+    pub codex_skill: PathBuf,
     pub pi_extension: PathBuf,
     /// Claude Desktop's configuration file, the one its Developer settings
     /// open: `mcpServers` is its only surface for a local server.
@@ -293,6 +295,7 @@ impl HostPaths {
             claude_state,
             claude_plugins,
             codex_config: codex_home.join("config.toml"),
+            codex_skill: home.join(".agents/skills/commonmeasure-enrol/SKILL.md"),
             pi_extension: pi_agent.join("extensions/commonmeasure/index.ts"),
             claude_desktop_config: application_data.join("Claude/claude_desktop_config.json"),
             cursor_mcp: home.join(".cursor/mcp.json"),
@@ -1407,6 +1410,72 @@ fn read_toml(path: &Path) -> Result<toml_edit::DocumentMut, String> {
     }
 }
 
+const ENROL_SKILL: &str = include_str!("../../../plugin/skills/commonmeasure-enrol/SKILL.md");
+const ENROL_POLICY: &str =
+    include_str!("../../../plugin/skills/commonmeasure-enrol/agents/openai.yaml");
+const ENROL_MARKER: &str = "<!-- commonmeasure managed enrol skill -->\n";
+
+fn enrol_skill_path(paths: &HostPaths) -> PathBuf {
+    paths.codex_skill.clone()
+}
+
+fn install_enrol_skill(binary: &Path, paths: &HostPaths) -> Result<(), String> {
+    let path = enrol_skill_path(paths);
+    if path.exists()
+        && !std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())?
+            .contains(ENROL_MARKER)
+    {
+        return Err(format!(
+            "{} is not a Common Measure managed skill; preserve or move it before installing",
+            path.display()
+        ));
+    }
+    let metadata = path
+        .parent()
+        .ok_or("skill parent unavailable")?
+        .join("agents/openai.yaml");
+    if metadata.exists()
+        && std::fs::read_to_string(&metadata).map_err(|e| e.to_string())? != ENROL_POLICY
+    {
+        return Err(format!(
+            "{} has custom skill settings; preserve or move them before upgrading",
+            metadata.display()
+        ));
+    }
+    let text = format!(
+        "{ENROL_SKILL}\n{ENROL_MARKER}\nInstalled binary: {}. Use this exact executable path when PATH is unavailable.\n",
+        binary.display()
+    );
+    write_atomically(&path, text.as_bytes())?;
+    write_atomically(
+        &path
+            .parent()
+            .ok_or("skill parent unavailable")?
+            .join("agents/openai.yaml"),
+        ENROL_POLICY.as_bytes(),
+    )
+}
+
+fn uninstall_enrol_skill(paths: &HostPaths) -> Result<(), String> {
+    let path = enrol_skill_path(paths);
+    if path.exists()
+        && std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())?
+            .contains(ENROL_MARKER)
+    {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        let policy = path
+            .parent()
+            .ok_or("skill parent unavailable")?
+            .join("agents/openai.yaml");
+        if std::fs::read_to_string(&policy).ok().as_deref() == Some(ENROL_POLICY) {
+            std::fs::remove_file(policy).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn install_codex(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String> {
     let mut document = read_toml(&paths.codex_config)?;
     let servers = document
@@ -1434,6 +1503,7 @@ fn install_codex(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String
     server["args"] = toml_edit::value(args);
     server["default_tools_approval_mode"] = toml_edit::value(CODEX_APPROVAL_MODE);
     servers[SERVER_NAME] = toml_edit::Item::Table(server);
+    install_enrol_skill(binary, paths)?;
     write_atomically(&paths.codex_config, document.to_string().as_bytes())?;
     Ok(vec![
         format!(
@@ -1453,6 +1523,7 @@ fn install_codex(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, String
 }
 
 fn uninstall_codex(paths: &HostPaths) -> Result<Vec<String>, String> {
+    uninstall_enrol_skill(paths)?;
     let mut document = read_toml(&paths.codex_config)?;
     let removed = document
         .as_table_mut()
@@ -2155,6 +2226,15 @@ fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
          the web as command text, so crossings are mediated or nothing"
             .to_owned(),
     );
+    lines.push(format!(
+        "enrol skill: {} at {}",
+        if paths.codex_skill.is_file() {
+            "installed"
+        } else {
+            "missing; run commonmeasure install codex"
+        },
+        paths.codex_skill.display()
+    ));
     lines.extend(home_lines(home));
     HostReport {
         host: "codex",
@@ -2173,6 +2253,7 @@ mod tests {
             claude_state: directory.join(".claude.json"),
             claude_plugins: directory.join(".claude/plugins"),
             codex_config: directory.join(".codex/config.toml"),
+            codex_skill: directory.join(".agents/skills/commonmeasure-enrol/SKILL.md"),
             pi_extension: directory.join(".pi/agent/extensions/commonmeasure/index.ts"),
             claude_desktop_config: directory.join("Claude/claude_desktop_config.json"),
             cursor_mcp: directory.join(".cursor/mcp.json"),

@@ -1,11 +1,13 @@
 # Architecture
 
-Common Measure sits between an agent and everything it reads. For each
-crossing it applies the operator's rules before content moves, records what
-moved and what it cost, and measures whether it helped. The definition, the
-buyer and the boundary are in `PRODUCT.md`; the defined terms (crossing,
-admission, manifest, evidence log, source record and the rest) are each one
-line in `docs/GLOSSARY.md`.
+Common Measure mediates the acquisition paths integrated by the operator,
+applies source policy before admission, and records origin and cost. Hooks
+observe supported host activity after the event; transcript imports
+reconstruct earlier activity. The record keeps those grades and unavailable
+evidence explicit. Batch runs measure outcomes against their recorded inputs.
+The definition, buyer and boundary are in `PRODUCT.md`; the defined terms
+(crossing, admission, manifest, evidence log, source record and the rest)
+are each one line in `docs/GLOSSARY.md`.
 
 ## Core objects
 
@@ -199,7 +201,7 @@ time.
 ### Console and relay
 
 `commonmeasure serve` (`crates/commonmeasure-console`) serves the console on loopback: a
-maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with five
+maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with six
 sections rendered server-side over an SQLite index derived from the session
 evidence logs, from the same JSON values the `/api/*` routes serve, with
 vendored htmx as the only client script. A published run directory is read
@@ -216,6 +218,18 @@ check before any save; what the console may and may not write is
 `DECISIONS.md` §Execution and evidence. The console is the one component
 that reads both engagement identities, so its Policy section names every
 scope where they differ.
+The Budget section renders `/api/budget`, including the footprint, declared
+caps and principal allowance standing. `/api/providers` serves the Sources
+list; `/api/policy/forecast` serves the forecast and its draft; `/api/compare`
+runs the Compare submission through the same runner as the page. All four
+writes accept form fields or a JSON object and return JSON when requested
+with `Accept: application/json`; their `/api/` aliases always return JSON.
+The answer carries `kind`, `status`, `notice` and the revision now in force
+(`null` for a comparison, which changes no declaration). JSON attribution
+edits carry an ordered `rules` array of `match` and `engagement` strings.
+The Record detail shows the fields a crossing carries and resolves its
+manifest reference within that session; it invents no fields for older or
+observed records.
 
 The relay (`crates/commonmeasure-relay`, driven by `commonmeasure relay`) builds a
 purpose-limited projection at the operator boundary: witnessed retrieval and

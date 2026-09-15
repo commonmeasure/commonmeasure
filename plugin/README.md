@@ -470,3 +470,33 @@ No binary, no provider credentials and no routing logic beyond the operator's
 declared policy. Credentials come from the environment and the operator's own
 `~/.commonmeasure/credentials.env` (`DECISIONS.md` §Integration and ownership)
 and travel only in request headers.
+
+
+## Enrol the current project
+
+The plugin includes `/commonmeasure:enrol`. It uses `context_enrol` on the local
+MCP server or the packaged launcher and shows the actual directory, policy and
+reporting status. Upgrade the plugin/archive to obtain the command; replacing
+only an older standalone binary does not add new plugin files. The archive
+bundles the command and the Codex skill. Removing the plugin removes its command
+and MCP prompt entry without deleting project selection or evidence.
+
+`commonmeasure install codex` installs `$commonmeasure-enrol` under
+`~/.agents/skills/commonmeasure-enrol`, alongside its existing MCP registration.
+Repeat installation updates the owned skill and preserves other host settings.
+It refuses to overwrite a foreign skill at that path. `uninstall codex` removes
+only the owned skill files and its MCP table, leaving evidence and selections.
+`HOME` controls the user skill root and `CODEX_HOME` the Codex config directory;
+use isolated values for both when testing installation.
+
+Local MCP also exposes the `commonmeasure_enrol` prompt. Claude Code documents
+MCP prompts as slash commands; other hosts must expose them before this surface
+can be invoked. The plugin command and Codex skill do not require such support.
+These host surfaces are specification-verified and tested at packaging and
+CLI/MCP boundaries; interactive invocation in actual Claude/Codex hosts remains
+unverified. Host references: [Claude plugin commands](https://code.claude.com/docs/en/plugins-reference),
+[Claude MCP prompts](https://code.claude.com/docs/en/mcp), and
+[Codex local skills](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+
+The [directory enrolment contract](../docs/contracts/directory-enrolment.md)
+states the reporting, history and managed-approval boundaries.

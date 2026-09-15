@@ -1,6 +1,6 @@
 //! Durable relay state: what has actually been delivered, and to whom.
 //!
-//! Two artefacts under `<home>/relay/`, both inspectable with a text editor:
+//! Artefacts under `<home>/relay/`, each inspectable with a text editor:
 //!
 //! - `delivered.idx` — one event id per line, appended after the receiver
 //!   accepts the batch carrying it. The set of ids, not a counter, so a
@@ -9,6 +9,8 @@
 //! - `receipts.json` — the last delivery outcome, written atomically. This is
 //!   what the console's egress block reports, so it must never say more than
 //!   the index can prove.
+//! - `session-agents.json` — the agent id fixed before a wire session first
+//!   leaves, retained across later batches and retries.
 //! - `refused-delivered.json` — per wire session, the highest refused count
 //!   a receiver has accepted on a batch, so a session whose count has moved
 //!   since can be told from one the receiver already has right.
@@ -18,7 +20,7 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -41,17 +43,59 @@ pub struct RelayState {
     delivered_path: PathBuf,
     receipts_path: PathBuf,
     refused_path: PathBuf,
+    agents_path: PathBuf,
 }
 
 impl RelayState {
     pub fn open(home: &Path) -> Result<Self> {
         let dir = home.join("relay");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        Ok(Self {
+        Ok(Self::read_only(home))
+    }
+
+    /// Locate relay state without creating any directories or files.
+    pub fn read_only(home: &Path) -> Self {
+        let dir = home.join("relay");
+        Self {
             delivered_path: dir.join("delivered.idx"),
             receipts_path: dir.join("receipts.json"),
             refused_path: dir.join("refused-delivered.json"),
-        })
+            agents_path: dir.join("session-agents.json"),
+        }
+    }
+
+    /// Agent identifiers fixed for wire sessions; absent before first delivery.
+    pub fn session_agents(&self) -> Result<HashMap<Uuid, String>> {
+        match std::fs::read(&self.agents_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("parse session-agents.json"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(error) => Err(error).context("read session-agents.json"),
+        }
+    }
+
+    /// Persist identities before delivery, including a request whose response
+    /// may be lost. A retry must use the identity the receiver may already hold.
+    pub fn pin_session_agent(&self, session: Uuid, agent: &str) -> Result<()> {
+        let mut agents = self.session_agents()?;
+        if let Some(known) = agents.get(&session) {
+            anyhow::ensure!(
+                known == agent,
+                "wire session {session} is pinned to another agent id"
+            );
+            return Ok(());
+        }
+        agents.insert(session, agent.to_owned());
+        let tmp = self.agents_path.with_extension("json.tmp");
+        let mut file = File::create(&tmp).context("create session-agents tmp")?;
+        file.write_all(&serde_json::to_vec_pretty(&agents).context("serialise session agents")?)?;
+        file.sync_all().context("fsync session agents")?;
+        drop(file);
+        std::fs::rename(&tmp, &self.agents_path).context("rename session agents into place")?;
+        #[cfg(unix)]
+        File::open(self.agents_path.parent().context("relay state directory")?)?
+            .sync_all()
+            .context("fsync relay state directory")?;
+        Ok(())
     }
 
     /// The highest refused count a receiver has accepted for each wire

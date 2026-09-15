@@ -1,33 +1,15 @@
-//! The budget strip: what each engagement's recorded work consumed, and what
-//! the operator declared it may spend.
+//! The Budget screen at `/app/budget` renders `/api/budget`: recorded context
+//! footprint by engagement, declared acquisition caps and principal allowances.
 //!
-//! The strip reports two things that live in different evidence, and it does
-//! not pretend otherwise. The context footprint and the crossing counts come
-//! from the session logs, which are attributed to an engagement at read time.
-//! Acquisition charges do not: no session evidence record carries a charge,
-//! a price or a provider — a mediated search's spend is accounted in the
-//! allowance ledger per principal (the section below), never on the
-//! crossing, and the quote-capable providers stay barred from the mediated
-//! surface entirely. Charges are otherwise recorded per run, and a run
-//! carries no engagement, so no honest per-engagement spend figure exists
-//! today. The cell states that absence and the column's own definition
-//! explains it, rather than rendering a zero, an `unknown`, or a total nobody
-//! measured. The full reason stays in the projection at `/api/budget`.
+//! Session logs supply the footprint and crossing counts, attributed at read
+//! time. They carry no per-engagement acquisition charge. Mediated purchases
+//! account for spend in the principal's allowance ledger; run charges carry
+//! no engagement. The projection states why no engagement spend total exists.
 //!
-//! The declared cap is read from the policy projection the panel above this
-//! one already renders, so the cap here and the cap there cannot disagree.
-//! It is shown as declared, never as enforced: the session path consults its
-//! constraints only through source admission, and the acquisition cap is
-//! checked in the run path alone.
-//!
-//! Principal allowances are the third thing, and their source is different
-//! again and named: the declarations come from `policy.json`'s principal
-//! bindings, the spend from the runtime's own allowance ledger
-//! (`allowance/ledger.ndjson`), which is what enforcement reads — so the
-//! remaining amount here is the remaining amount a purchase will meet, not a
-//! console-side recount. The job cap and the periodic allowance stay two
-//! columns of two tables: one bounds a purchase, the other a period
-//! (`DECISIONS.md` §Delegated authority and fleet management).
+//! Caps come from the Policy screen's projection and are labelled declared.
+//! Principal allowances come from the policy loader and the runtime's own
+//! ledger, the same sources enforcement reads. A job cap bounds one purchase;
+//! a periodic allowance bounds a principal's spending over its declared period.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -39,7 +21,7 @@ use serde_json::{Value, json};
 use super::html::text;
 
 /// Every declared principal allowance beside its ledger standing, read for
-/// the strip's allowance section. The declarations and the spend come from
+/// the screen's allowance section. The declarations and the spend come from
 /// the same places enforcement reads — the parsed policy document and the
 /// runtime's ledger — and an unreadable half is stated, never rendered as an
 /// empty allowance (`docs/FAIL-POLICY.md` §7).
@@ -78,7 +60,7 @@ pub fn allowance_state(home: &Path) -> Value {
 }
 
 /// The per-engagement budget projection: store facts joined to the declared
-/// policy, served verbatim at `/api/budget` and rendered by [`panel`].
+/// policy, served verbatim at `/api/budget` and rendered by [`super::app::budget_page`].
 ///
 /// `policy` is [`super::policy::projection`]'s output — not a second read of
 /// `policy.json`, so the cap shown here is the cap the policy panel resolved.
@@ -114,10 +96,9 @@ pub fn projection(
         // charge cell is empty.
         "acquisition_charge": {
             "recorded": false,
-            "reason": "No session evidence record carries a charge, a price or a provider: \
-                       the mediated surface bars every provider that can quote, and a mediated \
-                       search's spend is accounted per principal in the allowance ledger, never \
-                       on the crossing — so no per-engagement spend figure exists.",
+            "reason": "No per-engagement acquisition spend total is available. Crossings may record \
+                       quoted prices and allowance settlements; spend is accounted per principal \
+                       in the allowance ledger. Quotes are not settled charges.",
         },
         "allowances": allowances,
     })

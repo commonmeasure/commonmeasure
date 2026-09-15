@@ -1,7 +1,54 @@
 # Current decisions
 
-This file records the decisions that constrain the current product. Git holds
-the history; this document does not repeat it.
+This file records adopted product decisions, their reasons and the conditions
+for revisiting them. Implementation status belongs in `ROADMAP.md`; an adopted
+direction is not evidence that its code has shipped.
+
+## Pre-release scope
+
+Adopted by the owner on 14 September 2026. The first release is judged on one
+useful operator workflow: install, choose a test directory and source policy,
+fetch through a supported host, inspect an accurate local record, and optionally
+send the explicitly cleared projection to the hub. `ROADMAP.md` §Acceptance
+gate owns verification. Controlled routing experiments remain evidence for
+routing claims; an unshipped learned router is not a prerequisite for this path.
+
+Prioritise the first useful record and small invited-team trials. The intended
+hub path publishes an initial policy before managed connection and allows a
+pilot team without a pricing negotiation. The hub board records the remaining
+implementation; existing tier behaviour is not silently changed by this text.
+
+Scheme adjudication, certification and second-issuer governance are deferred.
+Identity pilot acceptance is accurate identity, contact and revocation plus a
+real publisher/operator test; bot registration gates the registration claim,
+not unrelated local work. Fetch behaviour, local demand evidence and optional
+hub demand/licensing services are separate packages.
+
+Collective licensing, commissions and demand services are not offered in this
+release. They remain options requiring a new adopted decision, authority for
+new customer-data uses and transparent incentives. This does not authorise
+sharing private evidence, paid supplier ranking or custody of funds.
+
+`AGENTS.md` owns coordination, proportional checks and documentation updates.
+A proposal does not add a gate. Change a settled decision when the owner has
+authorised it, record the reason, and update the affected contracts and docs
+with the implementation. These rules prevent parallel agents from silently
+changing scope or treating draft strategy as binding policy.
+
+## Directory reporting consent
+
+Adopted with the directory-enrolment implementation, integrated 15 September
+2026. A local canonical directory selection provides reporting consent;
+managed reporting also requires an independent, signed per-edge grant. Source
+policy still governs admission and can veto reporting. This separation lets
+an owner approve reporting without changing the signed source-policy format.
+
+Effective resolver identity advances to version 2 for canonical roots and
+separately selected worktrees. Grant snapshots expire within 24 hours; failed
+refresh never extends authority. Local-only ancestors veto nested reporting.
+All binaries sharing an operator home must be upgraded together: older releases
+do not enforce directory selection. The directory-enrolment contract owns the
+wire and local formats; hosted and interactive-host acceptance remain open.
 
 ## Product
 
@@ -12,7 +59,7 @@ the history; this document does not repeat it.
   (`docs/contracts/processor.md`), each invocation an evidence record, and
   each stays replaceable behind the contract. Which add-ons ship is
   `ROADMAP.md` §First-party add-ons.
-- Not built and not planned: monetisation of outputs (affiliate links,
+- Outside the current release: monetisation of outputs (affiliate links,
   ad-server decisions), a supply-facing display of demand, a content
   marketplace between buyers and suppliers of content, and a
   publisher-as-operator persona. Brand and AI-visibility reporting is a
@@ -33,13 +80,14 @@ the history; this document does not repeat it.
   agreement in `CONTRIBUTING.md`, which assigns its copyright to Common
   Measure Ltd so the licence can be relaxed later without a further request
   to each contributor.
-- The commercial premise, and the public description of it, is
-  "source-available edge, hosted hub". The hosted tier has two tiers. The
-  individual tier is free: one organisation of one person gets enrolment, a
-  key id, the directory listing and owner reports at no charge. The
-  institutional tier is paid: an organisation of more than one person, whose
-  first three paid features are organisation-wide signed policy, fleet
-  evidence and add-on mandates. Pricing is open (§Open decisions).
+- The commercial premise is "source-available edge, hosted hub". The initial
+  hosted trial is free; later individual and institutional plans, including
+  paid organisation policy, fleet evidence and add-on mandates, are commercial
+  proposals. Pricing remains open. Runtime tier labels remain for compatibility;
+  invited pilot teams join without a tier change. Removing the one-person
+  restriction serves the agreed pilot workflow while keeping membership,
+  invitation and organisation-closure checks. The hub board owns deployment
+  and hosted verification. No fee starts without a separate agreement.
 - The unit of batch work is a `ContextJob`. A job runs one route per supply
   plan, one step each, and the plans are compared, not combined. Cached
   context, sequential fallback and complementary sources are extensions of
@@ -409,6 +457,33 @@ the history; this document does not repeat it.
 
 ## Source declarations
 
+- Adopted on 15 September 2026 following the
+  [untrusted-context review](docs/guide/untrusted-context.md): admission,
+  factual reliability and authority to act are separate decisions. Source
+  policy controls mediated acquisition; the harness owns action permissions.
+  A licence or a passed screen does not give content authority over tools.
+- The planned basis-for-use record separates source declarations from the
+  operator's assessment, including an agreement or public licence reference
+  and version, or an applicable exception, the claimed issuer, evidence of
+  its authority, and the content and uses covered. Unknown applicability
+  stays unresolved. This addresses the risk of treating a supplier agreement
+  as permission for everything it returns. WP-30 owns the extension; current
+  host-level terms do not yet express or enforce those limits. Contract and
+  policy-schema changes must ship with that implementation.
+- Supported embedded credentials must be checked before a transformation
+  removes them, with the verification result and credential reference kept
+  alongside the transformation evidence. This preserves provenance that
+  sanitising might otherwise erase. It does not establish factual accuracy
+  or licensing authority. Acquisition integration is planned under WP-30;
+  WP-25 owns output signing.
+- Fidelity evaluation must distinguish factual accuracy, faithful
+  representation, citation support and completeness. Matching words alone
+  cannot establish that an answer preserved a source's date or qualification.
+  WP-26 owns the planned news evaluation. Observed citation and display are
+  separate facts from support: even a false citation needs local evidence
+  for investigation. WP-32 owns planned links to application evidence,
+  corrections and notices; private findings do not automatically become
+  telemetry. These extensions leave the release order unchanged.
 - A reporting duty comes from the source, never from policy: either an RSL
   licence carrying the Content Telemetry reporting binding, discovered from
   the page, or terms the operator holds and references in `policy.json` as a

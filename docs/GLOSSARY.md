@@ -57,7 +57,7 @@ authoritative technical definitions live in the contracts under
   invocation. Add-ons are processors; which ones ship is `ROADMAP.md`
   §First-party add-ons.
 - **Console** — the local web application served by `commonmeasure serve` on
-  loopback: Overview, Record, Policy, Sources and Compare, rendered from the
+  loopback: Overview, Record, Policy, Sources, Compare and Budget, rendered from the
   evidence logs. Its writes are the Compare query, the policy mode, a
   scope's denied hosts and the attribution rules.
 - **Index** — the SQLite file the console derives from the evidence logs

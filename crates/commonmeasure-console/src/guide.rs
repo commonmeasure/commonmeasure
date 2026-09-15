@@ -3,7 +3,7 @@
 //!
 //! The Markdown is the one home of each document. The console renders the
 //! product variant once, at first request; `public_pages` renders the
-//! education variant, which strips every product panel and refuses to emit a
+//! education variant, which strips product panels and marked sections and refuses to emit a
 //! page in which the product name survives, for publication where the
 //! product is not announced. Each page is self-contained: inline stylesheet,
 //! no scripts, no external assets, the same offline discipline as the console.
@@ -16,26 +16,37 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
 const STYLES: &str = include_str!("../../../docs/guide/guide.css");
 
 /// A source document: the file stem the console and the public build name it
-/// by, and its Markdown.
+/// by, its Markdown, the date its research was last checked, and whether every
+/// cited URL was link-checked. The last two are stated on the masthead, so a
+/// guide claims a link check only when one was run.
 pub struct Source {
     pub name: &'static str,
     pub markdown: &'static str,
+    pub current_to: &'static str,
+    pub links_checked: bool,
 }
 
 /// Every document rendered, in publication order.
-pub const SOURCES: [Source; 2] = [
+pub const SOURCES: [Source; 3] = [
     Source {
         name: "context-window-optimisation",
         markdown: include_str!("../../../docs/guide/context-window-optimisation.md"),
+        current_to: "4 August 2026",
+        links_checked: true,
     },
     Source {
         name: "state-of-the-evidence",
         markdown: include_str!("../../../docs/guide/state-of-the-evidence.md"),
+        current_to: "4 August 2026",
+        links_checked: true,
+    },
+    Source {
+        name: "untrusted-context",
+        markdown: include_str!("../../../docs/guide/untrusted-context.md"),
+        current_to: "15 September 2026",
+        links_checked: false,
     },
 ];
-
-/// The date the guide's research was last checked, stated on the masthead.
-const RESEARCH_CURRENT_TO: &str = "4 August 2026";
 
 /// The opening line of a product panel in the source: a blockquote whose
 /// first paragraph is exactly this, in bold.
@@ -144,7 +155,7 @@ pub fn render(source: &Source, variant: Variant) -> String {
         title = esc(&title),
         description = esc(&description),
         standfirst = esc(&standfirst),
-        facts = masthead_facts(markdown),
+        facts = masthead_facts(markdown, source),
     )
 }
 
@@ -224,8 +235,16 @@ fn drop_contents_section(body: &str) -> String {
     format!("{}{}", &body[..start], &body[end..])
 }
 
-/// Remove every product panel: a blockquote opening with the panel heading.
+/// Remove product panels and explicitly marked product-only sections.
 fn strip_panels(body: &str) -> String {
+    let mut body = body.to_owned();
+    while let Some(start) = body.find("<!-- product-only:start -->") {
+        let Some(end) = body[start..].find("<!-- product-only:end -->") else {
+            // Leave malformed regions intact so the public-name gate refuses them.
+            break;
+        };
+        body.replace_range(start..start + end + "<!-- product-only:end -->".len(), "");
+    }
     let opening = format!("> **{PANEL_HEADING}**");
     let mut kept = Vec::new();
     let mut lines = body.lines().peekable();
@@ -244,15 +263,21 @@ fn strip_panels(body: &str) -> String {
 /// The sources link each other by relative file, as a static site reads
 /// them; the page links the other page where this build serves it.
 fn link_companions(body: &str, variant: Variant) -> String {
-    let (guide, evidence) = match variant {
-        Variant::Console => ("/guide", "/guide/state-of-the-evidence"),
+    let (guide, evidence, untrusted) = match variant {
+        Variant::Console => (
+            "/guide",
+            "/guide/state-of-the-evidence",
+            "/guide/untrusted-context",
+        ),
         Variant::Public => (
             "context-window-optimisation.html",
             "state-of-the-evidence.html",
+            "untrusted-context.html",
         ),
     };
     body.replace("](state-of-the-evidence.md)", &format!("]({evidence})"))
         .replace("](context-window-optimisation.md)", &format!("]({guide})"))
+        .replace("](untrusted-context.md)", &format!("]({untrusted})"))
 }
 
 /// `(anchor, label)` for every `## ` heading, in order.
@@ -411,7 +436,7 @@ fn promote_panels(html: &str) -> String {
 }
 
 /// Derived from the source, so the counts cannot go stale.
-fn masthead_facts(markdown: &str) -> String {
+fn masthead_facts(markdown: &str, source: &Source) -> String {
     let is_definition = |line: &&str| line.starts_with("[^") && line.contains("]:");
     let words = markdown
         .lines()
@@ -421,11 +446,16 @@ fn masthead_facts(markdown: &str) -> String {
     let references = markdown.lines().filter(is_definition).count();
     let minutes = ((words as f64 / WORDS_PER_MINUTE).round() as usize).max(1);
     let mut facts = vec![
-        ("Research current to", RESEARCH_CURRENT_TO.to_owned()),
+        ("Research current to", source.current_to.to_owned()),
         ("Reading time", format!("about {minutes} minutes")),
     ];
     if references > 0 {
-        facts.push(("References", format!("{references}, all link-checked")));
+        let references = if source.links_checked {
+            format!("{references}, all link-checked")
+        } else {
+            references.to_string()
+        };
+        facts.push(("References", references));
     }
     facts
         .iter()

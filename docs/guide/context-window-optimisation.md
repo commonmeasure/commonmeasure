@@ -4,21 +4,29 @@ title: "Context window optimisation: a working guide"
 
 # Context window optimisation: a working guide
 
-*What should go into a model's context window, and how do you know it helped.*
+*Choosing what a model reads and checking whether it helps.*
 
-This guide is for people who build with agents and want to make informed
-decisions about context. It assumes a working knowledge of prompts and the
-outline of retrieval-augmented generation, but no familiarity with the
-research literature. Figures carry the date they were checked because prices,
-model limits and tooling change.
+An agent can find the right document and still miss the answer. Extraction
+may drop a table, selection may leave out a caveat, or a long conversation
+may obscure the evidence it needs. The same pipeline can also spend most of
+its tokens on repeated instructions, tool results and page markup.
 
-Specialist terms are defined on first use or in the [glossary](#glossary).
-The companion [`state-of-the-evidence.md`](state-of-the-evidence.md) grades the evidence behind each claim.
+Context optimisation means following that material from source to answer:
+what enters the window, what survives each transformation, what the model can
+use and what it costs. This guide works through those decisions, from counting
+tokens and acquiring sources to memory and evaluation. It assumes familiarity
+with prompts and the outline of retrieval-augmented generation, but no prior
+reading of the research.
+
+Prices, limits and tooling carry the dates they were checked. Specialist terms
+are explained as they arise or in the [glossary](#glossary); the companion
+[evidence review](state-of-the-evidence.md) gives a more detailed
+assessment of the supporting evidence.
 
 ## Contents
 
 1. [What is actually in the window](#1-what-is-actually-in-the-window)
-2. [Why more context is not better](#2-why-more-context-is-not-better)
+2. [How more context changes an answer](#2-how-more-context-changes-an-answer)
 3. [What the benchmarks do and do not tell you](#3-benchmarks)
 4. [Acquisition: getting the right material](#4-acquisition)
 5. [Extraction and chunking](#5-extraction-and-chunking)
@@ -28,64 +36,69 @@ The companion [`state-of-the-evidence.md`](state-of-the-evidence.md) grades the 
 9. [Caching, and what it costs to get the order wrong](#9-caching)
 10. [Agent memory, compaction and isolation](#10-agent-memory)
 11. [Proving a change helped](#11-proving-a-change-helped)
-12. [What nobody knows yet](#12-what-nobody-knows-yet)
+12. [Where local measurement still matters](#12-where-local-measurement-still-matters)
 13. [Glossary](#glossary)
-14. [About this guide](#about-this-guide)
-15. [Sources](#sources)
+14. [Appendix: one production system, end to end](#appendix-one-production-system-end-to-end)
+15. [Appendix: tooling](#appendix-tooling-checked-4-august-2026)
+16. [About this guide](#about-this-guide)
+17. [Sources](#sources)
 
 ---
 
 ## 1. What is actually in the window
 
-A [context window](#g-context-window) is the bounded working material a model
-can hold at once, usually measured in tokens. Text, encoded images and other
-supported inputs can all count towards it.
+Before deciding which documents to retrieve, work out how much room they will
+have. A [context window](#g-context-window) is the bounded working material a
+model can hold at once, usually measured in tokens. Text, encoded images and
+other supported inputs can all count towards it.
 
-Everything counts: the system prompt, every message in the conversation,
-every tool result, every image, every attached document, and the definitions
-of every tool the model can call. The model's own output counts too,
-including any reasoning it does before answering.[^1] Input and output share
-the overall context limit, although a model may also impose a lower maximum on
-its output.
-
-A "1M token window" therefore holds a million tokens of all of the above.
-The space left for your own content is that limit minus what the other items
-take, and several of them are easy to overlook.
+The window includes the system prompt, conversation messages, tool results,
+attached documents and the definitions of tools the model can call. The
+model's output counts too, including reasoning before its answer.[^1] Input
+and output share an overall limit, although the output may have a lower limit
+of its own. A million-token window therefore does not leave a million tokens
+for documents: everything else needs space as well.
 
 ### Why there is a limit
 
-In naive dense [attention](#g-attention), the amount of comparison work grows
-quadratically with input length: double the input and the work is roughly four
-times as large.[^2] This scaling is one reason context windows have limits.
+[Attention](#g-attention) lets a model relate one part of its input to another.
+In naive dense attention, the comparison work grows quadratically: doubling
+the input means roughly four times as much work.[^2] That helps explain why
+long inputs are costly to process.
 
-Vendors do not publish how they actually serve a million-token window, and
-nobody uses the naive method any more. Quadratic cost explains
-why the problem exists. It does not tell you what a specific endpoint costs
-you today.
+Serving systems use optimisations beyond that naive calculation, and vendors
+do not publish all the details of how they serve million-token windows. The
+quadratic relationship explains the underlying problem; it is not a formula
+for predicting a particular API's price or latency.
 
-### Tokens are not a unit you can convert
+<span id="tokens-are-not-a-unit-you-can-convert"></span>
 
-A [token](#g-token) is a chunk of text — a short word, part of a long one, a
-piece of punctuation. It is roughly four characters of English, but the
-approximation is loose.
+### Count tokens with the model you will use
 
-The same sentence is a different number of tokens on different models. It is
-a different number on different generations of the *same* model: Claude 4.7
-and later use a newer [tokeniser](#g-tokeniser) that produces about 30% more
-tokens for identical text.[^3] Per-token prices did not change, so the same
-document became about 30% more expensive to send.
+A [token](#g-token) is a short word, part of a longer word, punctuation or
+another piece of text. The familiar estimate of four English characters per
+token is useful for a rough sketch, but too loose for a budget.
 
-You also cannot count another vendor's tokens. `tiktoken` is OpenAI's
-tokeniser, and Anthropic's own guidance says using it on Claude undercounts
-by 15–20% on ordinary text and worse on code.[^4] Anthropic and Google
-publish no downloadable tokeniser at all. The only accurate count comes from
-each vendor's own counting endpoint, which is free.[^3]
+A [tokeniser](#g-tokeniser) determines those pieces. Different models can
+count the same sentence differently, even across generations from one
+provider. Anthropic's documentation in August 2026 described a
+newer tokeniser for Claude 4.7 and later producing about 30% more tokens for
+identical text. With unchanged per-token prices, that also raises the cost of
+sending the document.[^3]
+
+OpenAI's `tiktoken` does not give an exact count for Claude or Gemini.
+Anthropic's guidance puts its undercount at 15–20% on ordinary Claude text,
+and higher on code.[^4] Neither Anthropic nor Google published a downloadable
+tokeniser in August 2026. Use the relevant provider's free counting
+endpoint when the count needs to be accurate.[^3]
 
 ### How much of the window does real content take?
 
-Token density varies a lot by content type, and the figures that circulate are
-not sourced. Here is a measurement you can rerun: every file is in this
-repository and the tokeniser is named.
+Two files of the same character length can occupy quite different amounts of
+context. This matters when an agent reads a mixture of prose, source code,
+logs and generated files. The table below measures nine files in this
+repository with one named tokeniser, so it provides a starting point you can
+rerun rather than a universal conversion factor.
 
 | Content | Tokens per 1,000 characters | Characters per token |
 |---|---|---|
@@ -99,742 +112,721 @@ repository and the tokeniser is named.
 | Rust tests | 271 | 3.68 |
 | Lockfile (`Cargo.lock`) | 372 | 2.69 |
 
-Measured with tiktoken `o200k_base` on 4 August 2026 by
-`docs/guide/measurements/token_density.py`. Absolute counts do not transfer to
-Claude or Gemini, which publish no downloadable tokeniser; the ratios between
-rows largely do.
+These measurements used tiktoken `o200k_base` on 4 August 2026, through
+`docs/guide/measurements/token_density.py`. They do not give exact Claude or
+Gemini counts; measure those routes separately.
 
-These files do not support the claim that "code is about twice as dense as
-prose": code cost about 20–40% more per
-character than prose, not double. That is nine files in one repository and one
-tokeniser, so treat it as a reason to measure your own corpus rather than as a
-refutation.
-
-The densest thing in the table is a lockfile: repetitive, highly structured,
-machine-generated text. Anything
-that looks like a table of near-identical rows tokenises badly. Logs,
-lockfiles, dumps of similar JSON records and long lists of tool definitions
-are the expensive shapes, and they are also the shapes most often pasted
-into agent context.
+Code in this sample used about 20–40% more tokens per character than prose.
+The lockfile was denser still. That is useful when deciding whether to send a
+whole generated file or select the relevant entries. Logs, repeated JSON
+records and tool schemas deserve the same attention: their visible length
+can understate their share of the token budget. Nine files and one tokeniser
+are too small a sample to establish a rule for every corpus.
 
 ### A large avoidable cost: raw HTML
 
-Four real pages were fetched and measured twice, as retrieved and after
-stripping tags and scripts with a crude regular expression.
+A fetched web page contains both readable content and the machinery used to
+display it. Sending the raw response to a model can spend most of the budget
+on that machinery before the model reaches the article.
 
-| Page | Raw HTML | Tags and scripts removed | Saved |
+Four pages were measured as retrieved and after a crude regular expression
+removed tags and scripts:
+
+| Page | Raw HTML tokens | Tags and scripts removed | Saved |
 |---|---|---|---|
 | Wikipedia article | 145,535 | 18,760 | 87% |
 | arXiv abstract | 12,321 | 1,210 | 90% |
 | vLLM docs page | 205,908 | 10,867 | 95% |
 | BBC News index | 363,439 | 3,945 | 99% |
 
-**Removing tags, scripts, styles and similar HTML machinery removed between
-87% and 99% of the tokens, median 92% on these four pages.** This crude strip
-left navigation, footers and related-article rails in place. A real
-[extractor](#g-extraction) tries to remove those too.
+Removing HTML machinery saved 87–99% of tokens on these pages, with a median
+of 92%. The remaining text still included navigation, footers and related
+articles. A content [extractor](#g-extraction) tries to remove those too;
+chapter 5 explains how to check that it also preserves the material you need.
 
-Read the range rather than an average. The BBC entry is a news *index* — a
-navigation page, not a document — and it is both the 99% outlier and half the
-raw tokens in the sample, so a token-weighted aggregate across all four (95%)
-mostly measures that one page. Excluding it gives 92%.
-
-The figure usually quoted is "about 80% boilerplate", which comes from blog
-posts rather than a measurement and refers to text rather than tokens. Four
-pages cannot test that claim because this script did not identify boilerplate.
-They show instead that HTML machinery alone can dominate the token count, and
-that its share varies enough by page type that you should measure your own
-corpus rather than take any single number, including this one.
-
-For raw-web ingestion, removing HTML machinery is a large, inexpensive saving,
-and it happens before any retrieval decision.
+Page type matters. The BBC entry is an index rather than an article, and it
+accounts for about half the raw tokens in this small sample. A token-weighted
+saving of 95% mostly reflects that page; excluding it gives 92%. Neither
+figure establishes how much of a typical page is boilerplate, because the
+script did not identify boilerplate and only four pages were measured. The
+original HTML inputs were not retained, so these exact figures cannot be
+reproduced. They illustrate why extraction is worth measuring on your own
+sources.
 
 ### What is in there before you add anything
 
-A production agent carries a large fixed token overhead from its tooling.
-Anthropic published numbers: the GitHub connector's 35 tools cost about
-26,000 tokens, Slack's 11 tools about 21,000, and a five-connector setup
-around 55,000 tokens before the conversation starts. Internally they have seen 134,000 tokens of tool
-definitions.[^6]
+Tools occupy context even before they return a result. Their definitions tell
+the model what each tool does and how to call it. A large catalogue can
+therefore consume tens of thousands of tokens before a conversation begins:
+Anthropic reported about 55,000 tokens for one five-connector setup.[^6]
 
-Most of that is [JSON Schema](#g-json-schema), not prose. An independent
-measurement of one badly-shaped server found **97% of its tokens were in the
-input schema**, and that redesigning it cut 17,161 tokens to 773.[^7]
+Much of that text is [JSON Schema](#g-json-schema), the description of the
+arguments a tool accepts. In an independent measurement of one server, 97%
+of its tokens were in the input schema. Redesigning that schema reduced its
+footprint from 17,161 tokens to 773.[^7] The size of a catalogue depends as
+much on the shape of its definitions as on the number of tools.
 
-The order is fixed: tool definitions, then the system prompt, then the
-messages. Within the messages, tool results are usually the largest item in
-any long-running agent — larger than the definitions that produced them. One
-published breakdown of a real session put fixed overhead at about 28,000
-tokens and conversation plus tool results at 185,000, so roughly 87% of the
-combined 213,000 tokens were conversation and tool results.[^8]
+In Anthropic's request layout, tool definitions precede the system prompt
+and messages. As a session continues, messages and tool results can outgrow
+that fixed overhead. One published session breakdown attributed about 28,000
+tokens to fixed overhead and 185,000 to conversation and tool results.[^8]
+The initial inventory and the growing history need separate attention.
 
 ### Available, loaded, invoked
 
-These are three different costs, and conflating them is the most common
-accounting error in agent design.
+A useful inventory distinguishes three states:
 
-- **Available** — a tool exists and could be used. It may still need a small
-  discovery entry, but its full definition is absent.
-- **Loaded** — its description sits in the window. Costs its full size on
-  every request, whether or not it is ever called.
-- **Invoked** — it was actually called. Costs its arguments plus its result,
-  on top of the above.
+- **Available:** the tool exists and can be discovered. A short discovery
+  entry may be present, while its full definition remains outside the window.
+- **Loaded:** its definition is in the window and occupies space on each
+  request carrying it, whether or not the tool is called.
+- **Invoked:** the agent calls it, adding arguments and a result to the
+  conversation as well.
 
-The API implements the distinction. Deferred tool
-loading sends every definition to the service but keeps unused ones out of
-the model's window; Anthropic reports this taking a 77,000-token tool set
-down to 8,700, an 85% cut.[^6] Skills work the same way: a skill costs about
-100 tokens while available (its name and one-line description) and loads its
-full instructions only when triggered.[^9] An independent count
-across Anthropic's 17 official skills put discovery at a median of about 80
-tokens each, roughly 1,700 tokens for all seventeen.[^10]
+Deferred loading makes this distinction practical. Anthropic's implementation
+sends definitions to the service but keeps unused ones out of the model's
+window. In its reported example, the loaded tool set fell from 77,000 tokens
+to 8,700.[^6] Skills follow the same pattern: a name and short description
+cost about 100 tokens while available, and full instructions load when the
+skill is triggered.[^9] An independent count of the official skills found a
+similar discovery footprint.[^10]
 
-An inventory that does not separate these three states can make a fleet of 200
-tools look cheap because they are rarely called. Without deferred loading, the
-definitions occupy the window on every request.
+This is why counting calls alone misses a substantial cost. Two hundred
+rarely used tools can still fill the window if all their definitions load on
+every request.
 
 ### What you cannot see
 
-A hosted API exposes less instrumentation than its list of returned metrics
-suggests.
+Hosted APIs expose usage totals, but those totals do not explain the whole
+request. You may receive input, output and cache counts, and on Anthropic a
+reasoning-token count, without a breakdown separating system instructions,
+tools, history and retrieved evidence.
 
-You get total input tokens, cache counters, output tokens, and on Anthropic a
-count of reasoning tokens. You do **not** get a breakdown of which input
-tokens were system prompt, tool definitions, history or retrieved evidence.
+Keep a local inventory of those categories, while allowing for limits in the
+provider's reporting:
 
-The available metrics leave several blind spots:
+- Counting and billing can differ. Anthropic says its count may include
+  automatically added system tokens for which the customer is not billed.[^3]
+- A reasoning-token count does not necessarily expose the reasoning content.
+- A cache miss usually appears as no cache reuse, without an error explaining
+  which part of the prefix changed.
+- Usage counters do not identify which evidence influenced the answer.
 
-- **Counting and billing disagree.** Anthropic states that token counts "may
-  include tokens added automatically for system optimizations" and that you
-  are not billed for those.[^3] Never expect a counting dashboard to
-  reconcile against an invoice.
-- **Reasoning content is not returned** on current frontier models. You can
-  see how many tokens it took. You cannot see what it said.
-- **Cache misses are undiagnosed by default.** A prefix that fails to match
-  produces no error; it shows up only as a zero.
-- **Nothing tells you which tokens the model actually used.** Context rot is
-  documented as a phenomenon and is unobservable per request.
-
-That last one is the subject of the next chapter.
+The last limitation matters when a request fits comfortably within the window
+but the model still misses something you supplied. Understanding that failure
+requires looking at what models can do with long inputs.
 
 ---
 
-## 2. Why more context is not better
+<span id="2-why-more-context-is-not-better"></span>
 
-Context windows grew faster than models' ability to use them.
+## 2. How more context changes an answer
 
-This chapter is the evidence for that claim, and a warning about how it is
-usually cited. A great deal of confident writing on this subject quotes 2023
-numbers about 4,000-token models as though they were properties of 2026
-million-token ones.
+Adding context gives a model more evidence, but also more material to sort
+through. A document can contain the answer and still fail to help: the model
+may overlook it, confuse it with a similar passage, or carry forward an
+assumption from an earlier turn. These failures depend on the model, task and
+kind of input. The advertised window size alone cannot predict them.
 
-### Lost in the middle: what it actually said
+<span id="lost-in-the-middle-what-it-actually-said"></span>
 
-The founding result is Liu et al., published as a preprint in July 2023 and
-in TACL in 2024.[^11] They varied only *where* the answer-bearing document
-sat among 10, 20 or 30 retrieved documents, holding the content constant.
+### Where the answer sits
 
-GPT-3.5-Turbo scored about 75.5% when the gold document was first, fell to
-about 53% when it sat around position 10, and recovered to about 63% at
-position 20. A [U-shaped curve](#g-u-shaped-curve): good at the edges, poor
-in the middle.
+Imagine giving a model twenty documents, only one of which contains the
+answer. Moving that document from the beginning to the middle changes no
+facts, so differences in the answer reveal sensitivity to position.
 
-The same model scored **56.1%
-with no documents at all**. In the 20- and 30-document settings with the
-answer in the middle, it did *worse than that*. The retrieved context lowered
-accuracy below the closed-book score. The oracle condition (the gold document alone) scored 88.3%.
+That was the design of *Lost in the Middle*. In its GPT-3.5-Turbo experiment,
+accuracy was about 75.5% with the relevant document first, about 53% around the
+middle, and about 63% near the end: a [U-shaped curve](#g-u-shaped-curve). In
+some settings, placing the answer in the middle produced a lower score than
+giving the model no documents at all.[^11] A larger-window variant also did
+not necessarily use the supplied material better than its smaller-window
+counterpart.
 
-A second finding from the same paper is cited less often:
-extended-context variants were not better at using context than their
-short-context siblings. Claude-1.3 and Claude-1.3-100K scored 48.3% and 48.2%
-closed-book, 76.1% and 76.4% oracle. The larger window did not improve the
-model's use of it.
+Those were early models on inputs of roughly 2,000–6,000 tokens. The findings
+explain why ordering became a concern, but the size of the effect cannot be
+carried over to current models. A later controlled replication found nearly
+flat performance across placements for ordinary text retrieval. Its results
+were especially sensitive to which questions were sampled.[^109] Another
+audit found end-to-middle drops on reasoning tasks, with smaller drops in
+newer releases.[^12]
 
-**How to cite this, because it is contested.** These are
-GPT-3.5-Turbo and Claude-1.3 numbers on 2,000–6,000-token inputs. If you see
-"a 20-point drop" attributed to a current frontier model, it is a 2023 result
-presented as a 2026 one.
+As of August 2026, those results had not been reconciled.
+Position deserves attention for reasoning, tool output and multimodal input;
+for a modest set of retrieved text passages, its effect may be small. Chapter
+7 turns that distinction into an ordering strategy you can test.
 
-**The U-curve may also not survive replication.** A SIGIR 2026
-reproducibility study tested five current models on two datasets under a
-controlled protocol and found performance "nearly flat across
-placements".[^109] Their diagnosis is that topic sampling dominates the
-variance, and that stable conclusions need 1,000–2,000 topics — far more than
-most published ordering experiments use.
+<span id="context-rot-length-alone-degrades-performance"></span>
 
-Set against that, a May 2026 audit of nine models did find end-to-middle drops
-on *reasoning* tasks, growing with context length, while noting that newer
-releases show smaller drops.[^12] The two may be compatible — different task
-types, different protocols — but nobody has reconciled them.
+### Context rot: when length adds difficulty
 
-As of August 2026: **position sensitivity is real for tool
-output and for multimodal input, and is doubtful for ordinary text retrieval
-at moderate k.** Chapter 7 works through what that means for how you order
-evidence.
+A model can also become less reliable as an input grows even when the useful
+information stays in place. This is often called *context rot*.
 
-### Context rot: length alone degrades performance
+One way to see the problem is to remove almost all reasoning from the task.
+Chroma asked models to reproduce lists of repeated words. Accuracy fell from
+near-perfect on short lists to roughly 40–60% on lists of 10,000 words.[^13]
+The operation remained simple; keeping track of a long input did not.
 
-Chroma's July 2025 report tested 18 models on tasks with no reasoning content
-whatsoever.[^13] Their sharpest result: accuracy on *replicating a list of
-repeated words* falls from near-100% at 25 words to roughly 40–60% at 10,000
-words. The task does not get harder, only longer.
+The same evaluation found that retrieval deteriorated faster when the
+question and answer shared fewer words. Plausible distractors made it worse,
+and their effects differed: adding one misleading passage could matter more
+than adding several obvious irrelevancies. A focused prompt containing the
+needed memory also outperformed that memory embedded in a much longer input.
 
-The same work also found:
+Surrounding text had an effect of its own. Shuffling the filler to destroy its
+coherence improved retrieval across the models tested. That suggests a useful
+caution when assembling context: readable surrounding prose can still compete
+with the evidence the question needs.
 
-- Low semantic similarity between the question and the target degrades far
-  faster with length than high similarity. Standard needle tests, where the
-  question shares words with the answer, are the easy case.
-- One distractor reduces accuracy, four reduce it further, and the harm is
-  uneven across distractors rather than proportional to their number.
-- On a memory benchmark, a focused ~300-token prompt beat the same content
-  embedded in ~113,000 tokens by roughly 15–40 points depending on the model
-  family.
-
-**Shuffling the filler text to destroy its
-coherence consistently improved retrieval** across all 18 models. Coherent
-surrounding prose competes for attention. Well-written context is not
-automatically safer context.
-
-A separate 2024 study isolates length even more cleanly. Levy et al. hold a
-two-fact reasoning problem constant and pad it with irrelevant text: average
-accuracy falls from 0.92 to 0.68, with degradation beginning around 3,000
-tokens — orders of magnitude below the models' advertised limits.[^14]
+A separate study held a two-fact reasoning problem constant and padded it
+with irrelevant text. Accuracy declined well below the models' window
+limits.[^14] These experiments isolate aspects of length; they do not show
+that every longer document will produce a worse answer.
 
 ### Effective length versus advertised length
 
-"Effective context length" is the length at which a model still does the job,
-as opposed to the length it will accept without erroring.
+*Effective context length* means the length at which the model can still do a
+particular job reliably. The advertised length is how much input it accepts.
+A useful test needs to establish the first for your task.
 
-- **RULER** (NVIDIA, April 2024): despite near-perfect scores on simple
-  needle tests, "only half" of models claiming 32K or more maintained
-  satisfactory performance at 32K.[^15]
-- **NoLiMa** (Adobe, February 2025) removes the lexical shortcut, so the
-  model must associate rather than keyword-match. Of 12 models claiming 128K
-  or more, **10 fell below half their own short-context baseline at
-  32K**.[^16]
-- **Why**: long relative distances are rare in training data even when the
-  training window is long, so the far end of the window is undertrained. One
-  paper puts effective length near *half* the training length and recovers
-  more than 10 points on RULER by remapping position offsets.[^17]
+RULER extends simple retrieval tests with harder tasks and found that many
+models did not sustain their short-input performance across their advertised
+windows.[^15] NoLiMa removes the shared wording between question and answer,
+so the model has to make an association rather than match a phrase. Most of
+the long-window models it tested had fallen below half their short-context
+baseline by 32K tokens.[^16]
 
-The statistic "effective context is 60–70% of advertised" circulates widely
-with no traceable source. The figures above are narrower,
-lower and attributable.
+One proposed explanation concerns training: even a long training window may
+contain relatively few examples that require connecting distant positions.
+Experiments remapping position offsets recovered some of the lost
+performance.[^17] That is a possible mechanism, not a way to calculate a
+universal usable fraction of a window. No traceable source was found for the
+often-repeated estimate of 60–70% of advertised length.
 
-### The counterweight
+<span id="the-counterweight"></span>
 
-Epoch AI's tracking of 123
-models found that while advertised windows grew about 30× annually, the input
-length at which the best models still hit 80% accuracy improved **over 250×
-in nine months**.[^18] The failure modes are real. They are also receding
-faster than the windows are growing.
+### Improvements depend on the model and task
 
-Databricks' 2,000-experiment study points the same way: Llama 3.1 405B declined
-after 32K and GPT-4-0125 after 64K, but o1-mini, GPT-4o, Claude 3.5 Sonnet
-and Claude 3 Opus improved roughly monotonically to 100K.[^19] Failure modes
-were model-specific too — Claude 3.5's copyright refusals rose from 3.7% to
-49.5% between 16K and 64K, while DBRX's instruction-following failures rose
-from 5.2% to 50.4%. "Long context degrades" is too coarse. Ask which model,
-which task, and which failure.
+Effective length has also improved substantially. Epoch AI tracked the input
+length at which leading models maintained 80% accuracy, and found rapid gains
+over its observation period.[^18] Older failures remain useful diagnostic
+examples without defining a permanent limit.
+
+A larger comparison of long-context retrieval found some models declining
+after 32K or 64K tokens while others improved roughly monotonically to
+100K.[^19] The failures differed too: some models increasingly refused for
+copyright reasons, while others failed to follow instructions. These need
+different remedies. Before shortening a prompt, inspect whether the model
+missed evidence, refused to use it or answered the wrong question.
 
 ### Too many tools
 
-**LongFuncEval** (IBM, April 2025) isolated three stressors and measured each:
-growing tool definitions from 8K to 120K tokens degraded Mistral-large by
-94%, Llama-3.1-70B by 72% and GPT-4o by 13.8%; longer tool responses degraded
-Mistral-large by 91% and GPT-4o by 7%; longer conversations cost 13–40%.[^20]
+Choosing a tool is another retrieval problem. As a catalogue grows, the model
+must distinguish more names, descriptions and argument schemas. Similar tools
+can be hard to tell apart even when the correct one is present.
 
-The best-instrumented result is from a real production catalogue of 110
-agents and 584 tools, evaluated on GPT-5.4, GPT-5.1 and Claude Sonnet
-4.5.[^21] Routing F1 on implicit queries fell from 58.2% to 42.1% as the
-catalogue grew from 51 to 584 tools. The degradation was driven by recall
-(55%→37%) more than precision (68%→60%).
+LongFuncEval varied tool-definition length, tool-result length and
+conversation length separately. All three affected performance, with large
+differences between models.[^20] A production-catalogue study found that
+shortlisting tools recovered part of the loss as the catalogue grew.[^21]
+But even a shortlist guaranteed to include the correct tool left a gap of
+about ten points. Finding the right candidate did not ensure the model would
+choose it. Clear names and distinct descriptions therefore deserve attention
+alongside the index.
 
-An **oracle shortlister** — one that always includes the
-correct tool — still dropped from 79.0% to 68.8%. About **10 points of the
-gap cannot be closed by better retrieval**. That residue needs deduplicated
-descriptions and disambiguated names, not a better index. Embedding-based
-shortlisting to about 20 candidates recovered 10–11 points. The elbow sat
-around 40–60 agents, and the authors warn the specific numbers are
-catalogue-specific even if the shape transfers.
-
-Instructions have a ceiling too. One 2026 preprint crossing format,
-instruction count and context length found the perfect-response rate
-collapses to zero by 80 simultaneous instructions for every model, format and
-placement tested.[^22] The failure mode near capacity was *refusal*,
-not fabrication: 0 of 5,760 probes produced an invented answer.
+The point at which this became troublesome was specific to that catalogue.
+It does not establish a maximum tool count for every agent. Likewise, a
+preprint testing many simultaneous instructions found a limit to perfect
+compliance, with refusal becoming the failure near capacity.[^22] Adding
+instructions can make a request harder to satisfy even when there is ample
+room for their tokens.
 
 ### Conversations decay
 
-Laban et al. sharded fully-specified instructions across conversational
-turns, across 200,000+ simulated conversations and 15 models.[^23] Every
-model dropped, by **39% on average**; o3 fell from 98.1 to 64.1.
+A conversation can spread one complete task across many turns. The model
+starts acting before it has all the information, and later messages must
+correct or extend decisions already made.
 
-Their decomposition is the useful part. Aptitude fell about 16%.
-Unreliability rose about **112%**. The models did not get less capable; they
-got less consistent. And concatenating the shards back into a single turn
-largely restored performance, so the cause is the turn structure, not the
-information. Their summary: "when LLMs take a wrong turn in a conversation,
-they get lost and do not recover."
+A study that split fully specified instructions across turns found a large
+average performance drop across the models tested.[^23] Its decomposition
+showed both reduced capability and a larger increase in unreliability. Putting
+the same pieces back into a single turn largely restored performance. The
+information had not changed; its conversational arrangement had.
+
+For a long-running agent, this suggests keeping the current task and decisions
+explicit. A growing transcript is not necessarily a clear account of what the
+agent should do next. Chapter 10 looks at ways to maintain that account.
 
 ### Pruning can improve accuracy
 
-Cutting context can improve accuracy. Microsoft's 50-task expense
-benchmark on a production agent:[^24]
+Old tool results often accumulate after their immediate purpose has passed.
+Removing some of them can leave the model with a clearer view of the current
+work, provided the necessary facts survive.
+
+Microsoft tested this in a 50-task expense-agent benchmark.[^24] Keeping only
+recent tool call/response pairs improved accuracy; adding windowed
+summarisation improved it further:
 
 | Configuration | Accuracy | Tokens |
 |---|---|---|
 | Full context | 71.0% | 1,480,996 |
 | Keep last 5 tool call/response pairs | 79.0% | 535,274 |
-| Pruning plus windowed summarisation | **91.6%** | 553,374 |
+| Pruning plus windowed summarisation | 91.6% | 553,374 |
 
-**Cutting context by 63% raised accuracy by 20.6 points.** Reproduced by the
-same authors across three task categories and on Claude Sonnet 4.5 — not
-independently.
+The combined approach used about 63% fewer tokens and improved accuracy by
+20.6 percentage points. These are the authors' results on their own agent,
+with further checks across task categories and another model, rather than an
+independent replication. Input accounted for almost all token use in that
+workload, which explains why pruning history mattered more than shortening
+answers.
 
-Input tokens were 99.75–99.87% of total usage, so optimising output length is optimising
-the wrong thing. And individual tool responses ran 500–3,000 tokens while
-accumulated histories reached 50,000–150,000+.
+Tool history also has its own position effects. LongFuncEval found newer tool
+results easier to use than older ones.[^20] That differs from the original
+text-retrieval U-curve, another reason to evaluate the actual input type.
 
-LongFuncEval found that for *tool results*, accuracy
-at position 8 exceeded position 1 by 5–75%. For tool output it is the oldest
-results being ignored, not the middle ones. Lost-in-the-middle intuitions do
-not transfer wholesale.
+<span id="the-four-failure-taxonomy-and-how-much-to-trust-it"></span>
 
-### The four-failure taxonomy, and how much to trust it
+### A vocabulary for diagnosing failures
 
-Drew Breunig's June 2025 framing — context **poisoning**, **distraction**,
-**confusion** and **clash** — is the most-used vocabulary in this area.[^25]
-It is a practitioner blog post, correctly cited as the origin of the terms.
-Its evidential backing is uneven:
+Drew Breunig's terms *poisoning*, *distraction*, *confusion* and *clash* offer a
+way to describe what went wrong.[^25] An earlier error can be carried forward;
+irrelevant material can draw attention away; similar tools can be confused;
+and conflicting instructions can pull the model in different directions.
+These descriptions help organise a failure log before choosing a remedy.
 
-- **Distraction** and **clash** have real support (the multi-turn and
-  Databricks results above).
-- **Confusion** has strong support that arrived *after* the post, in the tool
-  and instruction work above.
-- **Poisoning** has essentially only an anecdote — a Gemini agent playing
-  Pokémon, which does not appear in any current version of the Gemini 2.5
-  technical report. As of August 2026 I could find no controlled experiment
-  that injects a false fact into an agent's context and measures how far it
-  propagates. Use the term; attribute it to Breunig, not to Google; and do
-  not present it as measured.
+The terms come from practitioner writing, and their empirical backing differs.
+The conversation, tool-selection and long-context studies above examine
+several of these mechanisms. For propagation of an injected false fact,
+described here as poisoning, the sources checked in August 2026 offered an anecdote rather
+than a controlled measurement. Keep that distinction when using the taxonomy.
 
-### Dead claims
+<span id="dead-claims"></span>
 
-**"Adding random documents improves RAG accuracy."** The original 2024 result
-reported up to 35% improvement from irrelevant documents.[^26] A SIGIR 2026
-reproducibility paper reproduced it under the original setup and then showed
-it vanishes under modern prompting — a 15-token generation limit, no chat
-template and a forced no-answer instruction were penalising the low-document
-baselines.[^27] Under normal settings the effect is between −0.23% and
-−1.30%. Truncated and malformed generations accounted for 53.6–73.6% of
-errors in the original configuration.
+### What adding noise teaches us
 
-The opposite finding survives: *semantically similar but wrong* passages are
-the expensive kind of noise, and they are common in top-10 dense retrieval
-results.[^28]
+Extra documents sometimes appear to help for reasons unrelated to their
+content. An early study reported improved retrieval-augmented answers after
+adding random documents.[^26] A replication reproduced the result under the
+original configuration, then found it disappeared with normal prompting.
+Short generation limits and formatting choices had disproportionately harmed
+the small-context baseline.[^27]
 
-**"Effective context is 60–70% of advertised."** No source. See above.
+For practice, the useful finding concerns plausible mistakes in the retrieved
+set. Passages that resemble the question but supply the wrong answer can be
+particularly harmful, and they occur in dense-retrieval results.[^28] This
+connects context management to evaluation: a change should be tested through
+the final answer, with the rest of the setup held constant.
 
 ---
 
 ## 3. Benchmarks
 
-The available measurements are less reliable than their scores suggest. This
-chapter is about which ones to trust, and for what.
+A long-context benchmark might ask a model to find a sentence, reconstruct a
+file or reason across several documents. Those tasks exercise different
+abilities. Before using a score to choose a model or pipeline, identify which
+ability your application needs.
 
-### The one finding that matters most
+<span id="the-one-finding-that-matters-most"></span>
 
-**The benchmarks disagree with each other.** HELMET, a meta-benchmark built
-to test this question across 59 models, found that no synthetic long-context
-task reaches an average correlation above 0.8 with real downstream tasks, and
-that RULER's correlations are all below 0.85.[^29] Between HELMET's own seven
-categories, correlations are low.
+### Match the benchmark to the work
 
-A model ranking from one long-context benchmark
-does not transfer to another. If you pick a model because it topped a
-leaderboard, you have chosen for that leaderboard's task mix, not for yours.
+HELMET compared long-context evaluations across many models and found that
+synthetic-task scores did not reliably predict downstream performance. Even
+its own task categories correlated poorly with one another.[^29]
+
+A model that leads on retrieval may therefore be a different choice from one
+that leads on synthesis or state tracking. Use benchmark results to narrow a
+shortlist, then test the tasks your system will actually perform.
 
 ### Needle-in-a-haystack is a floor test
 
-[NIAH](#g-niah) hides one sentence in filler text and asks the model to find
-it.[^30] Every frontier model passes it at every depth to a million
-tokens, so it does not separate models.
+A [needle-in-a-haystack test](#g-niah) hides one sentence in filler and asks the
+model to find it.[^30] It checks a necessary ability: access to a fact buried
+in a long input. By August 2026, frontier models' near-perfect
+scores made the simple version a weak way to distinguish them.
 
-It is also largely a string-matching test. Remove the word overlap between
-question and answer — which is what NoLiMa does — and 11 of 13 models fall
-below half their own short-context score by 32K.[^16]
+The task changes when a question no longer shares wording with the hidden
+answer. NoLiMa tests that association and finds much earlier declines.[^16]
+Reasoning across retrieved facts is harder again: GPT-4.1's launch material
+reported perfect needle retrieval to a million tokens, alongside 19% accuracy
+on multi-hop graph traversal above 128K.[^31]
 
-OpenAI's GPT-4.1 material reports perfect
-needle retrieval to 1M tokens, and **19.0% on multi-hop graph traversal above
-128K** on the same model.[^31] Both numbers are true. Only one of them
-resembles your workload.
-
-If your evaluation is a needle test, you are measuring whether the model can
-find a sentence, not whether it can use a document.
+For an application that must use a document to reach a conclusion, test that
+use directly. Finding one sentence is only the first step.
 
 ### What each benchmark is actually for
 
-| Benchmark | Use it to answer | Status |
+The following is a snapshot of the benchmark landscape in August 2026. The question in the middle column is more useful than an overall rank.
+
+| Benchmark | What it helps test | Qualification |
 |---|---|---|
-| **RULER** | Where does this model stop working? | Active; the standard effective-length probe |
-| **NoLiMa** | Can it retrieve without keyword overlap? | Active, still discriminative |
-| **HELMET** | Which benchmark should I even trust? | Active; the reference meta-benchmark |
-| **LongBench v2** | Hard reasoning over long documents | Active, unsaturated |
-| **LongProc** | Can it produce long structured *output*? | Active |
-| **LoCoDiff** | Can it track evolving state across a history? | Active; hard |
-| **τ-bench / τ²-bench** | Is the agent *repeatably* right? | Active; the reliability probe |
-| **Terminal-Bench** | What does the accuracy cost in dollars? | Active; the only one reporting cost |
-| **BEIR / MTEB** | Which retriever or embedder? | Active, heavily optimised against |
-| **RAGTruth** | Is the output grounded in what was retrieved? | Active |
-| **NIAH** | Is the model catastrophically broken? | Saturated |
-| **LongBench v1** | — | Saturated, and short by 2026 standards |
-| **LoCoMo** | — | Saturated and unreliable; see chapter 10 |
+| RULER | Effective length across several tasks | Broader than a simple needle test |
+| NoLiMa | Retrieval without keyword overlap | Still separates models |
+| HELMET | Performance across different task categories | Helps expose weak transfer between benchmarks |
+| LongBench v2 | Hard reasoning over long documents | Unsaturated in August 2026 |
+| LongProc | Long structured output | Tests output as well as input handling |
+| LoCoDiff | Tracking evolving state through a history | Requires exact final-file reconstruction |
+| τ-bench / τ²-bench | Repeated success on agent tasks | Reports reliability across attempts |
+| Terminal-Bench | Agent accuracy alongside cost | Includes dollar costs |
+| BEIR / MTEB | Retrieval and embedding quality | Widely used for optimisation |
+| RAGTruth | Grounding in retrieved material | Tests the output's relation to its evidence |
+| NIAH | Basic access to a fact in a long input | Simple versions are saturated |
+| LongBench v1 | Earlier long-context tasks | Saturated and relatively short by the check date |
+| LoCoMo | Conversational memory | Baseline and configuration issues; see chapter 10 |
 
-Two of these deserve expanding.
+LoCoDiff is a useful example of a task that needs more than fact retrieval. It
+gives a model a git history and asks for the exact final file.[^32] There is
+no filler: changes throughout the history may affect what must be reproduced.
+In the reported evaluation, all models fell below 50% above 25,000 tokens,
+despite much higher scores on long needle tests.
 
-**LoCoDiff** gives a model a git history and asks it to reproduce the exact
-final file.[^32] There is no filler and no planted needle; every token has to
-be reproduced.
-Best score is 79%, and **all models fall below 50% above 25,000 tokens**, on
-a benchmark whose largest prompt is 97,500. Set that against the same models'
-near-perfect needle scores at a million tokens.
+τ-bench adds a different requirement: consistency. Its `pass^k` metric counts
+tasks completed successfully on *all* k independent attempts.[^33] A high
+single-attempt score can conceal repeated failures that matter to users who
+rely on the same workflow every day.
 
-**τ-bench** is the only widely-used benchmark reporting `pass^k` — success on
-*all* k independent attempts rather than the best one.[^33] GPT-4o succeeded
-on under 50% of retail tasks at one attempt and **under 25% at eight**. For
-anything user-facing, that is the number that matters, and almost nothing
-else reports it.
+<span id="length-alone-degrades-performance-even-with-perfect-retrieval"></span>
 
-### Length alone degrades performance, even with perfect retrieval
+### Test the reader as well as retrieval
 
-This is the strongest evidence against "just use a bigger window". Du et
-al. isolated length by replacing irrelevant tokens with whitespace, masking
-them with forced attention, and placing all the evidence immediately before
-the question — every trick to remove distraction and position effects.
-Performance still fell **13.9% to 85%** across five models.[^34]
+Suppose the retriever finds every required passage. A long prompt can still
+make the answer worse. One study isolated this by replacing irrelevant text
+with whitespace, restricting attention and placing the evidence immediately
+before the question. Performance still declined across the models tested.[^34]
 
-Even a perfect retriever does not avoid this: length itself is a cost.
+These controls help separate length from distractor content and position.
+They also explain why retrieval recall alone cannot validate a context
+pipeline: you need to test the model that reads the assembled prompt.
 
-### Contamination cannot be audited away
+<span id="contamination-cannot-be-audited-away"></span>
 
-Models identify buggy file paths from SWE-bench issue text alone at up to 76%
-inside the benchmark and 53% outside it, and reproduce functions at 35%
-versus 18%.[^35] That is measured memorisation.
+### Allow for benchmark contamination
 
-Detection of contamination also fails. A 2026 study tested three contamination-detection
-methods across 25 models and found **only 201 of 335 evaluations produced
-correct outcomes**.[^36] Detection fails under distribution shift and lacks
-statistical power, because benchmarks are orders of magnitude smaller than
-training corpora. Their conclusion: statistical auditing "cannot replace
-transparent data provenance".
+A public benchmark may overlap with a model's training material. The model
+can then benefit from remembering benchmark-specific content, which is a
+different ability from solving a new task. SWE-bench experiments found higher
+rates of file identification and function reproduction for benchmark material
+than for comparison material outside it.[^35]
 
-The 2026 response is self-refreshing benchmarks built from post-cutoff
-material — EvoBrowseComp regenerates 800 live-web questions through an
-automated pipeline specifically because static sets leak.[^37] Expect this to
-become the dominant design.
+Detecting such overlap is itself unreliable. An evaluation of contamination
+audits found that the tested methods often gave incorrect results, particularly
+under distribution shift.[^36] Passing an audit cannot establish that a
+benchmark was absent from training.
 
-### Vendors report on evals they own
+Held-out material with known provenance and refreshed tasks can reduce this
+problem. EvoBrowseComp, for example, generates live-web questions from newer
+material.[^37] For your own evaluation, retain a private set alongside public
+benchmarks and record when its source material became available.
 
-OpenAI's MRCR and Graphwalks are OpenAI-published datasets, so nobody outside
-can build a held-out variant. Both have been corrected without announcement — MRCR in
-December 2025, Graphwalks in February 2026 — which means figures published
-before those dates are not comparable with figures after.
+<span id="vendors-report-on-evals-they-own"></span>
 
-Google's Gemini 3 launch material reported LMArena, GPQA Diamond, MathArena
-Apex and MMMU-Pro, and **no long-context benchmark**, despite the
-million-token window being a headline feature.[^38]
+### Record dataset versions and omitted tasks
 
-### Only one leaderboard publishes cost
+Vendor launch evaluations are useful sources, but inspect what they test and
+which version they use. OpenAI's MRCR and Graphwalks datasets were corrected
+after their initial publication, making scores from different versions hard
+to compare.[^31] Public datasets also leave outsiders without the vendor's
+private held-out material.
 
-Terminal-Bench 2.1, fetched 4 August 2026:[^39]
+An advertised capability may have no corresponding launch score. Google's
+Gemini 3 launch material highlighted a million-token window while reporting
+other kinds of benchmarks rather than a long-context benchmark.[^38] The
+window size establishes capacity; a suitable evaluation still needs to
+establish performance.
+
+<span id="only-one-leaderboard-publishes-cost"></span>
+
+### Compare the cost of a score
+
+Two systems with similar accuracy can have very different operating costs.
+Terminal-Bench was unusual among these leaderboards in publishing both.
+Its 4 August 2026 snapshot illustrates why the cost belongs beside the score:[^39]
 
 | System | Accuracy | Cost |
 |---|---|---|
 | Claude Code / Fable 5 | 83.8% ± 1.2% | $552.67 |
 | Codex / GPT-5.5 | 83.1% ± 1.1% | $2,059.19 |
 
-Statistically indistinguishable accuracy at 3.7× the cost. Every other
-benchmark in this chapter would rank those two identically.
+The reported accuracy intervals overlap, while the costs differ by about
+3.7 times. For deployment, that can matter more than the small difference in
+mean accuracy. Compare cost per correct answer and latency as well as quality.
 
-### What nothing measures
+<span id="what-nothing-measures"></span>
 
-If you build a retrieval or acquisition system, you have to measure these
-yourself:
+### Fill the gaps with your own evaluation
 
-- **Cost per correct answer.** Terminal-Bench aside, every leaderboard
-  reports accuracy at unbounded token spend.
-- **Latency.** No long-context benchmark reports wall-clock time.
-- **Whether the right *source* was chosen** from a live, adversarial, open
-  web. BrowseComp scores a final short answer, not source selection.
-  Nothing scores authoritative-over-content-farm, or primary-over-aggregator.
-- **Provenance and attribution fidelity.** HELMET's citation category is the
-  only serious attempt, and HELMET singles it out as correlating *worst* with
-  everything else.
-- **Multi-source synthesis and conflict resolution.** RECON is the first
-  benchmark to take source conflict seriously, and the best non-oracle system
-  scores 22.4%.[^40]
-- **Freshness and staleness detection.** Nothing measures whether a system
-  knows its evidence has gone stale.
-- **Abstention.** Benchmarks reward answering. A system that says "I could
-  not find a reliable source" scores the same as one that confabulates.
-- **Robustness to adversarial retrieved content.** If you retrieve from the
-  open web, that text is untrusted input, and no mainstream retrieval
-  benchmark treats it that way.
+These benchmarks leave several concerns only partly measured or
+unmeasured. If these matter to the application, include them in your own suite:
+
+- **Source selection:** whether the agent finds an authoritative, primary
+  source, rather than merely a page containing the expected answer.
+- **Attribution:** whether a claim is supported by the cited passage.
+  HELMET includes citation tasks, but their scores transfer poorly to other
+  task categories.
+- **Conflicting evidence:** whether the model notices and handles sources
+  that disagree. RECON begins to test this, with low reported performance
+  outside its oracle condition.[^40]
+- **Freshness:** whether the system recognises that evidence has become stale.
+- **Abstention:** whether it declines appropriately when evidence is missing,
+  rather than receiving credit only for attempting an answer.
+- **Untrusted content:** whether retrieved text can divert the agent from
+  its task.
+- **Operating cost and delay:** what each correct answer costs and how long
+  the user waits, including retries and failures.
+
+This gives acquisition a clearer objective. Finding a page is useful only if
+it supplies evidence the system can safely and accurately use.
 
 ---
 
 ## 4. Acquisition
 
-If the right material never enters the pipeline, no amount of ranking,
-compression or ordering will recover it.
+Acquisition decides what material the rest of the pipeline can work with. If
+the necessary source never arrives, ranking and compression cannot recover
+it. Start with the shape of the task: a question about one document, a search
+across a known collection and an investigation on the live web need different
+ways of gathering evidence.
 
-### Long context versus retrieval: what the comparison actually shows
+<span id="long-context-versus-retrieval-what-the-comparison-actually-shows"></span>
 
-One comparison across nine datasets found that, given enough budget, long
-context beat chunked retrieval on answer quality — by 7.6 points on
-Gemini-1.5-Pro, 13.1 on GPT-4o, 3.6 on GPT-3.5-Turbo across nine
-datasets.[^42]
+### Choosing between whole documents and retrieval
 
-But the same paper found **about 63% of queries produced identical answers
-under both**. The two approaches agreed far more than they differed in that
-study.
+For a question that compares sections or needs several reasoning steps,
+sending the whole document preserves connections that chunk retrieval might
+miss. For a narrow factual question, a few well-chosen passages may supply
+all the evidence at much lower cost.
 
-The useful question is which to use per query.
-**Self-Route** asks the model whether the retrieved chunks suffice and
-escalates to full context only when they do not: 38.6% of the tokens on
-Gemini-1.5-Pro (a 65% cost cut) and 61% on GPT-4o (39% cut), at near
-long-context quality.[^42] Over half of queries were answerable from
-retrieval alone.
+A comparison across nine datasets found that long context generally produced
+better answers when given enough budget. Yet about 63% of queries produced
+identical answers with long context and retrieval.[^42] That agreement makes
+routing useful: reserve the expensive path for questions that need it.
 
-The crossover point is roughly 128K tokens and it moves with model size. At
-32K long context leads by about 2.4%; at 128K retrieval leads open-source
-models by about 3.7%, while GPT-4o and Claude 3.5 Sonnet still favour long
-context.[^43] Weak models (3B–12B) gained 6.5%–38.1% from retrieval at 128K.
-By task, long context leads reasoning by ~9% and comparison by 14–15%, while
-**retrieval leads hallucination detection by 10–22%** — because withholding
-distractor mass is the point.
+The same paper's *Self-Route* method asks the model whether the retrieved
+chunks suffice, then escalates to full context when they do not. It retained
+near-long-context quality while reducing cost in the tested setups.[^42]
+This is a concrete alternative to choosing one strategy for every query.
 
-### Retrieval fails in four ways, and three are query problems
+The point where retrieval becomes preferable depends on model and task. LaRA
+found advantages for long context on reasoning and comparison, while retrieval
+helped with hallucination detection and helped smaller models at long input
+lengths.[^43] Its crossover near 128K tokens is a result of those experiments,
+not a general routing threshold. Test whole-document and retrieval baselines
+on the same questions, especially where the task needs evidence from distant
+sections.
 
-From manual error analysis:[^42] multi-step reasoning (the retriever cannot
-chain), vague queries (nothing to match on), long complex queries (the
-retriever cannot parse them), and implicit questions (the answer is not
-lexically or semantically present).
+<span id="retrieval-fails-in-four-ways-and-three-are-query-problems"></span>
 
-Only the last is an index problem. This taxonomy, from one paper's manual
-error analysis, is the most useful diagnostic found for this guide, because it tells
-you which fix to apply instead of applying all of them.
+### Diagnose the query before changing the index
+
+A retriever needs a query it can match to useful material. Manual error
+analysis in the long-context comparison identified four ways that can fail:[^42]
+
+- A multi-step question needs a chain of lookups that one retrieval call does
+  not perform.
+- A vague question gives too little detail to match reliably.
+- A long, complex question mixes requirements the retriever fails to separate.
+- An implicit question asks for something whose wording or meaning is not
+  directly present in a passage.
+
+These suggest different experiments. Query rewriting can clarify a vague
+request; decomposition can turn a multi-step task into smaller searches.
+Improving the representation may help when the connection to the answer is
+implicit. The taxonomy comes from one paper, but it provides a useful way to
+choose a change from observed failures instead of adding every retrieval
+technique at once.
 
 ### How many sources is enough
 
-Reader accuracy saturates long before retriever [recall](#g-recall) does.
-Going from 20 to 50 retrieved documents gained about **+1.5% for
-GPT-3.5-Turbo and +1% for Claude-1.3** while recall kept climbing.[^11] Past
-that point, the marginal end-to-end benefit was small despite the extra
-retrieved evidence.
+A retriever can keep finding relevant documents after the reader has stopped
+benefiting from them. In the original *Lost in the Middle* experiments,
+increasing the retrieved set from 20 to 50 documents improved reader accuracy
+only slightly while [recall](#g-recall) continued to rise.[^11]
 
-Both the number and the similarity of distractors matter.
-Semantically-close-but-wrong passages can do disproportionate harm, and over 60% of
-queries in one evaluation had at least one hard distractor in the top ten
-from a dense retriever.[^28]
+The extra passages also create opportunities for confusion. In one evaluation,
+over 60% of queries had at least one convincing but wrong passage among a
+dense retriever's top ten results.[^28] A close match can require more careful
+discrimination than an obviously irrelevant document.
 
-Anthropic's own sweep found k=20 best for their contextual-retrieval setup;
-other practitioner guidance converges on 5–10 after reranking.[^44] Both are
-right for their own pipelines. Tune k against your end
-metric, not in the abstract.
+Anthropic found twenty passages worked best in its contextual-retrieval
+setup; practitioner starting points after reranking often use five to ten.[^44]
+Those are settings to test, not a universal answer. Tune the admitted count,
+usually called *k*, against answer quality and cost in your complete pipeline.
 
-### Techniques, and whether they pay for themselves
+<span id="techniques-and-whether-they-pay-for-themselves"></span>
 
-| Technique | Reported benefit | Verdict |
+### Choose techniques by the failure they address
+
+The following techniques change different parts of the search. Their value
+depends on what happens after they return candidates.
+
+| Technique | What it changes | What to test |
 |---|---|---|
-| Hybrid dense + BM25 with rank fusion | Consistent recall lift over either alone, negligible added latency | **Worth it.** Near-zero cost |
-| Cross-encoder reranking | Part of the 5.7%→1.9% failure chain | **Worth it.** See chapter 6 |
-| Contextual chunk headers | −35% retrieval failure alone, −67% with reranking (vendor's own eval) | **Worth it** for corpus search; see chapter 5 |
-| Query rewriting | Addresses the vague-query failure directly | **Worth it**, routed to that failure |
-| Query decomposition | Addresses multi-step failure | **Situational.** Route to it |
-| Multi-query / RAG-Fusion | Raises recall, then Hit@10 *fell* 0.51→0.48 | **Not worth it** if you already rerank and truncate |
-| HyDE[^119] | Beat unsupervised retrievers in 2022 | **Situational.** Its premise mostly does not hold for current retrievers |
-| Step-back prompting[^120] | +7% to +27% on PaLM-2L, 2023 | **Situational.** Unreplicated on 2026 models |
-| Prompted iterative retrieval | +9.0 vs +10.0 for good one-shot | **Situational.** Choose it to save tokens |
-| RL-trained search policy | +41% / +20% over baselines | **Worth it** if you can train |
-| Full GraphRAG | Preference wins, parity on faithfulness | **Not worth it** at full price |
-| Multi-agent deep research | +90.2% on an internal eval | **Situational.** ~15× tokens |
+| Hybrid dense + BM25, with rank fusion | Combines semantic and exact-term matches | Whether each route finds useful candidates the other misses |
+| Cross-encoder reranking | Reads the query with each shortlisted passage | Whether it removes retrieval failures at the final k; chapter 6 |
+| Contextual chunk headers | Restores document context before indexing | Corpus search versus within-document search; chapter 5 |
+| Query rewriting | Makes a vague query more explicit | Whether the rewrite addresses observed query failures |
+| Query decomposition | Splits a multi-step question | Whether the separate searches recover the required chain |
+| Multi-query / RAG-Fusion | Broadens the candidate pool | Whether extra candidates survive reranking and the token budget |
+| HyDE[^119] | Generates a hypothetical document to search by | Whether it helps the retriever being used; its original gains were over unsupervised retrievers |
+| Step-back prompting[^120] | Searches through a more general question | Whether gains from the original older-model setup transfer |
+| Prompted iterative retrieval | Lets the model search again after reading | Answer quality, retrieval calls and token use against a good one-shot search |
+| RL-trained search policy | Trains the decisions about when and how to search | Whether training is feasible and improves your search tasks |
+| GraphRAG | Uses graph-derived structure for retrieval and synthesis | Grounded answer quality as well as preference scores and indexing cost |
+| Multi-agent research | Divides investigation across separate contexts | Whether parallel reading earns its extra token and coordination cost |
 
-### What "hybrid" actually needs to contain
+<span id="what-hybrid-actually-needs-to-contain"></span>
 
-"Use hybrid search" is repeated everywhere without saying which components or
-why. The components are classical information retrieval, and each exists to
-cover a specific failure of the others:
+### What hybrid search combines
 
-- **Full-text search** (BM25[^122] and its relatives) catches the exact tokens
-  embeddings blur — error
-  strings, flag names, host names. When someone pastes a literal error, an
-  exact match is the best evidence and no amount of semantic similarity should
-  outrank it.
-- **Embeddings** catch paraphrase. Someone asking "restore hangs after
-  manifest load" and the engineer who answered "checkpoint stalls on the NFS
-  mount" share no vocabulary.
-- **Term rarity** (inverse document frequency[^118]) separates signal from
-  filler. "Sounds good, thanks!" sits
-  close to many queries in embedding space and scores near zero once you
-  weight by how rare its words are.
-- **Age decay**, because answers expire. Two threads may both answer the
-  question, and the older one may describe infrastructure that no longer
-  exists.
+A literal error message and a loosely worded description of a fault call for
+different kinds of matching. Hybrid search combines them so the first stage
+can find both.
 
-The fusion step matters as much as the components. Reciprocal rank fusion
-scores each document `weight / (k + rank)` in every list it appears in, with
-`k = 60` from the original 2009 paper.[^116] That constant is what makes
-**consensus beat a single strong vote** — a document ranking moderately across
-four retrievers outranks one that tops a single list. It also sidesteps the
-calibration problem: ranks fuse without the incompatible scoring scales of
-BM25 and cosine similarity needing to agree.
+Full-text search, including BM25,[^122] retains exact terms that embeddings
+can blur: error strings, flag names and host names. A literal match can be
+especially useful when someone pastes the error they received. Embeddings
+help with paraphrase: someone asking “restore hangs after manifest load” may
+need an answer describing a “checkpoint stalled on the NFS mount”, despite
+having little wording in common.
 
-None of this is new; the 2009 result is that rank fusion beats the learning-
-to-rank methods of its day. Age decay is how practitioners handle staleness,
-which chapter 12 lists as unmeasured. They treat recency as one signal among
-several rather than a cut-off. Nobody has published how much it helps.
+Term rarity, or inverse document frequency,[^118] helps distinguish specific
+words from conversational filler. “Sounds good, thanks!” provides little
+search signal even if its embedding lies near many queries. Recency can be
+another signal when older answers describe infrastructure that has changed.
+A date should inform relevance alongside the content, rather than act as an
+unexamined cut-off.
 
-Three of the techniques above deserve expanding, because the received wisdom
-is wrong.
+The result lists need a shared ranking. Reciprocal rank fusion assigns each
+document `weight / (k + rank)` in each list where it appears, then adds those
+contributions. The original method used `k = 60`.[^116] A document with
+moderate ranks in several lists can then beat one found near the top of just
+one list. Working with ranks also avoids having to make BM25 scores and
+embedding similarities share a numerical scale.
 
-**Multi-query fusion is a benchmark win that reverses in production.** An
-enterprise deployment saw Hit@10 fall from 0.51 to 0.48 despite higher
-retrieval-level recall.[^45] The reason is structural: fusion widens the
-candidate pool, but the reranker and the token budget were already the
-binding constraint, so the extra candidates get discarded and only the
-latency remains. Treat this as a risk to test for any recall-widening trick
-evaluated without the downstream reader in the loop, especially when the
-reranker or token budget already binds.
+Recency weighting is a practitioner design choice for handling stale answers;
+the cited material does not quantify its benefit. The same care applies to
+the more elaborate approaches in the table.
 
-**Agentic retrieval is weaker than the discourse suggests.** A direct
-comparison found one-shot retrieval with a wider net and a chunk filter
-scored 91.0% against iterative retrieval's 90.0%, while the iterative version
-made 59–97% more retrieval calls.[^46] Combining the two underperformed
-either alone. Iterative retrieval's case is token efficiency, not
-accuracy.
+Multi-query fusion, for example, found more relevant candidates in an
+enterprise deployment but reduced Hit@10, the rate of finding a relevant
+result in the final ten.[^45] The reranker and token budget constrained what
+could reach the reader. Broader retrieval added work without improving that
+final set. Include the downstream reader when evaluating any technique that
+widens recall.
 
-The important distinction: Search-R1's +41% comes
-from *reinforcement learning on the search policy*.[^47] That does not
-transfer to "give the model a search tool and prompt it to iterate", which is
-what most people mean by agentic retrieval.
+Iterative retrieval lets a model refine a search after seeing the first
+results. In a direct comparison, a well-configured one-shot search slightly
+outperformed iteration, while iteration made substantially more retrieval
+calls. The iterative approach's advantage was token efficiency in that
+setup.[^46] Search-R1's larger reported gains came from training a search
+policy with reinforcement learning.[^47] Prompting an existing model to use a
+search tool repeatedly does not reproduce that training intervention.
 
-**GraphRAG's headline wins are preference wins, not accuracy wins.**
-Comprehensiveness, diversity and empowerment are LLM-judge pairwise
-preferences on open-ended questions with no ground truth. Faithfulness — the
-one objective axis measured — came out *similar* to baseline retrieval.[^48]
-Microsoft's own successor prices full GraphRAG's indexing at 1,000× that of
-LazyGraphRAG, which is a strong concession about the original's cost.[^49] I
-found no independent replication showing GraphRAG beating a well-tuned hybrid
-pipeline on a ground-truth benchmark.
+GraphRAG's reported benefits need another distinction. Its evaluations favoured
+answers for comprehensiveness, diversity and usefulness on open-ended tasks;
+faithfulness was similar to baseline retrieval.[^48] Those preferences may
+matter to a product, but they do not establish improved factual accuracy.
+Indexing cost also matters: Microsoft's LazyGraphRAG work reports a large
+reduction against full GraphRAG.[^49] As of August 2026, no independent ground-truth comparison was found establishing that full GraphRAG beats a
+well-tuned hybrid pipeline.
 
 ### How much do two search providers agree?
 
-If you are choosing between search providers, or considering running more than
-one, the practical question is how much a second one adds. Here is a
-measurement: 24 queries across six kinds — factual, fresh, technical,
-commercial, vague and analytical — sent to three providers on 4 August 2026,
-ten results each, search only. Seventy-two calls, four of which failed and are
-excluded rather than counted as empty.
+A second search provider may find sources the first misses. To explore that,
+the authors sent 24 queries across six types—factual, fresh, technical,
+commercial, vague and analytical—to three providers on 4 August 2026. Each
+request asked for ten search results. Four of the 72 calls failed and were
+excluded, rather than treated as empty result sets.
 
-Results are compared by **host**, not URL. Host diversity is a coarse proxy for
-source diversity: pages on one host may be independent, and pages on different
-hosts may repeat the same material.
+The comparison uses hosts rather than exact URLs. That is a coarse view of
+source diversity: two hosts can repeat one source, while two pages on one
+host can be independent.
 
-| Provider | Results | Distinct hosts | Host concentration |
+| Provider | Mean results | Mean distinct hosts | Host concentration |
 |---|---|---|---|
 | Exa | 10.0 | 8.3 | 0.18 |
 | Tavily | 9.0 | 7.8 | 0.16 |
 | Firecrawl | 10.0 | 9.0 | 0.13 |
 
-Overlap between providers, as the share of hosts they agree on:
+A concentration of 1 would mean every result came from one host. The lower
+values here indicate that each provider spread results across hosts. To judge
+what a second provider adds, look at overlap between the pairs:
 
-| Pair | Overlap |
+| Pair | Share of hosts in common |
 |---|---|
-| Tavily and Firecrawl | **0.62** |
+| Tavily and Firecrawl | 0.62 |
 | Exa and Firecrawl | 0.21 |
 | Exa and Tavily | 0.18 |
 
-This has several implications.
+Any one provider returned about eight or nine distinct hosts per query; the
+combined set averaged 15.5. Exa contributed a larger proportion of unique
+hosts in this sample, while Tavily and Firecrawl overlapped more. This suggests
+measuring provider combinations, rather than assuming any second provider will
+add the same coverage.
 
-**A second provider adds real coverage.** Any one provider returned about
-eight or nine distinct hosts; all three together returned **15.5 per query**.
-So roughly half the hosts one provider gives you, the others do not.
+Host variety also says little about source quality. Among the most frequent
+hosts were Reddit, YouTube, arXiv, Medium and the vLLM documentation site.
+A retrieval pipeline still needs to decide which kinds of evidence are
+appropriate for the task.
 
-**But not all second providers are equal.** Tavily and Firecrawl agree with
-each other far more than either agrees with Exa. Exa contributed **61% unique
-hosts**; the other two contributed about 26% each. If you already run one of
-that pair, adding the other helps much less than the overlap table suggests.
-Which providers pair well is worth measuring for your own
-queries — the pairing here is a property of these three, not a general result.
-
-**Results are not concentrated on one site.** Concentration ran 0.13–0.18,
-where 1.0 would be a single host taking everything. No provider dumped ten
-results from one domain.
-
-The overall host distribution matters too. Across all 295 distinct
-hosts, the most frequent were `reddit.com` (30 appearances), `youtube.com`
-(24), `arxiv.org` (19), `medium.com` (19) and `docs.vllm.ai` (19). Forum,
-video and blog content sit near the top for technical queries. That is not a
-fault in the providers; it reflects where the answers are. It does mean
-a pipeline with no source-quality policy will pass a large share of Reddit
-content to the model.
-
-Limits: 24 queries is small, one run per query, English only, and a snapshot
-of three products that change. Rerun it with your own queries rather than
-inheriting these numbers — the script is
-`docs/guide/measurements/source_overlap.py`.
+These results describe one English-language run over a small query set, not a
+stable ranking of providers. The script is
+`docs/guide/measurements/source_overlap.py`; rerun it on your own queries and
+inspect what the additional sources contribute to answers.
 
 ### Live web acquisition
 
-Two facts shape the architecture.
+Search results help choose what to read. Fetching every candidate can expand
+the input dramatically: the provider examples used here put an average page
+around 2,500 tokens, a large documentation page around 25,000 and a research
+PDF around 125,000.[^50] Ten full PDFs can exceed a million-token window.
+Search first, then fetch the pages whose contents are needed.
 
-**A snippet and a page differ by an order of magnitude.** An average page is
-about 2,500 tokens, a large documentation page about 25,000, a research PDF
-about 125,000.[^50] A ten-result search costs a few thousand tokens; fetching
-those ten pages costs 25,000; fetching ten PDFs exceeds a million-token
-window. Search to find candidates, then fetch selectively.
+Billing reinforces that distinction. At the 4 August 2026 check, Anthropic
+charged per search query and billed fetched content as input tokens; other
+providers used combinations of query charges, page charges, credits and
+output-token minimums.[^51] The cheapest search call is not necessarily the
+cheapest route to an answer if it leads to much more reading.
 
-**Search is priced per query and fetching per token.** Anthropic charges $10
-per 1,000 searches and nothing per fetch beyond tokens. Brave is $5 per
-1,000. Exa is $7 per 1,000 searches plus $1 per 1,000 pages *per content
-type*. Firecrawl bills one credit per page. Jina Reader bills output tokens
-with a 10,000-token minimum per search.[^51] These shapes should determine
-your ratio of searching to reading.
-
-Two constraints to design around: platform fetch tools respect
-`robots.txt`, and they cannot fetch a URL the model invented — it must have
-appeared in context already. Search-then-fetch is enforced, not only
-advisable. And crawling is becoming a priced resource: Cloudflare's
-pay-per-crawl uses HTTP 402 plus cryptographic crawler signatures so
-publishers can allow, charge or block.[^52]
+Fetch tools can also impose constraints on acquisition. The platform tools
+described here respect `robots.txt` and require a URL already present in
+context, which makes search-then-fetch part of the workflow. Publisher access
+can carry a separate price: Cloudflare's pay-per-crawl uses HTTP 402 and
+cryptographic crawler signatures to let publishers allow, charge or block
+access.[^52] Acquisition therefore needs to account for access as well as
+search relevance.
 
 ---
 
 ## 5. Extraction and chunking
 
-Two steps that sit between fetching a document and retrieving from it. Both
-are usually done badly, and one of them matters far more than the literature
-suggests.
+Once a document arrives, two steps determine what can be retrieved from it.
+Extraction separates useful content from the page around it. Chunking divides
+that content into pieces small enough to match and select. A failure in either
+step can remove evidence before the answer model ever sees it.
 
-### Extraction is where the tokens are
+<span id="extraction-is-where-the-tokens-are"></span>
 
-Chapter 1 measured four pages: removing tags, scripts and similar HTML
-machinery removed 87–99% of their tokens. For raw-web ingestion, extraction
-can therefore remove a large cost before any retrieval decision.
+### Extract the body and check what survives
 
-The reference comparison is Zyte's article-extraction benchmark — 181 pages,
-scored by four-gram shingle matching against article-body ground truth,
-normalised per document. It was expanded to 28 extractors across four
-languages in March 2026 and then **archived that June**.[^53] It is
-the most complete comparison available, and it is not maintained.
+Chapter 1's four-page measurement showed how much raw HTML can cost. An
+extractor goes further than stripping tags: it tries to identify the body and
+leave out navigation, adverts and footers. That saves space, but an extractor
+can also omit a table, paragraph or whole page that the task needs.
+
+Zyte's article-extraction benchmark compares extracted content with an
+article-body reference using overlapping four-word sequences.[^53]
+*Precision* indicates how much returned material matches the body; *recall*
+indicates how much of the body survives. Both matter when the output will
+become model context.
 
 | Extractor | F1 | Precision | Recall |
 |---|---|---|---|
 | `rs_trafilatura` (Rust) | 0.970 | 0.951 | 0.990 |
 | `go_trafilatura` | 0.960 | 0.940 | 0.980 |
-| **trafilatura** (Python) | 0.958 | 0.938 | 0.978 |
+| trafilatura (Python) | 0.958 | 0.938 | 0.978 |
 | Readability (JS) | 0.947 | 0.914 | 0.982 |
 | readability-lxml | 0.922 | 0.913 | 0.931 |
 | `justext` | 0.804 | 0.858 | 0.756 |
@@ -842,37 +834,37 @@ the most complete comparison available, and it is not maintained.
 | `html2text` | 0.662 | 0.499 | 0.983 |
 | `htmd` (Rust) | 0.184 | 0.102 | 0.970 |
 
-**Read the precision column, not the F1 column.** Precision here is roughly
-the share of the output that is actually article body. Every plain
-HTML-to-markdown converter has recall near 0.99 and precision between 0.10
-and 0.52: they drop no body text and keep all the non-body text.
+The converters near the bottom keep most body text but also return much of
+the surrounding page. That can be desirable for conversion, while being a
+poor fit for compact article context. The scores compare word sequences, so
+they cannot directly establish a token-cost multiplier.
 
-So `htmd` returns much more non-body text than the other entries, while
-trafilatura's output overlaps the article-body ground truth far more precisely.
-These are four-gram shingle scores, not token measurements, so they do not by
-themselves establish a token-cost multiplier.
+This benchmark covered 181 pages and was archived in June 2026. Treat it as a
+comparison on those pages, then inspect extraction on your own sources. In
+particular, distinguish Readability implementations and evaluation runs: the
+JavaScript entry above has high recall; lower figures elsewhere cannot be
+applied to it indiscriminately. MarkItDown is a converter whose HTML path
+wraps markdownify, rather than a body extractor. None of these tools renders
+JavaScript, leaving another source of missing content.
 
-Three practical notes. Readability — the most-deployed extractor, and
-what most "reader mode" pipelines use — scores 0.914 precision but has
-repeatedly measured lower recall than trafilatura in the table above, meaning
-it drops body text without any indication; a recall failure at the acquisition layer is
-invisible in every downstream metric. `MarkItDown`, with 171,000 GitHub stars, is a *converter*: on HTML it
-wraps markdownify and removes no boilerplate at all. And none of these tools
-render JavaScript, which is an unmeasured failure across a large slice of the
-modern web.
+Check page survival as well as scores on pages that survive. A separate study
+found that extractors with similar benchmark scores retained different sets
+of pages. Combining their outputs increased token yield without a benchmark
+regression.[^54] A clean-looking result is not enough if the extraction stage
+silently discards documents.
 
-One caution against over-cleaning. A February 2026 paper found that
-extractors scoring similarly on benchmarks produce very different *page
-survival*, and that taking the union of several extractors raised token yield
-by up to 71% with no benchmark regression.[^54] Aggressive cleaning drops
-whole pages, and nothing downstream reports it.
+<span id="chunking-matters-less-than-you-have-been-told"></span>
 
-### Chunking matters less than you have been told
+### Start with simple chunks
 
-Chroma's evaluation — five corpora, 328,208 tokens, 472 queries, scored at
-token level.[^55] Chroma sells a vector store rather than a chunker, so they
-have less stake in this result than most, but it is one company's unreplicated
-evaluation:
+Small chunks make it easier to match a specific passage. Larger chunks retain
+more of its surrounding explanation. Overlap preserves text around boundaries
+but also returns repetition. These are the trade-offs a chunking strategy
+needs to manage.
+
+In Chroma's evaluation, a simple recursive splitter was competitive with more
+elaborate semantic approaches.[^55] The LLM-guided splitter found slightly
+more relevant text, but returned substantially more irrelevant text with it:
 
 | Strategy | Recall | Precision |
 |---|---|---|
@@ -880,1353 +872,1380 @@ evaluation:
 | Cluster semantic chunker, 200 tokens | 87.3% | 8.0% |
 | LLM-guided semantic chunker | 91.9% | 3.9% |
 
-The spread between best and worst strategy was about 9% recall. The LLM-guided
-splitter bought 3.8 points of recall and halved precision. Reducing overlap
-improved the overlap-with-ground-truth measure.
+For a starting configuration, a recursive splitter at 200–400 tokens with no
+overlap is worth testing. Change it when failure inspection shows that
+boundaries or missing surroundings are losing answers. This is one company's
+evaluation on five corpora, not proof that one size suits every document.
 
-**A plain recursive splitter at 200–400 tokens with no overlap is a strong
-default.** Revisit it only after you have evidence that chunking is your
-bottleneck, which it usually is not.
+[Parent-document retrieval](#g-parent-document) separates matching from
+reading: search small chunks, then give the model the larger section each
+winning chunk came from. That preserves precise matches while restoring some
+context. No published measurement establishing its benefit was found;
+it is a design pattern to evaluate through the reader.
 
-The pattern that helps here is [parent-document retrieval](#g-parent-document)
-— widely used, with no published measurement of it found:
-match on small chunks because they match precisely, then hand the model the
-larger section each chunk came from. It sidesteps the precision/recall
-trade-off structurally instead of tuning along it. Treat it as a design pattern
-rather than an evidenced technique.
+<span id="contextual-retrieval-the-best-documented-vendor-upgrade"></span>
 
-### Contextual retrieval: the best-documented vendor upgrade
+### Restore the context a chunk lost
 
-Chunks lose their referents. "The company" and "this quarter" mean nothing
-once a paragraph is separated from its document. Contextual retrieval fixes
-this by having a model write a 50–100 token situating header for each chunk
-at index time.
+“The company” and “this quarter” mean little once their paragraph is detached
+from the document. Contextual retrieval addresses this by having a model write
+a short situating header for each chunk at index time. The header, typically
+50–100 tokens, accompanies the text used for search.
 
-Anthropic's chain, on top-20 retrieval failure rate. This is Anthropic
-evaluating its own technique, with no independent reproduction found:[^44]
+Anthropic measured retrieval failures as it added contextual embeddings,
+contextual BM25 and reranking.[^44] This is the vendor's evaluation of its
+own technique, with no independent reproduction found as of August 2026:
 
-| Configuration | Failure rate | Reduction |
-|---|---|---|
-| Baseline | 5.7% | — |
-| + contextual embeddings | 3.7% | −35% |
-| + contextual BM25 | 2.9% | −49% |
-| + reranking | 1.9% | −67% |
+| Configuration | Top-20 retrieval failure rate |
+|---|---|
+| Baseline | 5.7% |
+| + contextual embeddings | 3.7% |
+| + contextual BM25 | 2.9% |
+| + reranking | 1.9% |
 
-Cost: about **$1.02 per million document tokens**, one-off, and only that
-cheap because the document prefix is cached.
+The progression matters because it shows where each step helped. Contextual
+headers reduced missing evidence; reranking removed further failures after
+both search routes were present. Anthropic reported an indexing cost of about
+$1.02 per million document tokens, made possible by caching the shared document
+prefix during header generation.
 
-One important qualification. A SIGIR 2026 taxonomy paper found contextual
-chunking improves *corpus-level* search and **degrades in-document
-retrieval**.[^56] Adding document-level context makes chunks more
-distinguishable across a corpus and less distinguishable from their siblings.
-If you are searching within one document, it hurts.
+The same header can make sibling chunks harder to distinguish. A chunking
+study found improvements for search across a corpus but degradation when
+searching within one document.[^56] Document-level context helps tell documents
+apart; repeated across one document's chunks, it can blur their differences.
+Choose the technique with the search scope in mind.
 
-### Two steps further, both unmeasured
+<span id="two-steps-further-both-unmeasured"></span>
 
-Contextual retrieval annotates a chunk with its situating context. Two
-extensions of the same idea show up in production systems, neither with
-published numbers behind it.
+### Other ways to prepare an index
 
-**Rewriting into a canonical shape.** Rather than embedding source text at
-all, an extraction pass produces a structured record — for a support thread,
-the question someone would search for, a summary, the resolution, the systems
-involved — and that record is embedded instead. The reasoning is that
-heterogeneous sources embed badly together because their shapes differ: a code
-comment, an incident record and a wiki paragraph are not comparable objects
-even when they answer the same question. Normalising them makes the vector
-space mean something consistent.
+Some systems take contextual preparation further by rewriting each source into
+a common structure. A support thread might become a record containing the
+question someone would search for, a summary, the resolution and the systems
+involved. The index embeds that record. The aim is to make a code comment,
+incident record and wiki passage more comparable when they address the same
+problem.
 
-**Gating what enters the index at all.** Content is embedded only if it clears
-a quality threshold — containing a rare term, reaching a minimum length, or
-carrying some signal of value such as reactions or links.
+Another approach filters material before embedding it, using signals such as
+rare terms, minimum length, reactions or links. This can keep conversational
+filler out of the candidate pool and runs once per source item rather than on
+every query. It also makes an early selection decision that needs checking
+for lost evidence. The production example in the appendix uses both patterns;
+neither comes with published quality measurements in the sources cited here.[^115]
 
-The second matters more, because it is admission control at
-*ingestion* rather than at query time, and every other chapter here argues
-about the latter. It happens once per document rather than once per query, and
-it removes the low-signal material that chapter 4's distractor
-findings say costs you most. If your corpus is conversational — and chapter
-7's deduplication numbers found high repetition in one conversational corpus
-— ingestion gating is a low-cost design pattern worth testing.
+Late chunking preserves surrounding context in a different way. It embeds the
+whole document at token level, then pools those representations into chunks.
+Each chunk's representation has therefore been influenced by its neighbours,
+without a separate header-generation call for every chunk.[^57]
 
-Both are sensible and neither is evidence. Take them as design patterns to
-test, not as findings.
+Jina's evaluation of its own technique found gains that varied by dataset and
+grew with document length. A head-to-head comparison put contextual retrieval
+slightly ahead but at much higher cost.[^58] Both approaches are worth
+understanding as ways to retain context during indexing; their benefit still
+depends on the documents and questions being matched.
 
-**Late chunking** is a cheaper variant of contextual retrieval: embed the
-whole document at token level, then pool into chunks, so each chunk embedding
-is conditioned on its neighbours with no per-chunk model call. The technique
-and the numbers are both Jina AI's, evaluating their own method.[^57] The gains
-are smaller and less consistent than contextual retrieval's — nDCG@10 went 64.20→66.10 on SciFact, 23.46→29.98 on NFCorpus,
-and *unchanged* on Quora. Gains grow with document length. A head-to-head
-found contextual retrieval slightly ahead but far more expensive, concluding
-that "neither technique offers a definitive solution".[^58]
+---
 
 ## 6. Ranking and reranking
 
-Retrieval and ranking are different jobs. Retrieval asks "which hundred of
-these million documents might be relevant?" Ranking asks "which five of these
-hundred actually are?" They have different cost profiles, and the second
-contributes most of the quality.
+Retrieval and ranking are different jobs. Retrieval asks “which hundred of
+these million documents might be relevant?” Ranking asks “which five of these
+hundred actually are?” The first must search cheaply over a large collection.
+The second can spend more work on each candidate because there are far fewer
+of them.
 
 ### Why a second pass helps
 
-First-stage retrieval has to be fast over the whole corpus, so it compares
-pre-computed representations. An [embedding](#g-embedding) for a passage is
-computed once, before anyone asked a question, so it cannot be shaped by the
-question.
+First-stage retrieval compares pre-computed representations. A passage's
+[embedding](#g-embedding) is created before the question is known, so it cannot
+be shaped by that question.
 
-A [cross-encoder](#g-cross-encoder) reads the question and one candidate
-passage *together* and scores the pair. That is more accurate, too slow to
-run over a corpus, and affordable over fifty candidates.
+A [cross-encoder](#g-cross-encoder) reads the question and one candidate passage
+together, then scores the pair. That allows more detailed matching. It is too
+expensive to apply to every document in a large corpus, but affordable for a
+shortlist of fifty candidates.
 
-This is why the standard design retrieves many candidates, reranks them, and
-admits few.
+This division of work explains the common pattern: retrieve many candidates,
+rerank them, then admit a smaller set to the answer model.
 
-### The measured gain
+<span id="the-measured-gain"></span>
 
-The clearest published chain is Anthropic's, on top-20 retrieval failure rate
-— their own evaluation of their own technique:[^44] contextual embeddings took the baseline from 5.7% to 3.7%; adding
-contextual BM25 reached 2.9%; **adding reranking reached 1.9%**. So the
-reranking step alone removed about a third of the failures that survived
-everything before it.
+### What the second pass can recover
 
-### Bigger rerankers stop helping quickly
+The contextual-retrieval experiment in chapter 5 shows a reranker adding value
+after two search routes were already in place. In Anthropic's own evaluation,
+reranking reduced top-20 retrieval failure from 2.9% to 1.9%, removing about a
+third of the failures left by the earlier stages.[^44]
 
-Published sizing data, from the standard cross-encoder
-family trained on MS MARCO:[^97]
+That is a useful measure for a reranker: how often does its final shortlist
+contain evidence the reader needs? A ranking score alone does not tell you
+whether a missed answer has been recovered.
+
+<span id="bigger-rerankers-stop-helping-quickly"></span>
+
+### Choose model size against the gain
+
+A larger reranker can cost substantially more without improving the shortlist
+much. The published MS MARCO cross-encoder family illustrates diminishing
+returns.[^97] Here, nDCG@10 rewards placing relevant documents near the top,
+while throughput indicates the processing cost:
 
 | Model | nDCG@10 (TREC DL19) | Documents per second |
 |---|---|---|
 | TinyBERT-L2 | 69.84 | 9,000 |
 | MiniLM-L6 | 74.30 | 1,800 |
-| MiniLM-L12 | **74.31** | 960 |
+| MiniLM-L12 | 74.31 | 960 |
 
-About 4.5 points for a 5× throughput cost, then no meaningful gain on this
-benchmark while throughput roughly halved again. If your queries resemble the
-training distribution, the six-layer model is the stronger starting point.
+Moving to six layers improved the score but cut throughput by a factor of
+five. Moving to twelve layers nearly halved throughput again for little score
+change. If your queries resemble this evaluation, the six-layer model is a
+reasonable starting point; measure elsewhere before transferring the result.
 
-The newer models add a 32,000-token context — enough
-to rerank whole documents rather than fragments — and **instruction
-following**, where you tell the reranker in plain words what "relevant" means
-for this query. One vendor measures the instruction as worth roughly as much
-again as the model-generation upgrade itself.[^98] That is a vendor
-evaluation, but the mechanism is plausible: an instruction encodes domain
-semantics no generic relevance model can infer.
+Newer rerankers offer capabilities beyond size, including a 32,000-token
+context for whole documents and instructions defining relevance for a query.
+A vendor evaluation found instruction following contributed substantially to
+the gain.[^98] An instruction can express which kind of evidence the task
+requires, something a generic similarity score may not capture.
 
-### Do not use a frontier model as your reranker
+<span id="do-not-use-a-frontier-model-as-your-reranker"></span>
 
-The frontier model seems like the strong option. On quality,
-latency and cost simultaneously, a dedicated cross-encoder wins.
+### Dedicated rerankers and general models
 
-One vendor's comparison across 13 datasets puts its cross-encoder ahead of
-GPT-5 by 12.6% and Gemini 2.5 Pro by 13.4% on nDCG@10, while being 36× and 48×
-faster and 25–60× cheaper.[^99] Treat the magnitudes as vendor-configured; the
-direction is corroborated independently, and the mechanism is not in dispute —
-a listwise LLM reranker needs several sliding-window passes where a
-cross-encoder needs one batched forward pass.
+A general-purpose model can be prompted to order passages, but it brings the
+cost of generation to a task that a cross-encoder performs in a batched scoring
+pass. Listwise LLM rerankers may also need several sliding-window passes to
+process all candidates.
 
-The same source concedes one exception: LLM reranking does help when
-first-stage retrieval is bad. Fix the first stage instead.
+One vendor's comparison found its cross-encoder ahead of frontier models in
+quality, latency and cost.[^99] The direction had independent support in the
+cited material, while the vendor-configured magnitudes should be treated
+cautiously. The same comparison found LLM reranking more useful when the
+first-stage retrieval was poor. In that situation, test improvements to the
+candidate pool alongside changing the reranker.
 
-### It is cheap relative to what it saves
+<span id="it-is-cheap-relative-to-what-it-saves"></span>
 
-From chapter 8: a
-reranker over 20,000 candidate tokens costs about $0.001 at published
-per-token reranking prices, and saves about $0.09 of frontier-model input.
-Roughly **90:1**.
+### Work out whether reranking pays
 
-That ratio collapses in one specific regime — when the tokens it saves were
-already going to be served at a cached-read or budget-model rate. Against a
-cheap model on a warm cache, a reranker can cost more than it saves.
+Chapter 8 works through an example where scoring 20,000 candidate tokens costs
+about $0.001 and selecting 2,000 of them saves $0.09 in uncached frontier-model
+input. That leaves ample room for the reranker's cost. The calculation changes
+when the saved tokens would have been read from a warm cache or sent to a
+cheap model: reranking can then cost more than the input it removes.
 
-One third-party latency measurement: hosted rerankers
-measured at 595–603 ms end to end against 188 ms for the same class of model
-self-hosted.[^100] That gap is the network round trip, not the model. If p95
-latency matters, self-host. (Methodology on that benchmark is underspecified
-and a different source reports 392 ms for the same hosted model — treat the
-*ratio* as real and the absolutes as indicative.)
+Latency needs its own measurement. One third-party comparison reported a
+substantial gap between hosted and self-hosted rerankers, but did not state
+enough about hardware, batching or concurrency to isolate the cause.[^100]
+Measure end-to-end latency under your expected load before deciding whether
+self-hosting earns its operational cost.
 
 ### The options, roughly ordered by cost
 
-| Approach | What it does | When |
+| Approach | How it scores | Where it fits |
 |---|---|---|
-| **Bi-encoder** (plain embeddings) | Pre-computed vectors compared by distance. The document is compressed before the query is known, so query-specific evidence is destroyed at index time | First stage, always |
-| **Late interaction** (ColBERT-style) | One vector per token, scored by best-match-per-query-term. Recovers term-level sensitivity at retrieval time, at real index cost | See below |
-| **Cross-encoder reranker** | Reads query and passage together with full attention | The default second stage |
-| **LLM reranker** | Prompts a general model to order passages | Rarely. See above |
+| Bi-encoder, or plain embeddings | Compares pre-computed vectors | A fast first stage, with limited query-specific detail |
+| Late interaction, such as ColBERT | Keeps token vectors and matches query terms to them | More detailed retrieval at additional index cost |
+| Cross-encoder | Reads the query and passage together | A second pass over a shortlist |
+| LLM reranker | Generates an ordering of passages | A more expensive option to compare with a dedicated scorer |
 
-**On late interaction specifically.** The cleanest controlled comparison —
-same backbone, same size, single-vector against late-interaction — puts the
-gap at **57.22 against 56.20 nDCG@10**.[^101] About one point. Storage costs
-have fallen sharply (residual compression, product quantisation, on-disk
-token embeddings), so the old objection is weaker than it was, but for English
-text retrieval a dense first stage plus a cross-encoder is the better spend.
+Late interaction retains term-level detail that a single document vector
+compresses away. A controlled comparison using the same backbone found only
+about one nDCG@10 point between the two approaches.[^101] Compression and
+on-disk token embeddings reduce its storage burden, but for English text it
+still needs to justify its cost against dense retrieval plus a cross-encoder.
 
-There is one exception: **for visual documents — PDFs, slides, scans,
-tables — late interaction over page images is the default**, because it skips
-OCR and layout parsing entirely rather than competing with it.[^102]
+For visual documents, the design offers a different benefit. Late interaction
+over page images can search PDFs, slides, scans and tables without a separate
+OCR and layout-parsing pipeline.[^102] That makes it a relevant option when
+converting the page to text is itself a source of lost evidence.
 
-### Rank for attribution, not similarity, if you need citations
+<span id="rank-for-attribution-not-similarity-if-you-need-citations"></span>
 
-On a legal question-answering
-benchmark, semantic similarity did not correlate with which passages the model
-actually cited — **similarity-based ranking performed worse than random
-selection** at surfacing the cited paragraphs.[^103]
+### Rank for the support an answer needs
 
-If your product shows citations, the passages that support the answer and the
-passages that look most like the question are different sets. Rank for the
-first and measure it separately.
+A passage can resemble a question without supporting its answer. In a legal
+question-answering benchmark, semantic similarity was a poor predictor of
+which paragraphs the model cited; similarity ranking surfaced those paragraphs
+worse than random selection.[^103]
 
-### Put the context back after you rank, not before
+That finding is specific to the benchmark, but the distinction applies to
+citation-bearing products: evaluate whether selected passages support the
+answer, alongside whether they resemble the query. Otherwise a relevance gain
+can leave attribution unchanged or worse.
 
-Reranking works on chunks, and chunks have had their surroundings cut off. The
-heading that said which version this applies to, the preconditions above and
-the caveat below were all removed by whatever split the document.
+<span id="put-the-context-back-after-you-rank-not-before"></span>
 
-The fix is cheap and easy to get the wrong way round: once the winners are
-chosen, pull their neighbouring sections back in. Expanding *before* ranking
-would defeat the point, since you would be scoring padded chunks against each
-other. Expanding after leaves the ranking calculation unchanged and gives the
-model a complete passage instead of an orphaned paragraph; its effect on the
-reader still needs measuring.
+### Restore surrounding text after ranking
 
-This is chapter 5's parent-document retrieval applied at the end of the
-pipeline rather than the start, and the two combine: match and rank on small
-chunks, then give the model the larger section.
+A chunk may omit the heading that names a software version, the preconditions
+above it or the caveat below. Once the winning chunks are chosen, retrieving
+their neighbouring sections can give the answer model a more complete passage.
 
-### The one thing to measure
+Doing this after reranking keeps the scorer's inputs focused. Expanding first
+would change what the reranker compares, because each candidate would include
+additional surrounding material. This is parent-document retrieval applied at
+the end of selection: match and rank small chunks, then restore the larger
+section. Measure whether expansion helps the reader and account for the extra
+tokens before final packing.
 
-Measure **retrieval failure rate at your actual k**, not nDCG: how often is
-the answer absent from what the model finally sees? That is the number that
-predicts end quality, and it is the number Anthropic's chain reports.
+<span id="the-one-thing-to-measure"></span>
 
+### Measure the final shortlist
 
+Alongside ranking scores, measure retrieval failure at the k you actually
+admit: how often is the needed answer absent from what the model finally sees?
+This exposes a failure the rest of the pipeline cannot repair by reading more
+carefully. Then measure the reader's answer too, because presence alone does
+not guarantee successful use.
+
+---
 
 ## 7. Selection and ordering
 
-You have ranked candidates. Now decide how many to admit and in what order.
+The ranked list is a set of candidates. The prompt is a bounded collection of
+evidence. Turning one into the other means deciding what fits, what repeats
+material already selected and what must remain together for the answer to be
+understandable.
 
-Selection under a token budget is less well covered than retrieval or
-reranking. The claims below are marked as measured or as reasoning.
+<span id="the-budget-is-shared-and-most-of-it-is-already-spent"></span>
 
-### The budget is shared, and most of it is already spent
+### Work with the remaining budget
 
-From chapter 1: a real session spent about 28,000 tokens on fixed overhead and
-185,000 on conversation and tool results. Retrieved evidence competes with the
-system prompt, tool definitions, skills, memory, conversation history, tool
-results and the reserved space for the answer.
+Retrieved evidence shares the window with instructions, tools, memory,
+conversation history and space reserved for output. In the session example
+from chapter 1, conversation and tool results had grown far larger than the
+fixed overhead.[^8] A budget that worked at the start of the session may be too
+large several turns later.
 
-Deferring tool definitions frees more room than tightening
-your retrieval will (85% of a tool budget, chapter 1). And on a
-long-running agent, the retrieved-evidence budget is whatever survives the
-conversation, which shrinks every turn.
+Count those categories before packing evidence. Deferred tool loading can
+recover substantial room in a tool-heavy setup; pruning history may matter
+more later in a long-running agent. Which change helps most depends on the
+inventory, rather than on a fixed percentage assigned to retrieval.
 
 ### Scope before you select
 
-The cheapest selection decision is the one that excludes most of the corpus
-before retrieval runs at all.
+A compiler engineer and an infrastructure operator may search the same
+organisation's collection while needing different default sources. Scoping
+the query to the relevant project or source bundle reduces the candidate pool
+before retrieval starts. Material outside that scope cannot distract the
+reranker or reader.
 
-Every enterprise search product does this, and the reason is that "search
-everything everywhere" stops being useful as a corpus grows across teams —
-compiler engineers do not want infrastructure runbooks in their results, and
-vice versa. The usual shape is to scope queries by default to a bundle of
-sources relevant to the user's work, chosen once and changeable.
+The trade-off is cross-domain recall. A question may genuinely need material
+from another team's sources, so make scope visible and changeable rather than
+an unexplained permanent restriction. This is a practical filter to test,
+especially in collections full of similar terminology from different projects.
 
-The principle precedes every technique in this chapter: **a
-source that is out of scope cannot become a distractor.** Given chapter 2's
-finding that semantically-close-but-wrong material is expensive, excluding an
-irrelevant subject area is a useful filter before reranking.
+<span id="how-many-to-admit"></span>
 
-The trade is recall on cross-domain questions, which is why the scoping should
-be a default rather than a fixed restriction.
+### Tune how much reaches the reader
 
-### How many to admit
+The studies in chapters 2 and 4 point to three useful considerations: reader
+accuracy can level off while retrieval recall continues to climb; convincing
+near-misses can be harmful; and removing older tool results can sometimes
+improve answers.[^11][^28][^24]
 
-**Measured.** Reader accuracy saturates well before retriever recall does:
-going from 20 to 50 documents gained about +1.5% and +1% on two models while
-recall kept climbing.[^11] Anthropic found k=20 best for one setup;[^44]
-practitioner guidance after reranking converges on 5–10.
+Together they suggest starting with a broad candidate search and a selective
+final prompt. Five to ten reranked chunks is a practitioner starting point;
+Anthropic found twenty best for its own setup.[^44] Vary the admitted count
+and token budget against the final task score. An improving recall curve does
+not by itself justify a larger prompt.
 
-**Measured.** The risk scales with distractor *similarity*, not count. One
-convincing near-miss hurts more than several obvious irrelevancies, and over
-60% of queries had at least one hard distractor in the top ten of a dense
-retriever.[^28]
+<span id="greedy-top-k-is-probably-the-wrong-algorithm"></span>
 
-**Measured.** Cutting admitted context can raise accuracy: 63% fewer tokens,
-20.6 points better, in the Microsoft pruning study.[^24]
+### Select a useful set, not just high-scoring items
 
-The rule that follows: retrieve many candidates, rerank them, admit few, and
-treat k as something to tune downward against your end metric rather than upward
-against recall.
+If the five highest-ranked passages repeat the same fact, selecting all five
+can leave no room for a lower-ranked passage containing another fact the
+answer needs. Per-item relevance and set usefulness are different objectives.
 
-### Greedy top-k is probably the wrong algorithm
+Maximal marginal relevance, or MMR, addresses repetition by balancing a
+candidate's relevance against its similarity to items already selected.[^121]
+More recent work frames the problem as selection under a token budget: each
+candidate has a cost, and the value of adding it depends on the current
+set.[^104][^105][^106]
 
-Taking the k highest-scoring passages maximises per-item relevance, which is
-not the same as assembling the most useful *set*. It systematically
-over-selects near-duplicates, because near-duplicates of a good passage all
-score well. Maximal marginal relevance[^121] was the classic answer.
+This resembles a knapsack problem: choose useful items that fit within a
+capacity. If the objective has diminishing returns—a *submodular* objective—
+particular algorithms can provide an approximation guarantee. The clinical-text
+study's budget-aware algorithm guarantees roughly 63% of the optimum under
+its stated assumptions.[^104] That mathematical guarantee applies to its
+objective and algorithm, not to answer accuracy or every greedy packer.
 
-Three independent 2026 papers formalise this as knapsack-constrained
-subset selection: each candidate has a token cost and a marginal utility, and
-you are choosing a set under a budget.[^104][^105][^106] If the objective is
-monotone submodular — each added item helps less than the last — the
-budget-aware algorithm in the cited clinical-text study carries a `1−1/e`, or
-roughly 63%, approximation guarantee.[^104] That guarantee depends on the
-stated objective, constraint and algorithm; it does not attach to every greedy
-implementation.
-
-The objective that wins is **facility location**: reward a chosen set for
-being a good stand-in for everything in the candidate pool, not only for
-being varied. Maximal marginal relevance penalises similarity to what you have
-already picked but has no notion of covering the pool, which is why it comes
-third.
-
-The head-to-head result:[^105]
+A *facility-location* objective rewards a set for representing the candidate
+pool well. MMR penalises repetition; facility location also asks how well
+unselected candidates are represented by the chosen ones. In one comparison,
+that distinction improved answer accuracy despite slightly lower evidence
+recall:[^105]
 
 | Method | Evidence recall | End-to-end accuracy |
 |---|---|---|
-| Top-k | **0.933** | 50.0% |
+| Top-k | 0.933 | 50.0% |
 | MMR | 0.895 | 44.0% |
-| Facility location | 0.909 | **52.0%** |
+| Facility location | 0.909 | 52.0% |
 
-**The winner had lower recall than top-k and higher accuracy.** Recall and
-end-to-end quality can move in opposite directions, which is why recall alone
-is the wrong target.
+These results do not establish a universal winning packer. They show why the
+reader's score belongs in the comparison. Another study checked whether the
+gold answer survived as a contiguous span in the packed context. That
+predicted exact-match accuracy better than document recall, with substantial
+variation even among questions for which every gold document had been
+retrieved.[^106] Retrieving a document and preserving its answer are separate
+steps.
 
-That decoupling has been measured directly: a diagnostic asking whether the
-gold answer *survives as a contiguous span in the packed context* correlates
-with exact-match at 0.39–0.55, against 0.31 for document recall — and there is
-a **4.6× exact-match gap among questions where all the gold documents were
-retrieved**.[^106] You can retrieve everything and still lose the answer in
-packing.
-
-So do not tune your packer on recall@k alone. Measure whether the answer
-survives. Three 2026 papers agree on this and none has been replicated.
-
-One baseline worth running: at very tight budgets, taking the
-*front* of the document beats clever selection on front-loaded corpora, and
-loses badly on corpora that are not front-loaded.[^104] Know which yours is.
+The three studies had not been independently replicated as of August 2026.
+Include simple baselines: under a tight budget, taking the beginning of a
+document can work well when the corpus puts key facts first, and poorly when
+it does not.[^104]
 
 ### Removing redundancy
 
-Deduplication is the cheapest correct step, and it has been measured. Byte-exact
-chunk-level deduplication removes:[^107]
+Exact duplicates are a straightforward place to recover space. Compare the
+bytes of candidate chunks and keep one copy of each repeated passage. A study
+found very different savings across its corpora:[^107]
 
-| Corpus type | Context removed |
+| Corpus type | Context removed by exact deduplication |
 |---|---|
 | Clean academic | 0.16% |
 | Enterprise | 24.03% |
 | Conversational | 80.34% |
 
-— with **zero quality regression across four model vendors**. Eighty per cent
-of a conversational corpus is exact repetition.
+The study reported no quality regression across four model vendors. The large
+conversational saving describes that corpus, rather than conversation in
+general; the near-zero academic saving is equally useful when estimating
+whether the step will matter.
 
-So: run byte-exact deduplication always, because it is free. Add fingerprint
-near-duplicate detection (MinHash, SimHash) when your corpus is scraped or
-conversational. Use embedding-similarity deduplication only when those
-two miss paraphrases — it is roughly seven times slower than the alternatives
-for about 10% additional removal.[^108]
+After exact matching, fingerprint methods such as MinHash or SimHash can find
+near-duplicates in scraped or conversational text. Embedding similarity can
+also find paraphrases, at higher processing cost.[^108] Add that complexity
+when inspection shows useful remaining redundancy, and check that near-match
+removal does not discard distinct facts.
 
-### In what order — and the U-curve may not survive
+<span id="in-what-order--and-the-u-curve-may-not-survive"></span>
 
-The received wisdom here is under serious challenge.
+### Order for the input type and task
 
-Chapter 2 reported the U-curve: performance best at the start and end of the
-context, worst in the middle. A SIGIR 2026 reproducibility study tested five
-models across two datasets under a controlled protocol and **failed to
-reproduce it** — "performance is again nearly flat across placements".[^109]
+The original *Lost in the Middle* result suggests placing important evidence
+at the edges. As chapter 2 explained, later work did not consistently reproduce
+that pattern for text retrieval.[^109] Small sets of test questions were a
+major source of unstable conclusions.
 
-Their diagnosis of the disagreement is the valuable part: **topic sampling
-dominates the variance**, and small topic sets both manufacture and mask
-ordering effects. Stable conclusions required 1,000 topics on one dataset and
-2,000 on the other. Most published ordering experiments use far fewer. Read
-that against chapter 11's sample-size numbers — this is the same problem,
-diagnosed independently.
+In the controlled replication, ordering made little difference with five to
+ten text passages. With fifty to a hundred passages on multi-hop questions,
+putting the best evidence last gave a small gain on one dataset. The other
+dataset showed no ordering sensitivity. These are useful starting hypotheses
+for your own prompt, rather than a rule for all retrieval.
 
-The one ordering effect that survived their protocol is small and points
-against intuition: at k=50–100 on multi-hop questions, **reverse ordering —
-best evidence last — gained 2–3 F1**. At k=5–10, ordering made almost no
-difference. On the other dataset, no ordering sensitivity at any size.
+Other input types behaved differently. Visual question answering showed a
+substantial advantage for placing the answer-bearing image first.[^110]
+Tool-result experiments favoured newer results over older ones.[^20] And
+Chroma's filler experiments suggest the content surrounding evidence can
+matter as well as its position.[^13]
 
-Two effects that are large and do not transfer:
-
-- **Multimodal is the opposite.** In retrieval-augmented visual QA, gold-first
-  against gold-last produces gaps of **16 to 26 points** across five
-  models.[^110] Primacy, strongly. Do not carry a text heuristic into a
-  document-image pipeline.
-- **Tool results invert too.** Accuracy at position 8 exceeded position 1 by
-  5–75%.[^20] With tool output it is the *oldest* results being ignored.
-
-And from chapter 2: coherent filler competes for attention
-more than incoherent filler.[^13] Well-written surrounding context is not
-automatically safer context.
-
-**What should you do?** Below about 20 chunks on text, ordering is
-close to a non-issue — order for prefix-cache stability instead, and take the
-cost saving. Above 50 chunks on multi-hop tasks, put the best evidence last. In
-multimodal, put it first.
+For a short list of text chunks, first test whether order makes a material
+quality difference. If it does not, stable ordering may offer a caching benefit.
+For long multi-hop or visual inputs, compare placing the best evidence at the
+beginning and at the end.
 
 ### Order for the cache
 
-Chapter 9 posed the tension between ordering for relevance and ordering for
-cache stability. There is evidence for how to resolve it.
+Caching can reuse the beginning of a prompt when it matches a previous
+request. Reordering the same evidence may therefore change processing cost and
+latency even if answer quality stays similar.
 
-Keeping a prefix tree over recently-served evidence sequences and placing the
-most reusable prefix first — purely at the prompt layer, no serving changes —
-gave a **20–33% reduction in median time-to-first-token**, capturing 97.5% of
-the benefit an oracle ordering would achieve, **with no degradation in answer
-quality**.[^111]
+One study maintained a prefix tree of recently served evidence sequences and
+placed reusable prefixes first. This reduced median time to first token by
+20–33%, with no measured answer-quality loss.[^111] It operated at the prompt
+layer, without changes to the serving system.
 
-Set that against the ordering literature above: relevance ordering is worth at
-most 2–3 F1 on a narrow slice of tasks, and cache-aware ordering is worth
-20–33% of your latency at no measured quality cost. On the one study that
-measured this, the cache wins the trade. Unreplicated.
+The result had not been independently replicated, but it gives a reason to
+measure reuse before repeatedly reordering a small evidence set for marginal
+relevance gains. Chapter 9 explains the cache mechanics and costs.
 
-### Budget evidence first, then fit everything else round it
+<span id="budget-evidence-first-then-fit-everything-else-round-it"></span>
 
-The failure mode when scaffolding grows is **displacement, not interference**.
+### Reserve room for the evidence you need
 
-A 2026 study at a 4,096-token window found performance holding through
-moderate coordination overhead and then falling sharply once residual evidence
-dropped to a few hundred tokens. The decisive ablation: when the coordination
-tokens were added *outside* the fixed budget so evidence stayed intact, three
-commercial models stayed correct **even at a 95% coordination ratio**.[^112]
+Instructions and coordination messages can fill the window until little
+evidence remains. In one fixed-window experiment, performance fell sharply
+when only a few hundred evidence tokens survived. When coordination tokens
+were added outside that fixed budget, preserving the evidence, the tested
+commercial models stayed correct even at a very high coordination ratio.[^112]
 
-The scaffolding was not the problem; crowding out the evidence was.
+In that setup, the loss came from evidence being displaced. It suggests
+reserving enough room for the task's required material and then fitting
+coordination around it. Tool schemas are worth inspecting early: a separate
+study recovered substantial accuracy by compressing schemas under a tight
+budget.[^113]
 
-Budget evidence as a floor and fit the rest around
-it, rather than the reverse. And compress tool schemas before anything else —
-they are the highest-token, lowest-information consumer, and compressing them
-recovered **20.5 percentage points of exact-match** at an 8,000-token budget
-where uncompressed schemas scored 2.6%.[^113]
+How far other context can be cut needs a local measurement. One study retained
+near-baseline success at 75% of the original context, with a sharper decline
+between 50% and 35% retention.[^114] Those are results from one unreplicated
+setup, not safe and unsafe percentages for every agent. Inspect what was
+removed at each step, especially facts and instructions needed later.
 
-On how far you can cut: one study found 92.7% success at 75% retained context
-against a 93.8% full-context baseline, with sharp divergence between 50% and
-35% retention.[^114] Treat ~75% as safe and ~35% as dangerous — one paper,
-unreplicated — and measure where your own cliff sits.
+<span id="what-is-not-known"></span>
 
-### What is not known
+### What still needs local measurement
 
-This chapter cannot tell you:
+The cited work does not supply a validated allocation formula for
+instructions, tools, memory, evidence, history and output. It also leaves
+output reservation largely unmeasured: there is no established rule for how
+much space to hold back for the answer.
 
-- **No validated allocation formula** across system prompt, tools, memory,
-  evidence, history and output. Anyone quoting percentages is quoting a
-  heuristic.
-- **Output reservation is undocumented.** No study found measures the cost
-  of under- or over-reserving output tokens.
-- **No mechanistic account** reconciling text-RAG order-insensitivity with the
-  large multimodal primacy effect.
-- **No published measurement of multi-source overlap or host concentration**
-  beyond chapter 4's, which is 24 queries and a single run.
+Other gaps remain around why text and visual ordering effects differ, and how
+source overlap changes useful evidence coverage. The provider comparison in
+chapter 4 is only 24 queries in one run. Treat these as parts of the pipeline
+to instrument, rather than filling unknown quantities with fixed percentages.
 
-
+---
 
 ## 8. Compression
 
-Compression is usually the first thing people try. It should be the last.
+Compression reduces material you have already chosen to send. It can make a
+large, changing input affordable, but it also creates another opportunity to
+lose a fact, qualification or citation. Before paying for that transformation,
+check whether extraction, selection and caching can solve the budget problem.
 
-### The headline number does not survive checking
+<span id="the-headline-number-does-not-survive-checking"></span>
 
-The most-cited claim in this area is "up to 20× compression with little
-performance loss", from Microsoft's LLMLingua in October 2023.[^59] Two things
-about it.
+### Match the compression claim to the material
 
-First, what it was measured on: GSM8K, BBH, ShareGPT and an arXiv set. GSM8K
-and BBH are few-shot reasoning prompts — formulaic, highly repetitive text
-where the same scaffolding recurs in every example. That is the most
-compressible material there is, and the least like a retrieved web page.
+Repeated examples in a few-shot prompt contain scaffolding a compressor can
+remove many times. A web page with a single crucial detail presents a different
+problem. The ratio achieved on one does not establish what can be safely
+removed from the other.
 
-Second, what happened next. The same team's successor, LLMLingua-2, claims
-**2×–5×**.[^60] LongLLMLingua, the retrieval-oriented member of the family,
-claims up to +21.4% accuracy at around 4× fewer tokens on
-NaturalQuestions.[^61]
+LLMLingua's widely quoted “up to 20×” result came from a mixture including
+few-shot reasoning prompts with repetitive structure.[^59] Its successor,
+LLMLingua-2, reported 2×–5× compression.[^60] The retrieval-oriented
+LongLLMLingua reported improved accuracy with around four times fewer tokens
+on NaturalQuestions.[^61] Each result describes its own data and setup;
+together they give a range of possibilities to test, rather than one expected
+saving for retrieved documents.
 
-When a team's own follow-up paper claims a quarter of its predecessor's
-headline, treat the headline as a best case on favourable text.
-
-For completeness, the repository is MIT-licensed with 6,522 stars, and has had
-one commit since October 2025 (checked 4 August 2026). It is not abandoned. It
-is not under active development either.
+The implementation's maintenance also belongs in the decision. At the 4 August
+2026 check, LLMLingua remained available under MIT but had little recent commit
+activity. The tooling appendix retains that dated snapshot.
 
 ### The families, briefly
 
-| Family | How it works | Needs model weights? |
+Compression methods differ in what they preserve and what access they need:
+
+| Family | How it works | Requires access to answer-model weights? |
 |---|---|---|
-| **Token-level** (LLMLingua, LLMLingua-2) | Drop individual tokens judged low-information, by perplexity or by a trained classifier | No |
-| **Extractive** (RECOMP, and truncation) | Select whole sentences or passages and discard the rest | No |
-| **Abstractive** | Have a cheaper model summarise the retrieved documents | No |
-| **Soft / learned** (gist tokens, ICAE, xRAG) | Compress into internal model states rather than text | **Yes** |
+| Token-level, such as LLMLingua | Drops tokens scored as low-information, using perplexity or a trained classifier | No |
+| Extractive, such as RECOMP | Keeps selected sentences or passages | No |
+| Abstractive | Uses a model to summarise the material | No |
+| Soft or learned, such as gist tokens, ICAE and xRAG | Encodes material into internal model states | Yes |
 
-The last row is the practical dividing line. Soft compression is the most
-elegant work in the area and is unavailable to anyone using a hosted API,
-because it needs access to the weights.
+Text-based approaches can sit in front of a hosted API. Methods that inject
+compressed internal states require access below that API boundary, so they are
+not interchangeable deployment options.
 
-RECOMP is worth singling out, and not for its compression rate.[^62] Its
-extractive and abstractive compressors reach a compression rate as low as 6%
-with minimal loss — but its most useful feature is that it can **return an
-empty string** when the retrieved documents are not relevant. That is not
-compression. That is admission control, and it is the more valuable idea.
+RECOMP also allows its compressor to return an empty string when retrieved
+documents are irrelevant.[^62] This combines compression with an admission
+decision: some material should contribute no context at all. Measure that
+choice separately from how tightly useful material can be compressed.
 
 ### The arithmetic
 
-Take 50 candidate chunks of 400 tokens — 20,000 tokens — reduced to 5 chunks,
-saving 18,000 tokens per request. Prices are per million tokens, checked
-4 August 2026.
+Suppose a search returns fifty chunks of 400 tokens each: 20,000 candidate
+tokens. Selecting five leaves 2,000, saving 18,000 tokens in the answer call.
+Whether the selection step pays depends on the rate those removed tokens
+would otherwise have cost.
 
-| Approach | Cost of the step | Value of tokens saved | Ratio |
+The example below uses prices checked on 4 August 2026. It compares the cost
+of processing the candidates with the value of the input removed. The LLM
+compression rows count its input cost only, so its output adds further cost.
+
+| Approach | Cost of the step | Value of tokens saved | Saving / step cost |
 |---|---|---|---|
-| Rerank ($0.05/M) → Opus 5 uncached input ($5.00/M) | $0.0010 | $0.090 | **90:1** |
-| Rerank → Opus 5 cached read ($0.50/M) | $0.0010 | $0.009 | **9:1** |
+| Rerank ($0.05/M) → Opus 5 uncached input ($5.00/M) | $0.0010 | $0.090 | 90:1 |
+| Rerank → Opus 5 cached read ($0.50/M) | $0.0010 | $0.009 | 9:1 |
 | Rerank → Haiku 4.5 cached read ($0.10/M) | $0.0010 | $0.0018 | 1.8:1 |
-| Rerank → cheap model, cached ($0.02/M) | $0.0010 | $0.00036 | **0.36:1 — losing money** |
-| **LLM compression** (Haiku input $1.00/M) → Opus 5 uncached | **$0.020** | $0.090 | 4.5:1 |
-| **LLM compression** → Opus 5 **cached read** | **$0.020** | $0.009 | **0.45:1 — losing money** |
+| Rerank → cheap model, cached ($0.02/M) | $0.0010 | $0.00036 | 0.36:1 |
+| LLM compression (Haiku input $1.00/M) → Opus 5 uncached | $0.020 | $0.090 | 4.5:1 |
+| LLM compression → Opus 5 cached read | $0.020 | $0.009 | 0.45:1 |
 
-**A reranker is nearly free relative to frontier input tokens and almost
-always pays.** It stops paying when the tokens it saves were already being
-served at a cached or budget rate.
-
-**LLM-based compression is roughly twenty times more expensive than reranking
-for the same job**, before counting its output tokens. Against uncached
-frontier input it still nets out positive. Against *cached* reads it is a
-clear loss.
+A ratio below one means the processing step costs more than the input tokens
+it saves. Reranking has ample room to pay against uncached frontier input in
+this example, but less against inexpensive cached reads. LLM compression costs
+about twenty times as much as reranking before its output is counted. A large
+reduction in token count can therefore leave the bill higher.
 
 ### Compression and caching interact
 
-At modest compression ratios, compression can cost more than a warm cache
-saves. The interaction is not universal, because real cache-hit rates are
-below 100%.
+A cache can reuse a stable prompt prefix without processing its tokens again.
+Query-aware compression creates different text when the question or selected
+documents change, reducing that opportunity for reuse. A stable compressed
+result can be reused, but a new summarisation pass on every request needs to
+earn its cost against the alternative of caching the original material.
 
-Compressed context is *derived*. It changes whenever the retrieved set
-changes, which means it cannot live in a stable cached prefix. Caching requires
-the same bytes every time; compression produces different bytes every time.
+Compare the complete routes: compression cost plus the reduced answer input,
+and the writes, reads and misses of the uncompressed cache. The observed hit
+rate matters. One study found compression overtaking caching at around a sixfold
+reduction, with a cache-hit plateau near 0.83 on the API it tested.[^124] That
+is one provider and one recent study, not a general crossover threshold.
 
-So the comparison is not "compressed tokens versus uncompressed
-tokens". It is "compression cost versus the alternative of caching the
-uncompressed corpus and never compressing at all". A summarisation pass that
-runs on every request, over content that would otherwise have been a cache
-hit, can spend more than it saves.
+Latency follows the same dependency. A compression call must finish before
+the answer model can start reading its result. On a cold cache, reduced
+prefill may recover that delay. On a warm cache, the original prompt's
+processing might already have been reusable. Measure the serial compression
+call as part of end-to-end latency.
 
-One July 2026 study measured a cache-hit plateau around 0.83 on one production
-API and found query-aware compression overtaking naive caching at compression
-ratios around 6×.[^124] That is one recent study, not a general threshold. The
-decision therefore needs the observed cache-hit rate, compression ratio and
-prices for the route in question.
+<span id="measure-the-right-thing"></span>
 
-Latency runs the same way. A compression call is a serial round trip before
-prefill can start. On a cold cache it usually still wins, because prefilling
-18,000 extra tokens takes longer. On a warm cache, where those tokens would
-have been reused cache blocks rather than fresh prefill, it is added
-latency with no saving.
+### Check the details that survive
 
-### Measure the right thing
+A compression ratio describes the size change. Task quality depends on what
+remains: the needed facts, their qualifications and the evidence supporting
+them. Measure downstream accuracy, claim recall and citation support alongside
+the ratio.
 
-The compression ratio is a bad headline metric. It is the input to the
-decision, not the outcome.
+An Anthropic cookbook example makes the distinction concrete. A research agent
+read eight documents, then compacted its context. All three checked high-level
+facts survived, while none of three checked appendix-table details did.[^63]
+A summary can preserve the subject of the documents yet lose the numbers a
+later question needs. This was one small demonstration, so it motivates a
+fidelity check rather than establishing a general loss rate.
 
-What to measure instead: downstream task score, claim recall (did every fact
-needed to answer survive?), and citation support. Compression that removes
-the one fact needed to answer is not compression.
+<span id="when-to-compress-at-all"></span>
 
-There is a measurement of that failure. Anthropic's cookbook ran a
-research agent over eight documents totalling about 329,000 tokens. After
-compaction, **3 of 3 high-level facts were preserved and 0 of 3
-appendix-table details survived**.[^63] Compression keeps the gist and loses
-the specifics, which is fine until the specifics were the answer.
+### Decide when compression earns a place
 
-### When to compress at all
+A practical sequence is to reduce avoidable input before transforming useful
+input:
 
-A decision rule, in order:
+1. Fetch material selectively, using search results to choose what needs
+   a full read.
+2. Extract the body from raw pages, checking for lost content.
+3. Rerank and select passages against the task and token budget.
+4. Cache the stable part where reuse makes it worthwhile.
+5. Test compression for the remaining large, redundant material, especially
+   when it changes per request and will go to an expensive model.
 
-1. **Retrieve less.** Cheaper than compressing, and it removes distractor
-   load rather than concentrating it.
-2. **Extract properly.** Removing HTML machinery cut 87–99% of tokens on the
-   four pages measured in chapter 1. A content extractor can remove more, but
-   must be checked for lost body text.
-3. **Rerank and truncate.** Cheap, and it improves quality rather than
-   trading it.
-4. **Cache the stable part.** A 90% discount for getting the ordering right.
-5. **Then consider compression** — for content that is large,
-   redundant, uncacheable because it varies per request, and headed for an
-   expensive model.
-
-Most pipelines are better served by the first four steps than by the fifth.
+Each step needs an answer-quality check. Selection can omit evidence just as
+summarisation can. The advantage of this sequence is that the compressor only
+processes material still worth sending, and its savings are compared with a
+realistic caching alternative.
 
 ---
 
 ## 9. Caching
 
-The largest cost lever is prompt caching: a 90% discount for putting your
-content in a stable order.
+An agent often sends the same instructions, tools and earlier messages on
+successive requests. Prompt caching reuses the work of reading that repeated
+prefix. When much of the prompt stays stable, the read discount can make a
+large difference to cost without removing any content.
 
-### How it works, in one paragraph
+<span id="how-it-works-in-one-paragraph"></span>
 
-When a model reads your prompt, it computes intermediate results for every
-token — the [KV cache](#g-kv-cache). Prompt caching stores that work on the
-server so a later request starting with identical text can reuse it. You pay a
-small premium to write the cache and a large discount to read it. Note that
-**cached tokens still occupy the window**: caching changes what you pay, not
-how much space it takes.
+### How prompt caching works
+
+While reading a prompt, a model computes intermediate results for its tokens:
+the [KV cache](#g-kv-cache). Prompt caching retains reusable work on the server
+for later requests with a matching prefix. Providers differ in whether they
+charge for writes, reads or storage, and in how long the cache remains usable.
+
+Cached tokens still occupy the context window. Caching reduces processing and
+billing for repeated material; a 50,000-token cached block still takes 50,000
+tokens of room alongside the new question and answer.
 
 ### The numbers, checked 4 August 2026
 
-Every figure in this section comes from the providers' own pricing and caching
-documentation, fetched on 4 August 2026.[^123] They are the authority for how
-their own billing works, and these change often — recheck before quoting.
+The table records the providers' pricing and caching documentation at the
+original check date.[^123] Read the columns together: a low read price may
+come with a write premium, a minimum prefix size or storage charges.
 
 | Provider | Mechanism | TTL | Minimum | Write | Read |
 |---|---|---|---|---|---|
-| **Anthropic** | Explicit breakpoints, max 4 | 5 min or 1 hour | 512–4,096 tokens by model | 1.25× (5 min), 2× (1 hour) | **0.1×** |
-| **OpenAI** (GPT-5.6+) | Automatic, optional explicit | 30 min only | 1,024, strict | 1.25× | ~0.1× |
-| **OpenAI** (earlier) | Automatic | 5–10 min idle, max 1 h | 1,024–2,048 | free | varies; gpt-4o only 50% |
-| **Google Gemini** | Implicit by default | not documented | 2,048–4,096 | free | ~0.1× |
-| **Google** explicit | Cache objects | settable | as above | free per token | **plus hourly storage** |
+| Anthropic | Explicit breakpoints, max 4 | 5 min or 1 hour | 512–4,096 tokens by model | 1.25× (5 min), 2× (1 hour) | 0.1× |
+| OpenAI (GPT-5.6+) | Automatic, optional explicit | 30 min only | 1,024, strict | 1.25× | ~0.1× |
+| OpenAI (earlier) | Automatic | 5–10 min idle, max 1 h | 1,024–2,048 | free | varies; gpt-4o only 50% |
+| Google Gemini | Implicit by default | not documented | 2,048–4,096 | free | ~0.1× |
+| Google explicit | Cache objects | settable | as above | free per token | plus hourly storage |
 
-Break-even on Anthropic: the 5-minute cache pays for itself after one read
-(1.25 + 0.1 = 1.35 against 2.0 uncached); the 1-hour cache needs two.
+TTL is the *time to live*: the period during which an entry remains eligible
+for reuse. With Anthropic's five-minute cache, one write and one read cost
+`1.25 + 0.1 = 1.35` times the base input price, compared with `2.0` for two
+uncached requests. The one-hour cache needs two reads to recover its higher
+write premium.
 
-**Google bills storage by the hour.** Explicit context caching bills $1.00 per million
-tokens per hour on the Flash line and $4.50 on Gemini 3.1 Pro Preview. A
-200,000-token cache held for an hour on 3.1 Pro costs $0.90 in storage before a
-single read. Anthropic and OpenAI charge a one-off write premium instead.
+Google's explicit caching adds hourly storage. At the recorded rate for Gemini
+3.1 Pro Preview, holding 200,000 tokens for an hour cost $0.90 before any read.
+That makes the expected number and timing of requests part of the decision;
+retaining a rarely reused cache can outweigh its read savings.[^123]
 
-**Anthropic's minimum is not monotonic across generations**, and falling below
-it produces no error: 512 tokens on Opus 5, 1,024 on Opus 4.8, 2,048 on Opus 4.7,
-4,096 on Opus 4.6. Below the minimum, "requests to cache fewer than this number
-of tokens will be processed without caching, and no error is returned".[^64]
+Minimum prefix sizes also vary by model. Anthropic processes requests below
+the minimum without caching and returns no error.[^64] Check the relevant
+model's threshold and inspect the cache counters instead of assuming that a
+cache request succeeded. The prices and limits are a dated snapshot; check them before using the
+calculation for a deployment.
 
-### The tension with everything else in this guide
+<span id="the-tension-with-everything-else-in-this-guide"></span>
 
-Caching matches an exact request prefix. A content change before a breakpoint
-invalidates reuse at or after it; semantic equivalence does not preserve a
-cache hit.[^123]
+### Build a stable prefix
 
-So content must be ordered by *stability*, not by *relevance*:
+A cache matches an exact request prefix. Changing content before a breakpoint
+prevents reuse at or after that change, even if the new wording means the same
+thing.[^123] Arrange stable material before volatile material:
 
 ```
 tools (frozen)  →  system prompt (no timestamps)  →  cached history
                 →  [BREAKPOINT]  →  retrieved evidence, this turn's question
 ```
 
-This creates a trade-off with reranking retrieved passages per query. The
-usual architecture puts volatile evidence after the last stable breakpoint,
-where it is billed at full rate. Repeated jobs are an exception: chapter 7's
-cache-aware ordering result shows that recurring evidence sequences can be
-arranged for prefix reuse. Measure reuse before treating retrieved evidence as
-stable.
+Retrieved evidence usually changes with the query, so it belongs after the
+last stable breakpoint unless you have observed reuse. Repeated jobs can be
+different: recurring evidence sequences may form reusable prefixes, as in the
+ordering study in chapter 7. Measure that reuse before deciding how to arrange
+the retrieved blocks.
+
+This is a real trade-off with relevance ordering. Reordering the same passages
+might slightly improve reading on one task while invalidating an otherwise
+useful prefix. Compare both answer quality and cache behaviour.
 
 ### What mis-ordering costs
 
-A 50,000-token evidence block on Opus 5 ($5.00 input, $0.50 cached read, $6.25
-five-minute write):
+Consider a 50,000-token evidence block on the recorded Opus 5 prices. The same
+content has three costs depending on whether the server can reuse it:
 
 | Request state | Cost for the 50,000-token block |
 |---|---|
-| Warm cache read | **$0.025** |
+| Warm cache read | $0.025 |
 | Uncached input after the breakpoint | $0.25 |
-| Five-minute cache write | **$0.3125** |
+| Five-minute cache write | $0.3125 |
 
-If re-ordering forces a write on every request, it costs **more than not
-caching at all**: about $288 per thousand requests more than warm reads, and
-25% more than uncached input. An amortised comparison must also include the
-initial write, later reads, expiry and the observed hit rate.
+A changed prefix that forces a write on every request costs more than ordinary
+uncached input, because each request pays the write premium. In this example,
+that is about $288 more per thousand requests than warm reads, and 25% more
+than uncached input. For a deployment estimate, include the initial write,
+later reads, expiry and the measured hit rate.
 
-### What silently invalidates a prefix
+<span id="what-silently-invalidates-a-prefix"></span>
 
-Things that invalidate a prefix, worth grepping for:
+### Find why a prefix changed
 
-- `datetime.now()` or `Date.now()` anywhere in the system prompt
-- request IDs or UUIDs interpolated into the prefix
-- `json.dumps()` without `sort_keys=True`, or iteration over a set
-- per-user data in a shared system prompt
-- conditional system sections — each flag combination is a distinct prefix
-- a tool set that varies per user
-- **the 20-block lookback ceiling**: Anthropic's breakpoints walk back at most
-  20 content blocks, so an agent turn appending 30 tool calls misses on the
-  next request with no error. Place an intermediate breakpoint every ~15
-  blocks; you have four to spend.
-- **concurrency**: a cache entry only exists after the first response begins,
-  so N parallel identical requests all pay full price. Fire one, wait for the
-  first token, then fire the rest.
+Many cache misses begin with small changes unrelated to the main task. Inspect
+the prefix for timestamps, request IDs, UUIDs, per-user data, conditional
+sections and tool sets that vary between requests. Also check whether JSON
+serialisation or iteration over an unordered collection changes the order of
+otherwise identical content.
 
-Anthropic ships a diagnostics beta that names the cause — `system_changed`,
-`tools_changed`, `messages_changed`, `model_changed` — reporting only the
-earliest divergence.[^65]
+Two provider-specific behaviours deserve separate checks:
 
-### What you cannot touch
+- Anthropic's breakpoints look back at most twenty content blocks. If a turn
+  adds thirty tool calls, the next request can miss the earlier reusable
+  prefix. Intermediate breakpoints, placed about every fifteen blocks in the
+  documented pattern, help within the four-breakpoint limit.
+- A cache entry becomes available only after the first response begins.
+  Launching identical requests simultaneously can therefore make each pay
+  for fresh processing. When the workflow permits it, starting one request
+  and waiting for its first token lets later requests reuse the entry.
 
-The KV-cache research literature is large and almost entirely below the API
-boundary. StreamingLLM's attention sinks, H2O's heavy-hitter eviction,
-SnapKV's compression, KV quantisation — all require self-hosting.[^66] On
-vLLM, automatic prefix caching is on by default; SGLang's RadixAttention is
-too, with configurable eviction.
+Anthropic's diagnostics beta reports the earliest divergence with labels such
+as `system_changed`, `tools_changed`, `messages_changed` and
+`model_changed`.[^65] That helps distinguish a content change from a model or
+tool configuration change.
 
-One caution on those headline numbers: 22.2× and 29× speedups were measured
-against 2023-era baselines on OPT and LLaMA-1/2. The mechanisms replicate; the
-multipliers do not transfer to a well-configured 2026 server.
+<span id="what-you-cannot-touch"></span>
+
+### What requires control of the server
+
+Research on KV-cache eviction, attention sinks, compression and quantisation
+works below the hosted API boundary. StreamingLLM, H2O and SnapKV require
+control of the inference implementation.[^66] A caller of a hosted API can
+arrange prompts and use the exposed cache features, but cannot substitute
+those internal algorithms.
+
+For self-hosting, the August 2026 tooling check found automatic prefix caching
+enabled by default in vLLM and SGLang's RadixAttention providing configurable
+eviction. Compare performance against a well-configured server. Large speedup
+multipliers from early KV-cache papers used older models and baselines and do
+not predict the gain over those newer configurations.
 
 ---
 
 ## 10. Agent memory
 
-Everything so far concerned a single request. This chapter is about what
-happens over hundreds of them.
+A long-running agent needs to remember decisions, recover earlier evidence
+and avoid rereading everything on each turn. The transcript alone is a costly
+way to do that: it grows continuously and contains both useful state and the
+intermediate work that produced it.
 
-### Where the tokens actually go
+<span id="where-the-tokens-actually-go"></span>
 
-A published breakdown of a real session on a 1M-token window:[^8] system
-prompt 6,200; system tools 11,600; MCP tools 1,200; memory files 3,300; skills
-333; **messages 185,400**.
+### Separate fixed overhead from growing history
 
-The listed fixed components sum to about 22,600 tokens, making messages about
-89% of the listed total. The source reports about 28,000 tokens of fixed
-overhead under a broader grouping; against that figure, conversation and tool
-results are about 87%. Keep the categories alongside the percentage rather
-than collapsing them into one exact share.
+In the session breakdown used earlier, listed instructions, tools, memory
+files and skills totalled about 22,600 tokens, while messages occupied about
+185,400.[^8] The source's broader grouping put fixed overhead around 28,000;
+under either grouping, conversation and tool results dominated.
 
-The pre-deferral failure shape is the opposite: examples circulate of MCP tool
-definitions consuming tens of thousands of tokens before the user types
-anything. I could not resolve a primary source for the specific figures that
-get quoted, so treat the shape as real and the numbers as unverified.
+This gives you two maintenance jobs. Deferred loading reduces definitions that
+would otherwise be present before work begins. Managing history controls the
+tool results and messages that accumulate during work. Solving the first does
+not stop the second from growing.
 
-So there are two different problems. Tool definitions are a fixed cost you fix
-once, by deferring. Tool results are a growing cost you have to manage
-continuously.
+<span id="the-four-verbs"></span>
 
-### The four verbs
+### Four operations for memory
 
-LangChain's framing is the most useful organiser: **write, select, compress,
-isolate**.[^67]
+LangChain organises context management around four verbs:[^67]
 
-- **Write** — put things outside the window (files, memory, scratchpads).
-- **Select** — bring back only what is needed.
-- **Compress** — summarise or trim what remains.
-- **Isolate** — give separate work its own window.
+- **Write:** store information outside the window, in files, memory records
+  or scratchpads.
+- **Select:** bring back the parts needed for the current task.
+- **Compress:** summarise or trim material that remains in context.
+- **Isolate:** give separate work its own window.
+
+These operations can be combined. An agent might write a progress record,
+select the relevant source files on resumption and use a separate context for
+a bounded research task. The design question is what each operation must
+preserve for the next step to succeed.
 
 ### Compaction, and what it loses
 
-[Compaction](#g-compaction) replaces a long conversation with a summary.
-Anthropic's server-side implementation triggers by default at 150,000 input
-tokens, minimum 50,000, and the docs state the consequence: "once
-content is compacted, the raw history is permanently discarded".[^68]
+[Compaction](#g-compaction) replaces a long conversation with a summary. It
+creates room to continue, but the summary becomes a dependency: information
+omitted from it may no longer be available to the model.
 
-The measured fidelity result from chapter 8 is the one to remember: 3 of 3
-high-level facts preserved, 0 of 3 detail-table entries. Compaction keeps the
-shape of what happened and loses the particulars.
+Anthropic's server-side implementation, as documented in August 2026,
+triggered by default at 150,000 input tokens, with a minimum trigger of 50,000.
+Its documentation states that raw history is permanently discarded after
+compaction.[^68] The small fidelity example in chapter 8—high-level facts
+preserved, appendix details lost—shows the kind of omission to test for.[^63]
 
-Claude Code's published order of operations is instructive because it treats
-these as different tools: it clears older tool outputs first, and only
-summarises if that is not enough. Clearing is mechanical and costs no
-inference. Compaction costs a sampling pass and is irreversible. Use clearing
-first.
+Claude Code's documented sequence clears older tool outputs before resorting
+to summarisation. Clearing is mechanical and requires no inference; compaction
+adds a model pass. That ordering can remove expendable bulk before asking a
+summary to preserve the remaining state.
 
-What survives compaction there is documented: the system prompt and
-project-root instructions are re-injected from disk; path-scoped rules and
-nested instruction files are **lost** until a matching file is read again;
-invoked skills are re-injected but capped at 5,000 tokens each and 25,000
-total, truncated from the end — so critical instructions belong at the top of
-the file.
+Survival also depends on where instructions came from. In August 2026,
+Claude Code re-injected the system prompt and project-root instructions from
+disk. Path-scoped rules and nested instruction files were unavailable until a
+matching file was read again. Invoked skills were re-injected with per-skill
+and total caps of 5,000 and 25,000 tokens respectively, truncated from the end.
+These details make the placement and reload mechanism for critical instructions
+worth checking.
 
-Anthropic's own conclusion on long-running work is that "compaction isn't
-sufficient" by itself, because it does not reliably preserve instructions
-across sessions.[^69] The pattern that works is explicit handoff artefacts: a
-progress file, a git history, a task list on disk that the next session reads.
+For work across sessions, keep explicit handoff artefacts such as a progress
+file, task list and git history. Anthropic's long-running-agent guidance found
+compaction insufficient by itself for preserving instructions across
+sessions.[^69] A durable record lets the next session read the current state
+directly instead of reconstructing it from a compressed transcript.
 
 ### Sub-agents
 
-Give a sub-agent its own window, let it read widely, and take back only a
-summary — typically 1,000–2,000 tokens.[^70] A documented Claude Code example
-has a research sub-agent read three files and return 420 tokens, with none of
-the reads entering the main window.
+A sub-agent can read widely in its own window and return a short result to the
+main agent. The main context then carries the conclusion instead of every
+intermediate tool response.[^70] One documented Claude Code example read
+three files and returned 420 tokens, with those file reads staying outside the
+main window.
 
-### The multi-agent argument, fairly
+The handoff is selective by design. Give the sub-agent a bounded task and
+consider which details the parent will need from its answer. A short report
+saves context only if it retains enough information for the next decision.
 
-Two primary sources published a day apart in June 2025, reaching opposite
-conclusions.
+<span id="the-multi-agent-argument-fairly"></span>
 
-**Anthropic, for.**[^71] An orchestrator with parallel sub-agents beat a
-single agent by 90.2% on their internal research eval. Multi-agent uses about
-15× the tokens of chat; single agents about 4×. Their own scoping is usually
-dropped when the 90.2% is quoted: it suits "heavy parallelization, information
-exceeding single context windows, and numerous complex tools" and is a **poor
-fit** for "domains requiring all agents to share identical context, tasks with
-many dependencies, and most coding work".
+### Match isolation to the work
 
-**Cognition, against.**[^72] Two principles: share full agent traces, not
-individual messages; and "actions carry implicit decisions, and conflicting
-decisions carry bad results". Their illustration is parallel sub-agents
-building mismatched halves of the same game.
+Independent reading tasks are easier to split than changes with shared
+dependencies. Several agents can investigate different sources and report
+back; agents editing connected parts of a system also need to agree on the
+decisions their edits imply.
 
-**The revision.** Cognition's April 2026 follow-up sharpens rather than
-retracts: multi-agent works when "writes stay single-threaded and the
-additional agents contribute intelligence rather than actions".[^73] They
-run a reviewer with no prior context that catches an average of 2 bugs per
-pull request, 58% of them severe — clean context *helps* the reviewer,
-because of context rot.
+Anthropic's internal research evaluation found a substantial gain from an
+orchestrator with parallel sub-agents, at substantially higher token use.[^71]
+Its stated fit was work with heavy parallel reading, information beyond one
+window and many complex tools. It explicitly cautioned about tasks needing
+identical shared context, many dependencies and much coding work.
 
-**The complication.** Anthropic's own analysis found **token usage alone
-explains 80% of performance variance** on one benchmark. A Stanford paper
-tested the implication directly and found single agents matched or beat
-multi-agent systems under *matched* thinking-token budgets, arguing from the
-data processing inequality that passing information through more agents can
-only lose it.[^74] Read together, these suggest much of the multi-agent gain
-may come from the extra tokens rather than from the architecture.
+Cognition described the coordination problem through agents building
+incompatible halves of the same game.[^72] Its later guidance favoured
+additional agents contributing analysis while writes remained single-threaded,
+including review from a fresh context.[^73] These accounts support a practical
+starting point: isolate read-heavy work with clear boundaries and keep a
+single owner for interdependent writes.
 
-The reconciled position both parties hold: **isolate for read-heavy,
-parallelisable work; keep writes single-threaded.**
+Architecture is only one explanation for a measured gain. Anthropic's own
+analysis found token use explained much of the performance variation in one
+benchmark. A separate comparison found single agents matching or beating
+multi-agent systems under matched thinking-token budgets.[^74] Compare
+systems at similar budgets before attributing the difference to delegation.
 
-A separate study of 1,600+ annotated multi-agent traces found 14 distinct
-failure modes, with specification and system-design issues accounting for
-about 42% — most failures are design failures, not model failures.[^75]
+Failure analysis reinforces the importance of the surrounding design. A study
+of multi-agent traces found substantial failures attributable to specification
+and system-design issues.[^75] More agents create more handoffs whose
+requirements need to be clear.
 
 ### Progressive disclosure
 
-The pattern behind skills, deferred tools and just-in-time retrieval: keep a
-short pointer in the window, load the full text only if it turns out to
-matter. The numbers from chapter 1 — about 100 tokens per available skill, 85%
-of a tool budget recoverable by deferring — are all instances of it.
+Skills, deferred tools and just-in-time retrieval share one pattern: keep a
+short pointer in the window and load full content when it becomes relevant.
+An available skill might cost about a hundred tokens; loading all its
+instructions in advance would consume their full size on every request.[^9]
+
+Progressive disclosure shifts the question from “what might ever be useful?”
+to “what does this step need?” It works best when the pointer gives the model
+enough information to recognise when to load the detail.
 
 ### Keep tools narrow and let the caller orchestrate
 
-A related design choice: make each tool one primitive with narrow, stable
-inputs and outputs, and keep the model out of the tool itself.[^117] The tool
-runs a query, applies light scoring, and returns raw evidence rows. It does
-not decide what to do next.
+A narrow tool runs a query, applies light scoring or returns evidence through
+stable inputs and outputs. The caller decides which tool to use next and how
+to combine results.[^117] Keeping those decisions above the tools allows the
+same primitives to support different workflows.
 
-The agent is then the orchestration engine — it chooses which tools to call,
-in what order, and how to combine the results. One production system reports
-serving both an agent surface and a fixed plan-execute-synthesise web pipeline
-from the same primitives.[^115]
+The production example in the appendix uses one retrieval layer for both an
+agent that chooses its own sequence and a fixed plan-execute-synthesise web
+pipeline.[^115] A model call hidden inside every tool invocation would add
+cost and delay whether that reasoning was needed or not.
 
-One retrieval layer supports both an agent that
-improvises and a pipeline that does not, because the orchestration lives above
-it rather than inside it. And the tools stay cheap and fast, since a tool that
-calls a model internally adds latency and cost to every use whether or not
-that reasoning was needed.
+Narrow tools can create a large catalogue, bringing back chapter 2's selection
+problem. Deferred loading helps reconcile the two goals: provide specific
+capabilities, while presenting a relevant subset of their definitions at each
+step. Clear names and descriptions still matter once that subset is loaded.
 
-There is a tension with chapter 2: more tools, each narrow, is the
-shape that degrades selection accuracy past 40–60 entries. Narrow tools and
-*few* tools pull against each other, and the resolution is deferred loading
-rather than fewer capabilities.
+<span id="memory-benchmarks-are-not-trustworthy-yet"></span>
 
-### Memory benchmarks are not trustworthy yet
+### Evaluate memory against simple storage
 
-The vendor claims are strong; the evidence is not.
+A memory layer earns its place by recovering useful information at acceptable
+cost. Compare it with the full conversation and with simple file storage
+before comparing it only with other memory products.
 
-**On LoCoMo, the most-cited memory benchmark, a plain full-context baseline
-scores about 73% while a leading commercial memory system scores about
-68%.**[^76] Stuffing the whole transcript in beat the memory system. On that
-dataset the memory layer was a net negative.
+On LoCoMo, the full-context baseline in one commercial memory paper scored
+about 73%, above the system's roughly 68%.[^76] Letta separately reported 74%
+using conversation histories stored in a file.[^77] These results show that
+the benchmark allowed simple approaches to perform well; they do not settle
+how memory will behave on your longer or more selective tasks.
 
-Letta reported **74.0% on LoCoMo from storing
-conversation histories in a file**, beating a graph-based commercial system at
-68.5%.[^77] With full-context at ~73% and a naive filesystem at 74%, the floor
-and the plausible ceiling are about six points apart.
+Configuration also changed reported rankings. A vendor dispute produced
+substantially different scores for the same system after changes to the
+harness and inclusion of a disputed category.[^78] A controlled study found
+that changing only the embedding model could reverse the conclusion about
+which memory approach performed better.[^79]
 
-The vendor dispute is instructive. One vendor's paper reported a competitor at
-65.99%; the competitor re-ran with what it says is a correct configuration and
-got 75.14%; the first vendor replied that removing an adversarial category
-both sides agree is broken drops the competitor to 58.44%.[^78] That is a
-16–26 point spread for the same system on the same benchmark — **larger than
-any effect either party claims**. Neither party has to be lying: on a benchmark
-this easy, harness configuration dominates system quality.
-
-A 2026 paper shows the confound is structural: swapping **only** the embedding
-model in an otherwise identical pipeline moves accuracy by 6.2 percentage
-points, and one embedding model flips the conclusion about which approach is
-better.[^79]
-
-Both vendors report figures in the low 90s on LoCoMo, on their own blogs
-rather than in a shared evaluation. Treat it as retired. LongMemEval is
-harder; MemoryAgentBench, which adds *selective forgetting*, is the only one of
-the three that discriminates clearly, at around 61%.
-
-**The rule: benchmark against a full-context baseline on your own data before
-adopting any memory system.** On the standard benchmark, that baseline wins.
+These results make LoCoMo a weak discriminator between memory approaches.
+LongMemEval offers harder tasks, and MemoryAgentBench includes selective
+forgetting. Whatever suite you choose, hold the surrounding pipeline fixed,
+include simple baselines and measure the outcomes your own agent needs:
+recovering a past decision, retaining a detail or leaving obsolete information
+out of the next prompt.
 
 ---
 
 ## 11. Proving a change helped
 
-Every chapter so far offered a change you could make. This one is about
-whether you can tell if it worked. Most published attempts cannot.
+Suppose a reranker reduces the prompt by half and the next answer looks better.
+That is a promising example, but it leaves several possibilities open. The
+reranker may have selected better evidence, the model may have had a good run,
+or the question may simply have been easy. An evaluation needs to separate
+those explanations well enough to support the decision you are making.
 
-### Always include the boring baseline
+Start by naming that decision: whether to adopt the reranker, how much quality
+loss a saving can justify, or whether a memory strategy retains needed details.
+Then choose comparisons and measurements that can answer it.
 
-On LoCoMo, the
-most-cited agent-memory benchmark, **a plain full-context baseline scored
-about 73% while the leading commercial memory system scored about 68%**, in
-that system's own results table.[^76] A naive filesystem scored 74%.[^77]
+<span id="always-include-the-boring-baseline"></span>
 
-The memory layer was a net negative, and the papers reported leadership
-anyway — because they compared against *other memory systems* rather than
-against not having one.
+### Include the simplest useful baseline
 
-Your baselines are: do nothing, and do the simplest possible thing. For
-retrieval, that is no retrieval and single-provider top-k. If your system does
-not beat those, nothing else in the evaluation matters.
+A complex component can look good against its peers while adding little to a
+simple pipeline. Chapter 10's memory results illustrate this: full context and
+plain file storage performed well against specialised memory systems on
+LoCoMo.[^76][^77]
 
-### How many test cases you actually need
+For retrieval, compare with no retrieval and with a simple single-provider
+top-k pipeline. For memory, include the full transcript where it fits and
+simple storage with retrieval. Keep costs beside quality. A component that
+matches a baseline more cheaply may still be useful; one that adds cost needs
+a corresponding benefit.
 
-These numbers decide whether your experiment can detect anything.
+<span id="how-many-test-cases-you-actually-need"></span>
 
-An evaluation is a survey, so a score has sampling error like any survey. For
-a pass/fail score the standard error is √(s̄(1−s̄)/n). On a 164-item set that
-is about 3 percentage points — so an 83.6% against 86.7% difference is
-indistinguishable from noise.[^88]
+### Plan enough test cases for the decision
 
-Relevant planning figures include:
+An evaluation score estimates performance on a wider population of tasks. A
+small sample can move several points simply because different questions were
+included. For a pass/fail score, the standard error is
+`√(s̄(1−s̄)/n)`, where `s̄` is the observed pass fraction and `n` the number
+of independent items. That uncertainty can be as large as the improvement you
+hope to measure.[^88]
 
-| To detect | You need | Source |
+Plan around the smallest effect you would act on. The figures below illustrate
+the scale of the problem; they depend on the task variation, test design and
+assumptions of their sources.
+
+| Decision | Illustrative sample requirement | Basis |
 |---|---|---|
-| A 3-point difference in item-level scoring | **~1,000 items** | Power analysis[^88] |
-| A 10-point difference in agent pass rates | **~120–200 tasks** | Measured on a real agent suite[^89] |
-| A stable majority verdict from an LLM judge | **~11 repeat trials** | Measured judge flip rates[^90] |
+| Detect a 3-point change in item-level scores | About 1,000 items | Power analysis[^88] |
+| Detect a 10-point change in agent pass rates | About 120–200 tasks | Analysis of an agent evaluation[^89] |
+| Obtain a stable majority verdict from an LLM judge | About 11 repeated trials | Measured judge variability[^90] |
 
-**Repeats do not substitute for items.** Re-running each question K times
-shrinks only part of the variance: K=2 cuts total variance by a third, K=4 by
-a half, and the ceiling is two thirds. On a fixed 198-item set, going from 1
-repeat to 10 moved the minimum detectable effect only from 13.2% to
-7.5%.[^88] On agent tasks the effect is stronger — task-level variance
-dominates, and adding repeats "barely helps".[^89] **Add more tasks, not more
-repeats.**
+Repeating a task measures how consistently the system handles that task.
+Adding tasks measures how performance varies across the work you care about.
+These address different uncertainty. The cited analyses found diminishing
+returns from repeats, with task variation especially important for agents.[^88][^89]
+When a suite is too small to detect the intended effect, additional distinct
+tasks may help more than another round over the same few questions.
 
-**Lowering the temperature to reduce noise does not work.** It shifts variance
-into the conditional means, which no amount of resampling can reduce, and it
-can introduce bias. In one worked example it *tripled* the minimum
-variance.[^88]
+Lowering temperature is not a substitute for a better experiment. It changes
+the output distribution and can introduce bias or move variation into parts
+that repeats cannot reduce.[^88] Evaluate the settings the system will use.
 
-And one that specifically affects context work: if you generate several test
-questions per source document, your items are not independent. Naive standard
-errors can be **more than three times too small** — on one real benchmark,
-1.34 clustered against 0.44 naive.[^88] Cluster your errors on the document,
-the repository, or whatever the shared source is.
+Questions drawn from the same source are also related. If ten questions all
+come from one document, treating them as ten independent observations can
+understate uncertainty. Group, or *cluster*, the error calculation by the
+shared document, repository or other source. One worked comparison found the
+naive error estimate more than three times too small.[^88]
 
-### Change one thing — and "the model" is more than the model name
+<span id="change-one-thing--and-the-model-is-more-than-the-model-name"></span>
 
-A 2026 paper measured what happens when you do not: swapping **only the
-embedding model** in an otherwise identical pipeline moved accuracy by **6.2
-percentage points**, and one embedding model flipped the conclusion about
-which memory approach was better.[^79]
+### Hold the surrounding system constant
 
-Published comparisons routinely vary the method, the model, the embedder and
-the retrieval pipeline at once, then attribute the difference to the method.
+Changing an embedder alongside a memory method makes it difficult to tell
+which caused the gain. One controlled study found that the embedder alone
+could move accuracy enough to reverse the ranking of memory approaches.[^79]
+Vary one component in each comparison and retain the configuration of the rest.
 
-But "hold the model fixed" is harder than setting temperature to zero, and
-this is not widely known:
+“The same model” needs more detail than a display name:
 
-- **Temperature 0 is not deterministic.** A thousand completions of one prompt
-  at temperature 0 produced **80 unique outputs**, all identical for the first
-  102 tokens and then diverging. The cause is that kernel output depends on
-  the server's batch size, which varies with load you do not control.[^91]
-- **The serving stack moves your scores.** Backend, GPU type, GPU count and
-  quantisation shift benchmark results by up to 9% under greedy
-  decoding.[^92]
-- **Prompt format is usually a bigger effect than the thing you are
-  testing.** The same model scored 50.1% and 72.4% on the same benchmark under
-  two standard prompt formats — a 22.3-point swing that also reorders model
+- Temperature zero does not guarantee identical outputs. An inference study
+  found different completions of the same prompt because numerical behaviour
+  varied with server batching.[^91]
+- Hardware, quantisation and inference backends can shift benchmark
+  scores.[^92]
+- Prompt formatting can change performance substantially, including model
   rankings.[^93]
 
-So freeze the model *identifier*, the inference backend, the hardware class,
-the decoding parameters, the reasoning-effort setting, and the prompt template
-byte for byte. Then record all of it, because you will not reconstruct it
-later.
+Fix the model identifier, prompt template, decoding settings, reasoning effort
+and evaluator version. Where you control the server, fix its backend and
+hardware class too. Where the provider hides those details, record the limits
+of your control and interleave configurations in time so changing load or
+service behaviour is less likely to favour one arm.
 
-### One run tells you nothing
+<span id="one-run-tells-you-nothing"></span>
 
-τ-bench reports `pass^k` — success on all k independent attempts. GPT-4o
-scored under 50% at one attempt and **under 25% at eight**.[^33] Almost every
-other benchmark reports a single-run mean.
+### Measure consistency across runs
 
-At any temperature above zero, a single comparison between two configurations
-is mostly noise. Run each several times, report a spread, and be suspicious of
-differences smaller than the run-to-run variance. The multi-turn study's
-decomposition is the reason this matters: the damage from long conversations
-was 16% lost capability and **112% increased unreliability**.[^23] A system
-that is usually right and occasionally catastrophic scores well on a mean.
+Two configurations can have similar average accuracy but different patterns
+of failure. One may usually succeed on each task; another may alternate
+between success and a serious mistake. Users experience those repeated
+attempts, not just the mean across a suite.
 
-### A strong published context ablation found nothing
+τ-bench's `pass^k` counts success on all k attempts and makes that distinction
+visible.[^33] The multi-turn study in chapter 2 also found that growing
+unreliability contributed substantially to the loss from splitting a task
+across turns.[^23]
 
-A context ablation with unusually careful controls returned a null result.
+Repeat enough items to estimate run-to-run variation, report the spread and
+inspect differences smaller than that variation cautiously. Combine this with
+a sufficiently varied task set; repeated attempts cannot supply missing task
+coverage.
 
-A study tested whether context files (`AGENTS.md`-style standing instructions)
-help coding agents. The design covered three Python repositories, 15–17 real
-merged pull requests each, gold tests as the outcome, two different agents,
-three context strategies, three repeats, **291 runs**. The statistics were the
-ones this chapter recommends: within-task permutation tests at 10,000+
-iterations, equivalence
-testing with a task-clustered bootstrap, paired tests with multiple-comparison
-correction, and a Monte Carlo power simulation.[^89]
+<span id="a-strong-published-context-ablation-found-nothing"></span>
 
-**No correctness benefit.** One agent went 53.3% to 55.6% (p=1.00); the other
-went 58.8% / 56.9% / 52.9% (p=0.66).
+### Learn from a context change that did not help
 
-**It ran a manipulation-validity probe.** Thirty-six probe cells on near-miss
-tasks confirmed the context never converted a near-miss into a pass. Without
-that, a null result cannot distinguish "the change does not help" from "the
-change never fired". Failure analysis then showed the agents were stumbling on
-implementation skill, not missing repository knowledge — so the context
-supplied knowledge the agents did not lack.
+Standing context files are meant to supply repository knowledge an agent
+would otherwise need to discover. Whether they help depends partly on whether
+missing knowledge is causing the failures.
 
-**Its power analysis is the transferable part.** At 17 tasks × 3 repeats, the
-minimum detectable effect stayed above 30 percentage points. Detecting a
-10-point effect needs 120–200 tasks. Most published context comparisons are
-smaller than this one.
+A study comparing `AGENTS.md`-style instructions across repositories and two
+agents found no correctness benefit from the tested context strategies.[^89]
+It used paired, task-aware statistical comparisons and inspected near-miss
+tasks. Failure analysis suggested that agents were struggling with
+implementation rather than lacking the repository knowledge the files
+supplied. Adding that knowledge did not address the observed failure.
 
-**Task difficulty did not transfer between agents** (rank correlation 0.75,
-with about 40% of tasks at floor or ceiling for one agent but not the other).
-That alone may explain why published results on the same question contradict
-each other.
+The study also makes a useful distinction between a null finding and evidence
+of equivalence. With its small task set, the minimum effect it could reliably
+detect remained large. A modest benefit or harm could therefore go unnoticed.
+Its power analysis estimated 120–200 tasks to detect a ten-point effect.[^89]
 
-A well-powered null result is more useful than an underpowered positive one.
-If your evaluation cannot produce the first, it cannot be trusted to produce
-the second.
+For your own change, inspect whether it reached the intended stage and whether
+that stage was the source of the problem. If an extractor never saw the pages
+that failed, an extraction change cannot explain their outcome. If a context
+file supplied facts the agent already knew, a null result says little about
+cases where those facts are missing. Report what the experiment could detect,
+including the uncertainty around an apparent lack of difference.
 
-### Measure whether the evidence was there at all
+<span id="measure-whether-the-evidence-was-there-at-all"></span>
 
-Answer accuracy conflates two failures: the evidence was missing, and the
-model mishandled evidence it had. Separate them.
+### Separate missing evidence from failed use
 
-The clearest published version, from Google, classifies each (question,
-context) pair by whether it contains enough to answer definitively,
-independent of what the model then did. Their automated rater reaches **93%
-accuracy** on that judgement — Google's measurement of Google's rater, and
-Google ships retrieval products.[^94] Two findings follow from it:
+When an answer is wrong, first ask whether the supplied context contained
+enough information to answer. If it did not, acquisition or selection needs
+attention. If it did, the reader or prompt may need attention. A final accuracy
+score combines both failures.
 
-- Models answer correctly **35–62% of the time even when the context is
-  insufficient** — so retrieval improvements alone cannot account for
-  end-to-end quality.
-- With insufficient context, models hallucinate rather than abstain. One
-  model's hallucination rate went from 10.2% with *no* context to **66.1%
-  with insufficient context**. Partial evidence is more dangerous than none.
+Google's *Sufficient Context* work labels question-context pairs according to
+whether the material is enough to answer definitively.[^94] Its automated
+rater was accurate enough in its own evaluation to explore that distinction,
+though it remains a vendor-evaluated instrument rather than a perfect label.
 
-That second finding is the strongest case for admission control anywhere in
-this guide. Retrieving something-but-not-enough is measurably worse than
-retrieving nothing.
+Two results show why the distinction matters. Models sometimes answered
+correctly despite insufficient supplied context, so a correct answer did not
+prove successful retrieval. Conversely, one model hallucinated much more with
+insufficient context than with no context.[^94] Partial evidence can encourage
+an answer it cannot support.
 
-### Do not trust a single benchmark
+Include a sufficiency check and a path for recognising gaps. “Some related
+material was found” should not be treated as equivalent to “the evidence
+needed for this answer is present”.
 
-HELMET found that no synthetic long-context task correlates above 0.8 with
-downstream performance, and that its own seven categories correlate poorly
-with each other.[^29] A ranking from one benchmark does not transfer.
+<span id="do-not-trust-a-single-benchmark"></span>
 
-For your own work the implication is: pick the evaluation that resembles your
-job, and check that it correlates with the outcome you actually care about. If
-you never measure that correlation, you have built a proxy and started
-optimising it.
+### Use benchmarks as proxies, then check the outcome
 
-### The judge is a component, not an oracle
+A benchmark is useful when success on it predicts success at your task.
+HELMET's weak correlations across long-context tasks show why that relationship
+needs checking.[^29] A retrieval test, a synthesis test and a state-tracking
+test need not rank systems alike.
 
-Much of this literature is scored by a model. Three cautions.
+Choose the closest available tasks, then compare their scores with the real
+outcome on a held-out sample. If an improved retrieval metric leaves answer
+quality unchanged, inspect the link between the two before continuing to
+optimise the metric.
 
-The memory dispute in chapter 10 is the cleanest demonstration: three
-different numbers — 84%, 75.14%, 58.44% — for the same system on the same
-benchmark, depending on who configured the harness. That spread is larger than
-any effect either party claimed. Harness configuration dominated system
-quality.
+<span id="the-judge-is-a-component-not-an-oracle"></span>
 
-Grounding scores can be wrong in a specific way: a system can
-score as faithful because it grounded on the wrong
-document. Scoring whether the answer follows from the retrieved evidence does
-not check whether the retrieved evidence was the right evidence.
+### Evaluate the judge as part of the pipeline
 
-And the automatic metrics have a known ceiling. On the aggregate
-fact-verification leaderboard, the best system reaches about 77% balanced
-accuracy; on long-form expert answers, **every** system sits near 59%.[^82]
-These are useful instruments, not oracles.
+Many context evaluations use a model to score another model's answer. That
+makes the judge a component with its own errors and configuration, much like
+the retriever or reader. The memory-benchmark dispute in chapter 10 illustrates
+how harness choices can change reported results.[^78]
 
-### Automatic metrics are validated for comparing systems, not judging answers
+A judge may also answer a narrower question than you intend. An answer can
+faithfully follow a retrieved document while that document is wrong, stale or
+inappropriate. Grounding in the supplied text does not validate the source.
 
-This distinction decides whether a metric is usable, and it is routinely ignored.
+Automatic fact checkers have measurable error rates. In the aggregate
+leaderboard discussed here, performance was much weaker on long-form expert
+answers than across the overall set.[^82] Use those tools with calibration
+against the kinds of claims and sources your system produces.
 
-The standard automatic attribution metric reports a **system-level correlation
-of 0.96 with human judgement, and instance-level agreement its own authors
-describe as much lower and more variable** — they warn explicitly against
-per-example use.[^81] The same pattern holds for automatic coverage scoring:
-strong run-level rank correlation, and per-topic correlation around 0.49.
+<span id="automatic-metrics-are-validated-for-comparing-systems-not-judging-answers"></span>
 
-**An A/B test of a context change is a system-level comparison.** You
-are ranking two configurations over a suite, which is what these metrics were
-validated for. Use them freely there.
-Do not use them to gate an individual output in production; that is a
-different claim than the validation supports.
+### Distinguish system comparisons from individual verdicts
 
-### Entailment scoring can be cheap enough to run on everything
+A metric may rank whole systems well while often misjudging individual
+answers. Averaging across many examples can cancel errors that remain serious
+when one score determines whether to release one answer.
 
-A fine-tuned entailment checker scored 13,000 claim-document pairs for
-**$0.24**; the frontier model it matched cost **$107** for the same set, at
+AutoAIS, a standard automatic attribution metric, reported strong correlation
+with human judgement at system level, alongside much lower and more variable
+agreement on individual examples.[^81] That supports using it to compare
+configurations over a suite, with suitable calibration. It does not establish
+that a threshold on one answer is a reliable production gate.
+
+Choose the use of a metric at the level for which it has evidence. If you need
+to act on individual outputs, validate that decision separately, including
+which kinds of errors the metric misses.
+
+<span id="entailment-scoring-can-be-cheap-enough-to-run-on-everything"></span>
+
+### Use inexpensive scoring where it is valid
+
+A fine-tuned entailment checker can judge whether a claim follows from a
+passage at far lower cost than a frontier model. MiniCheck's comparison scored
+about 13,000 claim-document pairs for $0.24, against $107 for GPT-4 at
 comparable balanced accuracy.[^82]
 
-For this kind of claim-document entailment scoring, that changes the
-experimental design: score every response in both arms rather than sampling.
-Other metrics may have different costs.
+That cost difference can make it practical to score every response in both
+arms of an experiment. It does not remove the need to validate the checker or
+make every other metric equally cheap. Treat scoring cost and scoring quality
+as separate parts of the evaluation design.
 
-### Faithfulness alone rewards evasion
+<span id="faithfulness-alone-rewards-evasion"></span>
 
-The failure you get if you measure only one thing.
+### Measure faithfulness alongside coverage
 
-On Vectara's hallucination leaderboard — Vectara sells the detector that does
-the scoring — two models post low hallucination rates with **answer rates of
-80.7% and 62.7%** — they achieve faithfulness partly by
-declining to answer.[^83] A system that says less is scored as more truthful.
+A system that answers less can make fewer unsupported claims. If the only
+metric is faithfulness, a change that causes evasive or incomplete answers can
+look like an improvement.
 
-So run **two** metrics, always: faithfulness (is every claim supported by what
-was retrieved?) and coverage (did the answer contain the facts it needed?). A
-context change that makes the model terser will improve the first and damage
-the second, and only the pair tells you which happened.
+Vectara's hallucination leaderboard illustrates the need to inspect answer
+rates alongside low hallucination rates.[^83] The vendor supplies the detector,
+whose own errors also limit the precision of absolute scores.
 
-### Citations resolve far better than they support
+Pair faithfulness—whether claims follow from the evidence—with coverage—
+whether the answer contains the facts needed for the task. An appropriate
+abstention when evidence is missing is different from omitting facts the
+system could have supported. Inspect both so a shorter answer does not earn
+credit merely for making fewer checkable claims.
 
-Across 14 models,
-inline citations in research reports were scored on three things
+<span id="citations-resolve-far-better-than-they-support"></span>
+
+### Check what a citation supports
+
+A working link, a relevant page and a supporting passage are three different
+checks. A page may discuss the right subject while supplying no evidence for
+the sentence that cites it.
+
+An evaluation of research reports across fourteen models measured these
 separately:[^84]
 
-| What was checked | Result |
+| Citation check | Reported result |
 |---|---|
-| The link resolves | **over 94%** for frontier models |
-| The linked page is relevant | **over 80%** |
-| The linked page actually supports the claim | **39–77%** |
+| Link resolves | Over 94% for frontier models |
+| Linked page is relevant | Over 80% |
+| Linked page supports the claim | 39–77% |
 
-Most citation dashboards measure the first two. They run 20–50 points
-optimistic against real support.
+Link validity alone would therefore give a much more favourable picture than
+claim support. The same work found support accuracy falling as tool calls
+increased. More retrieval can expand coverage while making attribution harder.
 
-Also: **support accuracy fell by about 42% on average as
-tool calls scaled from 2 to 150.** A context change that enables more
-retrieval can improve coverage while making attribution worse. If you measure
-only coverage, that reads as a win.
+A deep-research benchmark also found a trade-off between precision per
+citation and the number of effective citations.[^85] Report both support and
+coverage, and trace claims to passages where possible. A larger bibliography
+is not itself a measure of a better-supported answer.
 
-A related trade-off, from a deep-research benchmark: one system scored 90.2%
-citation accuracy with about 31 effective citations, another 81.4% with about
-111.[^85] Precision per citation and number of citations trade against
-each other. Reporting one without the other makes any system look better than
-it is.
+<span id="a-bias-that-penalises-synthesis"></span>
 
-### A bias that penalises synthesis
+### Check for bias against synthesis
 
-An evaluation of five factuality
-metrics across 11 datasets found they disagree with one another and misestimate
-system-level performance, with two named biases: **against heavily paraphrased
-output, and against output that draws on distant parts of the source.**[^86]
+An answer that combines distant passages or paraphrases them heavily can be
+harder for an automatic checker to recognise as supported. An evaluation of
+factuality metrics found both kinds of bias.[^86]
 
-Read that against chapters 4 to 7. A context change that lets the model
-synthesise across a whole document instead of copying locally is the
-kind of change that will score *worse* on these metrics, for reasons unrelated
-to whether it is true.
+This matters directly to context optimisation. A change that enables broader
+synthesis may score worse even when its conclusions are supported. Calibrate
+the metric on a human-annotated sample containing the kinds of paraphrase and
+cross-document reasoning you want to enable, rather than assuming performance
+on local quotation transfers.
 
-If you adopt an automatic factuality metric, calibrate it on a small
-human-annotated sample of *your own* data before you let it decide anything.
-Every paper here that measured cross-domain transfer found it poor.
+<span id="prose-detectors-do-not-transfer-to-tool-output"></span>
 
-### Prose detectors do not transfer to tool output
+### Match detectors to the source format
 
-If your agent's context is code, tool results or structured documents rather
-than prose, off-the-shelf grounding detectors are close to useless: one
-reported **0.17 span-level F1** on code-agent sources against **0.689** for a
-model fine-tuned on that material.[^87]
+Code, tool results and structured records differ from the prose used to train
+many grounding detectors. In one study, a prose-trained detector performed
+poorly on code-agent sources, while a detector fine-tuned on that material
+performed substantially better.[^87]
 
-Measuring agentic grounding with a detector trained on news summarisation
-measures noise.
+That single study does not establish how every detector transfers. It does
+show why source format belongs in validation: test the checker on code and
+tool output before using its scores to decide whether a context change helped
+an agent working with those inputs.
 
-### Metrics, and what each one misses
+<span id="metrics-and-what-each-one-misses"></span>
 
-| Metric | Measures | Misses |
+### Choose metrics with their omissions in view
+
+No single metric covers the journey from selecting a source to producing a
+useful, supported answer. Use the table to locate the question each one asks:
+
+| Metric | Measures | Leaves open |
 |---|---|---|
-| Recall@k | Did the right document appear in the k you fetched? | Whether the model then used it. **Granularity matters more than the metric** — see below |
-| Precision@k | What share of what you fetched was useful? | Whether the useful ones were enough |
-| nDCG@10 | Is the ordering good? | Cost; and it assumes value decays with rank, which the U-curve contradicts |
-| **Sufficient context** | Could *anyone* answer from this context alone? | Whether the answer was right. The best coverage metric — separates retrieval failure from generation failure |
-| **Retrieval failure rate at k** | How often is the answer absent from what the model sees? | Nothing much — prefer this one |
-| Faithfulness / groundedness | Does the answer follow from the retrieved text? | Whether the retrieved text was right, or current. Rewards saying less |
-| Claim recall | Did every fact needed to answer survive? | Whether the answer was well-formed |
-| Citation support | Can each claim be traced to a span? | Whether the span still says that. Decompose into resolves / relevant / supports |
-| Answer accuracy | Was it right? | Everything about how and at what cost |
+| Recall@k | Whether required material appears in the selected k items | Whether it survives packing and is used |
+| Precision@k | What share of selected material is useful | Whether that material is sufficient |
+| nDCG@10 | Whether relevant items rank near the top | Token cost and how the reader responds to order |
+| Sufficient context | Whether the context contains enough to answer | Whether the model answers correctly |
+| Retrieval failure rate at k | How often needed evidence is absent from the final set | Whether present evidence is interpreted correctly |
+| Faithfulness / groundedness | Whether the answer follows from the supplied text | Whether the source is correct, current or sufficient |
+| Claim recall | Whether required facts survive | Answer form and unsupported additional claims |
+| Citation support | Whether a cited passage supports its claim | Source quality and later changes to the page |
+| Answer accuracy | Whether the answer is right | How it was reached, its cost and its reliability |
 
-One warning that outranks the choice of metric. In an applied study, **word-level
-recall correlated 0.35 with human answer scores while document-level recall
-correlated 0.05** — the same metric name, a sevenfold difference in
-usefulness.[^95] Decide your granularity deliberately and state it.
+Choose the unit deliberately. Document recall counts a source as present even
+if the useful words were cut from it. An applied study found word-level recall
+correlated much better with human answer scores than document-level recall.[^95]
+The same metric name can conceal a substantial difference in what is counted.
 
-And validate any metric on **at least two systems** before trusting it. A
-metric that correlates well on one system may be measuring question
-difficulty rather than system quality — in which case it scores every system
-the same and is useless for the comparison you actually want.[^95]
+Validate a proposed metric across at least two systems as well. Correlation
+within one system may mainly reflect which questions are easy, rather than
+whether the metric distinguishes better and worse systems.[^95]
 
-### Measure cost, because most leaderboards omit it
+<span id="measure-cost-because-most-leaderboards-omit-it"></span>
 
-Terminal-Bench is the only mainstream leaderboard publishing dollars, and it
-found two systems tied on accuracy at a 3.7× cost difference.[^39] Every
-long-context benchmark reports accuracy at unbounded spend.
+### Put cost and latency beside quality
 
-Report **cost per correct answer**, not accuracy. And report latency, which no
-long-context benchmark reports at all.
+The Terminal-Bench example in chapter 3 showed similar accuracy at a 3.7-fold
+cost difference.[^39] Without cost, the practical difference between those
+configurations is hidden.
 
-### Contamination is not auditable
+Report accuracy alongside cost per correct answer and latency, including
+failed attempts and retries. A context change may be worth adopting because it
+preserves quality while reducing spend or delay. A quality gain may also be
+too expensive for the intended workload. Both decisions need the complete
+route's costs.
 
-Models identify buggy files from benchmark issue text at 76% inside the
-benchmark and 53% outside it.[^35] And detection methods fail: only 201 of 335
-contamination evaluations produced correct outcomes across 25 models.[^36]
+<span id="contamination-is-not-auditable"></span>
 
-You cannot audit your way out. The defences are held-out sets you built
-yourself, data you can prove is post-cutoff, and self-refreshing evaluations.
+### Protect the value of held-out tasks
 
-### A checklist
+Public tasks may overlap with training material, and contamination detectors
+cannot reliably establish that they do not.[^35][^36] Supplement public
+benchmarks with private tasks, material known to post-date a training cut-off
+where that date is available, or refreshed evaluations.
 
-1. **Write down the decision rule before you look at any data** — the minimum
-   effect you would act on, the metric, and the power you need.
-2. **Size the suite from that effect, not from convenience.** ~1,000 items for
-   3 points; ~120–200 agent tasks for 10 points. If you cannot reach it, say
-   so and report an equivalence bound instead of claiming "no difference".
-3. **Keep tasks that pass or fail 100% of the time in headline performance.**
-   They add little information to a within-model comparison, so a predeclared
-   comparative analysis may report them separately; do not drop them after
-   seeing the result.
-4. **Run a manipulation-validity probe.** Confirm on a few near-misses that
-   the change *can* flip an outcome. Otherwise a null result tells you nothing.
-5. Freeze the model, inference backend, hardware class, decoding settings,
-   reasoning effort, evaluator version, prompt template and time window.
-   Record all of them.
-6. Include a do-nothing baseline and a simplest-thing baseline.
-7. Vary exactly one component per comparison.
-8. Interleave the arms rather than running one after the other, so load and
-   model updates do not correlate with the treatment.
-9. Run each item 4–6 times; beyond that the variance reduction has saturated.
-   Do not lower the temperature to reduce the noise.
-10. **Analyse paired per-item differences, not the two headline means**, and
-    **cluster the standard errors** on whatever the shared source is.
-11. Report `pass^k` if anything user-facing depends on consistency.
-12. Score **two** things — faithfulness and coverage — never one. Scoring
-    faithfulness alone rewards a change that makes the model evasive.
-13. Score every response rather than sampling. It costs cents, and sampling is
-    where your variance comes from.
-14. Score citation *support* separately from link resolution and relevance.
-    They differ by 20–50 points.
-15. Calibrate any automatic factuality metric against a human-annotated sample
-    of your own data. Size that sample from class prevalence and the uncertainty
-    your decision can tolerate; report sensitivity, specificity and their
-    confidence intervals rather than applying a universal accuracy threshold.
-16. Record cost and latency alongside quality, per configuration.
-17. Record what was *missing* — the gap — not only what scored.
-18. Record retries, refusals and failures rather than discarding them.
-19. Keep raw provider responses so the run can be replayed.
-20. Check your evaluator against the real outcome on a holdout set, and record
-    the correlation. Validate any new metric on at least two systems.
-21. Assume public benchmarks are contaminated; keep a private set, and treat
-    the holdout as single-use.
-22. Publish the configuration of the systems you lost to, not only your own.
-23. When you ship, confirm online with a test that stays valid under repeated
-    checking. Naive peeking at an accumulating dashboard produced a **70%
-    false-positive rate** on data with no real effect.[^96]
+Keep the held-out set for the final decision rather than repeatedly tuning
+against it. Record the provenance of its inputs and replace it when repeated
+use has turned it into part of the development process.
 
+<span id="a-checklist"></span>
 
+### A practical evaluation checklist
 
-## 12. What nobody knows yet
+The checks below follow the experiment from design to deployment. Their scale
+should match the decision: an exploratory result can guide the next test, but
+should not carry the certainty of a well-powered comparison.
 
-These are the gaps I hit while writing — places where the evidence runs out,
-or where what circulates as knowledge has no source.
+1. Write down the decision rule first: the minimum useful effect, primary
+   metric and statistical power needed.
+2. Size the task set from that effect. If it is too small, report the
+   uncertainty and detectable-effect limit rather than claiming equivalence.
+3. Keep always-pass and always-fail tasks in headline performance. Any
+   separate comparative analysis should be declared before seeing results.
+4. Inspect a few intended interventions and near-misses. Check that the change
+   reaches the relevant stage and addresses the failure you mean to test.
+5. Fix and record model, serving configuration where available, decoding,
+   reasoning effort, evaluator version and prompt template.
+6. Include a do-nothing baseline and a simple alternative.
+7. Vary one component per comparison.
+8. Interleave configurations so time, service updates and load do not align
+   with one arm.
+9. Use repeats to estimate variability. Four to six is a starting point from
+   the cited analysis; adding tasks may be more valuable than further repeats.
+   Keep the intended temperature setting.
+10. Analyse paired per-item differences and cluster errors by the shared source.
+11. Report `pass^k` when repeated success matters to the workflow.
+12. Score faithfulness and coverage together, including appropriate abstention.
+13. Score every response where the chosen validated metric is affordable;
+    otherwise record the sampling design and its uncertainty.
+14. Check citation support separately from link resolution and page relevance.
+15. Calibrate automatic metrics against human-labelled examples from your data.
+    Size that sample for class prevalence and tolerated uncertainty; report
+    sensitivity, specificity and confidence intervals.
+16. Record cost and latency for each configuration.
+17. Record missing evidence as well as the evidence that scored.
+18. Retain retries, refusals and failures in the evaluation record.
+19. Keep raw provider responses where retention is permitted, so the run can be
+    inspected and replayed. Record any retention limits and the gaps they leave.
+20. Check the evaluator against the real outcome on held-out data; validate new
+    metrics across at least two systems.
+21. Supplement public benchmarks with private tasks and reserve the holdout for
+    the final decision.
+22. Preserve the comparison systems' configurations as well as your own.
+23. Follow deployment with an online test designed to remain valid under
+    repeated checking. Repeatedly applying a fixed-horizon significance test
+    to an accumulating dashboard can create false positives.[^96]
 
-### Claims that are repeated and unsupported
+---
 
-**"Adding random documents improves RAG accuracy."** Refuted in July 2026. The
-original effect was largely an artefact of a 15-token generation limit; most
-of it traced to truncated and malformed outputs rather than any benefit from
-noise.[^27] It is widely repeated.
+<span id="12-what-nobody-knows-yet"></span>
 
-**"Effective context is 60–70% of advertised."** No traceable source. The
-attributable figures are lower and narrower — see chapter 2.
+## 12. Where local measurement still matters
 
-**"Code is about twice as token-dense as prose."** Not supported by the nine
-files measured in chapter 1, where it was 20–40% denser per character. Small
-sample; measure your own.
+The techniques in this guide give you ways to inspect and change a context
+pipeline. They do not supply a universal token budget, tool limit or retention
+percentage. Some useful questions remain open, and several common rules of
+thumb go beyond the measurements behind them.
 
-**"A web page is about 80% boilerplate."** Appears only in blog posts with no
-primary measurement, and refers to text rather than tokens. Chapter 1 measures
-87–99% of *tokens* across four pages — a different and more useful quantity,
-on too small a sample to settle the original claim.
+<span id="claims-that-are-repeated-and-unsupported"></span>
 
-**"Context poisoning."** The term is useful and the mechanism is plausible.
-The evidence is one anecdote about an agent playing Pokémon, which does not
-appear in any current version of the technical report it is attributed to. As
-of August 2026 I could find no controlled experiment that injects a false fact
-into an agent's context and measures how far it propagates.
+### Treat rules of thumb as hypotheses
 
-**Most published tool-count thresholds.** "Anthropic documents degradation past
-30–50 tools", "fewer than 20 per turn", "5–7 MCP servers is the ceiling" —
-these circulate widely with no primary citation I could resolve. The
-defensible numbers are LongFuncEval's 7–85% range and one production
-catalogue's elbow at 40–60 agents, whose authors explicitly warn the figures
-are catalogue-specific.
+A few examples recur across the chapters:
 
-### Things you will have to measure yourself
+- **Effective window size:** no traceable basis was found for a universal
+  60–70% of advertised length. Effective length depends on the task and model.
+- **Token density:** code was 20–40% denser than prose in the nine-file sample,
+  which cannot establish a ratio for other repositories or tokenisers.
+- **HTML overhead:** stripping machinery removed 87–99% of tokens from four
+  pages. That is a different measurement from the unsupported claim that a
+  typical page is 80% boilerplate text.
+- **Helpful random documents:** a replication traced the reported benefit to
+  prompting and generation constraints, rather than a transferable advantage
+  from noise.[^27]
+- **False-fact propagation:** the poisoning terminology is useful, but the
+  August 2026 source check did not establish a controlled propagation result
+  behind the anecdote discussed in chapter 2.[^25]
+- **Tool-count limits:** the reported point where one catalogue's selection
+  performance deteriorated was specific to that catalogue.[^21] Tool names,
+  schemas, ambiguity and the model all affect the problem.
 
-The published benchmarks do not cover these, so if they matter to your system,
-budget for measuring them.
+Use such numbers to choose an initial experiment, then measure the relevant
+quantity in your system. Their value is in helping frame the question, not in
+removing the need to ask it locally.
 
-**Source selection quality.** Benchmarks score the final answer. None scores
-whether the agent chose an authoritative source over a content farm, a primary
-document over a paraphrase, or a current page over a cached one. For
-acquisition work this is the metric that matters most.
+<span id="things-you-will-have-to-measure-yourself"></span>
 
-**Attribution fidelity.** Whether a claim traces to a specific span of a
-specific document, with that span still present at that URL. Chapter 11 has
-the tooling; no benchmark applies it end to end.
+### Measure the parts of source use that scores omit
 
-**Staleness.** Whether a system knows its evidence has gone out of date, as
-opposed to whether the evidence happens to be current.
+A final answer score leaves much of acquisition unexplained. Your evaluation
+may need to establish whether the chosen source is authoritative, whether a
+citation supports the exact claim and whether the evidence is still current.
+These are distinct from finding related text.
 
-**Abstention.** Benchmarks reward answering. A system that correctly says "I
-could not find a reliable source" scores the same as one that confabulates.
+The same applies to gaps and conflicts. A system needs a way to recognise that
+it lacks enough reliable evidence, and to handle two sources that disagree.
+The benchmarks discussed here cover these unevenly: RECON begins to examine source
+conflict,[^40] while chapter 4's provider comparison measures host overlap
+without settling which source should prevail.
 
-**Retrieved web content as untrusted input.** If you retrieve from the open
-web, that text is adversarial by default, and retrieval benchmarks do not
-treat it that way.
+Retrieved web content also arrives as [untrusted input](untrusted-context.md).
+Ordinary relevance
+scores do not establish that following instructions embedded in that content
+is appropriate. Include the source-selection, attribution, freshness,
+abstention and input-handling decisions that matter to your application,
+rather than assuming answer accuracy covers them.
 
-**Contradiction between sources.** Chapter 4's measurement shows three
-providers returning largely different hosts for the same query. What happens
-when two of them disagree is a decision your system makes and nothing scores.
+<span id="things-that-might-be-true-and-need-checking"></span>
 
-### Things that might be true and need checking
+### Results worth testing in other settings
 
-**Does sophisticated acquisition have a scale ceiling?** One paper reports
-that above roughly 10M corpus tokens, plain keyword search beats an agentic
-searcher by a margin approaching 20 points while the agent spends 39× more
-query tokens.[^41] One team, one construction, days old. If it replicates it
-matters a great deal.
+Several findings suggest useful experiments without yet supporting broad
+policies.
 
-**Does the confusion residue generalise?** The finding that about 10 points of
-tool-selection degradation survives a perfect shortlister is from one
-catalogue. If it generalises, there is a ceiling on what any selection system
-can achieve, and part of the remedy belongs to whoever writes the supply's
-descriptions.
+One corpus-scale study found plain keyword search overtaking an agentic
+searcher above roughly ten million corpus tokens, at much lower query-token
+cost.[^41] That is one team's corpus construction; replication would help
+establish whether the result concerns search policy, corpus scale or the
+particular task design.
 
-**Do degradation curves transfer across models?** Databricks found five models
-improving to 100K and two degrading after 32K, failing in different ways.
-Nothing suggests a policy fitted on one transfers to another.
+The tool-catalogue study left about ten points of selection loss even with a
+perfect shortlister.[^21] If that pattern transfers, part of the remedy lies in
+clearer descriptions and disambiguation after retrieval. Test whether the
+correct tool is missing from the shortlist or present but not chosen.
 
-**Is compaction fidelity measurable in general?** The 3-of-3-versus-0-of-3
-result is one run over eight documents. It matches intuition, which is a
-reason to be suspicious of it rather than reassured.
+Long-context degradation also varied substantially across models and failure
+types.[^19] A policy fitted to one model needs checking when the reader changes.
+And the small compaction example preserved broad facts while losing table
+details,[^63] leaving open how to measure fidelity across different tasks and
+longer runs.
 
-### How to read anything in this area
+<span id="how-to-read-anything-in-this-area"></span>
 
-Six habits that would have caught most of the errors above:
+### Carry the method into the next experiment
 
-1. **Check what the number was measured on.** "20× compression" measured on
-   few-shot reasoning prompts is not a claim about your web pages.
-2. **Check the date and the model.** A 2023 result about a 4,000-token model
-   is not a property of a 2026 million-token one.
-3. **Check whether the baseline was included.** On the main memory benchmark,
-   the missing full-context baseline explains the result.
-4. **Check who ran it.** Vendor evaluations of competitors are usually
-   misconfigured, in both directions.
-5. **Check whether the benchmark still discriminates.** A test everyone passes
-   measures nothing.
-6. **Prefer the follow-up paper to the headline.** When the same team's next
-   paper claims a quarter of the previous one, believe the quarter.
+When a new technique appears, connect its reported result to the decision in
+front of you:
+
+1. Identify the material and task it was tested on. Repeated examples and
+   retrieved web pages have different opportunities for compression.
+2. Keep the model and date with the result. An older finding can explain a
+   failure mode without predicting its size on a newer model.
+3. Inspect the baseline. Full context, simple file storage or one search call
+   may be the comparison that matters.
+4. Check who configured the experiment and whether its details are available,
+   especially in vendor comparisons.
+5. Check whether the benchmark still separates systems and whether it predicts
+   the outcome you need.
+6. Read follow-up work for changes in setup, narrower results and replication.
+
+Then make one bounded change, preserve the evidence needed to explain it and
+compare the complete answer path. A useful context policy is one you can
+connect to better answers, lower cost or more reliable behaviour on the work
+it is meant to support.
 
 ---
 
 ## Glossary
-
-Terms are defined in plain words, with no jargon inside the definitions.
 
 <span id="g-attention"></span>**Attention** — the mechanism by which a model
 decides, for each word it produces, how much to draw on each earlier word.
@@ -2245,12 +2264,12 @@ material a model can hold at once, counting what you send and what it writes
 back in that turn. Encoded images and other supported inputs can count too.
 
 **Context rot** — the tendency for a model to get less reliable as you give it
-more input, even when the extra input is harmless and the task stays easy.
+more input, even when the extra input adds no reasoning requirements.
 
 <span id="g-cross-encoder"></span>**Cross-encoder** — a model that reads the
 question and one candidate passage together and scores how well they match.
-Slow and accurate, so it is used to re-order a shortlist rather than to
-search.
+Used over a shortlist because scoring every query-passage pair across a
+whole collection would be expensive.
 
 **Dense retrieval** — finding documents by meaning: both question and passage
 become lists of numbers, and closeness between the lists stands in for
@@ -2266,7 +2285,7 @@ job properly, as opposed to the length it will accept without erroring.
 as practically equivalent, rather than merely failing to find a difference.
 
 <span id="g-embedding"></span>**Embedding** — a list of numbers representing a
-piece of text, arranged so that similar texts get similar numbers.
+piece of text, arranged so that similar texts have nearby representations.
 
 <span id="g-extraction"></span>**Extraction** — pulling the real content out of
 a web page and throwing away the navigation, footers and adverts.
@@ -2298,8 +2317,8 @@ its surroundings.
 **Lost in the middle** — the pattern where a model uses material at the start
 and end of a long input well and largely misses what sits between them.
 
-**MCP (Model Context Protocol)** — a standard way of plugging external tools
-into an agent. Convenient, and expensive in window space if left unmanaged.
+**MCP (Model Context Protocol)** — a standard for connecting tools and other
+resources to an agent. Tool definitions occupy context when loaded.
 
 **MMR (maximal marginal relevance)** — a selection rule that balances
 relevance to the query against similarity to items already selected.
@@ -2308,7 +2327,7 @@ relevance to the query against similarity to items already selected.
 appear near the top of the first k positions.
 
 **Oracle** — an idealised condition supplied with information a real system
-would have to discover, used to show the best possible result for that stage.
+would have to discover, used to separate that discovery step from later work.
 
 <span id="g-niah"></span>**Needle in a haystack** — a test where one specific
 fact is hidden inside a large body of unrelated text and the model is asked to
@@ -2321,8 +2340,8 @@ section each small piece came from.
 **pass^k** — the fraction of tasks a system gets right on every one of k
 separate attempts, rather than on its best attempt.
 
-**Prefill** — the first phase of answering, where the model reads your whole
-input before writing anything. Its cost grows with how much you sent.
+**Prefill** — the phase in which a model processes input before generating
+output. Reusable cached work can reduce the processing needed.
 
 **Precision** — the share of selected material that is relevant. High
 precision does not show that all relevant material was found.
@@ -2383,73 +2402,69 @@ between.
 
 ## Appendix: one production system, end to end
 
-The techniques in chapters 4 to 10 are discussed one at a time. This is what
-they look like assembled, in a system that runs.
+Cerebras' account of its internal knowledge base brings the earlier techniques
+together in one pipeline.[^115] It serves questions across data-centre
+operations, chip design, hardware, training, inference and cloud. People,
+automations and agents use the same underlying sources.
 
-Cerebras published the design of their internal knowledge base in July
-2026.[^115] It answers about 15,000 questions a day across data-centre
-operations, chip design, hardware, training, inference and cloud, three months
-after launch, and is queried by people, automations and agents. Individual
-techniques from it appear in the chapters where they belong; the value of
-seeing it whole is the ordering.
+The sequence shows where each decision happens:
 
 ```
 sources          Slack, wiki, code, incidents, team databases
    |             one connector per source, one row shape
 distillation     LLM rewrites each item into a canonical record       -> ch 5
-   |             gated on term rarity, length, reactions              -> ch 5
+   |             filtered by term rarity, length, reactions           -> ch 5
 index            a single embeddings table, any source queryable
    |
-scope            default project excludes most of the corpus          -> ch 7
+scope            default project narrows the corpus                  -> ch 7
    |
 retrieve         six lists in parallel: lexical, semantic, per-source -> ch 4
    |
-fuse             reciprocal rank fusion, k=60, consensus beats a vote -> ch 4
+fuse             reciprocal rank fusion, k=60, combines the lists     -> ch 4
    |
-rerank           small model scores the merged candidates, keep 10    -> ch 6
+rerank           small model scores merged candidates, keep 10        -> ch 6
    |
-expand           pull neighbouring sections back into the winners     -> ch 6
+expand           pull neighbouring sections into the selected text   -> ch 6
    |
 synthesise       answer with citations
 ```
 
-**Gating happens before indexing and scoping before retrieval** — the two cheapest filters run
-earliest, so everything downstream works on less. And **expansion happens
-last**, after ranking, so the ranker never scores padded chunks.
+Filtering runs before indexing, and project scoping narrows the pool before
+retrieval. Both reduce the work passed to later stages. Expansion happens
+after ranking, so the ranker compares focused chunks while the answer model
+receives more complete passages.
 
-The same primitives serve two orchestration strategies: agents call the tools
-directly and decide the sequence themselves, while the web interface runs a
-fixed plan-execute-synthesise pipeline over the identical layer (chapter 10).
+The same primitives support two ways of coordinating the work. Agents call
+tools and choose their own sequence; the web interface follows a fixed
+plan-execute-synthesise pipeline. This is chapter 10's separation between
+retrieval operations and the caller's decisions.
 
 ### What it cannot tell you
 
-No retrieval quality figures. No comparison against a simpler configuration.
-No evaluation methodology.
+The account reports use at about 15,000 questions a day three months after
+launch, but gives no retrieval-quality scores, simpler-baseline comparison or
+evaluation method. That usage describes adoption. It cannot identify how much
+the rewriting, filters, parallel searches or reranker each contribute.
 
-15,000 questions a day is an adoption number. It tells you people find it
-useful enough to keep using; it does not tell you whether the distillation
-step, the gating, the six-way fan-out or the LLM reranker each adds
-measurable value, or whether hybrid search with a cross-encoder would reach
-the same result for a fraction of the complexity.
-
-The write-up is more candid than most, but it illustrates chapter 11's
-point: a system can be carefully designed,
-widely adopted, and still leave you unable to say which parts are doing the
-work.
+Use the account to understand how the stages can fit together. To decide
+whether the same complexity belongs in another system, compare individual
+stages against a simpler pipeline as chapter 11 describes.
 
 ## Appendix: tooling, checked 4 August 2026
 
-Every status below was checked against the GitHub and package-registry APIs on
-4 August 2026. Tooling ages badly, so treat this as a snapshot and rerun the
-checks rather than trusting the table.
+This snapshot records GitHub and package-registry checks made on 4 August
+2026. Maintenance status can change, so check the current project before
+adopting it. The distinctions below—converter versus extractor, reference
+implementation versus maintained package, legacy server versus replacement—
+remain useful questions to ask.
 
 ### How to check whether a project is alive
 
-`pushed_at` is unreliable. It updates when someone edits a README or a bot
-bumps a dependency. The reliable signal is commit participation — 52 weekly commit
-counts, via `repos/OWNER/REPO/stats/participation`.
-
-The clearest illustration, from this survey:
+A recent `pushed_at` timestamp can reflect a README edit or dependency bot.
+Commit participation gives a longer view: GitHub's
+`repos/OWNER/REPO/stats/participation` endpoint returns weekly commit counts.
+Read those alongside the README and release history to understand where active
+development is happening.
 
 | Project | Commits, 52 weeks | Last 13 weeks | Last 4 weeks |
 |---|---|---|---|
@@ -2457,41 +2472,62 @@ The clearest illustration, from this survey:
 | mem0 | 837 | 384 | 103 |
 | graphiti | 394 | 110 | 51 |
 | langmem | 52 | 24 | 7 |
-| **letta** | **2,542** | **6** | **2** |
+| letta | 2,542 | 6 | 2 |
 
-Letta has a high annual figure, 24,000 stars and a recent push date, and its
-development stopped about thirteen weeks ago. Its README describes the
-repository as the "legacy Letta server" and points users elsewhere; the
-organisation's active repositories are all a TypeScript coding agent. Anyone
-running `pip install letta` today installs 247 transitive packages of software
-its own maintainers label legacy.
-
-Check participation, read the README, and look at what else the organisation
-is pushing.
+Letta illustrates why the time window matters. Its high annual count concealed
+much lower recent activity, and its README identified the repository as the
+legacy server and directed users elsewhere. The organisation's active
+repositories concerned a TypeScript coding agent. A package install and a
+project name alone would not reveal that change of focus.
 
 ### Picks by stage
 
-| Stage | Use | Avoid, and why |
+These are candidates and cautions from the dated snapshot, to be considered
+alongside the relevant chapter's evaluation:
+
+| Stage | Candidates | What to inspect |
 |---|---|---|
-| **Extraction** | **trafilatura** (Apache-2.0, F1 0.958, precision 0.938) | **MarkItDown** — 171k stars, but it is a *converter*: on HTML it removes no boilerplate. **Readability** — recall 0.729 in one benchmark run, so it drops about a quarter of the body text with no indication. **html2text** — GPL-3.0, F1 0.662, effectively dormant |
-| **Chunking** | Recursive splitter at 200–400 tokens; **Chonkie** if you want late chunking off the shelf; **semchunk** for token-exact splits | **semantic-chunkers** — no commit or release since June 2025. **jina-ai/late-chunking** — reference implementation, untouched since December 2024; the technique lives on as an embeddings API flag |
-| **Compression** | **LLMLingua** (MIT) if you have proved you need it | Not dead, but one commit since October 2025. Verify the ratio on your own text before believing the headline |
-| **Memory** | **Graphiti** (lightest serious option, 27 transitive packages); **Mem0** (most popular, 33); **Cognee** (most active, but 129 packages and 26 MB) | **Letta** — declared legacy by its maintainers, 247 packages. **LangMem** — dependabot commits only since late 2025 |
-| **Retrieval frameworks** | **Haystack 3.0**, **LangChain** (light: 3 direct dependencies, 36 transitive), **LlamaIndex**, **txtai**, **DSPy** | **R2R** — no commit since November 2025 despite ~8,000 stars. **Verba** and **Cognita** — both formally archived |
-| **Serving** | **vLLM** (prefix caching on by default — the prose docs describe it as opt-in, so trust the source), **SGLang** (RadixAttention, configurable eviction) | **HuggingFace TGI** — archived, and its own README recommends vLLM, SGLang or llama.cpp |
-| **Evaluation** | **Inspect AI** (UK AISI) — the only framework shipping clustered standard errors, bootstrap intervals and epoch reducers, so it implements chapter 11's statistics rather than leaving them to you; **promptfoo** for the fastest declarative before/after with CI gating; **DeepEval** for the metric catalogue; **Langfuse** or **Phoenix** as the trace substrate | **ARES** — no commit since March 2025, despite having the most interesting confidence-interval method of the set. **OpenAI Evals** — last release May 2024, README redirects to a hosted product. **Deepchecks** — last LLM release December 2024. **RAGAS** — the standard vocabulary, but the repo has moved orgs and has not shipped since early 2026; fine to cite, risky on a critical path |
+| Extraction | trafilatura (Apache-2.0); Readability where its output fits the pages | MarkItDown converts HTML but does not remove body-external boilerplate. Check recall for the exact extractor and source types; chapter 5 |
+| Chunking | Recursive splitting at 200–400 tokens; Chonkie for late chunking; semchunk for token-exact splits | `semantic-chunkers` had no commit or release since June 2025. Jina's reference implementation was unchanged since December 2024, while the technique remained available through an embeddings API flag |
+| Compression | LLMLingua (MIT), after measuring the need | One commit since October 2025; measure the ratio and fidelity on your own text |
+| Memory | Graphiti, Mem0, Cognee | Compare with full context and file storage; include the dependency footprint and maintenance findings below |
+| Retrieval frameworks | Haystack 3.0, LangChain, LlamaIndex, txtai, DSPy | R2R had no commit since November 2025; Verba and Cognita were archived |
+| Serving | vLLM, SGLang | vLLM's source enabled prefix caching by default despite prose describing opt-in; SGLang exposed eviction controls. Archived HuggingFace TGI directed users to vLLM, SGLang or llama.cpp |
+| Evaluation | Inspect AI for clustered errors, bootstrap intervals and epoch reducers; promptfoo for declarative comparisons and CI; DeepEval for metrics; Langfuse or Phoenix for traces | Confirm the statistical methods and maintenance you need rather than choosing by the size of the metric catalogue |
 
-Two licence warnings, because the GitHub badge is unreliable in both
-directions. Several projects that look permissive are not: Morphik is BSL 1.1,
-`context-mode` is Elastic License 2.0, Dify and holaOS use modified Apache-2.0
-with multi-tenancy bans, and OpenViking and chunkr are AGPL-3.0. Conversely,
-GitHub's `NOASSERTION` flag concealed plain Apache-2.0 or MIT licences on
-several others. Read the LICENSE file.
+Dependency counts help estimate the installation footprint of a memory system,
+though they do not measure its quality. The same snapshot recorded:
 
-A note on star counts: several repositories created in 2026 show growth curves
-that are hard to credit, including one claiming more stars than LangChain. A
-fork-to-star ratio well below what comparable projects show is a useful
-check.
+| Package | Transitive dependencies | Other recorded detail |
+|---|---|---|
+| Graphiti | 27 | Smaller dependency set among the compared memory packages |
+| Mem0 | 33 | — |
+| Cognee | 129 | 26 MB package footprint |
+| Letta | 247 | Maintainers labelled the server legacy |
+| LangChain | 36 | Three direct dependencies |
+
+LangMem's recent commits were dependency-bot changes. Among evaluation tools,
+ARES had no commit since March 2025; OpenAI Evals' last release was May 2024
+and its README pointed to a hosted product; Deepchecks' last LLM release was
+December 2024. RAGAS had moved organisations and had not released since early
+2026. These are maintenance observations in August 2026, not claims about
+their status today.
+
+For extraction, the earlier notes also recorded Readability recall of 0.729 in
+one benchmark run, distinct from the JavaScript result in chapter 5. The
+figures need their implementation and run attached before comparison.
+`html2text` was GPL-3.0 with little activity; its extraction score appears in
+chapter 5.
+
+Read licence files as well as repository badges. The snapshot found Morphik
+under BSL 1.1, `context-mode` under Elastic License 2.0, Dify and holaOS under
+modified Apache-2.0 terms with multi-tenancy restrictions, and OpenViking and
+chunkr under AGPL-3.0. Other repositories marked `NOASSERTION` by GitHub
+contained Apache-2.0 or MIT licences. The badge alone did not explain the terms.
+
+Stars indicate attention rather than maintenance or fitness for the task.
+Compare activity over time, the maintainers' own status notes and the component's
+behaviour in your pipeline before relying on popularity.
 
 ---
 
@@ -2504,23 +2540,37 @@ Anthropic post evaluates an Anthropic technique, the text marks it as a
 vendor evaluating itself. Anthropic's API documentation is treated as
 authoritative for the behaviour of its own products.
 
-Two measurements are the authors' own, based on small samples. They are
-labelled with their sample sizes where they appear.
+Three measurements are the authors' own: token density across nine repository
+files, HTML stripping on four pages and search-provider overlap across 24
+queries. Each is labelled with its sample size and limitations where it appears.
 
 ## Sources
 
-Every URL cited below returned HTTP 200 on 4 August 2026. That confirms the
-page exists, not that it says what is claimed; every figure quoted in the
-text was checked against the source rather than an automated summary.
-Several vendor claims are internal evaluations with unpublished
-composition, marked as such in the text.
+Source checks date from 4 August 2026. Recorded URL checks returned HTTP 200
+except where a reference notes an exception, including the Cerebras article
+in reference 115. A resolving URL establishes availability; the quoted figures
+were also checked against source content rather than automated summaries.
+Several vendor results come from internal evaluations with unpublished task
+composition, identified where that affects interpretation.
 
-Two measurements used in chapters 1 and 5 are original: token density by
-content type, and the raw-HTML-versus-tag-stripped-text token ratio. Both
-used tiktoken `o200k_base` over files in this repository plus four live web
-pages. The repository files can be rerun. The four original HTML inputs
-were not retained, so their published figures cannot be reproduced exactly.
-Neither measurement transfers exactly to Claude or Gemini tokenisers.
+The three original measurements have different scopes:
+
+- Token density used tiktoken `o200k_base` across nine files in this repository.
+  The measurement script and repository files are available to rerun.
+- HTML stripping used the same tokeniser on four fetched pages, before and
+  after removing tags and scripts. The four original HTML inputs were not
+  retained, so their published figures cannot be reproduced exactly. Neither
+  token measurement transfers exactly to Claude or Gemini tokenisers.
+- Provider overlap used 24 English-language queries across six categories,
+  sent once to three search providers. Four of 72 calls failed and were
+  excluded. The script is `docs/guide/measurements/source_overlap.py`; a new
+  run samples changing search results rather than reproducing the snapshot.
+
+In the provider sample, Exa contributed 61% unique hosts and the other two
+providers about 26% each. Across 295 distinct hosts, the most frequent were
+`reddit.com` (30 appearances), `youtube.com` (24), `arxiv.org` (19),
+`medium.com` (19) and `docs.vllm.ai` (19). These describe host coverage, not
+independent evidence or source quality.
 
 ### References
 
@@ -2531,73 +2581,180 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
 [^3]: Anthropic, *Token counting*, fetched 4 August 2026.
 [^4]: Anthropic `claude-api` reference material, bundled 2026.
 [^6]: Anthropic, *Advanced tool use*, 24 November 2025.
+    Reported connector footprints: GitHub, 35 tools and about 26,000 tokens;
+    Slack, 11 tools and about 21,000; five connectors, about 55,000.
+    Anthropic also reported seeing 134,000 tokens of definitions. Deferred
+    loading reduced one tool set from 77,000 to 8,700 tokens (reported as 85%).
 [^7]: `github.com/zhang-liz/mcp-token-benchmark`, 8 July 2026.
 [^8]: JD Hodges, published `/context` breakdown, 22 March 2026.
 [^9]: Anthropic, *Agent Skills overview*, fetched 4 August 2026.
 [^10]: Aurimas Griciūnas, *Agent Skills progressive disclosure*, 11 March
     2026.
+    Seventeen official skills: median discovery footprint about 80 tokens;
+    approximately 1,700 tokens for the full set.
 [^11]: Liu et al., *Lost in the Middle*, TACL, February 2024.
+    GPT-3.5-Turbo: about 75.5% with the gold document first, 53% around
+    position 10 and 63% at position 20; closed-book 56.1%, gold-only oracle
+    88.3%. Claude-1.3 and Claude-1.3-100K: closed-book 48.3% and 48.2%, oracle
+    76.1% and 76.4%. Inputs were about 2,000–6,000 tokens. Increasing retrieved
+    documents from 20 to 50 gained about 1.5% and 1% for GPT-3.5-Turbo and
+    Claude-1.3 respectively.
 [^12]: Zhang et al., *Positional Failures in Long-Context LLMs*,
     arXiv:2605.23170, 22 May 2026.
 [^13]: Hong, Troynikov and Huber, *Context Rot*, Chroma, 14 July 2025.
+    Eighteen models. Repeated-word copying fell from near-100% at 25 words
+    to roughly 40–60% at 10,000. A focused ~300-token memory prompt beat the
+    same content in ~113,000 tokens by roughly 15–40 points by model family.
 [^14]: Levy et al., *Same Task, More Tokens*, arXiv:2402.14848, ACL 2024.
+    Average accuracy fell from 0.92 to 0.68, with degradation beginning
+    around 3,000 tokens in this setup.
 [^15]: Hsieh et al., *RULER*, arXiv:2404.06654, April 2024.
+    Only about half the tested models claiming windows of at least 32K
+    maintained satisfactory performance at 32K despite strong needle scores.
 [^16]: Modarressi et al., *NoLiMa*, arXiv:2502.05167, February 2025.
+    The source notes record both 10 of 12 long-window models and 11 of 13
+    models falling below half their short-context baseline at 32K. The
+    denominators remain unreconciled; the prose therefore gives no exact
+    fraction.
 [^17]: An et al., *Why Does the Effective Context Length of LLMs Fall
     Short?*, arXiv:2410.18745, October 2024.
+    Effective length was near half the training length in the reported
+    setup; position-offset remapping recovered more than 10 points on RULER.
 [^18]: Epoch AI, *Context windows*, 25 June 2025.
+    Tracked 123 models: advertised windows grew about 30× annually; the
+    input length at which the best models achieved 80% accuracy improved
+    over 250× in nine months.
 [^19]: Leng et al., *Long Context RAG Performance of LLMs*,
     arXiv:2411.03538, November 2024.
+    About 2,000 experiments. Llama 3.1 405B declined after 32K and
+    GPT-4-0125 after 64K; o1-mini, GPT-4o, Claude 3.5 Sonnet and Claude 3 Opus
+    improved roughly monotonically to 100K. Claude 3.5 copyright refusals
+    rose from 3.7% to 49.5% between 16K and 64K; DBRX instruction-following
+    failures rose from 5.2% to 50.4%.
 [^20]: Kate et al., *LongFuncEval*, arXiv:2505.10570, April 2025.
+    Growing tool definitions from 8K to 120K degraded Mistral-large by
+    94%, Llama-3.1-70B by 72% and GPT-4o by 13.8%. Longer tool responses
+    degraded Mistral-large by 91% and GPT-4o by 7%; longer conversations cost
+    13–40%. Tool-result accuracy at position 8 exceeded position 1 by 5–75%.
 [^21]: Gillespie and Perry, *Scaling Enterprise Agent Routing*,
     arXiv:2606.17519, 16 June 2026.
+    Catalogue of 110 agents and 584 tools, evaluated on GPT-5.4, GPT-5.1
+    and Claude Sonnet 4.5. Implicit-query routing F1 fell 58.2%→42.1% from
+    51 to 584 tools; recall 55%→37%, precision 68%→60%. Oracle shortlisting
+    still fell 79.0%→68.8%. Embedding shortlisting to about 20 candidates
+    recovered 10–11 points; the elbow at 40–60 agents was catalogue-specific.
 [^22]: Eliav, *Prompt Design at Scale*, arXiv:2607.19257, 21 July 2026.
     Single-author preprint.
+    Perfect-response rates reached zero by 80 simultaneous instructions
+    for every model, format and placement tested; no invented answer was
+    recorded in 5,760 probes. Refusal was the failure near capacity.
 [^23]: Laban et al., *LLMs Get Lost In Multi-Turn Conversation*,
     arXiv:2505.06120, May 2025.
+    Over 200,000 simulated conversations, 15 models: average performance
+    drop 39%; o3 98.1→64.1. Decomposition reported about 16% lower aptitude
+    and 112% greater unreliability.
 [^24]: Lodha et al., *Less Context, Better Agents*, arXiv:2606.10209, 8 June
     2026.
+    Input accounted for 99.75–99.87% of token use; individual tool
+    responses were 500–3,000 tokens, with accumulated histories reaching
+    50,000–150,000+. Further checks were by the same authors across three
+    task categories and Claude Sonnet 4.5, not independent replication.
 [^25]: Drew Breunig, *How Long Contexts Fail*, 22 June 2025.
+    The poisoning illustration was a Gemini agent playing Pokémon. The
+    August 2026 source check did not find it in current versions of the Gemini 2.5
+    technical report, or find a controlled propagation experiment.
 [^26]: Cuconasu et al., *The Power of Noise*, arXiv:2401.14887, SIGIR 2024.
+    Original reported improvement from irrelevant documents: up to 35%.
 [^27]: Mazuryk et al., *The Powerless Noise*, arXiv:2607.03615, SIGIR 2026.
+    Under normal settings the effect was −0.23% to −1.30%. The original
+    setup used a 15-token generation limit, no chat template and a forced
+    no-answer instruction. Truncated or malformed generations accounted for
+    53.6–73.6% of its errors.
 [^28]: Amiraz et al., *The Distracting Effect*, arXiv:2505.06914, 2025.
 [^29]: Yen, Gao, Chen et al., *HELMET*, arXiv:2410.02694, ICLR 2025. 59 models,
     seven categories. <https://princeton-nlp.github.io/HELMET/>
+    No synthetic long-context task reached average correlation above
+    0.8 with downstream tasks; reported RULER correlations were below 0.85.
 [^30]: Greg Kamradt, *LLMTest_NeedleInAHaystack*, MIT.
     <https://github.com/gkamradt/LLMTest_NeedleInAHaystack>
 [^31]: OpenAI, GPT-4.1 launch material, 14 April 2025. MRCR 57.2% at 128K,
     46.3% at 1M; Graphwalks BFS 61.7% under 128K falling to 19.0% above.
+    MRCR was corrected in December 2025 and Graphwalks in February 2026;
+    the recorded corrections were unannounced.
 [^32]: LoCoDiff, Mentat AI / AbanteAI, 8 May 2025.
     <https://abanteai.github.io/LoCoDiff-bench/>
+    Reported best score 79%; all models below 50% above 25,000 tokens;
+    largest prompt 97,500 tokens.
 [^33]: Yao et al., *τ-bench*, arXiv:2406.12045, June 2024; and *τ²-bench*,
     arXiv:2506.07982, June 2025.
+    GPT-4o retail-task success was below 50% on one attempt and below
+    25% on all eight attempts.
 [^34]: Du, Tian, Peng et al., *Context Length Alone Hurts LLM Performance
     Despite Perfect Retrieval*, arXiv:2510.05381, EMNLP 2025 Findings.
+    Reported performance declines ranged from 13.9% to 85% across five
+    models under the study’s controls.
 [^35]: *The SWE-Bench Illusion*, arXiv:2506.12286, June 2025, final December
     2025.
+    Buggy file identification from issue text: up to 76% within the
+    benchmark versus 53% outside; function reproduction 35% versus 18%.
 [^36]: Zarzecki, Dubiński and Cygert, *The Reliability Gap in Benchmark
     Auditing*, arXiv:2606.03305, 2 June 2026.
+    Three detection methods across 25 models; 201 of 335 evaluations
+    produced correct outcomes. Distribution shift and low statistical power
+    limited detection.
 [^37]: Wang et al., *EvoBrowseComp*, arXiv:2606.13120, 11 June 2026.
+    Automated pipeline regenerating 800 live-web questions.
 [^38]: Google, Gemini 3 launch material, 18 November 2025.
+    Launch material reported LMArena, GPQA Diamond, MathArena Apex and
+    MMMU-Pro, with no long-context benchmark in the sources cited here.
 [^39]: Terminal-Bench 2.1 leaderboard, fetched 4 August 2026.
     <https://www.tbench.ai/leaderboard/terminal-bench/2.1>
 [^40]: Arya, *RECON*, arXiv:2607.16716, 18 July 2026.
+    Best non-oracle system reported 22.4%.
 [^41]: Wang, Xu et al., *BM25 Wins at Scale*, arXiv:2607.26497, 29 July 2026.
     One team, one corpus construction; unreplicated.
 [^42]: Li, Li, Zhang, Mei and Bendersky, *RAG or Long-Context LLMs?*,
     arXiv:2407.16833, EMNLP 2024 industry track. Source of the Self-Route
     results and the four-way failure taxonomy.
+    Across nine datasets, long-context answer-quality gains were 7.6 points
+    on Gemini-1.5-Pro, 13.1 on GPT-4o and 3.6 on GPT-3.5-Turbo; about 63%
+    of queries produced identical answers. Self-Route used 38.6% of the
+    tokens on Gemini-1.5-Pro (reported 65% cost cut) and 61% on GPT-4o
+    (39% cost cut), at near-long-context quality. Over half of queries were
+    answerable from retrieval alone.
 [^43]: *LaRA*, arXiv:2502.09977, ICML 2025. 2,326 test cases, 11 models.
+    At 32K, long context led by about 2.4%; at 128K, retrieval led open
+    models by about 3.7%, while GPT-4o and Claude 3.5 Sonnet still favoured
+    long context. Models of 3B–12B gained 6.5–38.1% from retrieval at 128K.
+    Long context led reasoning by ~9% and comparison by 14–15%; retrieval
+    led hallucination detection by 10–22%.
 [^44]: Anthropic, *Introducing Contextual Retrieval*, 19 September 2024.
+    Top-20 failure chain: 5.7% baseline, 3.7% contextual embeddings,
+    2.9% with contextual BM25, 1.9% with reranking; relative reductions
+    35%, 49% and 67%. Reported best k was 20. Header generation used
+    50–100 tokens per chunk and cost about $1.02 per million document
+    tokens with prefix caching. Vendor evaluation; no independent
+    reproduction found as of August 2026.
 [^45]: Industry RAG-Fusion deployment study, arXiv:2603.02153, 2 March 2026.
+    Hit@10 fell from 0.51 to 0.48 despite increased retrieval recall.
 [^46]: *Fishing for Answers*, arXiv:2509.04820, September 2025.
+    One-shot retrieval with a wider search and chunk filter scored 91.0%,
+    versus 90.0% for iterative retrieval; iteration made 59–97% more
+    retrieval calls. Combining the two underperformed either alone.
 [^47]: Jin et al., *Search-R1*, arXiv:2503.09516, March 2025.
+    Reported gains of +41% and +20% over the evaluated baselines came
+    from reinforcement learning on the search policy.
 [^48]: Edge et al., *GraphRAG*, arXiv:2404.16130, April 2024. Preference-based
     evaluation; faithfulness at parity with baseline retrieval.
 [^49]: Microsoft Research, *LazyGraphRAG*, 25 November 2024.
+    Reported full GraphRAG indexing cost was 1,000× LazyGraphRAG’s.
 [^50]: Anthropic, *Web fetch tool*, fetched 4 August 2026.
 [^51]: Provider pricing pages for Anthropic, Brave, Exa, Firecrawl and Jina,
     all fetched 4 August 2026.
+    Snapshot: Anthropic $10 per 1,000 searches, fetching charged through
+    input tokens; Brave $5 per 1,000 searches; Exa $7 per 1,000 searches
+    plus $1 per 1,000 pages per content type; Firecrawl one credit per
+    page; Jina Reader output tokens with a 10,000-token minimum per search.
 [^52]: Cloudflare, *Introducing pay-per-crawl*, 1 July 2025, modified 15 July
     2026.
 [^53]: Zyte, `scrapinghub/article-extraction-benchmark`. 181 pages, four-gram
@@ -2605,28 +2762,50 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     2026.
 [^54]: Li et al., *Beyond a Single Extractor*, arXiv:2602.19548, 23 February
     2026.
+    Combining extractors raised token yield by up to 71% with no
+    benchmark regression in the reported setup.
 [^55]: Smith and Troynikov, *Evaluating Chunking Strategies for Retrieval*,
     Chroma, 3 July 2024.
+    Five corpora, 328,208 tokens, 472 queries, token-level scoring.
+    About 9% recall spread between best and worst strategies. LLM-guided
+    splitting gained 3.8 recall points over the recursive baseline and
+    roughly halved precision; reducing overlap improved the overlap-with-
+    ground-truth measure. Vendor evaluation, unreplicated.
 [^56]: Chunking taxonomy paper, arXiv:2602.16974, SIGIR 2026, 19 February
     2026.
 [^57]: Günther, Mohr, Williams, Wang and Xiao, *Late Chunking*,
     arXiv:2409.04701, September 2024, revised July 2025.
+    Vendor’s own evaluation: nDCG@10 64.20→66.10 on SciFact,
+    23.46→29.98 on NFCorpus and unchanged on Quora.
 [^58]: *Reconstructing Context*, arXiv:2504.19754, 28 April 2025.
 [^59]: Jiang et al., *LLMLingua*, arXiv:2310.05736, 9 October 2023. "Up to 20x
     compression with little performance loss", measured on GSM8K, BBH,
     ShareGPT and an arXiv set.
+    Repository snapshot, checked 4 August 2026: MIT, 6,522 stars and one
+    commit since October 2025.
 [^60]: Pan et al., *LLMLingua-2*, arXiv:2403.12968, 19 March 2024. Claims
     2×–5×.
 [^61]: Jiang et al., *LongLLMLingua*, arXiv:2310.06839, ACL 2024.
+    Reported up to +21.4% accuracy at around four times fewer tokens on
+    NaturalQuestions.
 [^62]: Xu, Shi and Choi, *RECOMP*, arXiv:2310.04408, 6 October 2023.
+    Reported retained size as low as 6% with minimal performance loss in
+    the evaluated setups; extractive and abstractive variants, including
+    empty-string output for irrelevant retrieved material.
 [^63]: Isabella He, Anthropic cookbook, context-engineering tools, 20 March
     2026. Compaction fidelity: 3 of 3 high-level facts kept, 0 of 3
     appendix-table details.
+    One research-agent demonstration: eight documents, about 329,000
+    tokens. The six checked facts are a small sample from one run.
 [^64]: Anthropic, *Prompt caching*, fetched 4 August 2026.
+    Recorded model minima: Opus 5, 512 tokens; Opus 4.8, 1,024;
+    Opus 4.7, 2,048; Opus 4.6, 4,096. Below-minimum requests process
+    without caching and return no error.
 [^65]: Anthropic, *Cache diagnostics*, beta `cache-diagnosis-2026-04-07`.
 [^66]: Xiao et al., *StreamingLLM*, arXiv:2309.17453; Zhang et al., *H2O*,
     arXiv:2306.14048; Li et al., *SnapKV*, arXiv:2404.14469. Headline
     multipliers are against 2023-era baselines.
+    Headline speedups of 22.2× and 29× used OPT and LLaMA-1/2 baselines.
 [^67]: LangChain, *Context engineering for agents*, 2 July 2025. Its
     "auto-compact at 95%" figure is stale.
 [^68]: Anthropic, *Compaction*, fetched 4 August 2026. Default trigger 150,000
@@ -2637,22 +2816,38 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     2025.
 [^71]: Anthropic, *How we built our multi-agent research system*, 13 June
     2025.
+    Internal research evaluation: reported +90.2% over a single agent.
+    Multi-agent token use about 15× chat, single-agent about 4×. Token use
+    explained 80% of performance variance in one benchmark. Vendor’s own
+    evaluation; budget and task scope qualify the architecture claim.
 [^72]: Walden Yan, Cognition, *Don't Build Multi-Agents*, 12 June 2025.
 [^73]: Walden Yan, Cognition, *Multi-Agents: What's Actually Working*, 22
     April 2026.
+    Reported reviewer average: two bugs per pull request, 58% severe;
+    Cognition’s own deployment report.
 [^74]: Tran and Kiela, *Single-Agent LLMs Outperform Multi-Agent Systems Under
     Equal Thinking Token Budgets*, arXiv:2604.02460, 2 April 2026.
 [^75]: Cemri et al., *Why Do Multi-Agent LLM Systems Fail?*, arXiv:2503.13657,
     NeurIPS 2025. 1,600+ annotated traces, 14 failure modes.
+    Specification and system-design issues accounted for about 42%
+    of failures in the annotated traces.
 [^76]: Chhikara et al., *Mem0*, arXiv:2504.19413, April 2025 — the
     full-context baseline figure is in the paper's own results table. Critique:
     Zep, *Is Mem0 Really SOTA in Agent Memory?*, 6 May 2025. Zep is an
     interested party.
+    LoCoMo full-context baseline about 73%, Mem0 about 68%.
 [^77]: Letta, *Benchmarking AI agent memory*, 12 August 2025. 74.0% on LoCoMo
     from a plain filesystem.
+    The compared graph-based system scored 68.5%.
 [^78]: `getzep/zep-papers` issue #5, Mem0 reply, 8 May 2025.
+    Recorded competing results include 65.99%, a rerun at 75.14%, and
+    58.44% after removing an adversarial category both parties disputed.
+    Another quoted configuration reached 84%; these configurations do not
+    form a single controlled comparison.
 [^79]: Kuan Wang, *MemDelta: Controlled Baselines and Hidden Confounds in Agent
     Memory Evaluation*, arXiv:2606.29914, 29 June 2026.
+    Changing only the embedder moved accuracy by 6.2 percentage points;
+    one embedding choice reversed the ranking of memory approaches.
 [^81]: Bohnet et al., *Attributed Question Answering* (AutoAIS),
     arXiv:2212.08037, December 2022. System-level Pearson r = 0.96 against
     human attribution judgement; instance-level agreement explicitly described
@@ -2675,6 +2870,8 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     from 2 to 150.
 [^85]: *DeepResearch Bench*, arXiv:2506.11763, June 2025. 100 PhD-level tasks;
     the precision-versus-volume trade-off across systems.
+    Compared examples: 90.2% citation accuracy with about 31 effective
+    citations, versus 81.4% with about 111.
 [^86]: Godbole and Jia, *Verify with Caution*, arXiv:2501.14883, January 2025.
     Five factuality metrics across 11 datasets; biases against paraphrased
     output and against output drawing on distant parts of the source.
@@ -2687,12 +2884,29 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     1,000-question rule, the clustered-standard-error ratios (1.34 against
     0.44 on one benchmark), the resampling ceiling, and the warning against
     lowering temperature to reduce variance.
+    Worked examples: on a 164-item set, roughly three percentage points
+    of standard error made 83.6% versus 86.7% hard to distinguish. Repeats
+    K=2 reduced total variance by about a third, K=4 by half, with a
+    two-thirds ceiling in the analysed setup. On 198 items, moving from
+    one to ten repeats lowered the minimum detectable effect from 13.2%
+    to 7.5%. One lower-temperature example tripled minimum variance.
 [^89]: Prakhar Khatri, *Do Context Files Help Coding Agents?*,
     arXiv:2607.27250, July 2026. 291 runs, three repositories, two agents,
     three strategies; no correctness benefit; manipulation-validity probe;
     120–200 tasks needed for a 10-point effect; difficulty not portable across
     agents. Data and code at
     <https://github.com/codeprakhar25/context-files-coding-agents>.
+    Three Python repositories, 15–17 merged pull-request tasks each,
+    two agents, three context strategies and three repeats, 291 runs.
+    Methods included within-task permutation tests (10,000+ iterations),
+    task-clustered bootstrap equivalence testing, paired tests with
+    multiple-comparison correction and Monte Carlo power simulation.
+    Reported pass rates: 53.3%→55.6% (p=1.00) for one agent;
+    58.8% / 56.9% / 52.9% (p=0.66) for the other. Thirty-six near-miss
+    probe cells produced no conversion to a pass. At 17 tasks × 3 repeats,
+    minimum detectable effect remained above 30 points. Task-difficulty
+    rank correlation across agents was 0.75, with about 40% of tasks at
+    floor or ceiling for one but not the other.
 [^90]: Yagubyan, judge-reliability study, arXiv:2606.13685, 2026. 13.6% mean
     pairwise flip rate; 11 trials for a stable majority verdict. Note the
     listed submission date is internally inconsistent.
@@ -2725,10 +2939,16 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
 [^99]: Voyage AI, *The case against LLMs as rerankers*, 22 October 2025. 13
     datasets, 8 domains. Vendor evaluation; direction corroborated
     independently by ZeroEntropy, magnitudes not.
+    Reported cross-encoder gains: 12.6% over GPT-5 and 13.4% over
+    Gemini 2.5 Pro in nDCG@10, 36× and 48× faster, and 25–60× cheaper.
+    Vendor configured the competitors; independent evidence supported
+    the direction, not these magnitudes.
 [^100]: Particula, reranker latency comparison, 22 May 2026. Methodology
     underspecified (batch size, hardware, concurrency unstated) and a separate
     source reports 392 ms for one of the same models. Ratio indicative, not
     the absolutes.
+    Reported hosted latency 595–603 ms versus 188 ms self-hosted.
+    The missing controls prevent attributing the gap solely to networking.
 [^101]: DenseOn against LateOn, arXiv:2607.27178, 31 July 2026. Same backbone,
     149M parameters each: 56.20 against 57.22 nDCG@10 on BEIR. The cleanest
     controlled comparison of single-vector against late interaction.
@@ -2748,12 +2968,17 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     answer-in-context diagnostic, its correlation with exact match, and the
     4.6× gap among fully-retrieved questions. Single-author preprint; the
     author notes gains shrink as the reader gets larger.
+    Answer-span survival correlated 0.39–0.55 with exact match, versus
+    0.31 for document recall. A 4.6× exact-match gap remained among
+    questions where all gold documents had been retrieved.
 [^107]: Byte-exact deduplication in retrieval-augmented generation,
     arXiv:2605.09611, 10 May 2026. The three-regime result, zero quality
     regression across four vendors.
 [^108]: Cross-attention calibrated deduplication, arXiv:2607.24332, 27 July
     2026; and H3D, arXiv:2607.08382, 9 July 2026, benchmarking MinHash,
     SimHash, Winnowing, FuzzyHash and FlyHash.
+    Embedding-similarity deduplication was roughly seven times slower
+    than alternatives for about 10% additional removal in the cited work.
 [^109]: Gabín, Perez and Parapar, *Lost in the Evidence?*, arXiv:2605.27105,
     SIGIR 2026. Five models, two datasets; the U-curve fails to reproduce;
     1,000–2,000 topics needed for stable conclusions; reverse ordering worth
@@ -2766,10 +2991,14 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
 [^112]: RCWT, arXiv:2607.12216, 13 July 2026. The displacement result: three
     commercial models stayed correct at a 95% coordination ratio when
     coordination tokens were added outside the evidence budget.
+    Fixed window 4,096 tokens; evidence fell to a few hundred tokens
+    at the performance drop.
 [^113]: Tool-schema compression, arXiv:2605.26165, 24 May 2026. +20.5
     percentage points exact-match at 8,000 tokens against 2.6% uncompressed.
 [^114]: *Control Under Compression*, arXiv:2608.01056, 2 August 2026. 92.7%
     success at 75% retained context against a 93.8% full-context baseline.
+    The study reported sharp divergence between 50% and 35% retained
+    context; these are not validated general retention thresholds.
 [^115]: Cerebras, *How We Built Our Knowledge Base*, 15 July 2026,
     `cerebras.ai/blog/how-we-built-our-knowledge-base`. Practitioner report:
     architecture and design rationale, no retrieval quality figures and no
@@ -2803,6 +3032,9 @@ Neither measurement transfers exactly to Claude or Gemini tokenisers.
     and `.../pricing`; `ai.google.dev/gemini-api/docs/caching` and
     `.../pricing`. Vendor documentation, and authoritative for their own
     billing.
+    Google explicit storage at the check: $1.00 per million tokens per
+    hour for Flash and $4.50 for Gemini 3.1 Pro Preview; 200,000 tokens
+    held one hour on the latter costs $0.90 before reads.
 [^124]: Yan Song, *Cache-Aware Prompt Compression: A Two-Tier Cost Model for
     LLM API Caching*, arXiv:2607.15516, 17 July 2026. One author, one provider
     API; the measured crossover is not a general threshold.

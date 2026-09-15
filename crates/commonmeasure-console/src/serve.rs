@@ -21,9 +21,9 @@
 //! `POST /app/attribution`, each revision-checked and saved through the
 //! artefact's own loader (`console::edit`). `GET /app/policy/forecast` is the
 //! dry run over recorded history for a draft rule and writes nothing. Every
-//! write answers with the screen rendered from a fresh read, never from the
-//! form that was posted, so what the operator reads afterwards is what the
-//! runtime would now resolve, including where nothing was saved.
+//! write accepts form or JSON input and answers JSON when requested, HTML
+//! otherwise. `/api/` aliases always answer JSON. Policy answers carry the
+//! outcome and revision from a fresh read, including where nothing was saved.
 
 use std::io::Write as _;
 use std::net::SocketAddr;
@@ -275,7 +275,9 @@ fn route(
             request.headers.get("Origin"),
             request.headers.get("Sec-Fetch-Site"),
         ) {
-            return json_error(
+            return write_refusal(
+                home,
+                request,
                 403,
                 &format!(
                     "this console takes writes only from its own pages; a write with Origin \
@@ -285,8 +287,9 @@ fn route(
             );
         }
         return match path {
-            "/app/compare" => post_compare(search, &request.body, providers),
-            "/app/policy/mode" | "/app/policy/deny" | "/app/attribution" => {
+            "/app/compare" | "/api/compare" => post_compare(search, request, providers),
+            "/app/policy/mode" | "/app/policy/deny" | "/app/attribution" | "/api/policy/mode"
+            | "/api/policy/deny" | "/api/attribution" => {
                 policy_write(state, home, sessions_dir, path, request)
             }
             _ => json_error(
@@ -360,11 +363,24 @@ fn route(
             providers,
             session.as_deref(),
         ),
-        "/app/policy/forecast" => forecast_route(state, home, sessions_dir, &request.target),
+        "/app/policy/forecast" | "/api/policy/forecast" => {
+            forecast_route(state, home, sessions_dir, request)
+        }
+        "/api/providers" => json_value(200, &json!(providers)),
+        "/app/budget" => app_page(
+            state,
+            home,
+            sessions_dir,
+            engagement.as_deref(),
+            console::app::Section::Budget,
+            providers,
+            None,
+        ),
         "/styles.css" => asset(STYLES_CSS, "text/css; charset=utf-8"),
         "/htmx.min.js" => asset(HTMX_JS, "text/javascript; charset=utf-8"),
         "/guide" => guide_page("context-window-optimisation"),
         "/guide/state-of-the-evidence" => guide_page("state-of-the-evidence"),
+        "/guide/untrusted-context" => guide_page("untrusted-context"),
         "/sessions" | "/sessions.html" => app_page(
             state,
             home,
@@ -387,24 +403,16 @@ fn route(
                 Err(error) => json_error(500, &format!("{error:#}")),
             }
         }
-        // The same projection the budget strip renders, verbatim. The policy
+        // The same projection the Budget screen renders, verbatim. The policy
         // projection is built unfiltered and the budget projection narrows it,
         // so the cap in this answer is the cap the policy panel resolved.
         "/api/budget" => match attribution() {
             Ok(rules) => {
                 let home = home.to_path_buf();
                 with_store(state, sessions_dir, move |store| {
-                    let facts = store.cwd_facts()?;
-                    let policy = console::policy::projection(&home, &facts, &rules, None);
-                    let budgets = store.engagement_budgets(&rules)?;
                     Ok((
                         200,
-                        console::budget::projection(
-                            &policy,
-                            &budgets,
-                            &console::budget::allowance_state(&home),
-                            engagement.as_deref(),
-                        ),
+                        budget_projection(store, &home, &rules, engagement.as_deref())?,
                     ))
                 })
             }
@@ -498,34 +506,170 @@ fn route(
     }
 }
 
-/// Run a live comparison for the Compare screen: the query across every
-/// enabled provider, rendered side by side. Real calls, made on the operator's
-/// own trigger — never on the agent's behalf, and not recorded as a crossing,
-/// because this is a probe the operator runs, not context the agent received.
-fn post_compare(search: Option<&SearchRunner>, body: &[u8], providers: &[Value]) -> Response {
-    let query = console::form::parse_form(body)
-        .ok()
-        .and_then(|fields| {
-            fields
-                .into_iter()
-                .find(|(key, _)| key == "query")
-                .map(|(_, value)| value)
+/// API paths serve JSON; page paths negotiate an explicit JSON Accept value.
+fn negotiated_error(request: &Request, status: u16, detail: &str) -> Response {
+    if wants_json(request) {
+        json_error(status, detail)
+    } else {
+        html_error(status, detail)
+    }
+}
+
+fn wants_json(request: &Request) -> bool {
+    request.target.starts_with("/api/")
+        || request.headers.get("Accept").is_some_and(|accept| {
+            accept.split(',').any(|entry| {
+                let mut parts = entry.split(';');
+                parts
+                    .next()
+                    .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("application/json"))
+                    && !parts.any(|part| {
+                        part.trim()
+                            .strip_prefix("q=")
+                            .is_some_and(|q| q.parse::<f32>().unwrap_or(0.0) <= 0.0)
+                    })
+            })
         })
+}
+
+/// Decode either representation into the editor's ordered fields. Attribution
+/// JSON uses a rules array because order determines which rule wins.
+fn request_fields(request: &Request) -> Result<Vec<(String, String)>> {
+    if !request.headers.get("Content-Type").is_some_and(|kind| {
+        kind.split(';')
+            .next()
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("application/json"))
+    }) {
+        return console::form::parse_form(&request.body);
+    }
+    let value: Value = serde_json::from_slice(&request.body)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("expected a JSON object"))?;
+    let mut fields = Vec::new();
+    for (key, value) in object {
+        if key == "rules" {
+            for rule in value
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("rules must be an array"))?
+            {
+                for key in ["match", "engagement"] {
+                    let text = rule
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow::anyhow!("each rule needs a string {key}"))?;
+                    fields.push((key.to_owned(), text.to_owned()));
+                }
+            }
+        } else {
+            let text = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("{key} must be a string"))?;
+            fields.push((key.clone(), text.to_owned()));
+        }
+    }
+    Ok(fields)
+}
+
+fn write_revision(home: &std::path::Path, request: &Request) -> Value {
+    if request
+        .target
+        .split('?')
+        .next()
+        .is_some_and(|path| path.ends_with("/attribution"))
+    {
+        console::policy::attribution_editor(home)["revision"].clone()
+    } else if request.target.contains("/policy/") {
+        commonmeasure_harness::policy::PolicyDocument::read(home)
+            .map(|document| json!(document.revision()))
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    }
+}
+
+fn write_refusal(home: &std::path::Path, request: &Request, status: u16, notice: &str) -> Response {
+    if wants_json(request) {
+        json_value(
+            status,
+            &json!({"kind": "refused", "status": status, "notice": notice,
+            "revision": write_revision(home, request)}),
+        )
+    } else {
+        html_error(status, notice)
+    }
+}
+
+/// Execute one operator query through the same runner for both representations.
+fn post_compare(search: Option<&SearchRunner>, request: &Request, providers: &[Value]) -> Response {
+    let fields = match request_fields(request) {
+        Ok(fields) => fields,
+        Err(error) => {
+            let result = json!({"kind": "refused", "status": 400, "notice": format!("The query could not be read: {error:#}"),
+                "revision": null, "results": []});
+            return compare_answer(request, &result, providers);
+        }
+    };
+    let query = fields
+        .iter()
+        .find(|(key, _)| key == "query")
+        .map(|(_, value)| value.trim())
         .unwrap_or_default();
-    let query = query.trim();
-    if query.is_empty() {
-        return html(200, &console::app::compare_page(None, &[], providers));
-    }
-    match search {
-        Some(runner) => html(
+    let (kind, status, notice, results) = if query.is_empty() {
+        (
+            "refused",
+            400,
+            "Enter a query to compare sources.",
+            Vec::new(),
+        )
+    } else if let Some(runner) = search.filter(|_| providers.iter().any(|p| p["connected"] == true))
+    {
+        (
+            "completed",
             200,
-            &console::app::compare_page(Some(query), &runner(query), providers),
-        ),
-        None => html(
-            200,
-            &console::app::compare_page(Some(query), &[], providers),
-        ),
+            "Comparison completed; nothing is recorded.",
+            runner(query),
+        )
+    } else {
+        (
+            "unavailable",
+            503,
+            "Unavailable: no connected source or search runner; no query was sent.",
+            Vec::new(),
+        )
+    };
+    let result = json!({"kind": kind, "status": status, "notice": notice, "revision": null,
+        "query": query, "results": results});
+    compare_answer(request, &result, providers)
+}
+
+fn compare_answer(request: &Request, result: &Value, providers: &[Value]) -> Response {
+    let status = result["status"].as_u64().unwrap_or(500) as u16;
+    if wants_json(request) {
+        json_value(status, result)
+    } else {
+        html(
+            status,
+            &console::app::compare_answer_page(result, providers),
+        )
     }
+}
+
+fn budget_projection(
+    store: &Store,
+    home: &std::path::Path,
+    rules: &Attribution,
+    engagement: Option<&str>,
+) -> Result<Value> {
+    let facts = store.cwd_facts()?;
+    let policy = console::policy::projection(home, &facts, rules, None);
+    let budgets = store.engagement_budgets(rules)?;
+    Ok(console::budget::projection(
+        &policy,
+        &budgets,
+        &console::budget::allowance_state(home),
+        engagement,
+    ))
 }
 
 /// The rebuilt console (maud app shell), rendered for one section. Reads the
@@ -603,6 +747,10 @@ fn app_page(
                         let editor = console::policy::attribution_editor(&home);
                         console::app::policy_page(&policy, &editor, None, &at)
                     }
+                    Section::Budget => console::app::budget_page(
+                        &budget_projection(store, &home, &rules, engagement.as_deref())?,
+                        read,
+                    ),
                     Section::Sources => console::app::sources_page(&providers),
                     Section::Compare => console::app::compare_page(None, &[], &providers),
                 })
@@ -627,7 +775,7 @@ fn policy_write(
     request: &Request,
 ) -> Response {
     use console::edit::{self, Outcome};
-    let fields = match console::form::parse_form(&request.body) {
+    let fields = match request_fields(request) {
         Ok(fields) => fields,
         Err(error) => {
             let outcome = Outcome::Refused {
@@ -645,14 +793,16 @@ fn policy_write(
     };
     let revision = field("revision").unwrap_or_default();
     let outcome = match path {
-        "/app/policy/mode" => match edit::mode_of(field("mode").unwrap_or_default()) {
-            Ok(mode) => edit::set_mode(home, revision, edit::scope_field(field("scope")), mode),
-            Err(reason) => Outcome::Refused {
-                status: 400,
-                notice: format!("Not saved: {reason}."),
-            },
-        },
-        "/app/policy/deny" => edit::deny_host(
+        "/app/policy/mode" | "/api/policy/mode" => {
+            match edit::mode_of(field("mode").unwrap_or_default()) {
+                Ok(mode) => edit::set_mode(home, revision, edit::scope_field(field("scope")), mode),
+                Err(reason) => Outcome::Refused {
+                    status: 400,
+                    notice: format!("Not saved: {reason}."),
+                },
+            }
+        }
+        "/app/policy/deny" | "/api/policy/deny" => edit::deny_host(
             home,
             revision,
             edit::scope_field(field("scope")),
@@ -713,6 +863,15 @@ fn policy_answer(
     request: &Request,
     outcome: &console::edit::Outcome,
 ) -> Response {
+    if wants_json(request) {
+        return json_value(
+            outcome.status(),
+            &json!({
+                "kind": outcome.kind(), "status": outcome.status(), "notice": outcome.notice(),
+                "revision": write_revision(home, request),
+            }),
+        );
+    }
     let fragment = request
         .headers
         .get("HX-Request")
@@ -765,11 +924,11 @@ fn forecast_route(
     state: &Mutex<Store>,
     home: &std::path::Path,
     sessions_dir: &std::path::Path,
-    target: &str,
+    request: &Request,
 ) -> Response {
     use commonmeasure_harness::policy::PolicyDocument;
     use console::edit;
-    let param = |name: &str| query_param(target, name);
+    let param = |name: &str| query_param(&request.target, name);
     let scope = param("scope");
     let scope = edit::scope_field(scope.as_deref());
     let host = param("host").unwrap_or_default();
@@ -778,12 +937,17 @@ fn forecast_route(
         Some(matcher) => format!("scope \"{matcher}\""),
         None => "the top-level policy".to_owned(),
     };
-    let failed = |reason: String| {
-        html(
-            200,
-            &console::app::forecast_fragment(&json!({"error": reason}), &json!({})),
-        )
+    let answer = |value: Value| {
+        if wants_json(request) {
+            json_value(200, &value)
+        } else {
+            html(
+                200,
+                &console::app::forecast_fragment(&value, &value["draft"]),
+            )
+        }
     };
+    let failed = |reason: String| answer(json!({"error": reason, "saved": false}));
     let document = match PolicyDocument::read(home) {
         Ok(document) if document.declared() => document,
         Ok(_) => {
@@ -844,17 +1008,18 @@ fn forecast_route(
     };
     let mut store = match state.lock() {
         Ok(store) => store,
-        Err(_) => return html_error(500, "the index lock was poisoned"),
+        Err(_) => return negotiated_error(request, 500, "the index lock was poisoned"),
     };
     if let Err(error) = store.ingest_sessions(sessions_dir) {
-        return html_error(500, &format!("ingest failed: {error:#}"));
+        return negotiated_error(request, 500, &format!("ingest failed: {error:#}"));
     }
     let facts = match store.crossing_facts() {
         Ok(facts) => facts,
-        Err(error) => return html_error(500, &format!("{error:#}")),
+        Err(error) => return negotiated_error(request, 500, &format!("{error:#}")),
     };
-    let forecast = console::forecast::forecast(&document, candidate, &facts);
-    html(200, &console::app::forecast_fragment(&forecast, &draft))
+    let mut forecast = console::forecast::forecast(&document, candidate, &facts);
+    forecast["draft"] = draft;
+    answer(forecast)
 }
 
 /// The JSON routes. The query answers with its own status, because "the store
@@ -976,6 +1141,10 @@ fn html(status: u16, body: &str) -> Response {
 /// by what it renders: `nosniff` is exactly the mitigation for a JSON body
 /// carrying bytes a caller chose, and an error answer carries those more often
 /// than a page does.
+fn json_value(status: u16, value: &Value) -> Response {
+    json(status, &value.to_string())
+}
+
 fn json(status: u16, body: &str) -> Response {
     hardened(Response::json(status, body))
 }
@@ -1002,6 +1171,7 @@ fn hardened(mut response: Response) -> Response {
     // live; a browser that served a page or stylesheet from cache would show a
     // stale view of the operator's own evidence. Never cache — always refetch.
     response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Vary", "Accept");
     response
 }
 

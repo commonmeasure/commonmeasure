@@ -1,22 +1,19 @@
 # Live briefs
 
-A brief is a bounded task an agent can land in one change. It serves one
-roadmap package and carries no status: the package's boxes in `ROADMAP.md`
-record what is built, and the brief is deleted when it lands. When this
-directory holds only this file, nothing is queued beyond the packages
-themselves.
+Use a brief when a task needs coordination or a durable handoff. Small,
+self-contained edits need no work-package number or separate brief.
 
-Every brief is a markdown file in this directory with these second-level
-headings, in this order:
+A useful brief states the goal, affected area, acceptance and exclusions;
+headings are optional. Link the relevant roadmap package when there is one.
+For concurrent work, one shared brief names the lead, each worker's scope and
+checkout, shared-file ownership, dependencies and integration state. The
+roadmap owns product delivery status and `docs/qa/OPEN.md` owns defects.
 
-1. `## Package`: the `WP-nn` heading in `ROADMAP.md` the brief serves, and
-   the boxes it closes.
-2. `## Goal`: what is true when the brief has landed, in one paragraph.
-3. `## Files`: the repository paths the change touches.
-4. `## Done when`: the tests, artefacts or commands that show it, named
-   exactly.
-5. `## Out of scope`: what the brief leaves to another brief or package.
+At handoff, record changed files or revisions, validation actually run, and
+unresolved issues. Before closing, the lead checks the combined result and
+updates the owning docs and roadmap. Remove temporary assignments once
+integrated. Preserve useful rationale and evidence in their owning documents;
+a retained handoff is a dated snapshot linking to current status.
 
-A brief states current fact, follows `AGENTS.md` §Writing, and names no
-path outside this repository. `crates/commonmeasure-cli/tests/work_briefs.rs`
-checks the headings and the package reference.
+`AGENTS.md` §Coordination and completion defines the rules. Templates help
+communication; their exact wording or heading order is not a test interface.

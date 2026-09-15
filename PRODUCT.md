@@ -2,9 +2,11 @@
 
 ## Promise
 
-Common Measure controls what content an organisation's AI agents may read,
-records where every piece came from and what it cost, and shows whether it
-helped. The record it leaves is one a person or a regulator can check.
+Common Measure applies an organisation's source policy to the content its AI
+agents acquire through mediated paths, records its origin and cost, and
+measures whether it helped where outcome evidence is available. The record
+states what was controlled, observed or unavailable so a person or a
+regulator can check its claims.
 
 ## Definition
 
@@ -17,30 +19,45 @@ it took in, and the measurement of what that content was worth. Common
 Measure supplies that part once, so each firm's harness can differ in
 everything else.
 
-It sits between an agent and everything the agent reads: web pages, search
-results, licensed content feeds, internal documents, code repositories and
-third-party skills. For every piece of content, before the agent reads it,
-it:
+It mediates acquisition from web pages, search results, licensed content
+feeds, internal documents, code repositories and third-party skills on the
+paths the operator integrates. On those paths it:
 
-1. applies rules: which sources are allowed or forbidden, under what
-   licence, for which principal, within what spend allowance per job, day
-   and month;
+1. applies source, licence and spend rules before admitting content, for
+   the identified principal and its allowance per job, day and month;
 2. records where the content came from, what it cost, a hash of exactly what
-   entered the model's context, and what the agent did with it;
-3. measures whether the content helped: whether the answer was grounded in
-   it, how much of the question it covered, how fresh it was.
+   was delivered to context, and subsequent activity where the host exposes it;
+3. measures whether the content helped where the workflow supplies the
+   required evidence: grounding, coverage and freshness in batch runs.
+
+Hooks observe supported host activity after the event, and transcript imports
+reconstruct earlier activity. Neither path can refuse an acquisition that
+has already happened. Built-in tools outside these integrations, opaque
+vendor grounding and hidden host context remain coverage gaps.
 
 The category line is "input control and audit for AI agents".
 
 ## The question the first version answers
 
-Can a component that manages and measures the content an agent takes in
-choose more effective content and skills than a fixed route, within cost and
-efficiency constraints, and leave enough local evidence for a person to
-explain and trust the choice? The committed experiments hold the answer
-model fixed and vary only the supply, so the effect of content is isolated.
-The acceptance gate, with the state of each line, is `ROADMAP.md`
-§Acceptance gate.
+Can an operator use Common Measure in a real agent workflow, understand why
+it admitted or refused a source, inspect an accurate record, and find that
+useful enough to use again? The first path is install, select a test directory
+and policy, fetch in one supported host and inspect the local record. Hub
+reporting is an explicit opt-in to a named destination.
+
+Controlled comparisons also test whether content selection improves an
+operator-owned objective at acceptable cost. They hold the answer model fixed
+and vary supply. Claims about routing improvement require that evidence;
+a learned router, a certification scheme or a commercial licensing service is
+not required to test the core workflow. `ROADMAP.md` §Acceptance gate owns
+current acceptance and gaps.
+
+Pilot onboarding publishes initial policy before managed connection and
+supports a small invited team without a pricing negotiation. Directory enrolment
+selects a canonical project locally; managed reporting also requires an owner
+approved, signed grant. Policy still governs admission and can veto reporting.
+These paths are implemented and locally tested; the hub board owns outstanding
+hosted acceptance.
 
 ## Buyer
 
@@ -72,8 +89,8 @@ observed, reconstructed) is never hidden in a total.
 
 ## Core and add-ons
 
-The core manages and measures the stream of content an agent takes in. It
-is the rules, the record and the measurement, and it is complete on its own.
+The core manages and measures content on the integrated acquisition paths.
+It is the rules, the record and the measurement, and it is complete on its own.
 
 Add-ons run on that same stream through one contract
 (`docs/contracts/processor.md`): a namespaced identity, a configuration
@@ -98,19 +115,29 @@ universal score.
    into eligible routes.
 2. **Execute** — acquire content and select or invoke skills through explicit
    capability contracts.
-3. **Enforce** — refuse or escalate before content enters the model.
+3. **Enforce** — refuse or escalate before content enters through a mediated path.
 4. **Evaluate** — compare controlled runs using operator-owned measures.
 5. **Optimise** — select routes using measured evidence, starting with
    explicit rules and only later using learned policies.
 6. **Report** — show the operator the source record and emit its permitted
    projection in Content Telemetry format.
 
-Governance establishes which inputs an agent is authorised to acquire and
-use, under which identity and cumulative limits. Measurement establishes
-whether the admitted inputs improved the result enough to justify their
-cost. Selection needs both: an effective route is not eligible when the
-agent lacks authority to use it, and a permitted route is not valuable merely
-because policy allowed it.
+Source policy applies the operator's admission rules under the identified
+principal and cumulative limits. Admission does not establish factual
+accuracy or give content authority to direct the agent; action permissions
+remain the harness's responsibility.
+
+The intended source record separates a publisher's declaration from the
+operator's assessed basis for use, whether a direct agreement, public licence
+or applicable exception. That assessment needs its scope and supporting
+reference; Common Measure does not decide legal entitlement. The current
+policy records host-level agreement references. Scoped assessments and their
+enforcement are planned under `ROADMAP.md` WP-30.
+
+Measurement establishes whether the admitted inputs improved the result
+enough to justify their cost. Selection needs both: an effective route is not
+eligible when the agent lacks authority to use it, and a permitted route is
+not valuable merely because policy allowed it.
 
 The operator also needs an inventory of everything in the agent's context
 window: resident instructions and tool definitions, memory, skills,
@@ -151,10 +178,12 @@ enrolment, organisation-wide policy, signed distribution, rollout, drift,
 exceptions and fleet-wide evidence. In the standard's terms the hub is the
 operator's telemetry consumer: it receives the fleet's cleared projection
 and delivers each owner's events onward to the destination that owner
-designates. It holds no owner accounts. It has two tiers: a free individual
-tier for an organisation of one person, and a paid institutional tier for
-an organisation of more, which adds organisation-wide signed policy, fleet
-evidence and add-on mandates. Two invariants fix the boundary: the hub
+designates. It holds no owner accounts. The initial hosted trial is free;
+post-trial individual and institutional plans remain a commercial proposal.
+The implementation retains the tier labels for compatibility and admits
+invited pilot teams without a tier change; the hub board owns deployment
+and hosted verification. No paid service starts without a separate agreement.
+Two invariants fix the boundary: the hub
 is never in the decision path for a crossing, and its absence never relaxes
 local policy. A feature that needs either broken does not go to the hub.
 
@@ -190,7 +219,7 @@ product repository is `commonmeasure`; the hub is maintained separately.
 The product domain is commonmeasure.ai.
 
 Two namespaces stay as they are. The MCP tools are `context_fetch`,
-`context_search` and `context_status`: they name the action, not the
+`context_search`, `context_status` and `context_enrol`: they name the action, not the
 product. Format identifiers inside sealed evidence (`contextops-run/vN`,
 `contextops-processor-invocation/v1`, `contextops-session`, the
 `contextops-relay:v1` event-id seeds) keep the `contextops-` namespace,

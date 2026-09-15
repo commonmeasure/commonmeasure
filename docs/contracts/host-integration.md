@@ -33,8 +33,8 @@ no policy file, and it never breaks the agent: unreadable input yields no
 record and the process exits zero whatever happened (`crates/commonmeasure-cli/src/main.rs`
 `hook`, `crates/commonmeasure-harness/src/hook.rs`).
 
-The mediated path is an MCP server that offers three tools, `context_fetch`,
-`context_search` and `context_status` (`crates/commonmeasure-harness/src/mcp.rs`
+The mediated path is an MCP server that offers four tools, `context_fetch`,
+`context_search`, `context_status` and `context_enrol` (`crates/commonmeasure-harness/src/mcp.rs`
 `tool_definitions`). An agent that calls them instead of its own tools gives
 the runtime the crossing before it happens, which is the only point at which
 policy can refuse. Both paths append to the same session log; every record
@@ -493,3 +493,16 @@ are not committed here, so no path above claims `live-verified` from this
 repository alone. `demo/arc/regenerate.sh` produces a complete session store
 offline from the same binary, which is the committed demonstration of both
 paths end to end ([`docs/RUN-THE-DEMONSTRATION.md`](../RUN-THE-DEMONSTRATION.md)).
+
+
+## Directory enrolment surfaces
+
+[Directory enrolment](directory-enrolment.md) adds a Claude plugin command,
+an explicitly invoked Codex skill and a local MCP prompt. `context_enrol`
+requires the host project directory explicitly and refuses a missing/root
+identity or disagreement with the MCP process directory. `context_status`
+reports the process cwd. A CLI enrolment in another directory does not retarget
+an already-running server. MCP advertises `prompts` and implements `prompts/list`
+and `prompts/get`; the host must expose prompts to make them user-invocable.
+Plugin/Codex invocation is specification-verified, with fixture-tested packaging
+and production CLI/MCP boundaries; no interactive host verification is claimed.

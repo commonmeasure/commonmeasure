@@ -22,6 +22,7 @@
 pub use commonmeasure_runtime::declaration;
 pub mod browser;
 pub mod declarations;
+pub mod directory;
 pub mod discovery;
 pub mod enrolment;
 pub mod fleet;

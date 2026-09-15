@@ -346,3 +346,13 @@ envelope, an expired envelope and an invalid policy are refused by name
 with the applied policy kept; with the origin gone the last-known-good
 policy refuses a crossing offline and the status document says the hub was
 unreachable.
+
+
+## Directory reporting grants
+
+Directory reporting uses an independent signed snapshot, revision space and
+24-hour expiry under the existing signer pin. It never changes a source-policy
+payload or the meaning of an existing policy revision; older edges receive
+unchanged policy envelopes. Expired grants remove reporting permission while
+source policy retains its existing enforcement semantics. See the
+[directory enrolment contract](directory-enrolment.md).

@@ -282,7 +282,7 @@ impl Principal {
 /// Unix keeps the effective uid in the kernel, which is why it is the first
 /// shipped basis (`docs/contracts/session-evidence.md` §Crossing).
 #[cfg(unix)]
-fn trusted_os_user() -> Option<u32> {
+pub(crate) fn trusted_os_user() -> Option<u32> {
     // SAFETY: `geteuid` takes no arguments and has no memory-safety
     // preconditions. Effective uid is the credential governing this
     // process, unlike the freely writable USER/LOGNAME environment.
@@ -297,7 +297,7 @@ fn trusted_os_user() -> Option<u32> {
 /// binary this project ships, and one declaring none behaves exactly as it did
 /// before principals existed.
 #[cfg(not(unix))]
-fn trusted_os_user() -> Option<u32> {
+pub(crate) fn trusted_os_user() -> Option<u32> {
     None
 }
 
@@ -350,6 +350,7 @@ pub struct SessionPolicy {
 /// invocation reproducible: every decision it takes is against the same bytes,
 /// so a policy edited while it runs cannot change its later answers.
 pub struct PolicyDocument {
+    selection: crate::directory::Selection,
     file: PolicyFile,
     source: PathBuf,
     loaded: bool,
@@ -370,11 +371,13 @@ impl PolicyDocument {
     /// session on the machine.
     pub fn read(home: &Path) -> Result<Self, String> {
         let source = home.join("policy.json");
+        let selection = crate::directory::Selection::read(home)?;
         let encoded = match std::fs::read(&source) {
             Ok(encoded) => encoded,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self {
                     file: PolicyFile::default(),
+                    selection,
                     source,
                     loaded: false,
                     revision: declaration::ABSENT.to_owned(),
@@ -383,9 +386,24 @@ impl PolicyDocument {
             }
             Err(error) => return Err(format!("cannot read {}: {error}", source.display())),
         };
+        let mut document = Self::from_bytes(&encoded, source)?;
+        document.selection = selection;
+        Ok(document)
+    }
+
+    /// Read a named policy through the ordinary loader. An explicitly named
+    /// file must exist; absence is an error rather than the default policy.
+    pub fn read_file(source: &Path) -> Result<Self, String> {
+        let encoded = std::fs::read(source)
+            .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
+        Self::from_bytes(&encoded, source.to_path_buf())
+    }
+
+    fn from_bytes(encoded: &[u8], source: PathBuf) -> Result<Self, String> {
         Ok(Self {
-            file: parse(&encoded, &source)?,
-            revision: declaration::revision_of(&encoded),
+            file: parse(encoded, &source)?,
+            selection: crate::directory::Selection::default(),
+            revision: declaration::revision_of(encoded),
             source,
             loaded: true,
             principal: Principal::current(),
@@ -576,6 +594,7 @@ impl PolicyDocument {
         Self {
             file,
             source: self.source.clone(),
+            selection: self.selection.clone(),
             loaded: self.loaded,
             revision: self.revision.clone(),
             principal: self.principal.clone(),
@@ -878,6 +897,54 @@ impl PolicyDocument {
     /// Infallible by construction — [`Self::read`] already refused everything
     /// malformed, so resolution has nothing left to reject.
     pub fn resolve(&self, cwd: Option<&str>) -> SessionPolicy {
+        let canonical = cwd.and_then(|p| std::fs::canonicalize(p).ok());
+        let actual = canonical.as_ref().and_then(|p| p.to_str()).or(cwd);
+        let mut resolved = self.resolve_source(actual);
+        if cwd != actual
+            && self.resolve_source(cwd).scope != resolved.scope
+            && self.resolve_source(cwd).scope.is_some()
+        {
+            resolved.fail_closed = Some(
+                "symlink and selected directory resolve different source-policy scopes".into(),
+            );
+        }
+        if let Some(path) = canonical.as_ref() {
+            match crate::directory::git_identity(path) {
+                Ok(Some((common, root))) if common != root.join(".git") => {
+                    let original = common
+                        .parent()
+                        .map(|main| main.join(path.strip_prefix(&root).unwrap_or(Path::new(""))));
+                    if let Some(original) = original {
+                        let main = self.resolve_source(original.to_str());
+                        if main.scope != resolved.scope && main.scope.is_some() {
+                            resolved.fail_closed = Some("linked Git worktree differs from its main worktree source-policy scope; align policy before retrieval".into());
+                        }
+                    }
+                }
+                Err(error) => {
+                    resolved.fail_closed =
+                        Some(format!("Git directory identity unavailable: {error}"))
+                }
+                _ => {}
+            }
+        }
+        if let Some(registry) = &self.selection.registry {
+            let project = actual.and_then(|cwd| registry.matching(cwd));
+            // Every false winning scope vetoes a grant, including an omitted bool.
+            let veto = resolved.scope.is_some() && !resolved.allow_telemetry_egress;
+            let permitted = project.is_some_and(|p| !veto && self.selection.permitted(p));
+            resolved.allow_telemetry_egress = permitted;
+            if permitted && resolved.governing_engagement.is_none() {
+                resolved.governing_engagement = project.map(|p| p.name.clone());
+            }
+        }
+        if resolved.fail_closed.is_some() {
+            resolved.allow_telemetry_egress = false;
+        }
+        resolved
+    }
+
+    fn resolve_source(&self, cwd: Option<&str>) -> SessionPolicy {
         let mut file = self.file.clone();
         let mut principal = self.principal.clone();
         // An unauthenticated process has no subject to match on, so nothing
@@ -912,10 +979,13 @@ impl PolicyDocument {
         // The directory alone selects the scope, exactly as it did before
         // principals existed: first match wins.
         let matched = cwd.and_then(|cwd| {
-            let position = file
-                .scopes
-                .iter()
-                .position(|scope| cwd.contains(&scope.matcher))?;
+            let position = file.scopes.iter().position(|scope| {
+                cwd.contains(&scope.matcher)
+                    || (Path::new(&scope.matcher).is_absolute()
+                        && std::fs::canonicalize(&scope.matcher)
+                            .ok()
+                            .is_some_and(|root| Path::new(cwd).starts_with(root)))
+            })?;
             Some(file.scopes.swap_remove(position))
         });
         // Ownership is then checked, never searched past. Walking on to the
@@ -1166,7 +1236,7 @@ pub const IDENTITY_SCHEMA: &str = "contextops-policy-identity/v2";
 /// moves when that algorithm changes, so two edges resolving one policy
 /// document differently because they run different resolvers do not hash
 /// equal.
-pub const RESOLVER_VERSION: &str = "1";
+pub const RESOLVER_VERSION: &str = "2";
 
 /// The value the add-on slot of the pre-image carries until the active
 /// add-on set is part of policy. Every processor compiled into the binary

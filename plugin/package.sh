@@ -53,7 +53,7 @@ mkdir -p "$stage/.claude-plugin"
 # build.sh and this script stay home; they are how the package is made, not
 # part of what it installs.
 mkdir -p "$stage/plugin"
-cp -R "$here/.claude-plugin" "$here/.mcp.json" "$here/hooks" "$here/bin" \
+cp -R "$here/.claude-plugin" "$here/.mcp.json" "$here/hooks" "$here/bin" "$here/commands" "$here/skills" \
       "$here/README.md" "$stage/plugin/"
 
 # A marketplace manifest written for the shipped copy, not the working

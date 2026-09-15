@@ -49,9 +49,11 @@ On the hub an owner sees each machine's delivered sessions by the edge
 name chosen at enrolment, registers the content owners whose pages were
 read and downloads a report for each with no person, session or engagement
 in it, sets how long delivered records are kept, and can revoke any
-machine's key. The hub's own documentation, for an owner and the people an
-owner invites, is served on the hub: Start here at `/docs/start-here`, and
-policy distribution at `/docs/policy-distribution`.
+machine's key. For setup, follow [Start here](https://commonmeasure.ai/docs/hub/start-here/).
+The [Hub guides](https://commonmeasure.ai/docs/hub/connect-commonmeasure/)
+cover connecting machines, fleet evidence, keys, content owners,
+[policy distribution](https://commonmeasure.ai/docs/hub/policy-distribution/)
+and retention.
 
 ## History before enrolment
 
@@ -76,9 +78,14 @@ mediated fetches that failed or that the origin answered outside 2xx;
 refused crossings, which leave only as a count on a session that sends at
 least one event; and every reconstructed crossing. A later relay run under
 a wider policy sends what the wider policy clears, and sends nothing
-already delivered a second time. A session recorded before enrolment and
-resumed after its first delivery names the key id on its next batch, and
-the hub refuses a session that changes agent id.
+already delivered a second time. Each session keeps the agent id of its
+first delivery, including when it is resumed after enrolment
+([session evidence](contracts/session-evidence.md#the-agent-id-on-the-wire)).
+
+`commonmeasure relay --dry-run` prints the projected counts and distinct
+outgoing source hosts, including pending batches, without sending, refreshing
+policy or changing files. Add `--policy <file>` to forecast a draft through
+the same policy loader; an unreadable or invalid draft is an error.
 
 `commonmeasure import` reconstructs work done before Common Measure was
 installed, from Claude Code transcripts: a `WebFetch` with a recorded

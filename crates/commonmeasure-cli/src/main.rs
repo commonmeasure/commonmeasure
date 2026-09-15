@@ -5,6 +5,7 @@
 //! would miss, and no path by which the CLI can produce a result the runtime
 //! would not.
 
+mod enrol;
 mod inspect;
 
 use std::fmt::Write as _;
@@ -94,6 +95,8 @@ enum PolicyAction {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Set up a project directory, or show its current enrolment.
+    Enrol(enrol::Enrol),
     /// Run one job through each named supply plan and publish the run
     /// directory: the sealed manifest, the exact provider responses, the
     /// admitted context, the inference record and an append-only evidence
@@ -256,6 +259,12 @@ enum Command {
     /// identity and is not read here; the console names both and where they
     /// differ.
     Relay {
+        /// Forecast counts and distinct outgoing hosts without sending or writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Forecast a draft policy using the ordinary policy loader.
+        #[arg(long, requires = "dry_run")]
+        policy: Option<PathBuf>,
         /// Receiver base URL, e.g. `http://localhost:8080`. Overrides the
         /// `receiver` in `relay.json` for this invocation.
         #[arg(long)]
@@ -357,6 +366,7 @@ fn main() -> ExitCode {
     }
     let cli = Cli::parse_from(arguments);
     let result = match cli.command {
+        Command::Enrol(args) => enrol::run(args),
         Command::Run {
             suite,
             output,
@@ -381,11 +391,13 @@ fn main() -> ExitCode {
             PolicyAction::Schema => show_policy_schema(),
         },
         Command::Relay {
+            dry_run,
+            policy,
             receiver,
             api_key,
             run,
             session,
-        } => relay(receiver, api_key, run, session),
+        } => relay(receiver, api_key, run, session, dry_run, policy),
         Command::Connect {
             hub,
             token,
@@ -1283,12 +1295,17 @@ fn relay(
     api_key: Option<String>,
     runs: Vec<PathBuf>,
     sessions: Vec<String>,
+    dry_run: bool,
+    policy: Option<PathBuf>,
 ) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     // The clearances the relay reads come from the policy on disk, so a
     // managed edge refreshes it first. Nothing is printed when the desired
     // policy was already in force and its envelope has not expired.
-    if let Some(sync) = sync_managed_policy(&home, commonmeasure_harness::managed::DEFAULT_BUDGET) {
+    if !dry_run
+        && let Some(sync) =
+            sync_managed_policy(&home, commonmeasure_harness::managed::DEFAULT_BUDGET)
+    {
         let outcome = sync["outcome"].as_str().unwrap_or_default();
         let fresh = outcome == "already_applied" && sync["stale_since"].is_null();
         if !fresh {
@@ -1309,6 +1326,8 @@ fn relay(
     let report = match commonmeasure_relay::relay(
         &home,
         &commonmeasure_relay::RelayOptions {
+            dry_run,
+            policy,
             receiver,
             api_key,
             runs,
@@ -1339,6 +1358,9 @@ fn relay(
 /// `connect`, whose probe is a relay run.
 fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
     let mut out = String::new();
+    if report.dry_run {
+        out.push_str("dry run: nothing was sent; no state was changed\n");
+    }
     if let Some(standing) = &report.standing {
         out.push_str(&format!("{standing}\n"));
     }
@@ -1346,11 +1368,16 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
         out.push_str(&format!("{directory_proof}\n"));
     }
     out.push_str(&format!(
-        "projected {} of {} sessions and {} runs; {} events newly spooled\n",
+        "projected {} of {} sessions and {} runs; {} events {}\n",
         report.sessions_projected,
         report.sessions_read,
         report.runs_projected,
-        report.events_enqueued
+        report.events_enqueued,
+        if report.dry_run {
+            "would be newly spooled"
+        } else {
+            "newly spooled"
+        }
     ));
     if report.sessions_withheld > 0 {
         out.push_str(&format!(
@@ -1382,18 +1409,38 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
             report.refused_reported
         ));
     }
-    out.push_str(&format!(
-        "delivered {} events in {} batches to {} ({} new at the receiver)\n",
-        report.events_delivered,
-        report.batches_delivered,
-        report.receiver,
-        report.events_new_at_receiver
-    ));
+    if report.dry_run {
+        out.push_str(&format!(
+            "would deliver {} events in {} batches to {} (new at the receiver: unknown)\n",
+            report.events_delivered, report.batches_delivered, report.receiver
+        ));
+    } else {
+        out.push_str(&format!(
+            "delivered {} events in {} batches to {} ({} new at the receiver)\n",
+            report.events_delivered,
+            report.batches_delivered,
+            report.receiver,
+            report
+                .events_new_at_receiver
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "unknown".to_owned())
+        ));
+    }
     for delivered in &report.delivered_by_clearance {
         out.push_str(&format!(
             "  {} under {}\n",
             delivered.events, delivered.clearance
         ));
+    }
+    if report.dry_run {
+        if report.hosts.is_empty() {
+            out.push_str("hosts that would leave: none\n");
+        } else {
+            out.push_str("hosts that would leave:\n");
+            for host in &report.hosts {
+                out.push_str(&format!("  {host}\n"));
+            }
+        }
     }
     out
 }

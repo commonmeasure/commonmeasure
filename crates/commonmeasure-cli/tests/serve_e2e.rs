@@ -19,7 +19,18 @@ impl Console {
     /// Start `commonmeasure serve` on an OS-chosen port and wait for it to name
     /// the address it landed on.
     fn start(home: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        Self::with_credentials(home, &[])
+    }
+
+    fn with_credentials(home: &Path, credentials: &[(&str, &str)]) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+        for name in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
+            if let Some(variable) = commonmeasure_supply::required_variable(name) {
+                command.env_remove(variable);
+            }
+        }
+        command.envs(credentials.iter().copied());
+        let mut child = command
             .args(["serve", "--listen", "127.0.0.1:0"])
             .env("COMMONMEASURE_HOME", home)
             .stdout(Stdio::piped())
@@ -89,7 +100,7 @@ fn record_crossing(home: &Path, session: &str, url: &str, cwd: Option<&str>) {
 }
 
 #[test]
-fn the_console_serves_its_five_sections_and_the_record_from_one_binary() {
+fn the_console_serves_its_six_sections_and_the_record_from_one_binary() {
     let home = tempfile::tempdir().expect("home");
     record_crossing(
         home.path(),
@@ -110,6 +121,7 @@ fn the_console_serves_its_five_sections_and_the_record_from_one_binary() {
         ("/app/policy", "Policy"),
         ("/app/sources", "Sources"),
         ("/app/compare", "Compare"),
+        ("/app/budget", "Budget"),
     ] {
         assert!(console.text(path).contains(marker), "{path} lost {marker}");
     }
@@ -193,7 +205,22 @@ fn post_form(
     if htmx {
         request.headers.set("HX-Request", "true");
     }
-    send(&format!("{}{path}", console.base), request).expect("request should complete")
+    let response =
+        send(&format!("{}{path}", console.base), request.clone()).expect("request should complete");
+    if response.status >= 400 {
+        request.headers.set("Accept", "application/json");
+        let twin = send(&format!("{}{path}", console.base), request).unwrap();
+        assert_eq!(twin.status, response.status);
+        let value: Value = serde_json::from_slice(&twin.body).expect("negative JSON twin");
+        assert_eq!(value["status"], response.status);
+        assert!(matches!(
+            value["kind"].as_str(),
+            Some("refused" | "conflict" | "unavailable")
+        ));
+        assert!(value["notice"].is_string());
+        assert!(value.get("revision").is_some());
+    }
+    response
 }
 
 fn body_text(response: commonmeasure_http::Response) -> String {
@@ -647,10 +674,12 @@ fn an_unpaired_attribution_field_is_refused_by_name() {
 /// One mediated crossing through the real MCP server against a loopback
 /// origin, recorded into `home`, under a policy that admits private hosts.
 fn record_mediated_crossing(home: &Path, session: &str, url: &str) {
-    write_policy(
-        home,
-        r#"{"policy_mode": "observe", "allow_private_hosts": true}"#,
-    );
+    if !home.join("policy.json").exists() {
+        write_policy(
+            home,
+            r#"{"policy_mode": "observe", "allow_private_hosts": true}"#,
+        );
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
         .args(["mcp", "--host", "claude-code", "--session", session])
         .env("COMMONMEASURE_HOME", home)
@@ -751,4 +780,550 @@ fn the_record_pane_shows_the_hashes_status_and_identity_the_record_carries() {
     let api = console.get("/api/nowhere");
     assert_eq!(api.status, 404);
     assert!(String::from_utf8(api.body).unwrap().starts_with('{'));
+}
+
+fn post_json(console: &Console, path: &str, body: &Value) -> (u16, Value) {
+    let mut request = Request::post("/", body.to_string().into_bytes(), "application/json");
+    request.headers.set("Accept", "application/json");
+    let response = send(&format!("{}{path}", console.base), request).unwrap();
+    assert!(
+        response
+            .headers
+            .get("Content-Type")
+            .unwrap()
+            .contains("application/json")
+    );
+    assert_eq!(
+        response.headers.get("X-Content-Type-Options"),
+        Some("nosniff")
+    );
+    (
+        response.status,
+        serde_json::from_slice(&response.body).unwrap(),
+    )
+}
+
+#[test]
+fn providers_and_compare_share_the_real_binarys_adapter_results() {
+    let home = tempfile::tempdir().unwrap();
+    // Redpine has no Search capability. The real adapter returns its own
+    // capability error without making a paid request.
+    let console =
+        Console::with_credentials(home.path(), &[("REDPINE_API_KEY", "unused-local-test")]);
+    let providers = console.get_json("/api/providers");
+    assert_eq!(
+        providers
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["connected"] == true)
+            .count(),
+        1
+    );
+    let page = console.text("/app/sources");
+    for provider in providers.as_array().unwrap() {
+        let name = provider["name"].as_str().unwrap();
+        let marker = format!("data-provider=\"{name}\"");
+        let start = page
+            .find(&marker)
+            .expect("every API provider has a screen row");
+        let row = page[start + marker.len()..]
+            .split("data-provider=")
+            .next()
+            .unwrap();
+        assert!(row.contains(if provider["connected"] == true {
+            "connected"
+        } else {
+            "no key"
+        }));
+    }
+    let (status, result) = post_json(&console, "/api/compare", &json!({"query": "energy cap"}));
+    assert_eq!(status, 200);
+    assert_eq!(result["results"][0]["provider"], "redpine");
+    let error = result["results"][0]["error"].as_str().unwrap();
+    let response = post_form(&console, "/app/compare", "query=energy+cap", false);
+    assert_eq!(response.status, status);
+    let page = body_text(response);
+    assert!(page.contains(error), "{page}");
+    assert!(page.contains(result["notice"].as_str().unwrap()));
+    assert!(
+        console
+            .get_json("/api/sessions")
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn forecast_json_and_fragment_share_the_runtime_projection() {
+    let home = tempfile::tempdir().unwrap();
+    write_policy(home.path(), CLIENT_POLICY);
+    record_crossing(
+        home.path(),
+        "forecast-api",
+        "https://beacon.example/x",
+        Some("/home/op/code/client"),
+    );
+    let console = Console::start(home.path());
+    let revision = policy_revision(&console);
+    let query = "?scope=code%2Fclient&host=beacon.example&action=deny";
+    let value = console.get_json(&format!("/api/policy/forecast{query}"));
+    assert_eq!(value["grades"]["witnessed"]["newly_refused"], 1);
+    assert_eq!(value["saved"], false);
+    let fragment = console.text(&format!("/app/policy/forecast{query}"));
+    for grade in ["witnessed", "reconstructed", "refused"] {
+        let start = fragment.find(&format!("<td>{grade}</td>")).unwrap();
+        let rendered: Vec<u64> = fragment[start..]
+            .split("<td class=\"mono\">")
+            .skip(1)
+            .take(5)
+            .map(|cell| cell.split('<').next().unwrap().parse().unwrap())
+            .collect();
+        let projected: Vec<u64> = [
+            "crossings",
+            "newly_refused",
+            "newly_breached",
+            "newly_admitted",
+            "unchanged",
+        ]
+        .iter()
+        .map(|key| value["grades"][grade][key].as_u64().unwrap())
+        .collect();
+        assert_eq!(rendered, projected);
+    }
+    assert!(fragment.contains("Nothing is saved by a forecast"));
+    assert!(fragment.contains(value["principal"]["name"].as_str().unwrap()));
+    let bad = console.get_json("/api/policy/forecast?host=a.*.b&action=refuse");
+    assert!(bad["error"].is_string());
+    assert_eq!(policy_revision(&console), revision);
+}
+
+#[test]
+fn every_policy_write_has_identical_form_and_json_file_state_and_revision() {
+    for (route, fields, form, file) in [
+        (
+            "policy/mode",
+            json!({"scope":"code/client", "mode":"prefer"}),
+            "scope=code%2Fclient&mode=prefer",
+            "policy.json",
+        ),
+        (
+            "policy/deny",
+            json!({"scope":"code/client", "host":"beacon.example"}),
+            "scope=code%2Fclient&host=beacon.example",
+            "policy.json",
+        ),
+        (
+            "attribution",
+            json!({"rules":[{"match":"code/client", "engagement":"client-b"}]}),
+            "match=code%2Fclient&engagement=client-b",
+            "attribution.json",
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        write_policy(home.path(), CLIENT_POLICY);
+        let console = Console::start(home.path());
+        let revision = if file == "policy.json" {
+            policy_revision(&console)
+        } else {
+            "absent".to_owned()
+        };
+        let page = post_form(
+            &console,
+            &format!("/app/{route}"),
+            &format!("{form}&revision={revision}"),
+            false,
+        );
+        assert_eq!(page.status, 200);
+        let saved = std::fs::read(home.path().join(file)).unwrap();
+        let page = body_text(page);
+        if file == "policy.json" {
+            write_policy(home.path(), CLIENT_POLICY);
+        } else {
+            std::fs::remove_file(home.path().join(file)).unwrap();
+        }
+        let mut body = fields;
+        body["revision"] = json!(revision);
+        let (status, value) = post_json(&console, &format!("/app/{route}"), &body);
+        assert_eq!(status, 200);
+        assert_eq!(value["kind"], "saved");
+        assert_eq!(std::fs::read(home.path().join(file)).unwrap(), saved);
+        assert!(page.contains(value["revision"].as_str().unwrap()));
+        body["revision"] = value["revision"].clone();
+        let (_, unchanged) = post_json(&console, &format!("/api/{route}"), &body);
+        assert_eq!(unchanged["kind"], "unchanged");
+        assert_eq!(unchanged["revision"], value["revision"]);
+    }
+}
+
+#[test]
+fn all_write_routes_preserve_origin_guards_and_negotiate_failures() {
+    let home = tempfile::tempdir().unwrap();
+    write_policy(home.path(), CLIENT_POLICY);
+    let console = Console::start(home.path());
+    let revision = policy_revision(&console);
+    for prefix in ["app", "api"] {
+        for route in ["compare", "policy/mode", "policy/deny", "attribution"] {
+            for accept in ["text/html", "application/json"] {
+                let mut request = Request::post(
+                    "/",
+                    b"query=x".to_vec(),
+                    "application/x-www-form-urlencoded",
+                );
+                request.headers.set("Origin", "https://evil.example");
+                request.headers.set("Accept", accept);
+                let response =
+                    send(&format!("{}/{prefix}/{route}", console.base), request).unwrap();
+                assert_eq!(response.status, 403);
+                if prefix == "api" || accept == "application/json" {
+                    let value: Value = serde_json::from_slice(&response.body).unwrap();
+                    assert_eq!(value["kind"], "refused");
+                    assert_eq!(value["status"], 403);
+                    assert!(value["notice"].as_str().unwrap().contains("Origin"));
+                    if route.starts_with("policy/") {
+                        assert_eq!(value["revision"], revision);
+                    }
+                } else {
+                    assert!(body_text(response).contains("Origin"));
+                }
+            }
+        }
+    }
+    for route in ["compare", "policy/mode", "policy/deny", "attribution"] {
+        let (status, value) = post_json(
+            &console,
+            &format!("/api/{route}"),
+            &json!({"revision": 123}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(value["kind"], "refused");
+    }
+    let (status, unavailable) = post_json(&console, "/api/compare", &json!({"query":"cap"}));
+    assert_eq!(status, 503);
+    assert_eq!(unavailable["kind"], "unavailable");
+    assert!(unavailable["results"].as_array().unwrap().is_empty());
+    let page = post_form(&console, "/app/compare", "query=cap", false);
+    assert_eq!(page.status, 503);
+    assert!(body_text(page).contains(unavailable["notice"].as_str().unwrap()));
+    for body in ["query=%FF", "query="] {
+        assert_eq!(post_form(&console, "/app/compare", body, false).status, 400);
+    }
+    assert_eq!(policy_revision(&console), revision);
+}
+
+/// The publisher serves source declarations through the production fetch,
+/// licence and manifest readers. Terms and priced admission are separate
+/// crossings: operator terms deliberately bypass the allowance gate.
+#[cfg(unix)]
+#[test]
+fn record_details_and_budget_render_real_declarations_discovery_and_allowance_evidence() {
+    use commonmeasure_http::{Response, Server};
+    let server = Server::bind("127.0.0.1:0").unwrap();
+    let manifest_url = "https://127.0.0.1/.well-known/content-telemetry.json";
+    let origin = server.spawn(move |request| match request.target.as_str() {
+        "/robots.txt" => Response::text(200, "User-agent: CommonMeasureBot\nAllow: /\nContent-Usage: train-ai=n\nContent-Signal: ai-input=no\nLicense: /license.xml\n"),
+        "/license.xml" => Response::text(200, r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/"><license>
+            <permits type="usage">ai-input</permits>
+            <payment type="use"><amount currency="USD">0.015</amount></payment>
+            <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur">
+            <![CDATA[{"conformance_level":"grounding"}]]></reporting>
+            </license></content></rsl>"#),
+        "/.well-known/content-telemetry.json" => Response::json(200, &json!({
+            "schema_version":"1.0", "id":manifest_url, "roles":["content_owner"],
+            "operator":{"name":"Local publication"}, "telemetry":{"endpoint":"https://telemetry.example/events"},
+            "domains":["127.0.0.1"]
+        }).to_string()),
+        _ => Response::text(200, "The published cap is reviewed quarterly."),
+    }).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    // SAFETY: geteuid takes no arguments and has no memory preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let mut policy = json!({"policy_mode":"observe", "allow_private_hosts":true,
+        "constraints":[{"kind":"maximum_acquisition_cost", "amount":{"currency":"USD","micros":50000}}],
+        "principals":[{"principal":"reader", "os_user":uid, "allowances":[
+            {"period":"day", "amount":{"currency":"USD","micros":100000}, "timezone":"UTC"}]},
+            {"principal":"other-reader", "os_user":uid+1, "allowances":[
+            {"period":"month", "amount":{"currency":"USD","micros":500000}, "timezone":"UTC"}]}]});
+    write_policy(home.path(), &policy.to_string());
+    record_mediated_crossing(
+        home.path(),
+        "local-details",
+        &format!("{}/article", origin.url()),
+    );
+    policy["terms"] =
+        json!([{"host":"127.0.0.1", "reference":"operator-agreement", "requires_reporting":true}]);
+    write_policy(home.path(), &policy.to_string());
+    record_mediated_crossing(
+        home.path(),
+        "local-details",
+        &format!("{}/terms-article", origin.url()),
+    );
+    let console = Console::start(home.path());
+    let records = console.get_json("/api/sessions/local-details");
+    let crossings: Vec<&Value> = records
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["event"] == "crossing_mediated")
+        .collect();
+    assert_eq!(crossings.len(), 2, "{records}");
+    let first = &crossings[0]["payload"];
+    assert_eq!(first["declarations"]["effective"]["ai-input"], "disallow");
+    assert_eq!(first["allowance"]["decision"], "reserved", "{first}");
+    assert_eq!(first["allowance"]["settlement"]["reconciled"], true);
+    assert_eq!(
+        crossings[1]["payload"]["declarations"]["governing"],
+        "operator_terms"
+    );
+    assert!(crossings[1]["payload"].get("allowance").is_none());
+    let manifest = records
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["event"] == "manifest_resolved" && r["seq"] == first["manifest_record"])
+        .unwrap();
+    assert_eq!(manifest["payload"]["outcome"], "verified", "{manifest}");
+    let pane = console.text("/app/fragments/session/local-details");
+    for text in [
+        "Source declarations",
+        "robots-content-usage",
+        "CommonMeasureBot",
+        "ai-input",
+        "disallow",
+        "operator_terms",
+        "operator-agreement",
+        "Named by",
+        "Manifest record",
+        "verified",
+        "probes",
+        "reporting",
+        "receiver",
+        "absent",
+        "Content-Telemetry-ID",
+        "Allowance",
+        "reserved",
+        "settlement",
+        "reconciled",
+    ] {
+        assert!(pane.contains(text), "missing {text}: {pane}");
+    }
+    assert!(pane.contains(first["allowance"]["reservation_id"].as_str().unwrap()));
+    assert!(pane.contains(first["content_telemetry_id"].as_str().unwrap()));
+    let budget = console.get_json("/api/budget");
+    assert_eq!(budget["acquisition_charge"]["recorded"], false);
+    assert_eq!(
+        budget["engagements"][0]["declared_cap"]["amount"]["micros"],
+        50000
+    );
+    assert_eq!(
+        budget["allowances"]["principals"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        budget["allowances"]["principals"][0]["periods"][0]["remaining"]["micros"],
+        100000
+    );
+    let page = console.text("/app/budget");
+    assert!(page.contains(budget["acquisition_charge"]["reason"].as_str().unwrap()));
+    for text in [
+        "reader",
+        "other-reader",
+        "day",
+        "month",
+        "100000",
+        "500000",
+        "50000",
+        "remaining",
+        "reserved",
+        "committed",
+        "Estimated tokens",
+    ] {
+        assert!(page.contains(text), "missing {text}: {page}");
+    }
+    let filtered = console.get_json("/api/budget?engagement=missing");
+    assert!(filtered["engagements"].as_array().unwrap().is_empty());
+    assert_eq!(filtered["allowances"], budget["allowances"]);
+    assert!(
+        console
+            .text("/app/budget?engagement=missing")
+            .contains("other-reader")
+    );
+    std::fs::write(
+        home.path().join("allowance/ledger.ndjson"),
+        "invalid ledger\n",
+    )
+    .unwrap();
+    let broken = console.get_json("/api/budget");
+    assert!(broken["allowances"]["principals"][0]["error"].is_string());
+    assert!(console.text("/app/budget").contains("error"));
+}
+
+#[test]
+fn overview_names_the_whole_refusal_history_it_counts() {
+    let home = tempfile::tempdir().unwrap();
+    write_policy(
+        home.path(),
+        r#"{"policy_mode":"strict","constraints":[{"kind":"denied_source_host","host":"refused.example"}]}"#,
+    );
+    record_mediated_crossing(
+        home.path(),
+        "local-refused",
+        "https://refused.example/article",
+    );
+    let console = Console::start(home.path());
+    let status = console.get_json("/api/status");
+    assert_eq!(status["engagements"][0]["refused"], 1);
+    let page = console.text("/");
+    assert!(page.contains("refused by your policy · all recorded history"));
+    assert!(page.contains("<div class=\"n stop\">1</div>"), "{page}");
+}
+
+#[test]
+fn concurrent_form_and_json_writes_from_one_revision_save_once() {
+    let home = tempfile::tempdir().unwrap();
+    write_policy(home.path(), CLIENT_POLICY);
+    let console = Console::start(home.path());
+    let revision = policy_revision(&console);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let answers: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = [false, true]
+            .into_iter()
+            .map(|as_json| {
+                let barrier = barrier.clone();
+                let base = &console.base;
+                let revision = &revision;
+                scope.spawn(move || {
+                    let mut request = if as_json {
+                        Request::post(
+                            "/",
+                            json!({"mode":"strict", "revision":revision})
+                                .to_string()
+                                .into_bytes(),
+                            "application/json",
+                        )
+                    } else {
+                        Request::post(
+                            "/",
+                            format!("mode=prefer&revision={revision}").into_bytes(),
+                            "application/x-www-form-urlencoded",
+                        )
+                    };
+                    request.headers.set("Accept", "application/json");
+                    barrier.wait();
+                    let response = send(&format!("{base}/app/policy/mode"), request).unwrap();
+                    let value: Value = serde_json::from_slice(&response.body).unwrap();
+                    (response.status, value)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    let current = policy_revision(&console);
+    assert_ne!(current, revision);
+    assert_eq!(
+        answers.iter().filter(|(status, _)| *status == 200).count(),
+        1
+    );
+    let conflict = answers.iter().find(|(status, _)| *status == 409).unwrap();
+    assert_eq!(conflict.1["kind"], "conflict");
+    assert_eq!(conflict.1["revision"], current);
+    let notice = conflict.1["notice"].as_str().unwrap();
+    assert!(notice.contains(&revision[..12]) && notice.contains(&current[..12]));
+}
+
+#[test]
+fn forecast_evidence_read_failures_keep_status_500_and_the_requested_representation() {
+    let home = tempfile::tempdir().unwrap();
+    write_policy(home.path(), CLIENT_POLICY);
+    let console = Console::start(home.path());
+    let revision = policy_revision(&console);
+    // A directory cannot be read as an NDJSON file. This triggers the real
+    // store's read error without changing permissions or replacing the store.
+    std::fs::create_dir_all(home.path().join("sessions/broken.ndjson")).unwrap();
+    for (path, accept, is_json) in [
+        (
+            "/api/policy/forecast?host=beacon.example",
+            "text/html",
+            true,
+        ),
+        (
+            "/app/policy/forecast?host=beacon.example",
+            "application/json",
+            true,
+        ),
+        (
+            "/app/policy/forecast?host=beacon.example",
+            "text/html",
+            false,
+        ),
+    ] {
+        let mut request = Request::get("/");
+        request.headers.set("Accept", accept);
+        let response = send(&format!("{}{path}", console.base), request).unwrap();
+        assert_eq!(response.status, 500);
+        if is_json {
+            assert!(
+                response
+                    .headers
+                    .get("Content-Type")
+                    .unwrap()
+                    .contains("application/json")
+            );
+            let error: Value = serde_json::from_slice(&response.body).unwrap();
+            assert!(error["error"].as_str().unwrap().contains("broken.ndjson"));
+            assert!(error.get("grades").is_none());
+        } else {
+            assert!(
+                response
+                    .headers
+                    .get("Content-Type")
+                    .unwrap()
+                    .contains("text/html")
+            );
+            assert!(body_text(response).contains("broken.ndjson"));
+        }
+    }
+    assert_eq!(
+        commonmeasure_harness::policy::PolicyDocument::read(home.path())
+            .unwrap()
+            .revision(),
+        revision
+    );
+}
+
+/// Concurrent session writers can allocate the same sequence number. The
+/// console must withhold attribution instead of attaching another manifest.
+#[test]
+fn ambiguous_manifest_references_never_display_another_records_evidence() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("sessions")).unwrap();
+    let console = Console::start(home.path());
+    for (case, hosts) in [
+        ("different", vec!["a.example", "b.example"]),
+        ("same", vec!["b.example", "b.example"]),
+        ("foreign", vec!["a.example"]),
+        ("unique", vec!["b.example"]),
+    ] {
+        let mut records: Vec<Value> = hosts.iter().enumerate().map(|(index, host)| json!({"seq":7,"event":"manifest_resolved","payload":{"host":host,"outcome":"verified","probes":[format!("probe-{index}")]}})).collect();
+        records.push(json!({"seq":8,"event":"crossing_mediated","payload":{"url":"https://b.example/article","manifest_record":7}}));
+        let log = records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(home.path().join(format!("sessions/{case}.ndjson")), log).unwrap();
+        let pane = console.text(&format!("/app/fragments/session/{case}"));
+        assert_eq!(pane.contains("probe-0"), case == "unique", "{pane}");
+        assert!(!pane.contains("probe-1"), "{pane}");
+        assert_eq!(
+            pane.contains("unavailable or ambiguous"),
+            case != "unique",
+            "{pane}"
+        );
+    }
 }
