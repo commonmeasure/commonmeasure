@@ -1,0 +1,26 @@
+[package]
+name = "commonmeasure-runtime"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Deterministic eligibility, admission, inference orchestration and the append-only evidence trail."
+
+[dependencies]
+commonmeasure-types.workspace = true
+commonmeasure-http.workspace = true
+commonmeasure-supply.workspace = true
+commonmeasure-inference.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true
+uuid.workspace = true
+c2pa.workspace = true
+c2pa-text.workspace = true
+x509-parser.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

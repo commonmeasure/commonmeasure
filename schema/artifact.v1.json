@@ -1,0 +1,552 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Common Measure local artifact records and bundle v1",
+  "description": "Structural profile; the runtime additionally validates digests, reference equality, byte limits and canonical ordering.",
+  "oneOf": [
+    {
+      "$ref": "#/definitions/identity"
+    },
+    {
+      "$ref": "#/definitions/association"
+    },
+    {
+      "$ref": "#/definitions/snapshot"
+    },
+    {
+      "$ref": "#/definitions/bundle"
+    }
+  ],
+  "definitions": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "artifactId": {
+      "type": "string",
+      "pattern": "^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_version",
+        "kind",
+        "artifact_id",
+        "created_at"
+      ],
+      "properties": {
+        "record_version": {
+          "const": "commonmeasure-artifact/1"
+        },
+        "kind": {
+          "const": "identity"
+        },
+        "artifact_id": {
+          "$ref": "#/definitions/artifactId"
+        },
+        "created_at": {
+          "$ref": "#/definitions/timestamp"
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "id",
+        "edge"
+      ],
+      "properties": {
+        "namespace": {
+          "$ref": "#/definitions/text"
+        },
+        "id": {
+          "$ref": "#/definitions/text"
+        },
+        "edge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "installation_id"
+          ],
+          "properties": {
+            "issuer": {
+              "$ref": "#/definitions/text"
+            },
+            "installation_id": {
+              "$ref": "#/definitions/text"
+            }
+          }
+        },
+        "host": {
+          "$ref": "#/definitions/text"
+        }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis",
+        "actor",
+        "relation"
+      ],
+      "properties": {
+        "basis": {
+          "enum": [
+            "agent_declaration",
+            "operator_declaration"
+          ]
+        },
+        "actor": {
+          "$ref": "#/definitions/text"
+        },
+        "relation": {
+          "const": "session-associated-with-artifact"
+        }
+      }
+    },
+    "association": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_version",
+        "kind",
+        "artifact_id",
+        "created_at",
+        "record_id",
+        "session",
+        "role",
+        "assertion",
+        "applies_to"
+      ],
+      "properties": {
+        "record_version": {
+          "const": "commonmeasure-artifact/1"
+        },
+        "kind": {
+          "const": "association"
+        },
+        "artifact_id": {
+          "$ref": "#/definitions/artifactId"
+        },
+        "created_at": {
+          "$ref": "#/definitions/timestamp"
+        },
+        "record_id": {
+          "$ref": "#/definitions/uuid"
+        },
+        "session": {
+          "$ref": "#/definitions/session"
+        },
+        "role": {
+          "enum": [
+            "research",
+            "drafting",
+            "review",
+            "transformation",
+            "unspecified"
+          ]
+        },
+        "assertion": {
+          "$ref": "#/definitions/assertion"
+        },
+        "applies_to": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "working_artifact"
+            }
+          }
+        }
+      }
+    },
+    "fileContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "algorithm",
+        "digest",
+        "byte_length"
+      ],
+      "properties": {
+        "scope": {
+          "const": "file-bytes/1"
+        },
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 104857600
+        }
+      }
+    },
+    "inventoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "mode",
+        "byte_length",
+        "digest"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/text"
+        },
+        "mode": {
+          "enum": [
+            "100644",
+            "100755"
+          ]
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "excluded_prefixes",
+        "excluded_paths",
+        "entries"
+      ],
+      "properties": {
+        "scope": {
+          "const": "repo-inventory/1"
+        },
+        "excluded_prefixes": {
+          "const": [
+            ".commonmeasure/"
+          ]
+        },
+        "excluded_paths": {
+          "const": [
+            "COMMONMEASURE.md"
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/inventoryEntry"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "gitSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_format",
+            "tree"
+          ],
+          "properties": {
+            "object_format": {
+              "const": "sha1"
+            },
+            "tree": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_format",
+            "tree"
+          ],
+          "properties": {
+            "object_format": {
+              "const": "sha256"
+            },
+            "tree": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      ]
+    },
+    "gitContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "algorithm",
+        "digest",
+        "source",
+        "inventory"
+      ],
+      "properties": {
+        "scope": {
+          "const": "repo-inventory/1"
+        },
+        "algorithm": {
+          "const": "sha256"
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "source": {
+          "$ref": "#/definitions/gitSource"
+        },
+        "inventory": {
+          "$ref": "#/definitions/inventory"
+        }
+      }
+    },
+    "content": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/fileContent"
+        },
+        {
+          "$ref": "#/definitions/gitContent"
+        }
+      ]
+    },
+    "associationReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "digest"
+      ],
+      "properties": {
+        "record_id": {
+          "$ref": "#/definitions/uuid"
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "log_id",
+        "start",
+        "end",
+        "record_count",
+        "complete_lines",
+        "captured_at"
+      ],
+      "properties": {
+        "kind": {
+          "const": "full_prefix"
+        },
+        "log_id": {
+          "$ref": "#/definitions/text"
+        },
+        "start": {
+          "const": 0
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "record_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "complete_lines": {
+          "const": true
+        },
+        "captured_at": {
+          "$ref": "#/definitions/timestamp"
+        }
+      }
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "association_id",
+        "digest",
+        "scope",
+        "format",
+        "coverage"
+      ],
+      "properties": {
+        "association_id": {
+          "$ref": "#/definitions/uuid"
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "scope": {
+          "const": "evidence-bytes/1"
+        },
+        "format": {
+          "const": "application/x-ndjson"
+        },
+        "coverage": {
+          "$ref": "#/definitions/coverage"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_version",
+        "kind",
+        "artifact_id",
+        "created_at",
+        "snapshot_id",
+        "identity_digest",
+        "parents",
+        "content",
+        "associations",
+        "evidence"
+      ],
+      "properties": {
+        "record_version": {
+          "const": "commonmeasure-artifact/1"
+        },
+        "kind": {
+          "const": "snapshot"
+        },
+        "artifact_id": {
+          "$ref": "#/definitions/artifactId"
+        },
+        "created_at": {
+          "$ref": "#/definitions/timestamp"
+        },
+        "snapshot_id": {
+          "$ref": "#/definitions/uuid"
+        },
+        "identity_digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "parents": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "content": {
+          "$ref": "#/definitions/content"
+        },
+        "associations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/associationReference"
+          },
+          "maxItems": 1024
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/evidenceReference"
+          },
+          "maxItems": 1024
+        }
+      }
+    },
+    "evidenceObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "bytes"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "bytes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8388608
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_version",
+        "kind",
+        "identity",
+        "associations",
+        "snapshot",
+        "snapshot_digest",
+        "evidence"
+      ],
+      "properties": {
+        "record_version": {
+          "const": "commonmeasure-artifact/1"
+        },
+        "kind": {
+          "const": "bundle"
+        },
+        "identity": {
+          "$ref": "#/definitions/identity"
+        },
+        "associations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/association"
+          },
+          "maxItems": 1024
+        },
+        "snapshot": {
+          "$ref": "#/definitions/snapshot"
+        },
+        "snapshot_digest": {
+          "$ref": "#/definitions/digest"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/evidenceObject"
+          },
+          "maxItems": 1024
+        }
+      }
+    }
+  }
+}

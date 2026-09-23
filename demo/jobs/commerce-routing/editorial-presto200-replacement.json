@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-editorial-presto200-replacement/v1",
+  "label": "Commerce routing experiment, recommendation question 'presto200-replacement': third-party editorial alone",
+  "job": {
+    "id": "0f21fbcd-0f1b-4320-bff1-899aacc4229d",
+    "kind": "research.answer",
+    "prompt": "An Aurelio Presto 200 owner's machine has failed: what should they buy from Fictive Retail as a replacement, and what carries over?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-presto200-replacement",
+    "version": "1",
+    "items": [
+      {
+        "name": "editorial-pick",
+        "any_of": [
+          "the one we would buy"
+        ]
+      },
+      {
+        "name": "continuity",
+        "any_of": [
+          "same portafilter size"
+        ]
+      },
+      {
+        "name": "current-price",
+        "any_of": [
+          "£329.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

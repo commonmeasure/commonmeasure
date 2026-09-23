@@ -1,0 +1,28 @@
+[package]
+name = "commonmeasure-relay"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Delivers the Content Telemetry projection of cleared evidence to a configured receiver."
+
+[dependencies]
+commonmeasure-types.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+commonmeasure-http.workspace = true
+commonmeasure-harness.workspace = true
+commonmeasure-supply.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true
+tempfile.workspace = true
+# The hub double in tests/instance_registration.rs verifies the registration
+# signature independently of the edge's signing code.
+ed25519-dalek.workspace = true
+base64.workspace = true
+sha2.workspace = true

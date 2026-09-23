@@ -1,0 +1,1257 @@
+{
+  "summary": {
+    "queries": 24,
+    "per_provider": {
+      "exa": {
+        "mean_results": 10.0,
+        "mean_distinct_hosts": 8.3043,
+        "mean_host_concentration_hhi": 0.1774,
+        "failed_queries": 1
+      },
+      "tavily": {
+        "mean_results": 8.9565,
+        "mean_distinct_hosts": 7.8261,
+        "mean_host_concentration_hhi": 0.1597,
+        "failed_queries": 1
+      },
+      "firecrawl": {
+        "mean_results": 10.0,
+        "mean_distinct_hosts": 8.9545,
+        "mean_host_concentration_hhi": 0.1273,
+        "failed_queries": 2
+      }
+    },
+    "mean_pairwise_host_jaccard": {
+      "exa|tavily": 0.181,
+      "exa|firecrawl": 0.2141,
+      "tavily|firecrawl": 0.6248
+    },
+    "mean_union_hosts_per_query": 15.5,
+    "mean_unique_host_share": {
+      "exa": 0.6112,
+      "tavily": 0.2768,
+      "firecrawl": 0.2603
+    },
+    "top_hosts_overall": [
+      [
+        "reddit.com",
+        30
+      ],
+      [
+        "youtube.com",
+        24
+      ],
+      [
+        "arxiv.org",
+        19
+      ],
+      [
+        "medium.com",
+        19
+      ],
+      [
+        "docs.vllm.ai",
+        19
+      ],
+      [
+        "openai.com",
+        12
+      ],
+      [
+        "aclanthology.org",
+        11
+      ],
+      [
+        "bankofengland.co.uk",
+        9
+      ],
+      [
+        "github.com",
+        9
+      ],
+      [
+        "platform.claude.com",
+        7
+      ],
+      [
+        "mindstudio.ai",
+        7
+      ],
+      [
+        "community.openai.com",
+        7
+      ],
+      [
+        "users.rust-lang.org",
+        6
+      ],
+      [
+        "linkedin.com",
+        5
+      ],
+      [
+        "digital-strategy.ec.europa.eu",
+        5
+      ]
+    ],
+    "distinct_hosts_overall": 295
+  },
+  "rows": [
+    {
+      "kind": "factual",
+      "query": "what is the maximum context window of Claude Opus 4.5",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+            "https://support.claude.com/en/articles/8606394-how-large-is-the-context-window-on-paid-claude-plans",
+            "https://platform.claude.com/docs/en/build-with-claude/context-windows?fcdaa149_sort_Plus+ancien=asc&fcdaa149_sort_date=desc",
+            "https://zoer.ai/posts/zoer/claude-opus-context-window-size-limit",
+            "https://tokenrate.dev/models/claude-opus-4-5",
+            "https://magica.com/blog/model/claude-opus-4-5",
+            "https://swen.live/benchmark/anthropic-claude-opus-4-5",
+            "https://clear-https-mrxwg4zomnwg65lefztw633hnrss4y3pnu.proxy.gigablast.org/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-5",
+            "https://simonw.substack.com/p/claude-opus-45-and-why-evaluating",
+            "https://claudelog.com/faqs/what-is-claude-4-5-opus/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.datastudios.org/post/claude-opus-4-5-vs-claude-sonnet-4-5-model-differences-pricing-structure-context-windows-and-mor",
+            "https://forum.cursor.com/t/how-to-get-the-most-out-of-opus-4-5/148046",
+            "https://support.claude.com/en/articles/8606394-how-large-is-the-context-window-on-paid-claude-plans",
+            "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+            "https://repost.aws/questions/QU636ll_JOQxmoTp9kQblG2Q/how-do-i-enable-the-1m-context-window-for-claude-sonnet-4-5-on-amazon-bedrock",
+            "https://www.mindstudio.ai/blog/claude-1m-token-context-window-agents",
+            "https://simonw.substack.com/p/claude-opus-45-and-why-evaluating",
+            "https://www.youtube.com/watch?v=dk0QMbsdV8s",
+            "https://www.reddit.com/r/ClaudeCode/comments/1p6gtk9/the_context_window_simply_needs_to_be_larger_with",
+            "https://www.anthropic.com/news/claude-opus-4-6"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.reddit.com/r/ClaudeCode/comments/1p6gtk9/the_context_window_simply_needs_to_be_larger_with/",
+            "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+            "https://www.anthropic.com/news/claude-opus-4-6",
+            "https://simonw.substack.com/p/claude-opus-45-and-why-evaluating",
+            "https://support.claude.com/en/articles/8606394-how-large-is-the-context-window-on-paid-claude-plans",
+            "https://repost.aws/questions/QU636ll_JOQxmoTp9kQblG2Q/how-do-i-enable-the-1m-context-window-for-claude-sonnet-4-5-on-amazon-bedrock",
+            "https://forum.cursor.com/t/how-to-get-the-most-out-of-opus-4-5/148046",
+            "https://www.datastudios.org/post/claude-opus-4-5-vs-claude-sonnet-4-5-model-differences-pricing-structure-context-windows-and-mor",
+            "https://www.mindstudio.ai/blog/claude-1m-token-context-window-agents",
+            "https://www.claudecodecamp.com/p/claude-code-1m-context-window"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "factual",
+      "query": "how does rotary position embedding work",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://blog.eleuther.ai/rotary-embeddings/",
+            "https://www.abhik.ai/concepts/transformers/rotary-position-embeddings",
+            "https://arxiv.org/abs/2104.09864",
+            "https://www.sciencedirect.com/science/article/abs/pii/S0925231223011864",
+            "http://krasserm.github.io/2022/12/13/rotary-position-embedding/",
+            "https://nn.labml.ai/transformers/rope/index.html",
+            "https://pub.towardsai.net/rope-rotary-position-embeddings-a-detailed-example-8d82eb7dc04f",
+            "https://api.emergentmind.com/topics/rotary-position-embeddings",
+            "https://aiexpjourney.substack.com/p/an-in-depth-exploration-of-rotary-position-embedding-rope-ac351a45c794",
+            "https://medium.com/@ngiengkianyew/understanding-rotary-positional-encoding-40635a4d078e"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://nn.labml.ai/transformers/rope/index.html",
+            "https://neurips.cc/virtual/2024/poster/94296",
+            "https://aiexpjourney.substack.com/p/an-in-depth-exploration-of-rotary-position-embedding-rope-ac351a45c794",
+            "https://blog.eleuther.ai/rotary-embeddings",
+            "https://medium.com/ai-insights-cobet/rotary-positional-embeddings-a-detailed-look-and-comprehensive-understanding-4ff66a874d83",
+            "https://www.youtube.com/watch?v=SMBkImDWOyQ",
+            "https://www.youtube.com/watch?v=V8r__fXx7tU",
+            "https://arxiv.org/abs/2104.09864"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "http://krasserm.github.io/2022/12/13/rotary-position-embedding/",
+            "https://medium.com/ai-insights-cobet/rotary-positional-embeddings-a-detailed-look-and-comprehensive-understanding-4ff66a874d83",
+            "https://blog.eleuther.ai/rotary-embeddings/",
+            "https://aiexpjourney.substack.com/p/an-in-depth-exploration-of-rotary-position-embedding-rope-ac351a45c794",
+            "https://www.youtube.com/watch?v=SMBkImDWOyQ",
+            "https://arxiv.org/abs/2104.09864",
+            "https://neurips.cc/virtual/2024/poster/94296",
+            "https://nn.labml.ai/transformers/rope/index.html",
+            "https://www.youtube.com/watch?v=V8r__fXx7tU",
+            "https://www.youtube.com/watch?v=V8r__fXx7tU"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "factual",
+      "query": "UK corporation tax rate for small profits 2026",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.legislation.gov.uk/ukpga/2025/8/section/14/enacted",
+            "https://www.gov.uk/government/publications/rates-and-allowances-corporation-tax/rates-and-allowances-corporation-tax",
+            "https://www.legislation.gov.uk/ukpga/2025/8/part/1/crossheading/corporation-tax-charge-and-rates/enacted",
+            "https://www.freeagent.com/rates/corporation-tax/",
+            "https://www.legislation.gov.uk/ukpga/2025/8/part/1/crossheading/corporation-tax-charge-and-rates",
+            "https://library.croneri.co.uk/cch_uk/etc/20012",
+            "https://bloomfinancials.com/corporation-tax-rates-uk-2026/",
+            "https://tinytax.co.uk/guides/corporation-tax-rates-2026",
+            "https://myiva.co/blog/uk-corporation-tax-rates/",
+            "https://taxsummaries.pwc.com/united-kingdom/corporate/taxes-on-corporate-income"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.freeagent.com/rates/corporation-tax",
+            "https://myiva.co/blog/uk-corporation-tax-rates",
+            "https://tinytax.co.uk/guides/corporation-tax-rates-2026",
+            "https://blog.shorts.uk.com/corporation-tax-everything-you-need-to-know",
+            "https://www.gov.uk/government/publications/rates-and-allowances-corporation-tax/rates-and-allowances-corporation-tax",
+            "https://www.youtube.com/watch?v=X1AH77iKxRE",
+            "https://limitedcompanytaxcalculator.co.uk/blog/corporation-tax-rates-2026-27-explained",
+            "https://taxsummaries.pwc.com/united-kingdom/corporate/taxes-on-corporate-income",
+            "https://www.rossmartin.co.uk/running-the-business/183-company-tax-rates-and-allowances",
+            "https://www.gov.uk/corporation-tax-rates"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.gov.uk/government/publications/rates-and-allowances-corporation-tax/rates-and-allowances-corporation-tax",
+            "https://taxsummaries.pwc.com/united-kingdom/corporate/taxes-on-corporate-income",
+            "https://www.taxsure.co.uk/resources/blog/uk-corporation-tax-rates-2026-27/",
+            "https://tinytax.co.uk/guides/corporation-tax-rates-2026",
+            "https://www.freeagent.com/rates/corporation-tax/",
+            "https://gulliafiling.com/blog/uk-corporation-tax-rates-2026-guide",
+            "https://limitedcompanytaxcalculator.co.uk/blog/corporation-tax-rates-2026-27-explained",
+            "https://myiva.co/blog/uk-corporation-tax-rates/",
+            "https://www.carstonetl.com/how-much-tax-does-a-limited-company-pay-in-2026/",
+            "https://taxscape.deloitte.com/taxtables/deloitte-uk-tax-rates-2026-27.pdf"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "factual",
+      "query": "who wrote the paper introducing the transformer architecture",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://arxiv.org/abs/1706.03762",
+            "https://en.wikipedia.org/wiki/Attention_Is_All_You_Need",
+            "https://papers.neurips.cc/paper/7181-attention-is-all-you-need.pdf",
+            "https://papers.nips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf",
+            "https://arxiv.org/pdf/1706.03762",
+            "https://research.google/blog/transformer-a-novel-neural-network-architecture-for-language-understanding/",
+            "https://hasler.ece.gatech.edu/Courses/MachineLearning/FoundationalPapers/Google_Attention_NIPS-2017.pdf",
+            "https://en.wikipedia.org/wiki/Transformer_(deep_learning)",
+            "https://exa.ai/library/publication/985dxcclwqj",
+            "https://www.wikiwand.com/en/Attention_Is_All_You_Need"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": null,
+          "error": "The read operation timed out"
+        },
+        "firecrawl": {
+          "urls": [
+            "https://arxiv.org/abs/1706.03762",
+            "https://research.google/blog/transformer-a-novel-neural-network-architecture-for-language-understanding/",
+            "https://www.reddit.com/r/MachineLearning/comments/pkedi4/d_resources_for_understanding_the_original/",
+            "https://newsletter.theaiedge.io/p/attention-is-all-you-need-the-original",
+            "https://www.youtube.com/watch?v=bCz4OMemCcA",
+            "https://en.wikipedia.org/wiki/Transformer_(deep_learning)",
+            "https://etc.cuit.columbia.edu/news/basics-language-modeling-transformers-birth-transformer",
+            "https://mehmetozkaya.medium.com/transformer-architecture-attention-is-all-you-need-6a1072fa6644",
+            "https://mehmetozkaya.medium.com/transformer-architecture-attention-is-all-you-need-6a1072fa6644",
+            "https://www.linkedin.com/posts/accelinindia_ashish-vaswani-is-one-of-the-main-inventors-activity-7336572549159428096-YAGo"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "fresh",
+      "query": "EU AI Act general purpose model obligations latest guidance",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://digital-strategy.ec.europa.eu/en/library/guidelines-scope-obligations-providers-general-purpose-ai-models-under-ai-act",
+            "https://digital-strategy.ec.europa.eu/en/node/13148/printable/pdf",
+            "https://digital-strategy.ec.europa.eu/en/policies/guidelines-gpai-providers",
+            "https://ai-act-service-desk.ec.europa.eu/sites/default/files/2025-07/guidelines_on_the_scope_of_the_obligations_for_generalpurpose_ai_models_established_by_regulation_1cx2atxgq79us4n3x8jfgyy1qlm_118340-3.pdf",
+            "https://www.freshfields.com/en/our-thinking/blogs/technology-quotient/eu-ai-act-unpacked-27-guidelines-on-the-scope-of-obligations-for-general-purpos-102kxqo",
+            "https://www.mayerbrown.com/en/insights/publications/2025/08/eu-ai-act-news-rules-on-general-purpose-ai-start-applying-guidelines-and-template-for-summary-of-training-data-finalized",
+            "https://www.lexology.com/library/detail.aspx?g=2b7f17a1-73bf-4338-a76e-16fc4ed394c5",
+            "https://www.dacbeachcroft.com/en/What-we-think/EU-AI-act-full-steam-ahead-as-GPAI-model-guidelines-published-and-rules-take-effect",
+            "https://www.skadden.com/insights/publications/2025/08/eus-general-purpose-ai-obligations",
+            "https://docs.modulos.ai/frameworks/eu-ai-act/commission-guidance/gpai-models"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://aisigil.com/guidance-for-general-purpose-ai-models-under-the-ai-act",
+            "https://www.eyreact.com/eu-ai-act-gpai-models",
+            "https://eyreact.com/eu-ai-act-gpai-models",
+            "http://prighter.com/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "http://gdpr-rep.eu/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "https://gdpr-rep.eu/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "https://www.gdpr-rep.eu/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "http://gdpr-rep.eu/tr/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "http://www.prighter.com/resources/ai-act-obligations-for-general-purpose-ai-models",
+            "http://gdpr-rep.eu/ja/resources/ai-act-obligations-for-general-purpose-ai-models"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://digital-strategy.ec.europa.eu/en/news/learn-more-about-guidelines-providers-general-purpose-ai-models",
+            "https://artificialintelligenceact.eu/",
+            "https://www.mayerbrown.com/en/insights/publications/2025/08/eu-ai-act-news-rules-on-general-purpose-ai-start-applying-guidelines-and-template-for-summary-of-training-data-finalized",
+            "https://ai-law-center.orrick.com/eu-ai-act/general-purpose-ai/",
+            "https://artificialintelligenceact.eu/article/51/",
+            "https://www.skadden.com/insights/publications/2025/08/eus-general-purpose-ai-obligations",
+            "https://artificialintelligenceact.eu/high-level-summary/",
+            "https://www.jaggaer.com/blog/eu-ai-act-rules-for-general-purpose-ai",
+            "https://digital-strategy.ec.europa.eu/en/policies/guidelines-gpai-providers",
+            "https://verifywise.ai/ai-governance-library/regulations-and-laws/eu-ai-act-general-purpose-guidelines"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "fresh",
+      "query": "Bank of England base rate decision this month",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.bankofengland.co.uk/monetary-policy-report/2026/july-2026",
+            "https://www.bankofengland.co.uk/monetary-policy/the-interest-rate-bank-rate",
+            "https://www.bankofengland.co.uk/-/media/boe/files/monetary-policy-summary-and-minutes/2026/monetary-policy-summary-and-minutes-july-2026.pdf",
+            "https://www.bbc.co.uk/news/live/clyv9w91g85t",
+            "https://www.independent.co.uk/news/uk/home-news/interest-rates-bank-of-england-vote-inflation-mpc-b3023961.html",
+            "https://tradingeconomics.com/united-kingdom/interest-rate",
+            "https://investinglive.com/central-banks/boe-leaves-bank-rate-unchanged-at-3-75-in-july-meeting-as-expected/",
+            "https://www.upday.com/uk/bank-of-england-holds-rates-at-375-for-fifth-time-despite-split-vote-warns-inflation/e954h19",
+            "https://thelondonreview.org.uk/articles/2026-07-31-six-to-three-a-divided-hold-and-the-curve-the-bank-does-not-believe",
+            "https://www.bbc.com/news/articles/c3dky111m40o"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.uswitch.com/mortgages/guides/bank-of-england-base-rate",
+            "https://tradingeconomics.com/united-kingdom/interest-rate",
+            "https://equalsmoney.com/economic-calendar/events/boe-interest-rate-decision",
+            "https://www.bankofengland.co.uk/monetary-policy/the-interest-rate-bank-rate",
+            "https://www.bankofengland.co.uk/boeapps/database/Bank-Rate.asp",
+            "https://www.youtube.com/watch?v=KLWisyzLCT8",
+            "https://www.bbc.com/news/articles/c3dky111m40o",
+            "https://commonslibrary.parliament.uk/research-briefings/sn02802",
+            "https://www.fidelity.co.uk/markets-insights/markets/uk/when-will-interest-rates-fall",
+            "https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.bankofengland.co.uk/monetary-policy/the-interest-rate-bank-rate",
+            "https://www.bankofengland.co.uk/boeapps/database/Bank-Rate.asp",
+            "https://www.bbc.com/news/articles/c3dky111m40o",
+            "https://www.uswitch.com/mortgages/guides/bank-of-england-base-rate/",
+            "https://tradingeconomics.com/united-kingdom/interest-rate",
+            "https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates",
+            "https://www.fidelity.co.uk/markets-insights/markets/uk/when-will-interest-rates-fall/",
+            "https://equalsmoney.com/economic-calendar/events/boe-interest-rate-decision",
+            "https://www.youtube.com/watch?v=KLWisyzLCT8",
+            "https://www.fidelity.co.uk/markets-insights/markets/uk/when-will-interest-rates-fall/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "fresh",
+      "query": "OpenAI model releases 2026",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://help.openai.com/en/articles/9624314-model-release-notes",
+            "https://openai.com/index/previewing-gpt-5-6-sol/",
+            "https://openai.com/research/index/release/",
+            "https://help.openai.com/en/articles/9624314-model-release-notes?featured_on=pythonbytes",
+            "https://openai.com/news/product-releases/",
+            "https://openai.com/index/gpt-5-6-frontier-intelligence-efficiency/",
+            "https://openai.com/index/introducing-gpt-live/",
+            "https://hidekazu-konishi.com/entry/openai_gpt_model_release_timeline.html",
+            "https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/",
+            "https://openai.com/index/gpt-5-6-preferred-model-microsoft-365-copilot/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.evertune.ai/resources/ai-model-tracker",
+            "https://help.openai.com/en/articles/9624314-model-release-notes",
+            "https://releasebot.io/updates/openai",
+            "https://openai.com/research/index/release",
+            "https://www.cnbc.com/2026/07/08/openai-expanding-gpt-5point6-ai-model-release-ending-government-limits.html",
+            "https://openai.com/index/introducing-gpt-live",
+            "https://openai.com/index/gpt-5-6",
+            "https://community.openai.com/t/openai-is-at-risk-of-losing-developers/1382415"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://help.openai.com/en/articles/9624314-model-release-notes",
+            "https://openai.com/research/index/release/",
+            "https://openai.com/news/product-releases/",
+            "https://www.evertune.ai/resources/ai-model-tracker",
+            "https://www.reddit.com/r/PromptEngineering/comments/1rv9odx/the_open_source_ai_situation_in_march_2026_is/",
+            "https://www.reddit.com/r/OpenAI/comments/1qjv3rz/is_this_potential_2026_release_date_for_the/",
+            "https://hidekazu-konishi.com/entry/openai_gpt_model_release_timeline.html",
+            "https://community.openai.com/t/deprecation-notice-upcoming-model-shutdowns-in-2026/1379553",
+            "https://llm-stats.com/llm-updates",
+            "https://www.linkedin.com/pulse/openai-gpt-chatgpt-timeline-2022-feb-2026-sanjana-r-pmp-cspo--pxfoc"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "fresh",
+      "query": "latest developments in AI content licensing deals",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://conventuslaw.com/report/india-ani-v-open-ai-delhi-high-court-refuses-interim-injunction-in-landmark-ai-copyright-dispute/",
+            "https://www.musicbusinessworldwide.com/merlin-signs-spotify-licensing-deal-for-ai-powered-fan-made-covers-and-remixes/",
+            "https://www.einpresswire.com/article/930758853/princeton-university-press-cashmere-sign-partnership-to-license-academic-content-to-copyright-compliant-ai-platforms",
+            "https://newsroom.spotify.com/2026-08-04/merlin-spotify-licensing-agreements-fan-made-covers-remixes/",
+            "https://www.wsj.com/business/media/news-corp-meta-in-ai-content-licensing-deal-worth-up-to-50-million-a-year-d4fbf244",
+            "https://llmpulse.ai/blog/ai-content-licensing-deals/",
+            "https://www.brookings.edu/articles/same-gatekeepers-new-tollbooths-in-the-ai-content-licensing-market/",
+            "https://digiday.com/media/a-timeline-of-the-major-deals-between-publishers-and-ai-tech-companies-in-2025/",
+            "https://www.niemanlab.org/2026/05/the-emerging-ai-content-licensing-market-puts-news-publishers-in-a-double-bind-a-new-report-warns/",
+            "https://www.progressiverobot.com/2026/08/03/paying-artists-embrace-ai-pippa-royalties/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://presenc.ai/research/ai-content-licensing-deals-2026",
+            "https://wfanet.org/knowledge/item/2024/05/30/this-month-in-ai-new-tools-content-labelling-voice-cloning-and-licensing-deals",
+            "https://worldscreen.com/tvreal/curiosity-inks-new-international-content-licensing-deals",
+            "https://inquisitiveminds.bristows.com/post/102jl8j/licensing-content-to-train-ai-an-emerging-frontier",
+            "https://www.oreateai.com/blog/ai-content-licensing-deals/f67629720311bafd1a9fd4e55e6d2827",
+            "https://aimarketing.co/reddits-big-ai-deals-openai-google-licensing-contribute-10-to-its-revenue",
+            "https://www.law360.com/articles/2438639/what-artists-can-learn-from-latest-ai-music-licensing-deals",
+            "https://www.law360.com/commercialcontracts/articles/2438639/what-artists-can-learn-from-latest-ai-music-licensing-deals",
+            "https://themarketingjuice.com/ai-content-licensing-deals",
+            "https://www.law360.com/technology/articles/2438639/what-artists-can-learn-from-latest-ai-music-licensing-deals"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://digiday.com/media/a-timeline-of-the-major-deals-between-publishers-and-ai-tech-companies-in-2025/",
+            "https://www.brookings.edu/articles/same-gatekeepers-new-tollbooths-in-the-ai-content-licensing-market/",
+            "https://copyrightalliance.org/artificial-intelligence-copyright/licensing/",
+            "https://sr.ithaka.org/our-work/generative-ai-licensing-agreement-tracker/",
+            "https://www.niemanlab.org/2026/05/the-emerging-ai-content-licensing-market-puts-news-publishers-in-a-double-bind-a-new-report-warns/",
+            "https://mediaandthemachine.substack.com/p/5-takeaways-from-the-ai-content-licensing",
+            "https://www.wsj.com/business/media/news-corp-meta-in-ai-content-licensing-deal-worth-up-to-50-million-a-year-d4fbf244",
+            "https://digitalcontentnext.org/blog/2025/03/06/ai-content-licensing-lessons-from-factiva-and-time/",
+            "https://llmpulse.ai/blog/ai-content-licensing-deals/",
+            "https://www.maverickpublishingconsultants.com/blog/licensing-content-to-genai-platforms"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "technical",
+      "query": "vLLM automatic prefix caching configuration",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://docs.vllm.ai/en/stable/features/automatic_prefix_caching/",
+            "https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/",
+            "https://docs.vllm.ai/en/stable/examples/offline_inference/automatic_prefix_caching/",
+            "https://github.com/vllm-project/vllm/blob/main/examples/offline_inference/automatic_prefix_caching.py",
+            "https://github.com/vllm-project/vllm/blob/54d244f2/vllm/config/cache.py",
+            "https://docs.vllm.ai/en/latest/design/prefix%5Fcaching/",
+            "https://docs.vllm.ai/en/v0.23.0/examples/features/automatic_prefix_caching/",
+            "https://docs.vllm.ai/en/stable/design/prefix_caching/",
+            "https://docs.vllm.ai/en/v0.22.0/features/automatic_prefix_caching/",
+            "https://docs.vllm.ai/en/v0.18.1/features/automatic_prefix_caching/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://docs.rbln.ai/v0.10.2/software/model_serving/vllm_support/features/prefix-caching.html",
+            "https://docs.rbln.ai/v0.10.0/software/model_serving/vllm_support/features/prefix-caching.html",
+            "https://docs.rbln.ai/latest/software/model_serving/vllm_support/features/prefix-caching.html",
+            "https://docs.vllm.ai/en/v0.17.1/features/automatic_prefix_caching",
+            "https://docs.vllm.ai/en/v0.15.0/features/automatic_prefix_caching",
+            "https://docs.vllm.ai/en/v0.18.2/features/automatic_prefix_caching",
+            "https://docs.vllm.ai/features/automatic_prefix_caching.html",
+            "https://docs.vllm.ai/en/latest/examples/features/automatic_prefix_caching",
+            "https://docs.vllm.ai/en/latest/features/automatic_prefix_caching",
+            "https://docs.vllm.ai/en/stable/features/automatic_prefix_caching"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/",
+            "https://docs.vllm.ai/en/stable/design/prefix_caching/",
+            "https://llm-d.ai/blog/kvcache-wins-you-can-see",
+            "https://www.reddit.com/r/LocalLLaMA/comments/1r61so4/we_tested_5_vllm_optimizations_prefix_cache_fp8/",
+            "https://github.com/vllm-project/vllm/issues/2614",
+            "https://blog.squeezebits.com/vllm-vs-tensorrtllm-12-automatic-prefix-caching-38189",
+            "https://docs.vllm.ai/en/v0.7.0/features/automatic_prefix_caching.html",
+            "https://medium.com/byte-sized-ai/vllm-prefix-caching-vllms-automatic-prefix-caching-vs-chunkattention-749108317621",
+            "https://docs.vllm.ai/en/v0.7.2/design/v1/prefix_caching.html",
+            "https://jarvislabs.ai/blog/vllm-optimization-techniques"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "technical",
+      "query": "how to reduce MCP tool definition token usage",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://janeer.com/guides/how-to-reduce-mcp-tool-token-usage/",
+            "https://layered.dev/mcp-tool-schema-bloat-the-hidden-token-tax-and-how-to-fix-it/",
+            "https://pydantic.dev/articles/engineering-mcp-tools-for-token-efficiency",
+            "https://startdebugging.net/2026/05/how-to-reduce-the-number-of-mcp-tools-claude-loads/",
+            "https://axiomstudio.ai/blog/reducing-token-utilization-mcp-tools",
+            "https://tokenade.net/en/articles/token-efficient-mcp-tool-use",
+            "https://www.mindstudio.ai/blog/reduce-token-usage-ai-agents-mcp-optimization",
+            "https://mcp.directory/blog/mcp-context-bloat-fix-2026-tool-search-code-mode-progressive-disclosure",
+            "https://www.speakeasy.com/docs/mcp/build/toolsets/dynamic-toolsets",
+            "https://pristren.com/blog/mcp-token-bloat-how-to-fix/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.stackone.com/blog/mcp-token-optimization",
+            "https://thenewstack.io/how-to-reduce-mcp-token-bloat",
+            "https://www.speakeasy.com/blog/how-we-reduced-token-usage-by-100x-dynamic-toolsets-v2",
+            "https://www.mindstudio.ai/blog/optimize-mcp-server-token-usage",
+            "https://pydantic.dev/articles/engineering-mcp-tools-for-token-efficiency",
+            "https://www.solo.io/blog/keeping-context-and-tokens-low-with-progressive-disclosure-in-agentgateway",
+            "https://www.reddit.com/r/ClaudeAI/comments/1ha0aom/how_does_mcp_help_reduce_token_usage",
+            "https://medium.com/@shamsul.arefin/building-an-ai-agent-with-mcp-code-execution-from-confusion-to-clarity-6b13fccc8c4b"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://medium.com/@shamsul.arefin/building-an-ai-agent-with-mcp-code-execution-from-confusion-to-clarity-6b13fccc8c4b",
+            "https://www.reddit.com/r/ClaudeAI/comments/1ha0aom/how_does_mcp_help_reduce_token_usage/",
+            "https://github.com/github/github-mcp-server/discussions/1182",
+            "https://www.speakeasy.com/blog/how-we-reduced-token-usage-by-100x-dynamic-toolsets-v2/",
+            "https://www.solo.io/blog/keeping-context-and-tokens-low-with-progressive-disclosure-in-agentgateway",
+            "https://www.reddit.com/r/mcp/comments/1p287ou/reducing_mcp_token_usage_by_100x_you_dont_need/",
+            "https://pydantic.dev/articles/engineering-mcp-tools-for-token-efficiency",
+            "https://thenewstack.io/how-to-reduce-mcp-token-bloat/",
+            "https://www.mindstudio.ai/blog/optimize-mcp-server-token-usage",
+            "https://www.youtube.com/watch?v=rU6IYiQ1SdQ&vl=en"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "technical",
+      "query": "Rust async trait object safety workarounds",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://google.github.io/comprehensive-rust/concurrency/async-pitfalls/async-traits.html",
+            "https://rust-lang.github.io/rust-project-goals/2026/afidt-box.html",
+            "https://p.rst.im/q/github.com/dtolnay/async-trait",
+            "https://devencyclopedia.com/blog/rust-async-traits-object-safe",
+            "https://users.rust-lang.org/t/resolving-not-object-safe-error-with-trait-having-async-methods/105175",
+            "https://rs4ts.dev/11-async/05-async-trait/",
+            "https://uditsamani.com/async-traits/",
+            "https://boats.gitlab.io/blog/post/async-methods-ii/",
+            "https://arcmutex.com/content/async-trait-object-safety",
+            "https://users.rust-lang.org/t/resolving-not-object-safe-error-with-trait-having-async-methods/105175/1"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://docs.rs/trait-async",
+            "https://medium.com/@ashusk_1790/rust-async-traits-what-finally-works-now-7b7f46529718",
+            "https://without.boats/blog/async-methods-ii",
+            "https://google.github.io/comprehensive-rust/concurrency/async-pitfalls/async-traits.html",
+            "https://users.rust-lang.org/t/resolving-not-object-safe-error-with-trait-having-async-methods/105175",
+            "https://www.youtube.com/watch?v=-zYEbZi70hY",
+            "https://users.rust-lang.org/t/problems-caused-by-async-trait/105688/12",
+            "https://stackoverflow.com/questions/79154108/how-to-work-around-object-safe-traits-in-rust",
+            "https://www.reddit.com/r/rust/comments/1k2r19x/does_rust_still_require_the_use_of_asynctrait"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://users.rust-lang.org/t/problems-caused-by-async-trait/105688/12",
+            "https://www.reddit.com/r/rust/comments/1k2r19x/does_rust_still_require_the_use_of_asynctrait/",
+            "https://stackoverflow.com/questions/79154108/how-to-work-around-object-safe-traits-in-rust",
+            "https://medium.com/@ashusk_1790/rust-async-traits-what-finally-works-now-7b7f46529718",
+            "https://without.boats/blog/async-methods-ii/",
+            "https://docs.rs/trait-async",
+            "https://users.rust-lang.org/t/resolving-not-object-safe-error-with-trait-having-async-methods/105175",
+            "https://www.youtube.com/watch?v=-zYEbZi70hY",
+            "https://google.github.io/comprehensive-rust/concurrency/async-pitfalls/async-traits.html",
+            "https://uditsamani.com/async-traits/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "technical",
+      "query": "postgres logical replication slot disk usage growth",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.postgresql.org/docs/18/view-pg-replication-slots.html",
+            "https://www.michal-drozd.com/en/blog/logical-replication-slot-wal-retention/",
+            "https://stackoverflow.com/questions/60527214/how-to-limit-wal-size-when-using-postgres-logical-replication-slot",
+            "https://pghealth.io/blog/postgresql-health-check-logical-replication-slot-wal-retention",
+            "https://www.michal-drozd.com/en/blog/postgresql-replication-slot-bloat/",
+            "https://www.netdata.cloud/guides/postgres/postgres-replication-slot-bloat/",
+            "https://fosskit.com/postgres-replication-slot-bloat/",
+            "https://www.mydbops.com/blog/postgresql-wal-file-retention",
+            "https://engineered.at/articles/mastering-postgres-replication-slots-preventing-wal-bloat-and-other-production-issues",
+            "https://tech-champion.com/database/postgresql/postgresql-logical-replication-slots-and-wal-disk-bloat/"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://dba.stackexchange.com/questions/216253/postgres-9-4-wal-level-logical-increases-disk-space",
+            "https://blog.peerdb.io/exploring-versions-of-the-postgres-logical-replication-protocol",
+            "https://blog.peerdb.io/overcoming-pitfalls-of-postgres-logical-decoding",
+            "https://wolfman.dev/posts/pg-logical-heartbeats",
+            "https://tech-champion.com/database/postgresql/logical-replication-slot-suicide-in-global-microservices",
+            "https://tech-champion.com/general/logical-replication-slot-suicide-in-global-microservices",
+            "https://morling.dev/blog/insatiable-postgres-replication-slot",
+            "https://www.morling.dev/blog/insatiable-postgres-replication-slot",
+            "https://postgres.fm/episodes/logical-replication-common-issues",
+            "https://www.dolthub.com/blog/2024-03-08-postgres-logical-replication"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.morling.dev/blog/insatiable-postgres-replication-slot/",
+            "https://community.qlik.com/t5/Qlik-Replicate/Replication-Slot-size-increasing-rapidly-for-postgresql/td-p/2422551",
+            "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PostgreSQL.Replication.ReadReplicas.Monitor.html",
+            "https://severalnines.com/blog/using-postgresql-replication-slots/",
+            "https://medium.com/@sandeeparneja/postgres-database-keeps-running-out-of-space-3c1c7687212e",
+            "https://www.reddit.com/r/PostgreSQL/comments/y2si1q/wal_slots_filled_storage_during_replication/",
+            "https://blog.peerdb.io/overcoming-pitfalls-of-postgres-logical-decoding",
+            "https://repost.aws/questions/QU6C7gupuKTV-FdxkxdoqEUw/aws-posgres-rds-disk-space-consumption-in-idle-database-when-using-logical-replication",
+            "https://wolfman.dev/posts/pg-logical-heartbeats/",
+            "https://stackoverflow.com/questions/70737833/postgresql-pglogical-replication-filling-up-the-disk-space"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "commercial",
+      "query": "best reranking API pricing comparison",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://apiscout.dev/guides/reranking-api-cohere-vs-jina-vs-voyage-rag-2026",
+            "https://mixpeek.com/curated-lists/best-rerankers",
+            "https://aicraftguide.com/article/cohere-voyage-jina-mixedbread-flashrank-rerankers-rag-2026",
+            "https://alatirok.com/best-reranker-model-2026/",
+            "https://top-5-solutions.com/top-5-reranker-api-solutions/2026/",
+            "https://www.vibereference.com/ai-development/reranking-providers",
+            "https://openrouter.ai/collections/rerank-models",
+            "https://aimultiple.com/rerankers",
+            "https://www.metacto.com/blogs/cohere-pricing-explained-a-deep-dive-into-integration-development-costs",
+            "https://medium.com/google-cloud/reranking-3b5f351cb398"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.reddit.com/r/LangChain/comments/1hti702/top_rerank_models_and_rerank_apis_comparison",
+            "https://www.metacto.com/blogs/cohere-pricing-explained-a-deep-dive-into-integration-development-costs",
+            "https://medium.com/google-cloud/reranking-3b5f351cb398",
+            "https://github.com/agentset-ai/awesome-rerankers",
+            "https://www.siliconflow.com/articles/en/the-best-api-providers-of-open-source-reranker-model",
+            "https://aimultiple.com/rerankers",
+            "https://galileo.ai/blog/mastering-rag-how-to-select-a-reranking-model",
+            "https://zeroentropy.dev/articles/ultimate-guide-to-choosing-the-best-reranking-model-in-2025",
+            "https://openrouter.ai/collections/rerank-models"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.reddit.com/r/LangChain/comments/1hti702/top_rerank_models_and_rerank_apis_comparison/",
+            "https://galileo.ai/blog/mastering-rag-how-to-select-a-reranking-model",
+            "https://cohere.com/rerank",
+            "https://aimultiple.com/rerankers",
+            "https://www.metacto.com/blogs/cohere-pricing-explained-a-deep-dive-into-integration-development-costs",
+            "https://zeroentropy.dev/articles/ultimate-guide-to-choosing-the-best-reranking-model-in-2025/",
+            "https://openrouter.ai/collections/rerank-models",
+            "https://medium.com/google-cloud/reranking-3b5f351cb398",
+            "https://www.siliconflow.com/articles/en/the-best-api-providers-of-open-source-reranker-model",
+            "https://www.aipricing.guru/cohere-pricing/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "commercial",
+      "query": "vector database managed hosting pricing",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://weaviate.io/pricing",
+            "https://zilliz.com/pricing",
+            "https://www.pinecone.io/pricing/",
+            "https://qdrant.tech/pricing/",
+            "https://agentdeals.dev/vector-database-pricing",
+            "https://upstash.com/pricing/vector",
+            "https://endee.io/pricing",
+            "https://developers.cloudflare.com/vectorize/platform/pricing/index.md",
+            "https://www.rollinhost.com.br/en/vector-db-hospedagem",
+            "https://aws.amazon.com/marketplace/pp/prodview-iqbidum7feuio"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.actian.com/blog/databases/the-hidden-cost-of-vector-database-pricing-models",
+            "https://ranksquire.com/2026/03/04/vector-database-pricing-comparison-2026",
+            "https://zilliz.com/pricing",
+            "https://openmetal.io/resources/blog/when-self-hosting-vector-databases-becomes-cheaper-than-saas",
+            "https://weaviate.io/pricing",
+            "https://qdrant.tech/pricing",
+            "https://medium.com/@soumitsr/a-broke-b-chs-guide-to-tech-start-up-choosing-vector-database-cloud-serverless-prices-3c1ad4c29ce7",
+            "https://cloud.google.com/discover/what-is-a-vector-database"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://weaviate.io/pricing",
+            "https://www.actian.com/blog/databases/the-hidden-cost-of-vector-database-pricing-models/",
+            "https://www.reddit.com/r/learnmachinelearning/comments/17mf7pn/what_is_the_cheapest_way_to_host_a_1tb_vector/",
+            "https://qdrant.tech/pricing/",
+            "https://openmetal.io/resources/blog/when-self-hosting-vector-databases-becomes-cheaper-than-saas/",
+            "https://medium.com/@soumitsr/a-broke-b-chs-guide-to-tech-start-up-choosing-vector-database-cloud-serverless-prices-3c1ad4c29ce7",
+            "https://docs.aws.amazon.com/prescriptive-guidance/latest/choosing-an-aws-vector-database-for-rag-use-cases/cost.html",
+            "https://www.pinecone.io/pricing/",
+            "https://www.exoscale.com/dbaas/vector-databases/",
+            "https://www.buildmvpfast.com/api-costs/vector-db"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "commercial",
+      "query": "enterprise search vendors for regulated industries",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.searchblox.com/products/fully-managed-enterprise-search",
+            "https://dnxtsolutions.com/features/unified-search-discovery/",
+            "https://www.vaultree.com/solutions/veds-search",
+            "https://www.oxcyon.com/centralpoint-dxp/enterprise-search-appliance",
+            "https://www.progress.com/marklogic/solutions/regulatory-compliance",
+            "https://www.gosearch.ai/product/security",
+            "https://h33.ai/verifiable-enterprise-search/",
+            "https://nataero.ai/secure-ai-document-search/",
+            "https://www.atolio.com/blog/secure-ai-for-regulated-industries",
+            "https://flur.ee/solutions/enterprise-ai-search"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://lucidworks.com/guides/enterprise-search-buyers-guide",
+            "https://squirro.com/squirro-blog/ai-powered-enterprise-search-a-buyers-guide-for-regulated-industries",
+            "https://www.gosearch.ai/blog/enterprise-search-software-2026",
+            "https://www.alpha-sense.com/blog/product/enterprise-search-software",
+            "https://www.hebbia.com/resources/ai-powered-enterprise-search",
+            "https://www.gartner.com/reviews/market/enterprise-search-engines",
+            "https://www.atolio.com/blog/secure-ai-for-regulated-industries",
+            "https://www.kore.ai/blog/best-enterprise-search-software",
+            "https://flur.ee/solutions/enterprise-ai-search"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://squirro.com/squirro-blog/ai-powered-enterprise-search-a-buyers-guide-for-regulated-industries",
+            "https://www.atolio.com/blog/secure-ai-for-regulated-industries",
+            "https://www.alpha-sense.com/blog/product/enterprise-search-software/",
+            "https://www.gosearch.ai/blog/enterprise-search-software-2026/",
+            "https://lucidworks.com/guides/enterprise-search-buyers-guide",
+            "https://www.gartner.com/reviews/market/enterprise-search-engines",
+            "https://www.hebbia.com/resources/ai-powered-enterprise-search",
+            "https://www.kore.ai/blog/best-enterprise-search-software",
+            "https://flur.ee/solutions/enterprise-ai-search",
+            "https://mightybot.ai/compare/best-ai-agent-platforms-regulated-industries/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "commercial",
+      "query": "cost of licensed news content for AI training",
+      "providers": {
+        "exa": {
+          "urls": null,
+          "error": "The read operation timed out"
+        },
+        "tavily": {
+          "urls": [
+            "https://fiund.com/deals",
+            "https://generative-ai-newsroom.com/can-licensing-newsroom-data-to-ai-companies-generate-meaningful-revenue-03ad1a84e752",
+            "https://www.alien.club/blog/ai-content-licensing-guide",
+            "https://marketintelo.com/report/dataset-licensing-for-ai-training-market/amp",
+            "https://mediaandthemachine.substack.com/p/the-7-deal-points-of-ai-content-licensing",
+            "https://www.transparencycoalition.ai/news/harpercollins-ai-deal-with-microsoft-sets-first-public-price-for-training-data",
+            "https://www.youtube.com/watch?v=27iO8qvSn0k",
+            "https://www.brookings.edu/articles/same-gatekeepers-new-tollbooths-in-the-ai-content-licensing-market",
+            "https://www.facebook.com/gettheinformation/posts/news-publishers-shift-ai-licensing-focus-to-usage-based-dealsnews-publishers-are/1352531663542493"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://mediaandthemachine.substack.com/p/the-7-deal-points-of-ai-content-licensing",
+            "https://www.brookings.edu/articles/same-gatekeepers-new-tollbooths-in-the-ai-content-licensing-market/",
+            "https://www.alien.club/blog/ai-content-licensing-guide/",
+            "https://generative-ai-newsroom.com/can-licensing-newsroom-data-to-ai-companies-generate-meaningful-revenue-03ad1a84e752",
+            "https://marketintelo.com/report/dataset-licensing-for-ai-training-market/amp",
+            "https://www.transparencycoalition.ai/news/harpercollins-ai-deal-with-microsoft-sets-first-public-price-for-training-data",
+            "https://www.youtube.com/watch?v=zfn07Pe-q0s",
+            "https://fiund.com/deals",
+            "https://www.youtube.com/watch?v=27iO8qvSn0k",
+            "https://digiday.com/media/wtf-is-ai-grounding-licensing-and-why-do-publishers-say-it-matters-over-training-deals/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "vague",
+      "query": "why is my agent getting worse over long conversations",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.producttalk.org/context-rot/",
+            "https://tianpan.co/blog/2026-04-19-long-session-context-degradation-multi-turn",
+            "https://heyclarity.dev/blog/agent-context-decay/",
+            "https://hackernoon.com/why-ai-gets-worse-the-longer-it-works",
+            "https://keepmyclaw.com/blog/ai-agent-context-rot",
+            "https://www.channel.tel/blog/agent-drift-silent-degradation",
+            "https://aifirstsearch.com/problem-awareness/why-does-ai-get-worse-in-long-conversations",
+            "https://www.betterclaw.io/blog/ai-agent-memory-why-forgets-how-to-fix",
+            "https://dev.to/frank_brsrk/why-your-ai-agent-loses-the-plot-reasoning-decay-and-attention-loss-in-long-running-tasks-1cg8",
+            "https://blakecrosley.com/blog/agent-memory-degradation"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.parloa.com/labs/research/long-conversation-performance",
+            "https://www.facebook.com/OReilly/posts/when-you-have-a-continuous-chat-with-an-ai-agent-it-feels-like-the-ai-remembers-/1527815708999532",
+            "https://www.regal.ai/blog/ai-agent-takes-long-to-respond",
+            "https://community.latenode.com/t/why-does-ai-seem-to-get-worse-responses-with-repeated-queries/36686",
+            "https://medium.com/data-science-collective/the-longer-the-context-the-dumber-the-agent-16f7d9833519",
+            "https://www.reddit.com/r/AI_Agents/comments/1t2mjeh/why_do_ai_responses_get_worse_after_a_while_of",
+            "https://www.youtube.com/watch?v=q0I2yUn8_e4",
+            "https://www.instagram.com/reel/DTnyTDoDxTX",
+            "https://www.kmrom.com/post/why-the-chat-feels-faster-and-smarter-than-the-agent-and-what-lies-behind-that"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.reddit.com/r/AI_Agents/comments/1t2mjeh/why_do_ai_responses_get_worse_after_a_while_of/",
+            "https://www.instagram.com/reel/DTnyTDoDxTX/",
+            "https://www.parloa.com/labs/research/long-conversation-performance/",
+            "https://www.youtube.com/watch?v=q0I2yUn8_e4",
+            "https://medium.com/data-science-collective/the-longer-the-context-the-dumber-the-agent-16f7d9833519",
+            "https://community.latenode.com/t/why-does-ai-seem-to-get-worse-responses-with-repeated-queries/36686",
+            "https://www.regal.ai/blog/ai-agent-takes-long-to-respond",
+            "https://www.facebook.com/OReilly/posts/when-you-have-a-continuous-chat-with-an-ai-agent-it-feels-like-the-ai-remembers-/1527815708999532/",
+            "https://www.kmrom.com/post/why-the-chat-feels-faster-and-smarter-than-the-agent-and-what-lies-behind-that",
+            "https://millionleaves.co.nz/why-ai-conversations-degrade-and-what-you-can-do-about-it/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "vague",
+      "query": "how much context is too much",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://ctxflow.sh/blog/how-much-context-ai-agent-needs/",
+            "https://ctxflow.sh/blog/context-rot/",
+            "https://www.danilchenko.dev/posts/context-engineering/",
+            "https://alejandrorioja.com/context-engineering-for-ai-agents-what-goes-in-the-context-window/",
+            "https://ctxflow.sh/blog/does-more-context-improve-llm-answers/",
+            "https://arizenai.com/context-window-fallacy/",
+            "https://www.codexical.com/posts/2026-05-10-context-rot-llm-degradation",
+            "https://www.vectara.com/blog/context-engineering-can-you-trust-long-context",
+            "https://dev.to/lynkr/stuffing-the-context-window-is-making-your-agent-dumber-what-the-research-says-2063",
+            "https://dev.to/xhack/the-2m-token-trap-why-context-stuffing-kills-reasoning-1kck"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.producttalk.org/context-rot",
+            "https://towardsdatascience.com/your-1m-context-window-llm-is-less-powerful-than-you-think",
+            "https://www.youtube.com/watch?v=-uW5-TaVXu4",
+            "https://news.ycombinator.com/item?id=45862950",
+            "https://agenta.ai/blog/top-6-techniques-to-manage-context-length-in-llms",
+            "https://arxiv.org/pdf/2509.21361",
+            "https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html",
+            "https://www.vectara.com/blog/context-engineering-can-you-trust-long-context",
+            "https://www.reddit.com/r/LocalLLaMA/comments/1lxuu5m/how_does_having_a_very_long_context_window_impact",
+            "https://forum.cursor.com/t/context-window-must-know-if-you-dont-know/86786"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.reddit.com/r/reactjs/comments/stv096/how_many_context_is_ok/",
+            "https://www.reddit.com/r/LocalLLaMA/comments/1rpj5zs/whats_a_good_context_length_for_a_generalpersonal/",
+            "https://community.openai.com/t/why-context-length-is-becoming-a-big-deal-in-ai/1285618",
+            "https://www.facebook.com/groups/698593531630485/posts/1326745818815250/",
+            "https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html",
+            "https://www.youtube.com/watch?v=-uW5-TaVXu4",
+            "https://www.producttalk.org/context-rot/?srsltid=AfmBOorsyi6s6EL7JjN4wMFb6Ismnse8gSQOHL3c4SD41vPjjXoQclZa",
+            "https://natesnewsletter.substack.com/p/context-windows-are-a-lie-the-myth",
+            "https://arxiv.org/html/2510.05381v1",
+            "https://news.ycombinator.com/item?id=45862950"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "vague",
+      "query": "making retrieval better",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.thoughtworks.com/en-us/insights/blog/generative-ai/four-retrieval-techniques-improve-rag",
+            "https://aclanthology.org/2026.acl-long.1791.pdf",
+            "https://arxiv.org/html/2602.11841v1",
+            "https://aclanthology.org/2026.acl-long.1734.pdf",
+            "https://proceedings.iclr.cc/paper_files/paper/2026/file/015d6a156390d23c19d17651d60b3db6-Paper-Conference.pdf",
+            "https://aclanthology.org/2026.acl-long.1705.pdf",
+            "https://aclanthology.org/2026.findings-acl.1603.pdf",
+            "https://aclanthology.org/2025.emnlp-main.963.pdf",
+            "https://arxiv.org/abs/2604.05087v1",
+            "https://aclanthology.org/2026.findings-eacl.333.pdf"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://carlhendrick.substack.com/p/making-retrieval-practice-actually",
+            "https://www.reddit.com/r/Rag/comments/1j1ujks/need_help_to_make_the_retrieval_process_better",
+            "https://medium.com/data-science/10-ways-to-improve-the-performance-of-retrieval-augmented-generation-systems-5fa2cee7cd5c",
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC7272192",
+            "https://www.thoughtworks.com/en-us/insights/blog/generative-ai/four-retrieval-techniques-improve-rag",
+            "https://psychology.ucsd.edu/undergraduate-program/undergraduate-resources/academic-writing-resources/effective-studying/retrieval-practice.html",
+            "https://www.fertilityanswers.com/8-preparation-tips-for-successful-egg-retrieval"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": null,
+          "error": "The read operation timed out"
+        }
+      }
+    },
+    {
+      "kind": "vague",
+      "query": "context engineering best practices",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+            "https://redis.io/blog/context-engineering-best-practices-for-an-emerging-discipline/",
+            "https://sourcegraph.com/blog/context-engineering",
+            "https://www.ibm.com/think/topics/context-engineering",
+            "https://www.comet.com/site/blog/context-engineering/",
+            "https://skillscouter.com/context-engineering-guide/",
+            "https://www.rocket.new/blog/context-engineering-best-practices-developers-should-follow",
+            "https://www.product.engineer/blog/context-engineering",
+            "https://outcomeschool.com/blog/context-engineering",
+            "https://github.com/ypollak2/context-engineering-handbook"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://redis.io/blog/context-engineering-best-practices-for-an-emerging-discipline",
+            "https://www.comet.com/site/blog/context-engineering",
+            "https://www.linkedin.com/pulse/context-engineering-best-practices-ai-agents-snehotosh-kumar-banerjee-hsowc",
+            "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+            "https://www.llamaindex.ai/blog/context-engineering-what-it-is-and-techniques-to-consider",
+            "https://www.inngest.com/blog/context-engineering-in-practice",
+            "https://abvijaykumar.medium.com/context-engineering-1-2-getting-the-best-out-of-agentic-ai-systems-90e4fe036faf",
+            "https://packmind.com/context-engineering-ai-coding/context-engineering-best-practices",
+            "https://www.promptingguide.ai/guides/context-engineering-guide"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": null,
+          "error": "The read operation timed out"
+        }
+      }
+    },
+    {
+      "kind": "analytical",
+      "query": "evidence that retrieval augmented generation reduces hallucination",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://aclanthology.org/2021.findings-emnlp.320/",
+            "https://link.springer.com/article/10.1007/s10994-026-07121-y",
+            "https://computer-life.org/index.php/ojs/article/view/35",
+            "https://www.nature.com/articles/s41467-026-71411-1",
+            "https://www.mdpi.com/2227-7390/13/5/856",
+            "https://clawrxiv.io/abs/2604.02036",
+            "https://aclanthology.org/2026.acl-long.192.pdf",
+            "https://arxiv.org/html/2504.05324v1",
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12540348/",
+            "https://www.alphaxiv.org/abs/2508.02184"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.makebot.ai/blog-en/clinical-llm-rag-hallucination-mitigation",
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12540348",
+            "https://arxiv.org/abs/2104.07567",
+            "https://www.mdpi.com/2227-7390/13/5/856",
+            "https://www.k2view.com/blog/rag-hallucination?hs_amp=true",
+            "https://www.linkedin.com/pulse/why-retrieval-augmented-generation-rag-reduces-bartosz-mikulski-n9lef",
+            "https://genai.stackexchange.com/questions/2662/what-are-the-most-reliable-strategies-to-reduce-hallucinations-in-retrieval-augm",
+            "https://aclanthology.org/2021.findings-emnlp.320"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://aclanthology.org/2021.findings-emnlp.320/",
+            "https://arxiv.org/abs/2104.07567",
+            "https://www.linkedin.com/pulse/why-retrieval-augmented-generation-rag-reduces-bartosz-mikulski-n9lef",
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12540348/",
+            "https://www.k2view.com/blog/rag-hallucination/?hs_amp=true",
+            "https://www.mdpi.com/2227-7390/13/5/856",
+            "https://www.makebot.ai/blog-en/clinical-llm-rag-hallucination-mitigation",
+            "https://aws.amazon.com/blogs/machine-learning/detect-hallucinations-for-rag-based-systems/",
+            "https://www.reddit.com/r/Rag/comments/1q6pj44/what_amount_of_hallucination_reduction_have_you/",
+            "https://www.reddit.com/r/LocalLLaMA/comments/1ll1z0j/in_rag_systems_whos_really_responsible_for/"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "analytical",
+      "query": "compare long context models against retrieval on cost",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://usewire.io/blog/long-context-vs-rag-what-the-data-shows/",
+            "https://ai-tldr.dev/learn/rag/rag-fundamentals/rag-vs-long-context/",
+            "https://www.meilisearch.com/blog/rag-vs-long-context-llms",
+            "https://exa.ai/library/publication/g2m04fg234cqwd3xp3srr21k",
+            "https://aclanthology.org/2024.emnlp-industry.66.pdf",
+            "https://dev.to/dublecc/rag-vs-long-context-in-2026-when-to-use-which-3dhe",
+            "https://axiomlogica.com/ai-ml/long-context-vs-rag-100k-token-workloads",
+            "https://toolhalla.ai/blog/rag-vs-long-context-2026",
+            "https://arxiv.org/html/2407.16833",
+            "https://dev.to/gabrielanhaia/long-context-models-killed-rag-except-for-the-6-cases-where-they-made-it-worse-1ico"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.legionintel.com/blog/rag-systems-vs-lcw-performance-and-cost-trade-offs",
+            "https://medium.com/@rosgluk/rag-vs-long-context-llms-a-comprehensive-comparison-9b30594c445e",
+            "https://tianpan.co/blog/2026-04-09-long-context-vs-rag-production-decision-framework",
+            "https://www.youtube.com/watch?v=qN3vhWlzd4A",
+            "https://www.meilisearch.com/blog/rag-vs-long-context-llms",
+            "https://arxiv.org/html/2407.16833v1",
+            "https://redis.io/blog/rag-vs-large-context-window-ai-apps",
+            "https://sebastianraschka.com/faq/docs/short-context-vs-long-context-llms.html",
+            "https://www.reddit.com/r/MachineLearning/comments/1ax6j73/rag_vs_long_context_models_discussion",
+            "https://www.mindstudio.ai/blog/flat-rate-long-context-pricing-anthropic-claude"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.meilisearch.com/blog/rag-vs-long-context-llms",
+            "https://www.reddit.com/r/MachineLearning/comments/1ax6j73/rag_vs_long_context_models_discussion/",
+            "https://arxiv.org/html/2407.16833v1",
+            "https://medium.com/@rosgluk/rag-vs-long-context-llms-a-comprehensive-comparison-9b30594c445e",
+            "https://www.youtube.com/watch?v=qN3vhWlzd4A",
+            "https://sebastianraschka.com/faq/docs/short-context-vs-long-context-llms.html",
+            "https://tianpan.co/blog/2026-04-09-long-context-vs-rag-production-decision-framework",
+            "https://www.legionintel.com/blog/rag-systems-vs-lcw-performance-and-cost-trade-offs",
+            "https://redis.io/blog/rag-vs-large-context-window-ai-apps/",
+            "https://www.mindstudio.ai/blog/flat-rate-long-context-pricing-anthropic-claude"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "analytical",
+      "query": "criticism of needle in a haystack benchmarks",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://blakesnotes.io/2025/03/01/Needle-in-a-Haystack-What-it-Does-and-Does-Not-Imply.html",
+            "https://artifipedia.com/llms/needle-in-a-haystack",
+            "https://openreview.net/pdf?id=cEvmIKsRw0",
+            "https://www.openlayer.com/blog/post/needle-in-haystack-ai-testing-llm-context-retrieval",
+            "https://openreview.net/forum?id=PlH3YDvGhF",
+            "https://hub.stabilarity.com/long-context-retrieval-benchmarks-needle-in-haystack-and-beyond/",
+            "https://deep-paper.org/en/paper/2407.01370/",
+            "https://github.com/gkamradt/needle-in-a-haystack/issues/57",
+            "https://www.emergentmind.com/papers/2502.05167",
+            "https://zhanghaolin66.medium.com/the-quest-for-needles-in-the-haystack-why-llm-evaluation-needs-this-test-1c75ba4bd917"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://www.langchain.com/blog/multi-needle-in-a-haystack",
+            "https://arxiv.org/html/2504.04713v2",
+            "https://www.openlayer.com/blog/post/needle-in-haystack-ai-testing-llm-context-retrieval",
+            "https://opencompass.readthedocs.io/en/latest/advanced_guides/needleinahaystack_eval.html",
+            "https://cloud.google.com/blog/products/ai-machine-learning/the-needle-in-the-haystack-test-and-how-gemini-pro-solves-it",
+            "https://arize.com/blog-course/the-needle-in-a-haystack-test-evaluating-the-performance-of-llm-rag-systems",
+            "https://openreview.net/forum?id=PlH3YDvGhF",
+            "https://github.com/gkamradt/needle-in-a-haystack"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://www.langchain.com/blog/multi-needle-in-a-haystack",
+            "https://www.reddit.com/r/LocalLLaMA/comments/1u876gh/is_the_needle_in_haystack_problem_solved/",
+            "https://www.reddit.com/r/LLMDevs/comments/1svnflm/i_built_a_brutal_needleinahaystack_benchmark_for/",
+            "https://openreview.net/forum?id=PlH3YDvGhF",
+            "https://arize.com/blog-course/the-needle-in-a-haystack-test-evaluating-the-performance-of-llm-rag-systems/",
+            "https://cloud.google.com/blog/products/ai-machine-learning/the-needle-in-the-haystack-test-and-how-gemini-pro-solves-it",
+            "https://arxiv.org/html/2504.04713v2",
+            "https://opencompass.readthedocs.io/en/latest/advanced_guides/needleinahaystack_eval.html",
+            "https://github.com/gkamradt/needle-in-a-haystack",
+            "https://www.openlayer.com/blog/post/needle-in-haystack-ai-testing-llm-context-retrieval"
+          ],
+          "error": null
+        }
+      }
+    },
+    {
+      "kind": "analytical",
+      "query": "does prompt caching change optimal context ordering",
+      "providers": {
+        "exa": {
+          "urls": [
+            "https://llmbestpractices.com/prompt-engineering/prompt-caching-strategies",
+            "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+            "https://synthorai.io/blog/llm-prompt-caching-complete-guide/",
+            "https://agentpatterns.ai/context-engineering/static-content-first-caching/",
+            "https://developers.openai.com/api/docs/guides/prompt-caching?prompt-cache-api=responses",
+            "https://antrophicnegotiations.com/blog/designing-context-for-maximum-cache-hits/",
+            "https://developers.openai.com/cookbook/examples/prompt_caching_201",
+            "https://anyint.ai/docs/en/guides/prompt-caching",
+            "https://arxiv.org/pdf/2606.19667v1/__stdout.txt",
+            "https://sureprompts.com/blog/prompt-caching-guide-2026"
+          ],
+          "error": null
+        },
+        "tavily": {
+          "urls": [
+            "https://caylent.com/blog/prompt-caching-saving-time-and-money-in-llm-applications",
+            "https://www.youtube.com/watch?v=tECAkJAI_Vk",
+            "https://pub.towardsai.net/prompt-caching-66d436533522",
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html",
+            "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+            "https://community.openai.com/t/how-does-prompt-caching-work/992307",
+            "https://www.reddit.com/r/ClaudeAI/comments/1f5ynsd/how_does_prompt_caching_technically_work"
+          ],
+          "error": null
+        },
+        "firecrawl": {
+          "urls": [
+            "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+            "https://www.reddit.com/r/ClaudeCode/comments/1rv5t57/given_prompt_caching_is_there_any_point_to_clear/",
+            "https://community.openai.com/t/does-prompt-caching-persist-between-different-models/1066481",
+            "https://community.openai.com/t/prompt-caching-hierarchy-with-structured-outputs/968620",
+            "https://pub.towardsai.net/prompt-caching-66d436533522",
+            "https://www.youtube.com/watch?v=tECAkJAI_Vk",
+            "https://www.reddit.com/r/ClaudeAI/comments/1f5ynsd/how_does_prompt_caching_technically_work/",
+            "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html",
+            "https://caylent.com/blog/prompt-caching-saving-time-and-money-in-llm-applications",
+            "https://community.openai.com/t/how-does-prompt-caching-work/992307"
+          ],
+          "error": null
+        }
+      }
+    }
+  ]
+}

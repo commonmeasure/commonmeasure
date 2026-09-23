@@ -1,0 +1,29 @@
+[package]
+name = "commonmeasure-console"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "The operator console: an SQLite index over the evidence logs and the loopback HTTP server that renders it."
+
+[dependencies]
+commonmeasure-http.workspace = true
+commonmeasure-harness.workspace = true
+commonmeasure-types.workspace = true
+# The budget strip reads the allowance ledger's own state, so the remaining
+# amount shown is the amount enforcement reads (`console/budget.rs`).
+commonmeasure-runtime.workspace = true
+commonmeasure-relay.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+maud.workspace = true
+pulldown-cmark.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
+# Portable result bundles; already locked through c2pa, with no compression backend.
+zip = { version = "8.6", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true

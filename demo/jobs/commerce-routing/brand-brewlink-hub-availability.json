@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-brand-brewlink-hub-availability/v1",
+  "label": "Commerce routing experiment, availability question 'brewlink-hub-availability': brand content alone",
+  "job": {
+    "id": "409f0366-7d3e-4ac2-8f47-0a6282cf0fff",
+    "kind": "research.answer",
+    "prompt": "Can a buyer still purchase the Aurelio BrewLink Hub from Fictive Retail, and how does a Presto 300 connect to the Aurelio Home app now?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-brewlink-hub-availability",
+    "version": "1",
+    "items": [
+      {
+        "name": "hub-status",
+        "any_of": [
+          "discontinued on 5 July 2026"
+        ]
+      },
+      {
+        "name": "direct-connection",
+        "any_of": [
+          "connects directly over Wi-Fi"
+        ]
+      },
+      {
+        "name": "firmware-condition",
+        "any_of": [
+          "machine firmware 3.0"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

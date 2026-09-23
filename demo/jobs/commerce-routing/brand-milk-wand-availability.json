@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-brand-milk-wand-availability/v1",
+  "label": "Commerce routing experiment, availability question 'milk-wand-availability': brand content alone",
+  "job": {
+    "id": "3023a370-24b0-4b80-985d-e55242562062",
+    "kind": "research.answer",
+    "prompt": "Is the Aurelio milk wand still available from Fictive Retail, and what replaces it?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-milk-wand-availability",
+    "version": "1",
+    "items": [
+      {
+        "name": "wand-status",
+        "any_of": [
+          "discontinued on 2 July 2026"
+        ]
+      },
+      {
+        "name": "replacement",
+        "any_of": [
+          "steam tip set ST-1"
+        ]
+      },
+      {
+        "name": "replacement-price",
+        "any_of": [
+          "£39.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

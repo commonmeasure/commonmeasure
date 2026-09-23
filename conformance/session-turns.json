@@ -1,0 +1,88 @@
+{
+  "agent_id": "commonmeasure",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "ad2e6927-516a-5a14-9991-a37720c3c60e",
+      "source_role": "agent",
+      "timestamp": "2026-09-16T10:00:00.000Z",
+      "turn": {
+        "privacy_level": "minimal"
+      },
+      "turn_id": "t1",
+      "type": "turn_started"
+    },
+    {
+      "content_url": "https://www.example.com/witnessed",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "bba668e3-3157-5c45-821b-a91a9aa58121",
+      "source_role": "agent",
+      "timestamp": "2026-09-16T10:00:00.500Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://www.example.com/witnessed",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:aa044138653177b57cacad53fa4ea2be3b2770e7177198820949acad706450de",
+        "contextops-host-tool": "claude-code",
+        "scope": "session",
+        "token_basis": "characters/4",
+        "tokens_ingested": 360
+      },
+      "id": "f3d25f95-60cc-5bcf-8097-f0b90927013e",
+      "source_role": "agent",
+      "timestamp": "2026-09-16T10:00:00.500Z",
+      "type": "content_grounded"
+    },
+    {
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "4aa2791f-c41d-5b5b-aa86-89db26491087",
+      "source_role": "agent",
+      "timestamp": "2026-09-16T10:00:01.000Z",
+      "turn": {
+        "privacy_level": "minimal"
+      },
+      "turn_id": "t1",
+      "type": "turn_completed"
+    }
+  ],
+  "refused": 0,
+  "schema_version": "1.0",
+  "session_id": "ad961638-35f7-5f91-b1cf-e8b45609d2ae",
+  "started_at": "2026-09-16T10:00:00.000Z"
+}

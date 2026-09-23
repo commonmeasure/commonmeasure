@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contenttelemetry.org/schema/v1/telemetry-session.json",
+  "title": "Content Telemetry Session",
+  "description": "Schema for Content Telemetry sessions - tracking content usage in AI agent interactions",
+  "type": "object",
+  "required": ["schema_version", "session_id", "started_at"],
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "const": "session",
+      "default": "session",
+      "description": "Document type discriminator. 'session' for session documents. When absent, consumers SHOULD treat the document as a session."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Content Telemetry schema version"
+    },
+    "conformance_level": {
+      "type": "string",
+      "enum": ["retrieval", "grounding", "citation"],
+      "description": "Informational conformance level advertised by the emitter. The authoritative level is declared in the emitter's manifest (section 8). See section 5.7."
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique session identifier"
+    },
+    "parent_session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Optional identifier of the immediate parent session that delegated work to this session. See section 5.1."
+    },
+    "agent_id": {
+      "type": ["string", "null"],
+      "description": "Responding agent identifier"
+    },
+    "content_scope": {
+      "type": ["string", "null"],
+      "description": "Opaque content collection identifier (e.g., manifest URL, API key scope, agreement ID)"
+    },
+    "manifest_ref": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "description": "Manifest reference - the URL of a manifest at /.well-known/content-telemetry.json. See section 8."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Session start timestamp (UTC)"
+    },
+    "ended_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Session end timestamp (UTC)"
+    },
+    "data": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "Session-level extension container mirroring the event-level data field (section 5.1.3). Custom fields SHOULD be namespaced; consumers MUST tolerate unknown fields.",
+      "properties": {
+        "access_context": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Context from which the session's access rights derive - an institution, never an individual. Populated only where the governing terms of the relationship require it. See section 5.1.3.",
+          "properties": {
+            "identifiers": {
+              "type": "array",
+              "description": "Typed institutional identifiers. Access rights can derive through consortia, federated identity and proxies at once.",
+              "items": {
+                "type": "object",
+                "required": ["scheme", "value"],
+                "properties": {
+                  "scheme": {
+                    "type": "string",
+                    "description": "Identifier scheme. Core values: ror, saml_entity_id, isni. Consumers MUST tolerate unknown schemes."
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "Identifier value in the scheme's own format"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/TelemetryEvent" },
+          {
+            "if": {
+              "properties": { "type": { "const": "content_engaged" } },
+              "required": ["type"]
+            },
+            "then": { "required": ["presentation_id"] }
+          }
+        ]
+      },
+      "description": "Ordered list of events in the session (chronological by timestamp). Session documents are agent-reported, so content_engaged events here always carry presentation_id; the ctx_token relaxation applies only to standalone/batch envelopes (section 7.4)."
+    }
+  },
+  "$defs": {
+    "TelemetryEvent": {
+      "type": "object",
+      "description": "Single telemetry event within a session",
+      "required": ["type", "timestamp"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique event identifier; distinct within a session document (sections 5.7.5, 6.6)"
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Event timestamp (UTC)"
+        },
+        "turn_id": {
+          "type": ["string", "null"],
+          "description": "Associates this event with a conversation turn. Scoped to the session. SHOULD be set on turn_started, turn_completed, content_cited, content_presented, content_engaged events, and content_grounded events when scope is turn."
+        },
+        "output_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque identifier for the output artifact. REQUIRED on content_cited and content_presented events so output construction and later presentation can be correlated across services or times."
+        },
+        "output_element_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque identifier for the element within output_id that carries the citation or presentation, such as a passage, media track, caption, link, or card."
+        },
+        "citation_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The id of the content_cited event associated with this presentation. Valid only on content_presented events; absent when the presentation is not a citation."
+        },
+        "presentation_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The id of the exact content_presented event on which the engagement occurred. REQUIRED on agent-reported content_engaged events. Destination-reported events carrying ctx_token omit it; the consumer restores the binding at resolution (section 7.4)."
+        },
+        "ctx_token": {
+          "type": "string",
+          "pattern": "^ct_[A-Za-z0-9_-]{16,240}$",
+          "description": "The click token the agent minted for this engagement's presentation, recorded so the consumer can join destination-reported events to it. Valid only on content_engaged events (enforced at the application layer, section 5.7.5). Unguessable, at least 16 characters after the ct_ prefix. See section 7.4."
+        },
+        "source_role": {
+          "$ref": "#/$defs/SourceRole",
+          "description": "Who is reporting this event (see section 4.4). MUST be set on content_retrieved events (sections 5.2.2, 5.7.1; enforced at the application layer)."
+        },
+        "content_telemetry_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Correlation ID from the Content-Telemetry-ID HTTP header, used to deduplicate retrieval events reported by multiple observers"
+        },
+        "content_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "Content URL as fetched or canonical URL"
+        },
+        "content_id": {
+          "type": ["string", "null"],
+          "description": "Stable content identifier (CMS ID, DOI, ISBN, ISCC, C2PA manifest hash, or marketplace catalogue ID). See section 4.5."
+        },
+        "license_ref": {
+          "type": ["string", "null"],
+          "description": "Reference to a licence or grant the emitter associates with this event (JWT jti, CoMP package ID, or opaque identifier). Core does not resolve or interpret it. See section 5.2.3."
+        },
+        "terms_ref": {
+          "type": ["string", "null"],
+          "description": "Reference to the governing terms the emitter associates with this event (public URL or opaque identifier both parties can resolve). Distinct from license_ref, which records the grant that applied. Core does not resolve or interpret it, and it does not redefine core event semantics. See section 5.2.4."
+        },
+        "turn": {
+          "oneOf": [{ "$ref": "#/$defs/ConversationTurn" }, { "type": "null" }],
+          "description": "Conversation turn data (for turn_started/turn_completed)"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Type-specific metadata. See section 6 of the specification for data profiles by event type and source role."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "content_grounded" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["data"],
+            "properties": {
+              "data": {
+                "required": ["scope"],
+                "properties": {
+                  "scope": { "$ref": "#/$defs/GroundingScope", "description": "REQUIRED on every content_grounded event: the occurrence boundary and every counting model depend on it (sections 4.3, 6.4, 10)." },
+                  "cached": { "type": "boolean" },
+                  "provenance": { "$ref": "#/$defs/SourceProvenance" },
+                  "chars_ingested": { "type": "integer", "minimum": 0, "description": "Unicode code points in the exact text placed in the generation context, without normalising solely for counting. Portable across emitters; preferred over tokens_ingested (section 6.4)." },
+                  "tokens_ingested": { "type": "integer", "minimum": 0, "description": "Token count of the same content in the emitter's own tokeniser. Supplementary: not comparable between emitters (section 6.4)." },
+                  "content_version": { "type": "string" },
+                  "content_last_modified": { "type": "string", "format": "date-time" },
+                  "content_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+                  "media_type": { "$ref": "#/$defs/MediaType" },
+                  "content_fingerprint": { "$ref": "#/$defs/ContentFingerprint" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "content_cited" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["id", "output_id", "data"],
+            "anyOf": [
+              { "required": ["content_url"], "properties": { "content_url": { "type": "string" } } },
+              { "required": ["content_id"], "properties": { "content_id": { "type": "string" } } }
+            ],
+            "properties": {
+              "data": {
+                "required": ["citation_type"],
+                "properties": {
+                  "citation_type": { "$ref": "#/$defs/CitationType" },
+                  "media_type": { "$ref": "#/$defs/MediaType" },
+                  "excerpt_tokens": { "type": "integer", "minimum": 0 },
+                  "excerpt_chars": { "type": "integer", "minimum": 0 },
+                  "excerpt_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "SHA-256 of the cited excerpt text as it appears in the response (sha256:{hex})" },
+                  "position": { "$ref": "#/$defs/CitationPosition" },
+                  "content_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "SHA-256 matching the corresponding content_grounded event. When the agent chunked the source, this is the chunk hash." },
+                  "url_verified": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "content_presented" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["id", "output_id", "data"],
+            "properties": {
+              "data": {
+                "required": ["presentation_kind", "presentation_type"],
+                "properties": {
+                  "presentation_kind": { "$ref": "#/$defs/PresentationKind" },
+                  "presentation_type": { "$ref": "#/$defs/PresentationType" },
+                  "media_type": { "$ref": "#/$defs/MediaType" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "content_engaged" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "engagement_type": { "$ref": "#/$defs/EngagementType" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "content_retrieved" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "media_type": { "$ref": "#/$defs/MediaType" },
+                  "content_depth": { "type": "string", "description": "Depth of the content record reached: metadata, abstract, full. Open vocabulary; consumers MUST tolerate unknown values (section 6.1)." },
+                  "user_agent": { "type": "string" },
+                  "purpose": { "type": "string", "description": "Purpose of the access as classified by the reporting party. Open enum; core values: training, inference, search, advertising" },
+                  "bot_name": { "type": "string", "description": "Recognised bot family parsed from the User-Agent (e.g., Claude-User, GPTBot, Perplexity-User). Stable across product variants within a vendor." },
+                  "verified": { "type": "boolean" },
+                  "cache_status": { "type": "string", "description": "Edge cache result. Recommended values: hit, miss, bypass, dynamic" },
+                  "response_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                  "response_bytes": { "type": "integer", "minimum": 0 },
+                  "ja4": { "type": "string", "description": "JA4 TLS client fingerprint" },
+                  "asn": { "type": "integer", "description": "Client AS number" },
+                  "asn_org": { "type": "string", "description": "Client AS organisation name" },
+                  "country": { "type": "string", "pattern": "^[A-Z]{2}$", "description": "ISO 3166-1 alpha-2 country code" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "EventType": {
+      "type": "string",
+      "description": "Core event types. Extensions may define additional types such as checkout_completed.",
+      "enum": [
+        "content_retrieved",
+        "content_grounded",
+        "content_cited",
+        "content_presented",
+        "content_engaged",
+        "turn_started",
+        "turn_completed"
+      ]
+    },
+    "ConversationTurn": {
+      "type": "object",
+      "description": "Conversation turn with privacy controls",
+      "required": ["privacy_level"],
+      "properties": {
+        "privacy_level": {
+          "$ref": "#/$defs/PrivacyLevel"
+        },
+        "query_text": {
+          "type": ["string", "null"],
+          "description": "User's query (full/summary levels only)"
+        },
+        "response_text": {
+          "type": ["string", "null"],
+          "description": "Agent's response (full/summary levels only)"
+        },
+        "query_intent": {
+          "oneOf": [{ "$ref": "#/$defs/IntentCategory" }, { "type": "null" }],
+          "description": "Classified intent category"
+        },
+        "response_type": {
+          "type": ["string", "null"],
+          "description": "Response classification (e.g., 'recommendation', 'explanation')"
+        },
+        "response_mode": {
+          "oneOf": [{ "$ref": "#/$defs/ResponseMode" }, { "type": "null" }],
+          "description": "Product surface or generation mode (e.g., 'standard', 'deep_research'). See section 5.4.1."
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Detected topics/entities"
+        },
+        "content_urls_retrieved": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "description": "Content URLs fetched to answer the query"
+        },
+        "content_urls_cited": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "description": "Content URLs cited in response"
+        },
+        "query_tokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Query token count"
+        },
+        "response_tokens": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Response token count"
+        },
+        "model_id": {
+          "type": ["string", "null"],
+          "description": "Model identifier (e.g., 'vendor-model-v3')"
+        },
+        "ad_rendered": {
+          "type": ["boolean", "null"],
+          "description": "Whether advertising was rendered alongside the response"
+        }
+      }
+    },
+    "PrivacyLevel": {
+      "type": "string",
+      "description": "Privacy levels for conversation data sharing",
+      "enum": ["full", "summary", "intent", "minimal"]
+    },
+    "IntentCategory": {
+      "type": "string",
+      "description": "Intent category. Core values: question, explanation, comparison, how_to, troubleshooting, fact_check, analysis, opinion_seeking, creative, purchase_intent, chitchat, other. Extensions MAY define additional values such as price_check, availability_check, review_seeking. Telemetry consumers MUST tolerate unknown values."
+    },
+    "ResponseMode": {
+      "type": "string",
+      "description": "Product surface or generation mode. Recommended values: standard, deep_research, search, code_generation. Platforms MAY use custom values for additional product surfaces."
+    },
+    "SourceRole": {
+      "type": "string",
+      "description": "Who is reporting the event. Origin: content owner's web server. Edge: CDN or edge network. Index: search index or content repository. Agent: the AI agent itself.",
+      "enum": ["origin", "edge", "index", "agent"]
+    },
+    "CitationType": {
+      "type": "string",
+      "description": "How content was used in the response",
+      "enum": ["direct_quote", "paraphrase", "reference", "contradiction", "unclassified"]
+    },
+    "CitationPosition": {
+      "type": "string",
+      "description": "Prominence of citation in response",
+      "enum": ["primary", "supporting", "mentioned", "unclassified"]
+    },
+    "MediaType": {
+      "type": "string",
+      "description": "Content medium. Core values: text, image, video, audio. Emitters MAY use custom values for media outside the core set (e.g. 3d, dataset). Consumers MUST tolerate unknown values.",
+      "default": "text"
+    },
+    "EngagementType": {
+      "type": "string",
+      "description": "How the user acted on content. Core values: link_click, expand, copy, share, agent_navigate. Extensions MAY define additional values (e.g. commerce actions). Consumers MUST tolerate unknown values."
+    },
+    "GroundingScope": {
+      "type": "string",
+      "description": "Whether content informed all subsequent responses in the session or a specific turn only",
+      "enum": ["session", "turn"]
+    },
+    "SourceProvenance": {
+      "type": "string",
+      "description": "How the grounded representation reached the agent. Describes delivery path, not evidence quality.",
+      "enum": ["agent_fetched", "agent_cached", "third_party_sourced"]
+    },
+    "ContentFingerprint": {
+      "type": "object",
+      "description": "Emitter-reported detection of a fingerprint or provenance signal in the exact grounded representation. Core does not interpret schemes or assign evidence status from detection.",
+      "required": ["scheme", "detected"],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Open identifier for the fingerprint or provenance scheme checked. Globally collision-resistant values are recommended."
+        },
+        "detected": {
+          "type": "boolean",
+          "description": "Emitter claim that the scheme's signal was found in the grounded representation"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional scheme-defined fingerprint or identifier value"
+        }
+      },
+      "additionalProperties": true
+    },
+    "PresentationKind": {
+      "type": "string",
+      "description": "What was made perceivable: source content itself, including a bounded excerpt or derived representation, or a reference to the source.",
+      "enum": ["content", "source_reference"]
+    },
+    "PresentationType": {
+      "type": "string",
+      "description": "How content or a source reference was made perceivable. Core values: link, snippet, inline_quote, card, detail_view, embed, spoken_credit. Platforms MAY use custom values for additional presentation surfaces. Consumers MUST tolerate unknown values."
+    }
+  }
+}

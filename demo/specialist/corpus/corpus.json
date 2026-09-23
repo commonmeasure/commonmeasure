@@ -1,0 +1,57 @@
+{
+  "name": "Fictive Systems Orchestrator documentation (synthetic)",
+  "licence": { "state": "declared", "reference": "fictive-systems/doc-licence-v1" },
+  "dates": {
+    "orchestrator-overview.md": "2026-02-01",
+    "connecting-data-sources-3x.md": "2025-04-15",
+    "connecting-data-sources-4x.md": "2026-03-01",
+    "flux-connector-4x-migration.md": "2026-03-01",
+    "bulk-export-operations.md": "2026-04-10",
+    "stream-gateway-tuning.md": "2026-05-20",
+    "release-notes-4-2.md": "2026-06-15"
+  },
+  "documents": {
+    "connecting-data-sources-3x.md": {
+      "edition": "orchestrator",
+      "version_range": "3.x",
+      "integration_path": "flux-connector",
+      "support_status": "supported",
+      "entitlement": "standard"
+    },
+    "connecting-data-sources-4x.md": {
+      "edition": "orchestrator",
+      "version_range": "4.x",
+      "integration_path": "stream-gateway",
+      "support_status": "supported",
+      "entitlement": "standard"
+    },
+    "flux-connector-4x-migration.md": {
+      "edition": "orchestrator",
+      "version_range": "4.x",
+      "integration_path": "flux-connector",
+      "support_status": "deprecated",
+      "entitlement": "standard"
+    },
+    "bulk-export-operations.md": {
+      "edition": "orchestrator",
+      "version_range": "4.x",
+      "integration_path": "bulk-export",
+      "support_status": "supported",
+      "entitlement": "premier"
+    },
+    "stream-gateway-tuning.md": {
+      "edition": "orchestrator",
+      "version_range": "4.x",
+      "integration_path": "stream-gateway",
+      "support_status": "supported",
+      "entitlement": "standard"
+    },
+    "release-notes-4-2.md": {
+      "edition": "orchestrator",
+      "version_range": "4.x",
+      "integration_path": "pulse-metrics",
+      "support_status": "experimental",
+      "entitlement": "standard"
+    }
+  }
+}

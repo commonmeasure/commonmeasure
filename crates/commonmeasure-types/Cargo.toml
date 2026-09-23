@@ -1,0 +1,18 @@
+[package]
+name = "commonmeasure-types"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "Plain value types: what a job declares, what supply looks like normalised, what a decision must record."
+
+[dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+ryu.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true
+uuid.workspace = true

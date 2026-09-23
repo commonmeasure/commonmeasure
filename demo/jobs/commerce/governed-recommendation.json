@@ -1,0 +1,84 @@
+{
+  "suite_version": "commerce-governed-recommendation/v1",
+  "label": "Commerce comparison, recommendation question: the mixed corpus under source policy — admission requires a declared licence the job accepts, refusing the unlicensed review capture before inference",
+  "job": {
+    "id": "6a71b898-cbc6-4ad6-b32d-49b52c296b97",
+    "kind": "research.answer",
+    "prompt": "Which espresso machine should a buyer with a small kitchen choose from Fictive Retail's range, and why?",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      },
+      {
+        "kind": "required_licence",
+        "licence": "fictive-retail/product-data-licence-v1"
+      },
+      {
+        "kind": "required_licence",
+        "licence": "aurelio/brand-content-licence-v1"
+      },
+      {
+        "kind": "required_licence",
+        "licence": "northglade/brand-content-licence-v1"
+      },
+      {
+        "kind": "required_licence",
+        "licence": "crema-courier/syndication-licence-v1"
+      },
+      {
+        "kind": "required_licence",
+        "licence": "brewprint/syndication-licence-v1"
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-recommendation",
+    "version": "1",
+    "items": [
+      {
+        "name": "editorial-pick",
+        "any_of": [
+          "pick for small kitchens"
+        ]
+      },
+      {
+        "name": "fits-narrow-counters",
+        "any_of": [
+          "21 cm wide"
+        ]
+      },
+      {
+        "name": "current-availability",
+        "any_of": [
+          "in stock at £329.00"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-08",
+    "maximum_age_days": 180
+  }
+}

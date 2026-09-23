@@ -1,0 +1,63 @@
+{
+  "suite_version": "specialist-whole-currency/v1",
+  "label": "Specialist comparison, currency prompt: the whole bundle admitted under a permissive policy, no rules consulted",
+  "job": {
+    "id": "a7ad2b3a-2db9-4b1a-9dfe-8faf038b407f",
+    "kind": "research.answer",
+    "prompt": "Which integration path should a new external data source use on Orchestrator 4.x, and since when does that guidance apply?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "coverage_rubric": {
+    "name": "specialist-currency",
+    "version": "1",
+    "items": [
+      {
+        "name": "effective-from",
+        "any_of": [
+          "From 1 March 2026"
+        ]
+      },
+      {
+        "name": "replacement",
+        "any_of": [
+          "replaces the Flux Connector"
+        ]
+      },
+      {
+        "name": "prohibition",
+        "any_of": [
+          "do not build new 4.x integrations"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 365
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "skills": {
+    "plugin-creator": {
+      "root": "/home/op/.codex/skills/.system/plugin-creator",
+      "entrypoint": "scripts/validate_plugin.py",
+      "interpreter": "/usr/bin/python3",
+      "arguments": ["{job}"],
+      "timeout_ms": 30000,
+      "maximum_output_bytes": 262144
+    },
+    "skill-creator": {
+      "root": "/home/op/.codex/skills/.system/skill-creator",
+      "entrypoint": "scripts/quick_validate.py",
+      "interpreter": "/usr/bin/python3",
+      "arguments": ["{job}"],
+      "timeout_ms": 30000,
+      "maximum_output_bytes": 262144
+    }
+  }
+}

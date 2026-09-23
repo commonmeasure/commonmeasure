@@ -1,0 +1,9 @@
+# A host whose three mechanisms disagree. The Content-Usage rule allows
+# training, the Content-Signal line disallows AI input and training, and the
+# licence permits AI input and training under payment.
+License: https://contradictory.example/license.xml
+
+User-agent: *
+Allow: /
+Content-Usage: train-ai=y, search=y
+Content-Signal: search=yes, ai-input=no, ai-train=no

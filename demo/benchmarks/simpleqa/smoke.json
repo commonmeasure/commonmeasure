@@ -1,0 +1,33 @@
+{
+  "schema": "contextops-simpleqa-dataset/v1",
+  "source_commit": "99feb7decc9be67edb49a63d3985cf6094c873f2",
+  "source_sha256": "sha256:feee3f7e7db3617e94e8fcf1977b756ec420ef8568f4e0fcbbe0e92e9d5fc032",
+  "source_rows": 4326,
+  "cases": [
+    {
+      "id": "simpleqa-0001",
+      "question": "Who received the IEEE Frank Rosenblatt Award in 2010?",
+      "reference_answer": "Michio Sugeno"
+    },
+    {
+      "id": "simpleqa-0002",
+      "question": "Who was awarded the Oceanography Society's Jerlov Award in 2018?",
+      "reference_answer": "Annick Bricaud"
+    },
+    {
+      "id": "simpleqa-0003",
+      "question": "What's the name of the women's liberal arts college in Cambridge, Massachusetts?",
+      "reference_answer": "Radcliffe College"
+    },
+    {
+      "id": "simpleqa-0004",
+      "question": "In whose honor was the Leipzig 1877 tournament organized?",
+      "reference_answer": "Adolf Anderssen"
+    },
+    {
+      "id": "simpleqa-0005",
+      "question": "According to Karl Küchler, what did Empress Elizabeth of Austria's favorite sculpture depict, which was made for her villa Achilleion at Corfu?",
+      "reference_answer": "Poet Henrich Heine."
+    }
+  ]
+}

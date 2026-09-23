@@ -1,0 +1,51 @@
+{
+  "suite_version": "nvidia-redpine-live/v1",
+  "label": "Live licensed acquisition: one Redpine quote-then-buy under trial, pre-registered in demo/recon/redpine/NOTES.md",
+  "job": {
+    "id": "c9e63a48-1f52-4f0a-9d0e-7b64f2ab1c05",
+    "kind": "research.answer",
+    "prompt": "NVIDIA",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 0.0,
+      "freshness": 1.0,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_acquisition_cost",
+        "amount": {
+          "currency": "USD",
+          "micros": 50000
+        }
+      },
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "One live licensed acquisition through the quote gate, with the receipt's cost_charged and balance_remaining recorded verbatim",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 3,
+  "providers": [
+    "redpine"
+  ],
+  "as_of": {
+    "date": "2026-08-06",
+    "maximum_age_days": 7
+  }
+}

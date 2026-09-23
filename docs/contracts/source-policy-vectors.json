@@ -1,0 +1,363 @@
+{
+  "contract": "source-policy.md",
+  "source_name": "policy.json",
+  "validation": [
+    {"name": "supplier source permission preserves its adapter identity", "policy": {"constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}},
+    {"name": "a scoped agreement records issuer authority and reuse scope", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": [], "terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}, "requires_reporting": false}]}},
+    {"name": "an operator-assessed public_licence", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "public_licence", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": [], "terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "public_licence", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}, "requires_reporting": false}]}},
+    {"name": "an operator-assessed exception", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "exception", "applicability": "applicable", "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": [], "terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "exception", "applicability": "applicable", "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}, "requires_reporting": false}]}},
+    {"name": "unresolved applicability remains an assessment with no inferred authority", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "unresolved", "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "The supplier has not established reuse authority."}}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": [], "terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "unresolved", "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "The supplier has not established reuse authority."}, "requires_reporting": false}]}},
+    {"name": "invalid scoped assessment 1: reason", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": " "}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment reason is empty"},
+    {"name": "invalid scoped assessment 2: content", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": [], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment must name content and intended uses"},
+    {"name": "invalid scoped assessment 3: intended_uses", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": [], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment must name content and intended uses"},
+    {"name": "invalid scoped assessment 4: content", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://other.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment"},
+    {"name": "invalid scoped assessment 5: content", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article#part"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment"},
+    {"name": "invalid scoped assessment 6: content", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://user:pass@publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment"},
+    {"name": "invalid scoped assessment 7: content", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment"},
+    {"name": "invalid scoped assessment 8: version", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": null, "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": an applicable agreement or public licence must name its version"},
+    {"name": "invalid scoped assessment 9: claimed_issuer", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": null, "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": an applicable agreement must name its claimed issuer and authority evidence"},
+    {"name": "invalid scoped assessment 10: authority_evidence", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": [], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": an applicable agreement must name its claimed issuer and authority evidence"},
+    {"name": "invalid scoped assessment 11: authority_evidence", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": [" "], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": true, "accepted": false, "check": "terms_assessment_invalid", "refusal": "policy.json the top-level policy terms entry 1 for host \"publisher.example\": assessment version, issuer and authority references must be non-empty when supplied"},
+    {"name": "unknown assessment basis is refused", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "subscription", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": false, "accepted": false, "check": "structure"},
+    {"name": "unknown assessment applicability is refused", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "probably", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": false, "accepted": false, "check": "structure"},
+    {"name": "unknown assessment intended_uses is refused", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["anything"], "reason": "Agreement covers AI input for this article."}}]}, "schema_valid": false, "accepted": false, "check": "structure"},
+    {"name": "unknown assessment unexpected is refused", "policy": {"terms": [{"host": "publisher.example", "reference": "agreement-42", "assessment": {"basis": "agreement", "applicability": "applicable", "version": "2026-09", "claimed_issuer": "Publisher", "authority_evidence": ["agreement-42:reuse-clause"], "content": ["https://publisher.example/article"], "intended_uses": ["ai-input"], "reason": "Agreement covers AI input for this article.", "unexpected": true}}]}, "schema_valid": false, "accepted": false, "check": "structure"},
+    {
+      "name": "an empty document is the observe policy",
+      "policy": {},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "a firm's policy as an owner writes it",
+      "policy": {"policy_mode": "strict", "constraints": [{"kind": "access_rule", "host": "www.legislation.gov.uk", "action": "allow"}, {"kind": "access_rule", "host": "library.example", "action": "require_licence", "licence": "firm/library-subscription"}, {"kind": "access_rule", "host": "*.news.example", "action": "allow"}, {"kind": "access_rule", "host": "*", "action": "refuse"}], "scopes": [{"match": "/matters/confidential-", "engagement": "client-confidential", "constraints": [{"kind": "access_rule", "host": "*", "action": "refuse"}]}, {"match": "/matters", "engagement": "matters", "allow_telemetry_egress": true}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "strict", "constraints": [{"kind": "access_rule", "host": "www.legislation.gov.uk", "action": "allow"}, {"kind": "access_rule", "host": "library.example", "action": "require_licence", "licence": "firm/library-subscription"}, {"kind": "access_rule", "host": "*.news.example", "action": "allow"}, {"kind": "access_rule", "host": "*", "action": "refuse"}], "scopes": [{"match": "/matters/confidential-", "engagement": "client-confidential", "allow_telemetry_egress": false, "constraints": [{"kind": "access_rule", "host": "*", "action": "refuse"}]}, {"match": "/matters", "engagement": "matters", "allow_telemetry_egress": true}], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "host patterns and currencies are written in the form admission compares",
+      "policy": {"constraints": [{"kind": "access_rule", "host": "*.Docs.Example.COM.", "action": "refuse"}, {"kind": "access_rule", "host": "bücher.example", "action": "allow"}, {"kind": "maximum_acquisition_cost", "amount": {"currency": "gbp", "micros": 2500000}}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "access_rule", "host": "*.docs.example.com", "action": "refuse"}, {"kind": "access_rule", "host": "xn--bcher-kva.example", "action": "allow"}, {"kind": "maximum_acquisition_cost", "amount": {"currency": "GBP", "micros": 2500000}}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "an unknown member inside a constraint is dropped, not refused",
+      "policy": {"constraints": [{"kind": "denied_source_host", "host": "tracker.example", "note": "advertising"}, {"kind": "access_rule", "host": "*", "action": "refuse", "reason": "default"}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "denied_source_host", "host": "tracker.example"}, {"kind": "access_rule", "host": "*", "action": "refuse"}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "an explicit null on a scope's optional field is the field left out",
+      "policy": {"scopes": [{"match": "/research", "policy_mode": null, "constraints": null, "engagement": null}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [{"match": "/research", "allow_telemetry_egress": false}], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "a scope that replaces every setting it may",
+      "policy": {"policy_mode": "observe", "scopes": [{"match": "/matters", "engagement": "matters", "allow_telemetry_egress": true, "policy_mode": "strict", "constraints": [{"kind": "access_rule", "host": "*", "action": "require_mediation"}], "allow_private_hosts": true, "refuse_on_pii": true, "terms": [{"host": "library.example", "reference": "firm/library-subscription"}]}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [{"match": "/matters", "engagement": "matters", "allow_telemetry_egress": true, "policy_mode": "strict", "constraints": [{"kind": "access_rule", "host": "*", "action": "require_mediation"}], "allow_private_hosts": true, "refuse_on_pii": true, "terms": [{"host": "library.example", "reference": "firm/library-subscription", "requires_reporting": false}]}], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "principals, allowances, terms and recordable prefixes",
+      "policy": {"policy_mode": "strict", "principals": [{"principal": "alice", "os_user": 501, "require_scope": true, "allowances": [{"period": "month", "amount": {"currency": "GBP", "micros": 50000000}, "timezone": "Europe/London"}]}], "scopes": [{"match": "/work/alice", "principal": "alice", "engagement": "alice-research"}], "terms": [{"host": "library.example", "reference": "firm/library-subscription", "requires_reporting": true, "access_context": [{"scheme": "ror", "value": "https://ror.org/000000000"}]}], "record_internal_prefixes": ["https://rag.example.internal/"], "refuse_on_pii": true},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "strict", "constraints": [], "scopes": [{"match": "/work/alice", "principal": "alice", "engagement": "alice-research", "allow_telemetry_egress": false}], "principals": [{"principal": "alice", "os_user": 501, "require_scope": true, "allowances": [{"period": "month", "amount": {"currency": "GBP", "micros": 50000000}, "timezone": "Europe/London"}]}], "allow_private_hosts": false, "refuse_on_pii": true, "record_internal_prefixes": ["https://rag.example.internal/"], "terms": [{"host": "library.example", "reference": "firm/library-subscription", "requires_reporting": true, "access_context": [{"scheme": "ror", "value": "https://ror.org/000000000"}]}]}
+    },
+    {
+      "name": "principals keyed by a token subject and by an edge token",
+      "policy": {"policy_mode": "strict", "principals": [{"principal": "research-lead", "subject": "hub-user-01", "policy_mode": "observe"}, {"principal": "copilot-agent", "edge_token": "github-copilot"}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "strict", "constraints": [], "scopes": [], "principals": [{"principal": "research-lead", "subject": "hub-user-01", "require_scope": false, "policy_mode": "observe"}, {"principal": "copilot-agent", "edge_token": "github-copilot", "require_scope": false}], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+
+    {
+      "name": "a misspelled top-level field",
+      "policy": {"policy_mode": "strict", "contraints": [{"kind": "access_rule", "host": "*", "action": "refuse"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a misspelled scope field",
+      "policy": {"scopes": [{"match": "/matters", "engagment": "matters"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a scope without a match",
+      "policy": {"scopes": [{"engagement": "matters"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "an unknown policy mode",
+      "policy": {"policy_mode": "enforce"},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "an unknown constraint kind",
+      "policy": {"constraints": [{"kind": "allowed_domain", "host": "docs.example"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "an access rule with no action",
+      "policy": {"constraints": [{"kind": "access_rule", "host": "docs.example"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a value of the wrong type",
+      "policy": {"allow_private_hosts": "no"},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a fractional token cap",
+      "policy": {"constraints": [{"kind": "maximum_context_tokens", "tokens": 1.5}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "an unknown member inside an amount",
+      "policy": {"constraints": [{"kind": "maximum_acquisition_cost", "amount": {"currency": "GBP", "micros": 1, "note": "per page"}}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a wildcard that does not stand at the front of a host pattern",
+      "policy": {"constraints": [{"kind": "access_rule", "host": "docs.*.example", "action": "allow"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "structure"
+    },
+
+    {
+      "name": "a recordable prefix that is not an absolute URL",
+      "policy": {"record_internal_prefixes": ["rag.example.internal/"]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "internal_prefix_not_absolute",
+      "refusal": "policy.json: record_internal_prefixes entry \"rag.example.internal/\" is not an absolute URL prefix and would never match anything"
+    },
+    {
+      "name": "a recordable prefix without a trailing slash",
+      "policy": {"record_internal_prefixes": ["https://rag.example.internal"]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "internal_prefix_unterminated",
+      "refusal": "policy.json: record_internal_prefixes entry \"https://rag.example.internal\" must end with \"/\" — without it the prefix also matches hosts and paths it merely starts, which would record more than the operator named"
+    },
+    {
+      "name": "a scope with an empty match",
+      "policy": {"scopes": [{"match": ""}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "scope_match_empty",
+      "refusal": "policy.json has a scope with an empty \"match\", which would govern everything"
+    },
+    {
+      "name": "two scopes with one match",
+      "policy": {"scopes": [{"match": "/matters", "policy_mode": "strict"}, {"match": "/matters", "policy_mode": "observe"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "scope_match_duplicate",
+      "refusal": "policy.json declares two scopes matching \"/matters\"; only the first would govern or take an edit, so the second must be merged into it or renamed"
+    },
+    {
+      "name": "a principal with an empty name",
+      "policy": {"principals": [{"principal": "", "os_user": 501}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_name_empty",
+      "refusal": "policy.json has a principal with an empty name"
+    },
+    {
+      "name": "one principal declared twice",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501}, {"principal": "alice", "os_user": 502}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_name_duplicate",
+      "refusal": "policy.json declares principal \"alice\" twice, for OS users 501 and 502"
+    },
+    {
+      "name": "one operating-system user bound to two principals",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501}, {"principal": "bob", "os_user": 501}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_os_user_duplicate",
+      "refusal": "policy.json binds OS user 501 to both \"alice\" and \"bob\"; one identity cannot hold two principals"
+    },
+    {
+      "name": "one token subject bound to two principals",
+      "policy": {"principals": [{"principal": "alice", "subject": "hub-user-01"}, {"principal": "bob", "subject": "hub-user-01"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_os_user_duplicate",
+      "refusal": "policy.json binds subject \"hub-user-01\" to both \"alice\" and \"bob\"; one identity cannot hold two principals"
+    },
+    {
+      "name": "a principal binding naming no key",
+      "policy": {"principals": [{"principal": "alice"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_key_count",
+      "refusal": "policy.json principal \"alice\" names none of os_user, subject and edge_token; a binding names exactly one"
+    },
+    {
+      "name": "a principal binding naming two keys",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501, "subject": "hub-user-01"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_key_count",
+      "refusal": "policy.json principal \"alice\" names os_user and subject; a binding names exactly one of os_user, subject and edge_token"
+    },
+    {
+      "name": "a principal binding with an empty subject",
+      "policy": {"principals": [{"principal": "alice", "subject": ""}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_key_empty",
+      "refusal": "policy.json principal \"alice\" names an empty subject"
+    },
+    {
+      "name": "a principal required to work in a scope that no scope is bound to",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501, "require_scope": true}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "principal_scope_missing",
+      "refusal": "policy.json requires principal \"alice\" to work in a directory scope bound to it and declares none, so nothing could ever be admitted for it; bind a scope or drop require_scope"
+    },
+    {
+      "name": "an allowance in a timezone the build does not know",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501, "allowances": [{"period": "day", "amount": {"currency": "GBP", "micros": 1000000}, "timezone": "Europe/Atlantis"}]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "allowance_timezone_unknown",
+      "refusal": "policy.json principal \"alice\" day allowance names timezone \"Europe/Atlantis\", which is not an IANA zone this build recognises"
+    },
+    {
+      "name": "two allowances for one period",
+      "policy": {"principals": [{"principal": "alice", "os_user": 501, "allowances": [{"period": "day", "amount": {"currency": "GBP", "micros": 1000000}, "timezone": "UTC"}, {"period": "day", "amount": {"currency": "GBP", "micros": 2000000}, "timezone": "UTC"}]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "allowance_period_duplicate",
+      "refusal": "policy.json principal \"alice\" declares two day allowances of 1.000000 and 2.000000; one period holds one amount, and the second would silently never bind"
+    },
+    {
+      "name": "a require_licence rule naming no licence",
+      "policy": {"constraints": [{"kind": "access_rule", "host": "library.example", "action": "require_licence", "licence": " "}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "access_rule_licence_empty",
+      "refusal": "policy.json the top-level policy constraint 1: a require_licence access rule must name the licence it requires"
+    },
+    {
+      "name": "a require_licence rule naming no licence, inside a scope",
+      "policy": {"scopes": [{"match": "/matters", "constraints": [{"kind": "access_rule", "host": "*.news.example", "action": "allow"}, {"kind": "access_rule", "host": "library.example", "action": "require_licence", "licence": ""}]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "access_rule_licence_empty",
+      "refusal": "policy.json scope \"/matters\" constraint 2: a require_licence access rule must name the licence it requires"
+    },
+    {
+      "name": "a scope with an empty engagement",
+      "policy": {"scopes": [{"match": "/matters", "engagement": ""}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "scope_engagement_empty",
+      "refusal": "policy.json has a scope with an empty \"engagement\""
+    },
+    {
+      "name": "telemetry egress cleared without an engagement",
+      "policy": {"scopes": [{"match": "/matters", "allow_telemetry_egress": true}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "scope_egress_without_engagement",
+      "refusal": "policy.json scope \"/matters\" allows telemetry egress without naming an engagement"
+    },
+    {
+      "name": "a scope bound to a principal that is not declared",
+      "policy": {"scopes": [{"match": "/work/alice", "principal": "alice"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "scope_principal_undeclared",
+      "refusal": "policy.json scope \"/work/alice\" names undeclared principal \"alice\""
+    },
+    {
+      "name": "terms naming no host",
+      "policy": {"terms": [{"host": "", "reference": "firm/library-subscription"}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_host_empty",
+      "refusal": "policy.json the top-level policy terms entry 1 names no host"
+    },
+    {
+      "name": "terms naming no reference",
+      "policy": {"terms": [{"host": "library.example", "reference": " "}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_reference_empty",
+      "refusal": "policy.json the top-level policy terms entry 1 for host \"library.example\" names no reference; the reference is what the record and the wire carry"
+    },
+    {
+      "name": "two agreements for one host, spelled differently",
+      "policy": {"scopes": [{"match": "/matters", "terms": [{"host": "library.example", "reference": "firm/library-subscription"}, {"host": "Library.Example", "reference": "firm/library-trial"}]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_host_duplicate",
+      "refusal": "policy.json scope \"/matters\" declares terms for host \"library.example\" twice; one host holds one agreement"
+    },
+    {
+      "name": "an institution identifier without a value",
+      "policy": {"terms": [{"host": "library.example", "reference": "firm/library-subscription", "access_context": [{"scheme": "ror", "value": ""}]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_identifier_incomplete",
+      "refusal": "policy.json the top-level policy terms entry 1 for host \"library.example\" has an access_context identifier without a scheme or a value"
+    }
+  ],
+  "ruling_policies": {
+    "firm": {"policy_mode": "strict", "constraints": [{"kind": "denied_source_host", "host": "tracker.example"}, {"kind": "access_rule", "host": "www.legislation.gov.uk", "action": "allow"}, {"kind": "access_rule", "host": "*.news.example", "action": "allow"}, {"kind": "access_rule", "host": "tracker.example", "action": "allow"}, {"kind": "access_rule", "host": "library.example", "action": "require_licence", "licence": "firm/library-subscription"}, {"kind": "access_rule", "host": "*", "action": "refuse"}], "scopes": [{"match": "/matters/confidential-", "engagement": "client-confidential", "constraints": [{"kind": "access_rule", "host": "*", "action": "refuse"}]}, {"match": "/matters", "engagement": "matters", "allow_telemetry_egress": true}, {"match": "/research", "policy_mode": "observe"}]},
+    "allowlist": {"policy_mode": "strict", "constraints": [{"kind": "allowed_source_host", "host": "docs.example"}, {"kind": "access_rule", "host": "api.example", "action": "allow"}, {"kind": "required_licence", "licence": "cc-by-4.0"}]},
+    "unwritten": {}
+  },
+  "rulings": [
+    {"name": "an allowed host outside every scope", "policy": "firm", "cwd": "/home/op/notes", "url": "https://www.legislation.gov.uk/ukpga/2018/12", "licence": null, "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a wildcard rule covers the domain's own apex", "policy": "firm", "cwd": "/home/op/notes", "url": "https://news.example/today", "licence": null, "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a wildcard rule covers every host beneath the domain", "policy": "firm", "cwd": "/home/op/notes", "url": "https://politics.uk.news.example/today", "licence": null, "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a host written in capitals is the host", "policy": "firm", "cwd": "/home/op/notes", "url": "https://WWW.Legislation.GOV.uk/ukpga/2018/12", "licence": null, "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "the denied-host list is applied before any access rule", "policy": "firm", "cwd": "/home/op/notes", "url": "https://tracker.example/pixel", "licence": null, "scope": null, "mode": "strict", "ruling": "refused", "reason": "The job denies host tracker.example."},
+    {"name": "a required licence the supplier declared", "policy": "firm", "cwd": "/home/op/notes", "url": "https://library.example/case/1", "licence": "firm/library-subscription", "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a required licence nobody declared", "policy": "firm", "cwd": "/home/op/notes", "url": "https://library.example/case/1", "licence": null, "scope": null, "mode": "strict", "ruling": "refused", "reason": "access rule 5 (library.example) requires licence \"firm/library-subscription\" for host library.example, and no supplier declared one."},
+    {"name": "a different licence than the one required", "policy": "firm", "cwd": "/home/op/notes", "url": "https://library.example/case/1", "licence": "firm/library-trial", "scope": null, "mode": "strict", "ruling": "refused", "reason": "access rule 5 (library.example) requires licence \"firm/library-subscription\" for host library.example, and the supplier declared \"firm/library-trial\"."},
+    {"name": "the catch-all rule refuses what no earlier rule named", "policy": "firm", "cwd": "/home/op/notes", "url": "https://blog.example/post", "licence": null, "scope": null, "mode": "strict", "ruling": "refused", "reason": "access rule 6 (*) refuses host blog.example."},
+    {"name": "a scope's constraints replace the top-level list", "policy": "firm", "cwd": "/home/op/matters/confidential-acme/brief", "url": "https://www.legislation.gov.uk/ukpga/2018/12", "licence": null, "scope": "/matters/confidential-", "mode": "strict", "ruling": "refused", "reason": "access rule 1 (*) refuses host www.legislation.gov.uk."},
+    {"name": "a scope without constraints inherits the top-level list", "policy": "firm", "cwd": "/home/op/matters/acme", "url": "https://www.legislation.gov.uk/ukpga/2018/12", "licence": null, "scope": "/matters", "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a match is a substring, so it also governs a directory it merely appears in", "policy": "firm", "cwd": "/home/op/matters-archive/2019", "url": "https://blog.example/post", "licence": null, "scope": "/matters", "mode": "strict", "ruling": "refused", "reason": "access rule 6 (*) refuses host blog.example."},
+    {"name": "a scope's mode replaces the top-level mode, so a breach is admitted and recorded", "policy": "firm", "cwd": "/home/op/research/topic", "url": "https://blog.example/post", "licence": null, "scope": "/research", "mode": "observe", "ruling": "allowed_with_breach", "reason": "access rule 6 (*) refuses host blog.example."},
+    {"name": "a host on the allowed-host list", "policy": "allowlist", "cwd": "/home/op", "url": "https://docs.example/guide", "licence": "cc-by-4.0", "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "an access rule that allows a host lets it past the allowed-host list", "policy": "allowlist", "cwd": "/home/op", "url": "https://api.example/reference", "licence": "cc-by-4.0", "scope": null, "mode": "strict", "ruling": "allowed", "reason": null},
+    {"name": "a host outside the allowed-host list", "policy": "allowlist", "cwd": "/home/op", "url": "https://blog.example/post", "licence": "cc-by-4.0", "scope": null, "mode": "strict", "ruling": "refused", "reason": "Host blog.example is outside the job's allowed-host list."},
+    {"name": "a required_licence constraint still applies to a host a rule allowed", "policy": "allowlist", "cwd": "/home/op", "url": "https://api.example/reference", "licence": null, "scope": null, "mode": "strict", "ruling": "refused", "reason": "No supplier declared a licence this job accepts."},
+    {"name": "no policy written observes and refuses nothing", "policy": "unwritten", "cwd": "/home/op", "url": "https://blog.example/post", "licence": null, "scope": null, "mode": "observe", "ruling": "allowed", "reason": null}
+  ]
+}

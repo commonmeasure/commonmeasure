@@ -1,0 +1,64 @@
+{
+  "suite_version": "commerce-routing-brand-g4-price-today/v1",
+  "label": "Commerce routing experiment, availability question 'g4-price-today': brand content alone",
+  "job": {
+    "id": "44d49f79-3064-45fe-a94c-85be2eb6d950",
+    "kind": "research.answer",
+    "prompt": "What does the Northglade G4 burr grinder cost at Fictive Retail today, and are replacement burrs available?",
+    "policy_mode": "observe",
+    "objective": {
+      "kind": "weighted",
+      "quality": 0.0,
+      "coverage": 1.0,
+      "freshness": 0.5,
+      "cost": 0.0,
+      "latency": 0.0,
+      "policy_risk": 0.0
+    },
+    "constraints": [
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      }
+    ],
+    "evidence_requirements": []
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 10,
+  "providers": [
+    "internal"
+  ],
+  "require_cited_answer": true,
+  "coverage_rubric": {
+    "name": "commerce-g4-price-today",
+    "version": "1",
+    "items": [
+      {
+        "name": "current-price",
+        "any_of": [
+          "£129.00"
+        ]
+      },
+      {
+        "name": "price-history",
+        "any_of": [
+          "reduced from £159.00"
+        ]
+      },
+      {
+        "name": "spare-burrs",
+        "any_of": [
+          "burr set BS-40"
+        ]
+      }
+    ]
+  },
+  "as_of": {
+    "date": "2026-08-13",
+    "maximum_age_days": 180
+  }
+}

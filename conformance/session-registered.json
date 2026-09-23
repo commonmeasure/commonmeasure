@@ -1,0 +1,123 @@
+{
+  "agent_id": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "content_url": "https://publisher.example.org/before-registration",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "79bbfeb6-99c8-53c5-b8f2-e0cf394b1feb",
+      "source_role": "agent",
+      "timestamp": "2026-09-18T11:00:00.000Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://publisher.example.org/registered",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "24128ca7-587c-5d37-913e-bac107d39f81",
+      "instance": {
+        "id": "5c2f8d8e-7a41-4a0b-9e55-1f6b3c9d2e70",
+        "issuer": "https://hub.example",
+        "revision": 1
+      },
+      "source_role": "agent",
+      "timestamp": "2026-09-18T11:01:00.000Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://publisher.example.org/registered",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:5d41402abc4b2a76b9719d911017c592ae2f1c0b6d3e4f5a60718293a4b5c6d7",
+        "contextops-host-tool": "claude-code",
+        "scope": "session",
+        "token_basis": "characters/4",
+        "tokens_ingested": 212
+      },
+      "id": "0e515071-1c8b-5654-9996-d73ee5809d69",
+      "instance": {
+        "id": "5c2f8d8e-7a41-4a0b-9e55-1f6b3c9d2e70",
+        "issuer": "https://hub.example",
+        "revision": 1
+      },
+      "source_role": "agent",
+      "timestamp": "2026-09-18T11:01:00.000Z",
+      "type": "content_grounded"
+    },
+    {
+      "content_url": "https://publisher.example.org/after-renewal",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "4750b6ee-e497-5ac0-9af1-f129ffbbeac2",
+      "instance": {
+        "id": "5c2f8d8e-7a41-4a0b-9e55-1f6b3c9d2e70",
+        "issuer": "https://hub.example",
+        "revision": 2
+      },
+      "source_role": "agent",
+      "timestamp": "2026-09-18T11:02:00.000Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://publisher.example.org/after-renewal",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:5d41402abc4b2a76b9719d911017c592ae2f1c0b6d3e4f5a60718293a4b5c6d7",
+        "contextops-host-tool": "claude-code",
+        "scope": "session",
+        "token_basis": "characters/4",
+        "tokens_ingested": 212
+      },
+      "id": "69db8b39-5872-5325-a389-37382767a938",
+      "instance": {
+        "id": "5c2f8d8e-7a41-4a0b-9e55-1f6b3c9d2e70",
+        "issuer": "https://hub.example",
+        "revision": 2
+      },
+      "source_role": "agent",
+      "timestamp": "2026-09-18T11:02:00.000Z",
+      "type": "content_grounded"
+    }
+  ],
+  "refused": 0,
+  "schema_version": "1.0",
+  "session_id": "bb09e320-106b-5459-8fb5-67e7b389c3be",
+  "started_at": "2026-09-18T11:00:00.000Z"
+}

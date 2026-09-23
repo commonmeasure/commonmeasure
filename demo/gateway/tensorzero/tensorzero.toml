@@ -1,0 +1,12 @@
+[gateway]
+disable_pseudonymous_usage_analytics = true
+
+# A controlled Common Measure comparison must not silently change model or provider.
+# One named provider in `routing` means TensorZero has no fallback route.
+[models.contextops_gpt_4o_mini_2024_07_18]
+routing = ["openai"]
+
+[models.contextops_gpt_4o_mini_2024_07_18.providers.openai]
+type = "openai"
+model_name = "gpt-4o-mini-2024-07-18"
+api_key_location = "env::OPENAI_API_KEY"

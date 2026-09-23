@@ -1,0 +1,15 @@
+[package]
+name = "commonmeasure-inference"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "The swappable inference-gateway boundary, spoken over the real transport."
+
+[dependencies]
+commonmeasure-types.workspace = true
+commonmeasure-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+uuid.workspace = true

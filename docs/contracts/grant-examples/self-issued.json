@@ -1,0 +1,286 @@
+{
+  "contract": "grant.md",
+  "name": "A self-issued grant over an internal collection, reported to the private record only",
+  "note": "Synthetic parties, identifiers, hosts, agreement references, clause numbers and figures; an offline bound here is an example, not a recommended value. Each case is the file's defaults with the members under `with` replaced; `instance: null` is work with no accepted binding. `bound` is what the accepted binding carries for this file's grant: id, revision, digest, the duty bound for it and what remains of its reservation. A case's `instance` replaces the defaults' instance except `bound`, which it keeps unless the case gives its own; `bound_with` replaces members of that one bound entry. `document_with` replaces top-level members of `document` (`state`, `basis`) and never `grant`, so the digest stands.",
+  "document": {
+    "schema": "commonmeasure-grant/v1",
+    "grant": {
+      "id": "grant-precedents-1",
+      "revision": 1,
+      "issuer": {
+        "kind": "organisation",
+        "id": "org-example-firm",
+        "name": "Example Firm LLP"
+      },
+      "collection": {
+        "id": "example-firm-precedents",
+        "name": "Precedent bank",
+        "supplier": {
+          "shape": "connector",
+          "adapter": "internal",
+          "credential": "none"
+        },
+        "resources": [
+          {
+            "kind": "adapter_collection",
+            "value": "precedents"
+          }
+        ],
+        "coverage": null
+      },
+      "grantee": {
+        "organisation": "org-example-firm",
+        "principals": [
+          {
+            "scheme": "hub-member",
+            "value": "member-ana"
+          }
+        ],
+        "engagements": [
+          "matter-2291"
+        ],
+        "instance_classes": []
+      },
+      "uses": {
+        "permits": [
+          "ai-input",
+          "search"
+        ],
+        "prohibits": [
+          "ai-train"
+        ]
+      },
+      "conditions": [],
+      "validity": {
+        "not_before": "2026-10-01T00:00:00Z",
+        "not_after": "2027-01-01T00:00:00Z",
+        "revocation": {
+          "check": "distribution",
+          "max_age_seconds": null
+        }
+      },
+      "price": {
+        "type": "free",
+        "amount_minor": null,
+        "currency": null,
+        "per": null,
+        "budget": {
+          "unit": "acquisition",
+          "ceiling": 500,
+          "period": "month"
+        }
+      },
+      "reporting": {
+        "duty": "private_record_only",
+        "form": null,
+        "destination": null,
+        "event_classes": [],
+        "period": null,
+        "deadline_days": null
+      },
+      "terms": {
+        "references": []
+      },
+      "issuer_fields": {
+        "kb.example/clearance": "partner-review",
+        "kb.example/practice_area": [
+          "employment"
+        ]
+      }
+    },
+    "digest": "sha256:18515fc948885f9716dd7a90225462f7ffd0738978f0ecf63e661ff169127aa0",
+    "state": "current",
+    "basis": {
+      "kind": "self_issued",
+      "evidence": [],
+      "signature": null
+    }
+  },
+  "defaults": {
+    "at": "2026-10-06T10:00:00Z",
+    "envelope": {
+      "issued_at": "2026-10-05T08:00:00Z",
+      "expires_at": "2026-10-12T08:00:00Z",
+      "organisation": "org-example-firm"
+    },
+    "instance": {
+      "organisation": "org-example-firm",
+      "operator_identifiers": [
+        {
+          "scheme": "hub-member",
+          "value": "member-ana"
+        }
+      ],
+      "requires_entitlements": true,
+      "bound": [
+        {
+          "id": "grant-precedents-1",
+          "revision": 1,
+          "digest": "sha256:18515fc948885f9716dd7a90225462f7ffd0738978f0ecf63e661ff169127aa0",
+          "duty": null,
+          "reservation_remaining": 20
+        }
+      ]
+    },
+    "engagement": "matter-2291",
+    "route": "internal",
+    "resource": {
+      "kind": "adapter_collection",
+      "value": "precedents"
+    },
+    "use": "ai-input",
+    "amount": 1
+  },
+  "cases": [
+    {
+      "name": "the granted principal reads the precedent bank on the granted engagement",
+      "with": {},
+      "outcome": "authorised",
+      "reason": null
+    },
+    {
+      "name": "a mediated search is a permitted use",
+      "with": {
+        "use": "search"
+      },
+      "outcome": "authorised",
+      "reason": null
+    },
+    {
+      "name": "another organisation's edge holds the document",
+      "with": {
+        "envelope": {
+          "issued_at": "2026-10-05T08:00:00Z",
+          "expires_at": "2026-10-12T08:00:00Z",
+          "organisation": "org-other-firm"
+        },
+        "instance": {
+          "organisation": "org-other-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            }
+          ],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "wrong_organisation"
+    },
+    {
+      "name": "another member of the organisation",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ben"
+            }
+          ],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "wrong_principal"
+    },
+    {
+      "name": "work with no registered instance holds no binding",
+      "with": {
+        "instance": null
+      },
+      "outcome": "refused",
+      "reason": "grant_not_bound"
+    },
+    {
+      "name": "the granted principal on another engagement",
+      "with": {
+        "engagement": "matter-3140"
+      },
+      "outcome": "refused",
+      "reason": "wrong_engagement"
+    },
+    {
+      "name": "a directory no scope governs resolves no engagement",
+      "with": {
+        "engagement": null
+      },
+      "outcome": "refused",
+      "reason": "engagement_unresolved"
+    },
+    {
+      "name": "a collection of the same adapter that no grant covers",
+      "with": {
+        "resource": {
+          "kind": "adapter_collection",
+          "value": "hr-files"
+        }
+      },
+      "outcome": "refused",
+      "reason": "resource_not_granted"
+    },
+    {
+      "name": "training is prohibited",
+      "with": {
+        "use": "ai-train"
+      },
+      "outcome": "refused",
+      "reason": "use_not_permitted"
+    },
+    {
+      "name": "indexing is not among the permitted uses",
+      "with": {
+        "use": "ai-index"
+      },
+      "outcome": "refused",
+      "reason": "use_not_permitted"
+    },
+    {
+      "name": "the instant of not_after is expired",
+      "with": {
+        "at": "2027-01-01T00:00:00Z",
+        "envelope": {
+          "issued_at": "2026-12-29T08:00:00Z",
+          "expires_at": "2027-01-05T08:00:00Z",
+          "organisation": "org-example-firm"
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_expired"
+    },
+    {
+      "name": "before not_before",
+      "with": {
+        "at": "2026-09-30T23:59:59Z",
+        "envelope": {
+          "issued_at": "2026-09-28T08:00:00Z",
+          "expires_at": "2026-10-05T08:00:00Z",
+          "organisation": "org-example-firm"
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_not_yet_valid"
+    },
+    {
+      "name": "the reservation is spent",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            }
+          ],
+          "requires_entitlements": true,
+          "bound_with": {
+            "reservation_remaining": 0
+          }
+        }
+      },
+      "outcome": "refused",
+      "reason": "budget_exhausted"
+    }
+  ]
+}

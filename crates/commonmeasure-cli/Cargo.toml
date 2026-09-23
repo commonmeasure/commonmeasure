@@ -1,0 +1,58 @@
+[package]
+name = "commonmeasure-cli"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+rust-version.workspace = true
+description = "The Common Measure command line: suite runs, harness hooks, the mediated MCP surface and inspection."
+
+[dependencies]
+commonmeasure-types.workspace = true
+commonmeasure-runtime.workspace = true
+commonmeasure-relay.workspace = true
+commonmeasure-console.workspace = true
+commonmeasure-harness.workspace = true
+commonmeasure-supply.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The hosted edge (`src/hosted.rs`): the listener that answers Streamable
+# HTTP, and the client that fetches the issuer's signing keys.
+commonmeasure-http.workspace = true
+url.workspace = true
+# The resource server verifies the hub's EdDSA access tokens with the same
+# crate that verifies its policy envelopes (`src/hosted_tokens.rs`).
+ring.workspace = true
+base64.workspace = true
+# Session ids and edge tokens draw from the operating system.
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# The tests recompute the hashes the binary records.
+sha2.workspace = true
+# The mediated fetch test serves a page gzipped, as some origins do whatever
+# the request accepts.
+flate2.workspace = true
+# The managed-policy test signs envelopes as the hub would.
+ring.workspace = true
+# The source policy contract test checks what the published schema accepts
+# against what the loader accepts.
+jsonschema.workspace = true
+# The loopback hub in the enrolment test verifies the proof of possession
+# the binary sends, as the real hub does.
+base64.workspace = true
+ed25519-dalek.workspace = true
+# The prompt-hook tests build a signed C2PA manifest and embed it in text,
+# so the reader is exercised on a real manifest store.
+c2pa.workspace = true
+c2pa-text.workspace = true
+
+# The principal end-to-end test binds policy to this process's own uid.
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
+
+[[bin]]
+name = "commonmeasure"
+path = "src/main.rs"

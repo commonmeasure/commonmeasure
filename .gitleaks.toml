@@ -1,0 +1,18 @@
+# Secret-scanning configuration. Three strings gitleaks flags are not secrets:
+# the committed demonstration signing identity, which authorises nothing and
+# is on no trust list (demo/provenance/README.md), a fixture in the relay's
+# test for stripping embedded credentials from a projected URL, and the
+# browser extension's public key, which Chrome reads from the manifest to fix
+# the extension's id (browser/README.md).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Committed material that is not a credential"
+paths = [
+  '''demo/provenance/signer-key\.pem$''',
+]
+regexes = [
+  '''sk-live-SECRET123''',
+  '''MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlQA0FYlBu2tFltdwvPw9vJ3Itjl6x2dBmmGmzmbCCFpzjgV81''',
+]

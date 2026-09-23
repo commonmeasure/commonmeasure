@@ -1,0 +1,393 @@
+{
+  "contract": "grant.md",
+  "name": "A grant derived from a collective's coverage snapshot, under agreed self-reporting with no per-instance token",
+  "note": "Synthetic parties, identifiers, hosts, agreement references, clause numbers and figures; an offline bound here is an example, not a recommended value. Each case is the file's defaults with the members under `with` replaced; `instance: null` is work with no accepted binding. `bound` is what the accepted binding carries for this file's grant: id, revision, digest, the duty bound for it and what remains of its reservation. A case's `instance` replaces the defaults' instance except `bound`, which it keeps unless the case gives its own; `bound_with` replaces members of that one bound entry. `document_with` replaces top-level members of `document` (`state`, `basis`) and never `grant`, so the digest stands.",
+  "document": {
+    "schema": "commonmeasure-grant/v1",
+    "grant": {
+      "id": "coverage-example-firm",
+      "revision": 14,
+      "issuer": {
+        "kind": "collective",
+        "id": "collective.example",
+        "name": "Example Collective"
+      },
+      "collection": {
+        "id": "collective.example/repertoire",
+        "name": "Example Collective repertoire",
+        "supplier": {
+          "shape": "connector",
+          "adapter": "fetch",
+          "credential": "none"
+        },
+        "resources": [
+          {
+            "kind": "host",
+            "value": "journal.example"
+          },
+          {
+            "kind": "host",
+            "value": "news.example"
+          }
+        ],
+        "coverage": {
+          "reference": "collective.example coverage snapshot for licensee example-firm",
+          "max_age_seconds": 86400
+        }
+      },
+      "grantee": {
+        "organisation": "org-example-firm",
+        "principals": [],
+        "engagements": [
+          "matter-2291",
+          "matter-3140"
+        ],
+        "instance_classes": []
+      },
+      "uses": {
+        "permits": [
+          "ai-input",
+          "search"
+        ],
+        "prohibits": [
+          "ai-train"
+        ]
+      },
+      "conditions": [
+        {
+          "kind": "rsl_user",
+          "enforced_by": "grantee",
+          "effect": "permits",
+          "values": [
+            "commercial"
+          ]
+        },
+        {
+          "kind": "attribution",
+          "enforced_by": "grantee",
+          "effect": null,
+          "values": []
+        }
+      ],
+      "validity": {
+        "not_before": "2026-10-01T00:00:00Z",
+        "not_after": "2027-01-01T00:00:00Z",
+        "revocation": {
+          "check": "distribution",
+          "max_age_seconds": 86400
+        }
+      },
+      "price": {
+        "type": "use",
+        "amount_minor": null,
+        "currency": null,
+        "per": null,
+        "budget": {
+          "unit": "acquisition",
+          "ceiling": 1000,
+          "period": "month"
+        }
+      },
+      "reporting": {
+        "duty": "required",
+        "form": "issuer_batch",
+        "destination": {
+          "kind": "issuer_api",
+          "reference": "collective.example usage reporting"
+        },
+        "event_classes": [
+          "content_retrieved",
+          "content_grounded"
+        ],
+        "period": "month",
+        "deadline_days": 30
+      },
+      "terms": {
+        "references": [
+          {
+            "role": "agreement",
+            "reference": "collective.example licensee agreement EF-2026",
+            "version": "2026-09",
+            "digest": "sha256:544028e033e9603bf3e3d198935b1707f83b6b3bd3a051fc61df89dc97e3c1eb",
+            "location": "held by the organisation"
+          },
+          {
+            "role": "licence",
+            "reference": "https://collective.example/licence.xml",
+            "version": "1.0",
+            "digest": null,
+            "location": "https://collective.example/licence.xml"
+          }
+        ]
+      },
+      "issuer_fields": {}
+    },
+    "digest": "sha256:87bd90124561743fe1b2dc7ce071cd1a87d99580f61f7df321982650c58dfe57",
+    "state": "current",
+    "basis": {
+      "kind": "derived",
+      "evidence": [
+        {
+          "role": "coverage",
+          "reference": "collective.example coverage snapshot for licensee example-firm",
+          "digest": "sha256:9c42b1c244ada9f4d412bb89b946c08b356c086b31396fb45e7556a3fb0d4f31",
+          "retrieved_at": "2026-10-05T06:00:04Z",
+          "as_of": "2026-10-05T06:00:00Z"
+        },
+        {
+          "role": "offline_bound",
+          "reference": "collective.example licensee agreement EF-2026, clause 9 (offline use and notice of withdrawal)",
+          "digest": "sha256:544028e033e9603bf3e3d198935b1707f83b6b3bd3a051fc61df89dc97e3c1eb",
+          "retrieved_at": null,
+          "as_of": null
+        }
+      ],
+      "signature": null
+    }
+  },
+  "defaults": {
+    "at": "2026-10-05T15:00:00Z",
+    "envelope": {
+      "issued_at": "2026-10-05T08:00:00Z",
+      "expires_at": "2026-10-12T08:00:00Z",
+      "organisation": "org-example-firm"
+    },
+    "instance": {
+      "organisation": "org-example-firm",
+      "operator_identifiers": [
+        {
+          "scheme": "hub-member",
+          "value": "member-ben"
+        }
+      ],
+      "requires_entitlements": true,
+      "bound": [
+        {
+          "id": "coverage-example-firm",
+          "revision": 14,
+          "digest": "sha256:87bd90124561743fe1b2dc7ce071cd1a87d99580f61f7df321982650c58dfe57",
+          "duty": "owner:example-collective",
+          "reservation_remaining": 50
+        }
+      ]
+    },
+    "engagement": "matter-3140",
+    "route": "fetch",
+    "resource": {
+      "kind": "url",
+      "value": "https://news.example/2026/10/ruling"
+    },
+    "use": "ai-input",
+    "amount": 1
+  },
+  "cases": [
+    {
+      "name": "any named principal reads a covered host with no token",
+      "with": {},
+      "outcome": "authorised",
+      "reason": null
+    },
+    {
+      "name": "another organisation's edge holds the document",
+      "with": {
+        "envelope": {
+          "issued_at": "2026-10-05T08:00:00Z",
+          "expires_at": "2026-10-12T08:00:00Z",
+          "organisation": "org-other-firm"
+        },
+        "instance": {
+          "organisation": "org-other-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ben"
+            }
+          ],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "wrong_organisation"
+    },
+    {
+      "name": "a binding that names no operator, although any principal is granted; the grant names no principal, so this file has no wrong_principal case",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "principal_unresolved"
+    },
+    {
+      "name": "an engagement the grant does not name",
+      "with": {
+        "engagement": "matter-9000"
+      },
+      "outcome": "refused",
+      "reason": "wrong_engagement"
+    },
+    {
+      "name": "a host outside the coverage, for an instance that requires entitlements",
+      "with": {
+        "resource": {
+          "kind": "url",
+          "value": "https://unlisted.example/story"
+        }
+      },
+      "outcome": "refused",
+      "reason": "resource_not_granted"
+    },
+    {
+      "name": "a redirect from a covered host to one outside the coverage",
+      "with": {
+        "resource": {
+          "kind": "url",
+          "value": "https://cdn.unlisted.example/2026/10/ruling"
+        }
+      },
+      "outcome": "refused",
+      "reason": "resource_not_granted"
+    },
+    {
+      "name": "training is prohibited",
+      "with": {
+        "use": "ai-train"
+      },
+      "outcome": "refused",
+      "reason": "use_not_permitted"
+    },
+    {
+      "name": "the instant of not_after is expired",
+      "with": {
+        "at": "2027-01-01T00:00:00Z",
+        "envelope": {
+          "issued_at": "2026-12-29T08:00:00Z",
+          "expires_at": "2027-01-05T08:00:00Z",
+          "organisation": "org-example-firm"
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_expired"
+    },
+    {
+      "name": "the reservation is spent",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ben"
+            }
+          ],
+          "requires_entitlements": true,
+          "bound_with": {
+            "reservation_remaining": 0
+          }
+        }
+      },
+      "outcome": "refused",
+      "reason": "budget_exhausted"
+    },
+    {
+      "name": "the envelope is unexpired and older than the grant's max_age_seconds",
+      "with": {
+        "at": "2026-10-06T08:00:01Z"
+      },
+      "outcome": "unavailable",
+      "reason": "grant_distribution_stale"
+    },
+    {
+      "name": "the binding carries no duty for a grant that requires reporting",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ben"
+            }
+          ],
+          "requires_entitlements": true,
+          "bound_with": {
+            "duty": null
+          }
+        }
+      },
+      "outcome": "refused",
+      "reason": "reporting_duty_unbound"
+    },
+    {
+      "name": "the envelope is fresh enough and the coverage snapshot is older than its bound",
+      "with": {
+        "at": "2026-10-06T07:00:00Z"
+      },
+      "outcome": "unavailable",
+      "reason": "coverage_stale"
+    },
+    {
+      "name": "a same-revision renewal carries a refreshed snapshot: the grant digest and the binding stand",
+      "with": {
+        "at": "2026-10-06T07:00:00Z",
+        "envelope": {
+          "issued_at": "2026-10-06T06:30:00Z",
+          "expires_at": "2026-10-13T06:30:00Z",
+          "organisation": "org-example-firm"
+        }
+      },
+      "document_with": {
+        "basis": {
+          "kind": "derived",
+          "evidence": [
+            {
+              "role": "coverage",
+              "reference": "collective.example coverage snapshot for licensee example-firm",
+              "digest": "sha256:c4a6375e66a7932c21eb5d90257c138f9bf514a4e847968ac94ce7815098999d",
+              "retrieved_at": "2026-10-06T06:00:03Z",
+              "as_of": "2026-10-06T06:00:00Z"
+            },
+            {
+              "role": "offline_bound",
+              "reference": "collective.example licensee agreement EF-2026, clause 9 (offline use and notice of withdrawal)",
+              "digest": "sha256:544028e033e9603bf3e3d198935b1707f83b6b3bd3a051fc61df89dc97e3c1eb",
+              "retrieved_at": null,
+              "as_of": null
+            }
+          ],
+          "signature": null
+        }
+      },
+      "outcome": "authorised",
+      "reason": null
+    },
+    {
+      "name": "a registered instance that named no grant and does not require entitlements reads a covered host: no ordinary access while the grant is carried",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ben"
+            }
+          ],
+          "requires_entitlements": false,
+          "bound": []
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_not_bound"
+    },
+    {
+      "name": "work with no registered instance reads a covered host",
+      "with": {
+        "instance": null
+      },
+      "outcome": "refused",
+      "reason": "grant_not_bound"
+    }
+  ]
+}

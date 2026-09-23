@@ -1,0 +1,280 @@
+{
+  "rule_version": "commerce-routing-rule/1",
+  "frozen": "2026-08-13",
+  "rule_text": "commerce-routing-rule/1. For a job of class 'availability', route to the product-data corpus (demo/commerce/corpus/product-data). For a job of class 'compatibility', route to the product-data corpus (demo/commerce/corpus/product-data). For a job of class 'recommendation', route to the mixed corpus (demo/commerce/corpus). Derivation, deterministic and complete: for each class, the route is the supply condition with the strictly highest mean weighted objective (1.0 x measured coverage fraction + 0.5 x measured freshness fraction, the weights sealed in every fitting manifest) over that class's pre-registered fitting questions (demo/jobs/commerce-routing/split.json), computed from the committed fitting runs' evaluation records only. A tie on the mean objective leaves the class unrouted, published as such; none occurred. Frozen 13 August 2026, after the 24 fitting runs and before any holdout run. No holdout record contributed to this rule.",
+  "rule_text_digest": "sha256:94214704a6b0642c324a9c81eac191fca15d52422e5db415d5e729da2b2f2d67",
+  "routes": {
+    "availability": {
+      "condition": "product",
+      "corpus": "demo/commerce/corpus/product-data"
+    },
+    "compatibility": {
+      "condition": "product",
+      "corpus": "demo/commerce/corpus/product-data"
+    },
+    "recommendation": {
+      "condition": "mixed",
+      "corpus": "demo/commerce/corpus"
+    }
+  },
+  "fitted_from": {
+    "availability": {
+      "product": {
+        "questions": [
+          {
+            "question": "brewlink-hub-availability",
+            "run": "demo/output/commerce-routing/product-brewlink-hub-availability",
+            "manifest_hash": "sha256:3a974b9edc51d75b3aaf43f8662236f1351930b955306d4521e4e1101b240626",
+            "coverage": 1.0,
+            "freshness": 1.0,
+            "objective": 1.5
+          },
+          {
+            "question": "milk-wand-availability",
+            "run": "demo/output/commerce-routing/product-milk-wand-availability",
+            "manifest_hash": "sha256:ca0d7d41ac1f12f520b8109195458df4150282dc4bc6780f084bfdc8bd79398e",
+            "coverage": 1.0,
+            "freshness": 1.0,
+            "objective": 1.5
+          }
+        ],
+        "mean_objective": 1.5
+      },
+      "brand": {
+        "questions": [
+          {
+            "question": "brewlink-hub-availability",
+            "run": "demo/output/commerce-routing/brand-brewlink-hub-availability",
+            "manifest_hash": "sha256:84d6cef3d3980da30a67c8f540ccaafa278eba7674248803e4ac6cc413bd073d",
+            "coverage": 0.0,
+            "freshness": 0.6,
+            "objective": 0.3
+          },
+          {
+            "question": "milk-wand-availability",
+            "run": "demo/output/commerce-routing/brand-milk-wand-availability",
+            "manifest_hash": "sha256:72eab193bd894e831bd1c5f8274969f810204ac66c854601bc2cc4bf6f763c3b",
+            "coverage": 0.0,
+            "freshness": 0.6,
+            "objective": 0.3
+          }
+        ],
+        "mean_objective": 0.3
+      },
+      "editorial": {
+        "questions": [
+          {
+            "question": "brewlink-hub-availability",
+            "run": "demo/output/commerce-routing/editorial-brewlink-hub-availability",
+            "manifest_hash": "sha256:a7850d03c1cf382144ffb8019aecdf61d0cae78ee951d50173bf127975ec9487",
+            "coverage": 0.0,
+            "freshness": 0.8,
+            "objective": 0.4
+          },
+          {
+            "question": "milk-wand-availability",
+            "run": "demo/output/commerce-routing/editorial-milk-wand-availability",
+            "manifest_hash": "sha256:e7dc4192d0c94886673691a24c752abf1d27b280b85d26758751fcc924598dc6",
+            "coverage": 0.6666666666666666,
+            "freshness": 0.8,
+            "objective": 1.0666666666666667
+          }
+        ],
+        "mean_objective": 0.7333333333333334
+      },
+      "mixed": {
+        "questions": [
+          {
+            "question": "brewlink-hub-availability",
+            "run": "demo/output/commerce-routing/mixed-brewlink-hub-availability",
+            "manifest_hash": "sha256:8d20087ec7178dc98e47b40f705dfcb74adefda12be7bdb38a7cfa0e74a07a72",
+            "coverage": 1.0,
+            "freshness": 0.8,
+            "objective": 1.4
+          },
+          {
+            "question": "milk-wand-availability",
+            "run": "demo/output/commerce-routing/mixed-milk-wand-availability",
+            "manifest_hash": "sha256:109005838b1309d4755a38d9d33f4ccffafaa5de9a071413af151671e3149521",
+            "coverage": 1.0,
+            "freshness": 0.9,
+            "objective": 1.45
+          }
+        ],
+        "mean_objective": 1.4249999999999998
+      }
+    },
+    "compatibility": {
+      "product": {
+        "questions": [
+          {
+            "question": "accessory-carryover",
+            "run": "demo/output/commerce-routing/product-accessory-carryover",
+            "manifest_hash": "sha256:a42678ebe8bbb03be477a884253c49f28bfc883abb6203f39a652939b71757e8",
+            "coverage": 1.0,
+            "freshness": 1.0,
+            "objective": 1.5
+          },
+          {
+            "question": "g4-out-of-box",
+            "run": "demo/output/commerce-routing/product-g4-out-of-box",
+            "manifest_hash": "sha256:7c952c9afa02b26db004870b0fc855b9cc66e70137c91e9e5980880ff6544628",
+            "coverage": 1.0,
+            "freshness": 1.0,
+            "objective": 1.5
+          }
+        ],
+        "mean_objective": 1.5
+      },
+      "brand": {
+        "questions": [
+          {
+            "question": "accessory-carryover",
+            "run": "demo/output/commerce-routing/brand-accessory-carryover",
+            "manifest_hash": "sha256:ec368ae5ed1e7e6c58785ef9d9473d89b63260537da7cde1b0f442ddf72e35a8",
+            "coverage": 0.0,
+            "freshness": 0.6,
+            "objective": 0.3
+          },
+          {
+            "question": "g4-out-of-box",
+            "run": "demo/output/commerce-routing/brand-g4-out-of-box",
+            "manifest_hash": "sha256:1c6e29c9b7d902f55848c200086b5145cfa9c1458da2f977190fcd1e2860636b",
+            "coverage": 0.3333333333333333,
+            "freshness": 0.6,
+            "objective": 0.6333333333333333
+          }
+        ],
+        "mean_objective": 0.4666666666666667
+      },
+      "editorial": {
+        "questions": [
+          {
+            "question": "accessory-carryover",
+            "run": "demo/output/commerce-routing/editorial-accessory-carryover",
+            "manifest_hash": "sha256:75167131d143a2f17d4d6608fa4064b1869622c4f57edfba54cda6e2fe503fa3",
+            "coverage": 0.0,
+            "freshness": 0.8,
+            "objective": 0.4
+          },
+          {
+            "question": "g4-out-of-box",
+            "run": "demo/output/commerce-routing/editorial-g4-out-of-box",
+            "manifest_hash": "sha256:74c177b312541bd13fda330cc7e850530d55fe63ad8d01c4cea78500d543e48f",
+            "coverage": 0.0,
+            "freshness": 0.8,
+            "objective": 0.4
+          }
+        ],
+        "mean_objective": 0.4
+      },
+      "mixed": {
+        "questions": [
+          {
+            "question": "accessory-carryover",
+            "run": "demo/output/commerce-routing/mixed-accessory-carryover",
+            "manifest_hash": "sha256:6f2bba2d436e3af831a63c06b640e5ac03119c3fd7fdc8d6db4b5a6edc4f7d7f",
+            "coverage": 1.0,
+            "freshness": 0.9,
+            "objective": 1.45
+          },
+          {
+            "question": "g4-out-of-box",
+            "run": "demo/output/commerce-routing/mixed-g4-out-of-box",
+            "manifest_hash": "sha256:1039beac9bc073d609df878f2584d7c98964099733105cc5092a38ad58eb4258",
+            "coverage": 1.0,
+            "freshness": 0.8,
+            "objective": 1.4
+          }
+        ],
+        "mean_objective": 1.4249999999999998
+      }
+    },
+    "recommendation": {
+      "product": {
+        "questions": [
+          {
+            "question": "grinder-choice",
+            "run": "demo/output/commerce-routing/product-grinder-choice",
+            "manifest_hash": "sha256:21a4fa61a3fa973300562c3c6a898e7693750c3ce7487b1764d338bc4d49a049",
+            "coverage": 0.6666666666666666,
+            "freshness": 1.0,
+            "objective": 1.1666666666666665
+          },
+          {
+            "question": "narrow-counter-setup",
+            "run": "demo/output/commerce-routing/product-narrow-counter-setup",
+            "manifest_hash": "sha256:fd659b70df5bf177099a2e13d3d9a571a085ea11bc2495e5f30ef8f7e542ae78",
+            "coverage": 0.5,
+            "freshness": 1.0,
+            "objective": 1.0
+          }
+        ],
+        "mean_objective": 1.0833333333333333
+      },
+      "brand": {
+        "questions": [
+          {
+            "question": "grinder-choice",
+            "run": "demo/output/commerce-routing/brand-grinder-choice",
+            "manifest_hash": "sha256:eb333d31b563a56a28afdd55a831870e053cfb9165e627b9de4259fc5dd08487",
+            "coverage": 0.3333333333333333,
+            "freshness": 0.6,
+            "objective": 0.6333333333333333
+          },
+          {
+            "question": "narrow-counter-setup",
+            "run": "demo/output/commerce-routing/brand-narrow-counter-setup",
+            "manifest_hash": "sha256:fd61933eee4c31c7c4a4ec73a333391c33afab972313b02eac9c381163ef7fe7",
+            "coverage": 0.0,
+            "freshness": 0.6,
+            "objective": 0.3
+          }
+        ],
+        "mean_objective": 0.4666666666666667
+      },
+      "editorial": {
+        "questions": [
+          {
+            "question": "grinder-choice",
+            "run": "demo/output/commerce-routing/editorial-grinder-choice",
+            "manifest_hash": "sha256:577be5166e5d355de0102b894d46dada8a77f57df0417fbad8c240f7744bff13",
+            "coverage": 0.6666666666666666,
+            "freshness": 0.8,
+            "objective": 1.0666666666666667
+          },
+          {
+            "question": "narrow-counter-setup",
+            "run": "demo/output/commerce-routing/editorial-narrow-counter-setup",
+            "manifest_hash": "sha256:7160f8965859fe031e5e18f9ad8eb0ebc5a1b2fcc2d5a0847cff7c76ec3229af",
+            "coverage": 0.75,
+            "freshness": 0.8,
+            "objective": 1.15
+          }
+        ],
+        "mean_objective": 1.1083333333333334
+      },
+      "mixed": {
+        "questions": [
+          {
+            "question": "grinder-choice",
+            "run": "demo/output/commerce-routing/mixed-grinder-choice",
+            "manifest_hash": "sha256:69f8dfe7b7fee70d0b175eb3ed954c762c911e4bea19aa9d56ec5af4f522c73f",
+            "coverage": 1.0,
+            "freshness": 0.9,
+            "objective": 1.45
+          },
+          {
+            "question": "narrow-counter-setup",
+            "run": "demo/output/commerce-routing/mixed-narrow-counter-setup",
+            "manifest_hash": "sha256:2ad26655634d7242851789ae94ed4dcdc19154a8f290dbe491ba6862f6a15363",
+            "coverage": 1.0,
+            "freshness": 0.8,
+            "objective": 1.4
+          }
+        ],
+        "mean_objective": 1.4249999999999998
+      }
+    }
+  }
+}

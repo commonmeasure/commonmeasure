@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "commonmeasure": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch",
+      "args": ["mcp", "--host", "claude-code"]
+    }
+  }
+}

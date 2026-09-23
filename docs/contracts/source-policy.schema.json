@@ -1,0 +1,627 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Common Measure source policy",
+  "type": "object",
+  "properties": {
+    "policy_mode": {
+      "$ref": "#/$defs/PolicyMode",
+      "default": "observe"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Constraint"
+      },
+      "default": []
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PolicyScope"
+      },
+      "default": []
+    },
+    "principals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PrincipalBinding"
+      }
+    },
+    "allow_private_hosts": {
+      "type": "boolean",
+      "default": false
+    },
+    "refuse_on_pii": {
+      "type": "boolean"
+    },
+    "record_internal_prefixes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "terms": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TermsDeclaration"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "PolicyMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "observe"
+        },
+        {
+          "type": "string",
+          "const": "prefer"
+        },
+        {
+          "type": "string",
+          "const": "strict"
+        }
+      ]
+    },
+    "Constraint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "allowed_provider"
+            }
+          },
+          "required": [
+            "kind",
+            "provider"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "denied_provider"
+            }
+          },
+          "required": [
+            "kind",
+            "provider"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "allowed_source_provider"
+            }
+          },
+          "required": [
+            "kind",
+            "provider"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "allowed_source_host"
+            }
+          },
+          "required": [
+            "kind",
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "denied_source_host"
+            }
+          },
+          "required": [
+            "kind",
+            "host"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "licence": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "required_licence"
+            }
+          },
+          "required": [
+            "kind",
+            "licence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "$ref": "#/$defs/Money"
+            },
+            "kind": {
+              "type": "string",
+              "const": "maximum_acquisition_cost"
+            }
+          },
+          "required": [
+            "kind",
+            "amount"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tokens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "maximum_context_tokens"
+            }
+          },
+          "required": [
+            "kind",
+            "tokens"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "milliseconds": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "maximum_latency_ms"
+            }
+          },
+          "required": [
+            "kind",
+            "milliseconds"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "$ref": "#/$defs/HostPattern"
+            },
+            "kind": {
+              "type": "string",
+              "const": "access_rule"
+            }
+          },
+          "required": [
+            "kind",
+            "host"
+          ],
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "const": "allow"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "const": "refuse"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "licence": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string",
+                  "const": "require_licence"
+                }
+              },
+              "required": [
+                "action",
+                "licence"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "const": "require_mediation"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "micros": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "currency",
+        "micros"
+      ]
+    },
+    "HostPattern": {
+      "type": "string"
+    },
+    "PolicyScope": {
+      "type": "object",
+      "properties": {
+        "match": {
+          "type": "string"
+        },
+        "principal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engagement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allow_telemetry_egress": {
+          "type": "boolean",
+          "default": false
+        },
+        "policy_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "constraints": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          }
+        },
+        "allow_private_hosts": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "refuse_on_pii": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "terms": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/TermsDeclaration"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "match"
+      ]
+    },
+    "TermsDeclaration": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "requires_reporting": {
+          "type": "boolean",
+          "default": false
+        },
+        "access_context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InstitutionIdentifier"
+          }
+        },
+        "assessment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UseAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "reference"
+      ]
+    },
+    "InstitutionIdentifier": {
+      "type": "object",
+      "properties": {
+        "scheme": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scheme",
+        "value"
+      ]
+    },
+    "UseAssessment": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "$ref": "#/$defs/UseBasis"
+        },
+        "applicability": {
+          "$ref": "#/$defs/AssessedApplicability"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "claimed_issuer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authority_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intended_uses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Category"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "basis",
+        "applicability",
+        "content",
+        "intended_uses",
+        "reason"
+      ]
+    },
+    "UseBasis": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "agreement"
+        },
+        {
+          "type": "string",
+          "const": "public_licence"
+        },
+        {
+          "type": "string",
+          "const": "exception"
+        }
+      ]
+    },
+    "AssessedApplicability": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "applicable"
+        },
+        {
+          "type": "string",
+          "const": "unresolved"
+        }
+      ]
+    },
+    "Category": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "train-ai"
+        },
+        {
+          "type": "string",
+          "const": "ai-input"
+        },
+        {
+          "type": "string",
+          "const": "ai-index"
+        },
+        {
+          "type": "string",
+          "const": "search"
+        }
+      ]
+    },
+    "PrincipalBinding": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "type": "string"
+        },
+        "os_user": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edge_token": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "require_scope": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowances": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AllowanceDeclaration"
+          }
+        },
+        "policy_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "constraints": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Constraint"
+          }
+        },
+        "allow_private_hosts": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "principal"
+      ]
+    },
+    "AllowanceDeclaration": {
+      "type": "object",
+      "properties": {
+        "period": {
+          "$ref": "#/$defs/AllowancePeriod"
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "period",
+        "amount",
+        "timezone"
+      ]
+    },
+    "AllowancePeriod": {
+      "type": "string",
+      "enum": [
+        "day",
+        "month"
+      ]
+    }
+  }
+}

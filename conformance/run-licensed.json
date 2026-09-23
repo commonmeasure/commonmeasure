@@ -1,0 +1,47 @@
+{
+  "agent_id": "commonmeasure",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "content_url": "https://www.example.org/price-cap",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        }
+      },
+      "id": "880d60c9-8121-5ac0-8d2f-aa1956c7a489",
+      "license_ref": "agreement-42",
+      "source_role": "agent",
+      "timestamp": "2026-08-20T10:00:00.000Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://www.example.org/price-cap",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:caa39059d132617b74b16f2344aa34e2de68ff0940edc5bab8aa19fb2f6938df",
+        "scope": "session",
+        "token_basis": "whitespace-words",
+        "tokens_ingested": 129
+      },
+      "id": "034399f2-6d18-5c6e-9cf0-7a45b723b4ae",
+      "license_ref": "agreement-42",
+      "source_role": "agent",
+      "timestamp": "2026-08-20T10:00:00.000Z",
+      "type": "content_grounded"
+    }
+  ],
+  "schema_version": "1.0",
+  "session_id": "6e0f9b3a-4c1d-4f2e-8a5b-9d7c2e1f0a3b",
+  "started_at": "2026-08-20T10:00:00.000Z"
+}

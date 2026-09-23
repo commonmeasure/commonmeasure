@@ -1,0 +1,387 @@
+{
+  "contract": "grant.md",
+  "name": "A direct agreement with one publisher whose receiver accepts Content Telemetry",
+  "note": "Synthetic parties, identifiers, hosts, agreement references, clause numbers and figures; an offline bound here is an example, not a recommended value. Each case is the file's defaults with the members under `with` replaced; `instance: null` is work with no accepted binding. `bound` is what the accepted binding carries for this file's grant: id, revision, digest, the duty bound for it and what remains of its reservation. A case's `instance` replaces the defaults' instance except `bound`, which it keeps unless the case gives its own; `bound_with` replaces members of that one bound entry. `document_with` replaces top-level members of `document` (`state`, `basis`) and never `grant`, so the digest stands.",
+  "document": {
+    "schema": "commonmeasure-grant/v1",
+    "grant": {
+      "id": "gazette-archive-2026-014",
+      "revision": 2,
+      "issuer": {
+        "kind": "publisher",
+        "id": "gazette.example",
+        "name": "Example Gazette"
+      },
+      "collection": {
+        "id": "gazette.example/archive",
+        "name": "Example Gazette archive",
+        "supplier": {
+          "shape": "connector",
+          "adapter": "fetch",
+          "credential": "none"
+        },
+        "resources": [
+          {
+            "kind": "url_prefix",
+            "value": "https://gazette.example/archive/"
+          }
+        ],
+        "coverage": null
+      },
+      "grantee": {
+        "organisation": "org-example-firm",
+        "principals": [
+          {
+            "scheme": "email",
+            "value": "ana@example-firm.example"
+          },
+          {
+            "scheme": "email",
+            "value": "ben@example-firm.example"
+          }
+        ],
+        "engagements": [
+          "matter-2291"
+        ],
+        "instance_classes": []
+      },
+      "uses": {
+        "permits": [
+          "ai-input"
+        ],
+        "prohibits": [
+          "ai-train",
+          "ai-index"
+        ]
+      },
+      "conditions": [
+        {
+          "kind": "attribution",
+          "enforced_by": "grantee",
+          "effect": null,
+          "values": []
+        }
+      ],
+      "validity": {
+        "not_before": "2026-10-01T00:00:00Z",
+        "not_after": "2027-01-01T00:00:00Z",
+        "revocation": {
+          "check": "distribution",
+          "max_age_seconds": 86400
+        }
+      },
+      "price": {
+        "type": "use",
+        "amount_minor": 4,
+        "currency": "GBP",
+        "per": "acquisition",
+        "budget": {
+          "unit": "currency_minor",
+          "ceiling": 5000,
+          "period": "month"
+        }
+      },
+      "reporting": {
+        "duty": "required",
+        "form": "content_telemetry",
+        "destination": {
+          "kind": "receiver",
+          "reference": "https://telemetry.gazette.example/v1/events"
+        },
+        "event_classes": [
+          "content_retrieved",
+          "content_grounded"
+        ],
+        "period": null,
+        "deadline_days": 1
+      },
+      "terms": {
+        "references": [
+          {
+            "role": "agreement",
+            "reference": "gazette.example agreement 2026-014",
+            "version": "2026-09-30",
+            "digest": "sha256:ca0b00c3b7a3806e6532f9562c667d2eca3ed3047f2526b0f677dbb2a08b0aef",
+            "location": "held by the organisation"
+          }
+        ]
+      },
+      "issuer_fields": {
+        "gazette.example/account": "EF-0042"
+      }
+    },
+    "digest": "sha256:2f931ba8d02aee7f73fb6133da4ac0990a1e6f81ec8e3b21e2797a338d2f481a",
+    "state": "current",
+    "basis": {
+      "kind": "transcribed",
+      "evidence": [
+        {
+          "role": "agreement",
+          "reference": "gazette.example agreement 2026-014, clauses 3 (uses), 5 (fees) and 7 (reporting)",
+          "digest": "sha256:ca0b00c3b7a3806e6532f9562c667d2eca3ed3047f2526b0f677dbb2a08b0aef",
+          "retrieved_at": null,
+          "as_of": null
+        },
+        {
+          "role": "offline_bound",
+          "reference": "gazette.example agreement 2026-014, clause 9 (offline use and notice of withdrawal)",
+          "digest": "sha256:ca0b00c3b7a3806e6532f9562c667d2eca3ed3047f2526b0f677dbb2a08b0aef",
+          "retrieved_at": null,
+          "as_of": null
+        }
+      ],
+      "signature": null
+    }
+  },
+  "defaults": {
+    "at": "2026-10-06T10:00:00Z",
+    "envelope": {
+      "issued_at": "2026-10-06T08:00:00Z",
+      "expires_at": "2026-10-13T08:00:00Z",
+      "organisation": "org-example-firm"
+    },
+    "instance": {
+      "organisation": "org-example-firm",
+      "operator_identifiers": [
+        {
+          "scheme": "hub-member",
+          "value": "member-ana"
+        },
+        {
+          "scheme": "email",
+          "value": "ana@example-firm.example"
+        }
+      ],
+      "requires_entitlements": true,
+      "bound": [
+        {
+          "id": "gazette-archive-2026-014",
+          "revision": 2,
+          "digest": "sha256:2f931ba8d02aee7f73fb6133da4ac0990a1e6f81ec8e3b21e2797a338d2f481a",
+          "duty": "owner:example-gazette",
+          "reservation_remaining": 200
+        }
+      ]
+    },
+    "engagement": "matter-2291",
+    "route": "fetch",
+    "resource": {
+      "kind": "url",
+      "value": "https://gazette.example/archive/2019/tribunal-report"
+    },
+    "use": "ai-input",
+    "amount": 4
+  },
+  "cases": [
+    {
+      "name": "a granted principal reads the archive and the duty is bound",
+      "with": {},
+      "outcome": "authorised",
+      "reason": null
+    },
+    {
+      "name": "another organisation's edge holds the document",
+      "with": {
+        "envelope": {
+          "issued_at": "2026-10-06T08:00:00Z",
+          "expires_at": "2026-10-13T08:00:00Z",
+          "organisation": "org-other-firm"
+        },
+        "instance": {
+          "organisation": "org-other-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            },
+            {
+              "scheme": "email",
+              "value": "ana@example-firm.example"
+            }
+          ],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "wrong_organisation"
+    },
+    {
+      "name": "a member whose email the grant does not name",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-cy"
+            },
+            {
+              "scheme": "email",
+              "value": "cy@example-firm.example"
+            }
+          ],
+          "requires_entitlements": true
+        }
+      },
+      "outcome": "refused",
+      "reason": "wrong_principal"
+    },
+    {
+      "name": "another engagement",
+      "with": {
+        "engagement": "matter-3140"
+      },
+      "outcome": "refused",
+      "reason": "wrong_engagement"
+    },
+    {
+      "name": "the publisher's host outside the archive prefix, for an instance that requires entitlements",
+      "with": {
+        "resource": {
+          "kind": "url",
+          "value": "https://gazette.example/subscribers/today"
+        }
+      },
+      "outcome": "refused",
+      "reason": "resource_not_granted"
+    },
+    {
+      "name": "the same resource for an instance that does not require entitlements: the grant layer is silent and source policy rules",
+      "with": {
+        "resource": {
+          "kind": "url",
+          "value": "https://gazette.example/subscribers/today"
+        },
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            },
+            {
+              "scheme": "email",
+              "value": "ana@example-firm.example"
+            }
+          ],
+          "requires_entitlements": false
+        }
+      },
+      "outcome": "not_covered",
+      "reason": null
+    },
+    {
+      "name": "search is not among the permitted uses",
+      "with": {
+        "use": "search"
+      },
+      "outcome": "refused",
+      "reason": "use_not_permitted"
+    },
+    {
+      "name": "the instant of not_after is expired",
+      "with": {
+        "at": "2027-01-01T00:00:00Z",
+        "envelope": {
+          "issued_at": "2026-12-29T08:00:00Z",
+          "expires_at": "2027-01-05T08:00:00Z",
+          "organisation": "org-example-firm"
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_expired"
+    },
+    {
+      "name": "three minor units remain and the acquisition costs four",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            },
+            {
+              "scheme": "email",
+              "value": "ana@example-firm.example"
+            }
+          ],
+          "requires_entitlements": true,
+          "bound_with": {
+            "reservation_remaining": 3
+          }
+        }
+      },
+      "outcome": "refused",
+      "reason": "budget_exhausted"
+    },
+    {
+      "name": "the binding names revision 1 and the envelope carries revision 2",
+      "with": {
+        "instance": {
+          "organisation": "org-example-firm",
+          "operator_identifiers": [
+            {
+              "scheme": "hub-member",
+              "value": "member-ana"
+            },
+            {
+              "scheme": "email",
+              "value": "ana@example-firm.example"
+            }
+          ],
+          "requires_entitlements": true,
+          "bound": [
+            {
+              "id": "gazette-archive-2026-014",
+              "revision": 1,
+              "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+              "duty": "owner:example-gazette",
+              "reservation_remaining": 200
+            }
+          ]
+        }
+      },
+      "outcome": "refused",
+      "reason": "grant_not_bound"
+    },
+    {
+      "name": "the publisher withdraws the grant: the hub carries it marked withdrawn and the binding still names it",
+      "with": {},
+      "document_with": {
+        "state": "withdrawn"
+      },
+      "outcome": "refused",
+      "reason": "grant_withdrawn"
+    },
+    {
+      "name": "the document cites no clause that permits offline use, so the grant is treated as one that needs an online check",
+      "with": {},
+      "document_with": {
+        "basis": {
+          "kind": "transcribed",
+          "evidence": [
+            {
+              "role": "agreement",
+              "reference": "gazette.example agreement 2026-014, clauses 3 (uses), 5 (fees) and 7 (reporting)",
+              "digest": "sha256:ca0b00c3b7a3806e6532f9562c667d2eca3ed3047f2526b0f677dbb2a08b0aef",
+              "retrieved_at": null,
+              "as_of": null
+            }
+          ],
+          "signature": null
+        }
+      },
+      "outcome": "unavailable",
+      "reason": "issuer_validation"
+    },
+    {
+      "name": "the envelope is unexpired and older than the bound the publisher agreed",
+      "with": {
+        "at": "2026-10-07T08:00:01Z"
+      },
+      "outcome": "unavailable",
+      "reason": "grant_distribution_stale"
+    }
+  ]
+}

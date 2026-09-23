@@ -1,0 +1,43 @@
+{
+  "suite_version": "energy-price-cap/v1",
+  "label": "Compare current UK household electricity price-cap evidence",
+  "job": {
+    "id": "3d8beea4-eb91-4f2d-9426-2fa2f06fef8b",
+    "kind": "research.answer",
+    "prompt": "What is the current Ofgem household energy price cap, when does it apply, and what primary evidence supports the answer? Identify anything the supplied evidence cannot establish.",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 1.0,
+      "coverage": 1.0,
+      "freshness": 0.8,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1.0
+    },
+    "constraints": [
+      { "kind": "maximum_acquisition_cost", "amount": { "currency": "USD", "micros": 50000 } },
+      { "kind": "maximum_context_tokens", "tokens": 4000 },
+      { "kind": "maximum_latency_ms", "milliseconds": 5000 },
+      { "kind": "allowed_source_host", "host": "www.ofgem.gov.uk" },
+      { "kind": "allowed_source_host", "host": "www.gov.uk" }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "A current primary Ofgem source",
+        "required": true
+      },
+      {
+        "description": "The cap period and headline annualised figure",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 3,
+  "providers": ["exa", "firecrawl", "tavily", "tollbit"]
+}

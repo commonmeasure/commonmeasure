@@ -1,0 +1,10 @@
+<rsl xmlns="https://rslstandard.org/rsl">
+  <content url="/">
+    <license>
+      <permits type="usage">ai-input ai-train search</permits>
+      <payment type="use">
+        <amount currency="USD">0.010</amount>
+      </payment>
+    </license>
+  </content>
+</rsl>

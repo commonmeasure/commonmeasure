@@ -1,0 +1,44 @@
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Emacs autosave, lock and backup files. `#.env#` is not covered by `.env.*`
+# and can hold live provider keys.
+\#*\#
+.\#*
+*~
+target/
+node_modules/
+dist/
+.DS_Store
+*.log
+tmp/
+fixtures/private/
+data/
+
+# Run artefacts that must not enter git. `*.staging`/`*.previous` are the
+# atomic-publication working directories (docs/FAIL-POLICY.md clause 4).
+# The demonstration evidence home is regenerated from scripted sessions
+# by `just demo-arc` (demo/arc/regenerate.sh); its session ids and timestamps
+# are volatile and the store is reviewed locally before every screen share,
+# so it stays out of git like any other operator store.
+demo/arc/home/
+# A run's `responses/` holds unredacted provider bodies, which may contain
+# licensed content, wherever the run was written.
+responses/
+*.staging/
+*.previous/
+
+# Binaries for the standalone plugin archive are build outputs: one per
+# platform, several megabytes each, built by plugin/build.sh. The checkout's
+# plugin carries none; the launcher beside them is source and is committed.
+plugin/bin/*
+!plugin/bin/commonmeasure-launch
+
+# Python bytecode from the scripts under demo/ and docs/guide/measurements/
+__pycache__/
+*.pyc
+
+# Local Cloudflare deployment cache.
+.wrangler/

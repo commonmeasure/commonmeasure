@@ -1,0 +1,18 @@
+{
+  "description": "Instance registration mutation signature vector. The seed is a published test value (bytes 0x01 to 0x20) and protects nothing; Ed25519 is deterministic, so a client signing signature_base with it must produce headers.signature byte for byte.",
+  "method": "POST",
+  "target_uri": "https://hub.example/api/v1/instances",
+  "body": "{\"version\":1}",
+  "created": 1758100000,
+  "headers": {
+    "content-digest": "sha-256=:JDDxoq0pgtAGeIVIikyJ4hrR18g7EVuo8bIKzIjfrqg=:",
+    "idempotency-key": "create-001",
+    "signature-input": "sig1=(\"@method\" \"@target-uri\" \"content-digest\" \"idempotency-key\");created=1758100000;expires=1758100300;keyid=\"WWpn_pfHui9YKR4CZtQsDGMu7_Gch2zYChfSvnxgtPk\";alg=\"ed25519\";nonce=\"AAAAAAAAAAAAAAAAAAAAAA\";tag=\"commonmeasure-registration\"",
+    "signature": "sig1=:7IiS/GiSBc2qZ90EKFqCtNsx8JvLdid7kxW+Xg9hQCVMJ8tHltBdZL9dK3V1HUCNiZUgAKdJbjo2z8+HtURcCw==:"
+  },
+  "signature_base": "\"@method\": POST\n\"@target-uri\": https://hub.example/api/v1/instances\n\"content-digest\": sha-256=:JDDxoq0pgtAGeIVIikyJ4hrR18g7EVuo8bIKzIjfrqg=:\n\"idempotency-key\": create-001\n\"@signature-params\": (\"@method\" \"@target-uri\" \"content-digest\" \"idempotency-key\");created=1758100000;expires=1758100300;keyid=\"WWpn_pfHui9YKR4CZtQsDGMu7_Gch2zYChfSvnxgtPk\";alg=\"ed25519\";nonce=\"AAAAAAAAAAAAAAAAAAAAAA\";tag=\"commonmeasure-registration\"",
+  "request_digest": "sha256:7a9610173079ad842956b040f1cbafc438453fb121d1b79316c0be20dfc442e8",
+  "key_id": "WWpn_pfHui9YKR4CZtQsDGMu7_Gch2zYChfSvnxgtPk",
+  "public_key_base64": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
+  "test_seed_base64": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+}

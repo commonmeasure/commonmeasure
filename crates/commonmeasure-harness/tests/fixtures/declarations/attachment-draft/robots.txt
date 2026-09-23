@@ -1,0 +1,9 @@
+User-Agent: *
+Allow: /
+Disallow: /never/
+Content-Usage: train-ai=n
+Content-Usage: /ai-ok/ train-ai=y
+
+User-Agent: ExampleBot
+Allow: /
+Content-Usage: train-ai=y

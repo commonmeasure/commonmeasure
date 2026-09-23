@@ -1,0 +1,38 @@
+{
+  "name": "Fictive Retail mixed corpus (synthetic): product data, brand content, third-party editorial",
+  "dates": {
+    "product-data/presto-300-listing.md": "2026-08-01",
+    "product-data/presto-200-listing.md": "2026-08-01",
+    "product-data/compatibility-matrix.md": "2026-08-01",
+    "product-data/northglade-g4-listing.md": "2026-08-01",
+    "product-data/accessories-listing.md": "2026-08-01",
+    "product-data/brewlink-hub-listing.md": "2026-08-01",
+    "brand-content/aurelio-presto-200-page.md": "2025-11-12",
+    "brand-content/aurelio-presto-300-page.md": "2026-05-04",
+    "brand-content/northglade-g4-guide.md": "2026-04-02",
+    "brand-content/northglade-g4-page.md": "2026-03-30",
+    "brand-content/aurelio-brewlink-hub-page.md": "2026-02-10",
+    "third-party/crema-courier-roundup.md": "2026-06-20",
+    "third-party/brewprint-g4-review.md": "2025-09-30",
+    "third-party/gadgetgrove-presto-300-review.md": "2026-07-18",
+    "third-party/crema-courier-grinder-guide.md": "2026-07-25",
+    "third-party/brewprint-steam-tip-review.md": "2026-07-20"
+  },
+  "licences": {
+    "product-data/presto-300-listing.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "product-data/presto-200-listing.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "product-data/compatibility-matrix.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "product-data/northglade-g4-listing.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "product-data/accessories-listing.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "product-data/brewlink-hub-listing.md": { "state": "declared", "reference": "fictive-retail/product-data-licence-v1" },
+    "brand-content/aurelio-presto-200-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" },
+    "brand-content/aurelio-presto-300-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" },
+    "brand-content/northglade-g4-guide.md": { "state": "declared", "reference": "northglade/brand-content-licence-v1" },
+    "brand-content/northglade-g4-page.md": { "state": "declared", "reference": "northglade/brand-content-licence-v1" },
+    "brand-content/aurelio-brewlink-hub-page.md": { "state": "declared", "reference": "aurelio/brand-content-licence-v1" },
+    "third-party/crema-courier-roundup.md": { "state": "declared", "reference": "crema-courier/syndication-licence-v1" },
+    "third-party/brewprint-g4-review.md": { "state": "declared", "reference": "brewprint/syndication-licence-v1" },
+    "third-party/crema-courier-grinder-guide.md": { "state": "declared", "reference": "crema-courier/syndication-licence-v1" },
+    "third-party/brewprint-steam-tip-review.md": { "state": "declared", "reference": "brewprint/syndication-licence-v1" }
+  }
+}
