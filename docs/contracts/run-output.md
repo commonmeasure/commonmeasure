@@ -1,5 +1,8 @@
 ---
 title: Run output contract
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Run output contract
@@ -581,8 +584,8 @@ volatile fields. This contract and the runtime change together.
   than asked for, or a provider whose published search page is smaller than
   the job's result limit, the gap naming both numbers — and is distinct from
   the coverage evaluator's rubric measurement.
-- `search` (every open-web adapter, and Redpine behind its quote gate),
-  `fetch` (Exa, Firecrawl, Linkup, Parallel, Search1API and Tavily,
+- `search` (every open-web adapter, Ozone Live, and Redpine behind its quote
+  gate), `fetch` (Exa, Firecrawl, Linkup, Ozone Live, Parallel, Search1API and Tavily,
   dispatched only when the job names a `fetch_target`), `query` (the
   internal corpus), `quote` (the Redpine adapter's quote-then-buy gate) and
   `invoke` (catalogued local skills) are implemented. The rest of the

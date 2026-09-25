@@ -61,7 +61,7 @@ pub fn automatic(home: &Path) -> bool {
 pub const SESSION_END_HOSTS: [&str; 1] = ["claude-code"];
 
 /// The name Claude Code gives itself in `initialize`. Every Claude Code
-/// session recorded on the owner's machine announced
+/// session recorded on a development machine announced
 /// `{"name": "claude-code", "title": "Claude Code"}`: 10 of 10
 /// `client_identified` records, Claude Code 2.1.270 to 2.1.278, September
 /// 2026 (`docs/contracts/session-evidence.md` §Client identity).

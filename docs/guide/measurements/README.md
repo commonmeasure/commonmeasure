@@ -1,5 +1,7 @@
 ---
 title: Measurements behind the guide
+domain: shared
+audience: reader
 ---
 
 # Measurements behind the guide

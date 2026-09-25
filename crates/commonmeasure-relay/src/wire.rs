@@ -1,10 +1,12 @@
 //! The Content Telemetry v1.0 wire shapes this relay emits.
 //!
 //! These are projection types, not the operator record: a [`WireEvent`] carries
-//! only what the standard defines and the Content Telemetry boundary in
-//! `ARCHITECTURE.md` permits. The pinned schemas in `schema/` are the contract;
-//! the conformance test in `tests/conformance.rs` keeps these types honest
-//! against them, so the standard is reused verbatim rather than forked.
+//! what the standard defines, the Content Telemetry boundary in
+//! `ARCHITECTURE.md` permits, and the custom members
+//! `docs/contracts/telemetry-projection.md` §Custom fields lists. The pinned
+//! schemas in `schema/` are the contract; the conformance test in
+//! `tests/conformance.rs` keeps these types honest against them, so the
+//! standard is reused verbatim rather than forked.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -37,8 +39,8 @@ pub struct WireBatch {
     /// batches, where the run's own rejected sources are not crossings.
     /// A receiver keeps the highest value it has seen for a session rather
     /// than summing, so every batch of a session and every redelivery
-    /// carry the same fact (`docs/contracts/session-evidence.md` §The
-    /// refused count on the wire).
+    /// carry the same fact (`docs/contracts/telemetry-projection.md`
+    /// §The refused count on the wire).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub refused: Option<u64>,
     pub events: Vec<WireEvent>,
@@ -76,7 +78,7 @@ pub struct WireEvent {
     /// content event projected for the registration service that issued it
     /// and on nothing else. Not a standard member: the operator's hub reads
     /// it to join the event to a reporting duty and removes it before onward
-    /// delivery (`docs/contracts/session-evidence.md` §Instance reference).
+    /// delivery (`docs/contracts/telemetry-projection.md` §Instance reference).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub instance: Option<WireInstance>,
     #[serde(skip_serializing_if = "Map::is_empty", default)]

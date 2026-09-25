@@ -41,8 +41,8 @@ pub use state::egress_report;
 #[derive(Debug, Default)]
 pub struct RelayOptions {
     /// Forecast the projection and pending delivery against the policy and
-    /// grants on disk, without network or writes. A real run syncs managed
-    /// policy and directory grants first, so over a home where either moves
+    /// approvals on disk, without network or writes. A real run syncs managed
+    /// policy and reporting approvals first, so over a home where either moves
     /// the forecast can differ from the run.
     pub dry_run: bool,
     /// Draft policy to forecast; valid only with `dry_run`.
@@ -144,7 +144,7 @@ pub struct RelayReport {
     /// each session for which a batch was enqueued, whether it carried new
     /// events or only a moved count. A session whose count the receiver
     /// already holds contributes nothing. The URLs and reasons stay home
-    /// (`docs/contracts/session-evidence.md` §The refused count on the wire).
+    /// (`docs/contracts/telemetry-projection.md` §The refused count on the wire).
     pub refused_reported: u64,
     pub events_enqueued: u64,
     /// Undelivered batches retained after this invocation.
@@ -159,15 +159,17 @@ pub struct RelayReport {
     /// covers batches spooled by earlier runs as well as those projected by
     /// this one.
     ///
-    /// A forecast is taken against the policy and the directory grants on
+    /// A forecast is taken against the policy and the reporting approvals on
     /// disk. It is not a promise about the next real run: that run syncs
-    /// managed policy and refreshes directory grants before it projects
+    /// managed policy and refreshes reporting approvals before it projects
     /// ([`relay_with_clock`]), and either can change which crossings are
     /// cleared. The counts match a real run over an unchanged home.
     pub events_by_type: BTreeMap<String, u64>,
     /// Events the receiver newly recorded. Lower than `events_delivered` on a
     /// redelivery, and that difference is the idempotency working. Unknown
-    /// during a dry run because no receiver has acknowledged the events.
+    /// during a dry run because no receiver has acknowledged the events, and
+    /// when any batch was accepted without a stated `events_created` count
+    /// ([`client::Acceptance`]).
     pub events_new_at_receiver: Option<u64>,
     /// Delivered events that were queued with an `instance` reference and
     /// posted without it, because this receiver did not issue the instance
@@ -446,7 +448,7 @@ pub fn relay_with_clock(
     // A policy file that cannot be read is an error here, not a silently
     // unfiltered projection, and it is read before the spool is opened so a
     // home with a broken policy gains no relay state at all.
-    let policy_document = match &options.policy {
+    let mut policy_document = match &options.policy {
         Some(path) => commonmeasure_harness::policy::PolicyDocument::read_file(path),
         None => commonmeasure_harness::policy::PolicyDocument::read(home),
     }
@@ -455,7 +457,7 @@ pub fn relay_with_clock(
     // The spool lock is taken before any other work, so a second relay — two
     // sessions ending at the same moment, or a session end beside a typed
     // `commonmeasure relay` — loses it here and exits before it has asked
-    // the hub for a standing, refreshed a directory grant or written any
+    // the hub for a standing, refreshed a reporting approval or written any
     // state. What the loser would have projected stays in the session logs
     // and is projected by the next run.
     //
@@ -487,15 +489,24 @@ pub fn relay_with_clock(
         }
     };
 
-    // Directory grants decide which sessions a directory-selected home may
-    // project, so they are refreshed before projection. A forecast refreshes
-    // nothing and reads the grants as they are cached.
-    if !options.dry_run
-        && let Err(error) = commonmeasure_harness::directory::sync(home)
-    {
-        eprintln!(
-            "commonmeasure: directory grant refresh failed; cached grants retain their original expiry: {error}"
-        );
+    // Reporting approvals decide which sessions a directory-selected home may
+    // project, so they are refreshed before projection, and the policy read
+    // above takes them up: it holds the approvals as they were before this
+    // refresh, and an approval the hub renewed after expiry would otherwise
+    // clear nothing until the next run (EGR-49). A named policy file carries
+    // no directory selection. A forecast refreshes nothing and reads the
+    // approvals as they are cached.
+    if !options.dry_run {
+        if let Err(error) = commonmeasure_harness::directory::sync(home) {
+            eprintln!(
+                "commonmeasure: reporting approval refresh failed; cached approvals retain their original expiry: {error}"
+            );
+        }
+        if options.policy.is_none() {
+            policy_document
+                .reread_selection(home)
+                .map_err(anyhow::Error::msg)?;
+        }
     }
     let directory_selection = commonmeasure_harness::directory::Registry::read(home)
         .map_err(anyhow::Error::msg)?
@@ -506,8 +517,8 @@ pub fn relay_with_clock(
     let internal_prefixes: Vec<String> = policy_document.resolve(None).internal_prefixes().to_vec();
 
     let mut agents = state.session_agents()?;
-    // The spool retains acknowledged documents. Recover their first identity
-    // when upgrading a home that has delivered sessions but has no pins yet.
+    // A session is pinned at its first delivery, so a batch queued by an
+    // earlier run and not yet sent carries the only copy of its agent id.
     for (_, entry) in spool.entries()? {
         if let (Some(session), Some(agent)) = (
             wire_session(&entry.document),
@@ -739,7 +750,9 @@ pub fn relay_with_clock(
     let delivery_states = spool.delivery_states()?;
     let mut batches_delivered = 0u64;
     let mut events_delivered = 0u64;
-    let mut events_new_at_receiver = 0u64;
+    // One batch accepted without a stated count makes the run's total
+    // unknown: a partial sum would read as the whole.
+    let mut events_new_at_receiver = Some(0u64);
     let mut instance_references_withheld = 0u64;
     let mut delivered_by_clearance: BTreeMap<Clearance, u64> = BTreeMap::new();
     let mut events_by_type: BTreeMap<String, u64> = BTreeMap::new();
@@ -758,7 +771,15 @@ pub fn relay_with_clock(
                 continue;
             }
         }
-        // Re-read consent, grant expiry and source policy before every delivery.
+        // A batch queued by 0.3.4 or earlier may carry consent provenance a
+        // later prune filled in, so it is held whatever the consent in force.
+        if entry.queued_at.is_none() {
+            if !options.dry_run {
+                spool.hold(index, spool::PRE_0_3_5_HOLD)?;
+            }
+            continue;
+        }
+        // Re-read consent, approval expiry and source policy before every delivery.
         // Hold selection's lock across the send: opt-out completes after any
         // already-running delivery, and every subsequent send sees the opt-out.
         let _consent = if options.dry_run {
@@ -845,7 +866,9 @@ pub fn relay_with_clock(
                 state.record_refused_delivered(session, refused)?;
             }
             spool.record_acceptance(index, &ids, references_withheld)?;
-            events_new_at_receiver += acceptance.events_created;
+            events_new_at_receiver = events_new_at_receiver
+                .zip(acceptance.events_created)
+                .map(|(total, created)| total + created);
             state.record_success(&receiver)?;
         }
         batches_delivered += 1;
@@ -906,7 +929,7 @@ pub fn relay_with_clock(
         batches_delivered,
         events_delivered,
         events_by_type,
-        events_new_at_receiver: (!options.dry_run).then_some(events_new_at_receiver),
+        events_new_at_receiver: events_new_at_receiver.filter(|_| !options.dry_run),
         instance_references_withheld,
         delivered_by_clearance: delivered_by_clearance
             .into_iter()
@@ -1056,9 +1079,9 @@ fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<Rechec
         .is_none()
     {
         // Provenance still requires consent even if both the registry and its
-        // persistent mode marker have been lost. Legacy scopes cannot replace it.
-        // Keep the batch pending as well: acknowledging it would allow its
-        // historical events to be projected again under legacy scopes later.
+        // persistent mode marker have been lost. Scope clearances cannot
+        // replace it. Keep the batch pending as well: acknowledging it would
+        // allow its events to be projected again under scope clearances later.
         anyhow::bail!(
             "queued directory reporting requires local consent state; re-enrol the directory before retrying"
         );

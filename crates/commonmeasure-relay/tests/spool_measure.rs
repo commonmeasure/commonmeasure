@@ -90,8 +90,11 @@ fn state_changes_with_thousands_of_retained_batches() {
     for index in 0..retained + dead + due {
         let session = uuid::Uuid::new_v4();
         pins.insert(session.to_string(), json!("commonmeasure"));
-        queue.push_str(&line(delivered_at, session));
-        queue.push('\n');
+        // Stored as the spool stores it: the index first.
+        queue.push_str(&format!(
+            "{{\"index\":{index},{}\n",
+            &line(delivered_at, session)[1..]
+        ));
         let (status, attempts) = match index {
             i if i < retained => ("delivered", 1),
             i if i < retained + dead => ("dead", 10),

@@ -20,7 +20,7 @@ pub struct RelayConfig {
     /// Base URL of the Content Telemetry receiver, e.g. `http://localhost:8080`.
     pub receiver: String,
     /// API key presented as `X-API-Key`. Optional because the standard does
-    /// not prescribe an auth scheme; oa-server requires one.
+    /// not prescribe an auth scheme; a conforming receiver may require one.
     #[serde(default)]
     pub api_key: Option<String>,
 }

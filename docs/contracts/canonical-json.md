@@ -1,5 +1,8 @@
 ---
 title: Canonical JSON contract
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Canonical JSON contract
@@ -56,6 +59,7 @@ Every seal in the product, with no exception and no second form:
 | the policy digest | [`docs/contracts/fleet-status.md`](fleet-status.md) §Policy digest |
 | the effective-policy identity | [`docs/contracts/fleet-status.md`](fleet-status.md) §Policy identity |
 | the signed policy envelope's signature base | [`docs/contracts/policy-envelope.md`](policy-envelope.md) |
+| the extension manifest-version and approved-configuration digests | [`docs/contracts/extension-manifest.md`](extension-manifest.md) §Digest |
 
 A hash over bytes that are not a JSON document — a retrieved source's text, a
 skill's entrypoint, the evidence log file, a processor's rule set — is a hash

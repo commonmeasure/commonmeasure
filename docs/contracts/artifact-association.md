@@ -1,5 +1,8 @@
 ---
 title: Artifact associations and local snapshots
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Artifact associations and local snapshots

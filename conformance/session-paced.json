@@ -1,0 +1,68 @@
+{
+  "agent_id": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "content_url": "https://publisher.example.org/analysis",
+      "data": {
+        "commonmeasure-crawl-delay": {
+          "delay_ms": 2000
+        },
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "0791f821-a814-5d69-a7e9-1b3bc654759e",
+      "source_role": "agent",
+      "timestamp": "2026-09-24T09:00:00.250Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://publisher.example.org/analysis",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:0f343b0931126a20f133d67c2b018a3b5c1d4e7f80a9b2c3d4e5f60718293a4b",
+        "contextops-host-tool": "claude-code",
+        "scope": "session",
+        "token_basis": "characters/4",
+        "tokens_ingested": 418
+      },
+      "id": "ddcf5cd2-d213-5de3-b383-f1e0175736ec",
+      "source_role": "agent",
+      "timestamp": "2026-09-24T09:00:00.250Z",
+      "type": "content_grounded"
+    },
+    {
+      "content_url": "https://unpaced.example.net/notes",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "grounding",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "737992e5-436f-587e-bb9d-5a7d47b60f5a",
+      "source_role": "agent",
+      "timestamp": "2026-09-24T09:01:00.250Z",
+      "type": "content_retrieved"
+    }
+  ],
+  "refused": 0,
+  "schema_version": "1.0",
+  "session_id": "aac40777-c138-57da-a112-fe201770e82f",
+  "started_at": "2026-09-24T09:00:00.250Z"
+}

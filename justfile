@@ -90,7 +90,7 @@ injection-example: fixtures
     COMMONMEASURE_INTERNAL_CORPUS=demo/injection/corpus cargo run -p commonmeasure-cli -- run demo/jobs/injection-screen.json --output {{evidence}}/output/injection
     cargo run -p commonmeasure-cli -- inspect {{evidence}}/output/injection
 
-# Regenerate the demonstration evidence home demo/arc/home (offline; docs/RUN-THE-DEMONSTRATION.md)
+# Regenerate the demonstration evidence home demo/arc/home (offline; demo/RUN-THE-DEMONSTRATION.md)
 demo-arc:
     sh demo/arc/regenerate.sh
 

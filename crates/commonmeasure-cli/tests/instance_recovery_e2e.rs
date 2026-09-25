@@ -314,7 +314,7 @@ impl Forwarder {
 /// Two loopback processes of the test stand beside the binary. The onward
 /// receiver is a **test double**: it answers `POST /events` with 503 until
 /// told to accept, then with the Content Telemetry acceptance body, and keeps
-/// what it accepted. It is not oa-server, a reference receiver or a
+/// what it accepted. It is not a conforming receiver, a reference receiver or a
 /// publisher's system. The forwarder stands at the
 /// hub's public origin and passes every request and answer through unchanged;
 /// it exists so the relay can be killed at a known point of one exchange.

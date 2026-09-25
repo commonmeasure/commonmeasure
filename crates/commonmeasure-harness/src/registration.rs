@@ -1118,8 +1118,9 @@ fn install_chrome(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
          at the extension's next message"
     ));
     lines.push(
-        "chrome: observed only. The extension records the sources ChatGPT, Google AI Overviews \
-         and Bing Copilot Search show, retrieved and never grounded, and refuses nothing"
+        "chrome: observed only. The extension records the sources ChatGPT and Bing Copilot \
+         Search show, retrieved and never grounded, and refuses nothing; it records nothing \
+         from Google AI Overviews"
             .to_owned(),
     );
     Ok(lines)
@@ -1223,8 +1224,8 @@ fn doctor_chrome(paths: &HostPaths, home: &Path) -> HostReport {
             .to_owned(),
     );
     lines.push(
-        "hooks: none; the extension observes ChatGPT, Google AI Overviews and Bing Copilot \
-         Search, and nothing it records is mediated"
+        "hooks: none; the extension observes ChatGPT and Bing Copilot Search, and nothing it \
+         records is mediated"
             .to_owned(),
     );
     lines.extend(home_lines(home));
@@ -1707,7 +1708,8 @@ fn plugin_lines(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<Strin
 /// No other host's install registers the event
 /// (`docs/contracts/host-integration.md` §2), so this answers whether a
 /// session ending on this machine reaches the hook at all — and therefore
-/// whether the relay runs without a person (§Relay at session end).
+/// whether the relay runs without a person
+/// (`docs/contracts/telemetry-projection.md` §Relay at session end).
 pub fn session_end_registered(paths: &HostPaths) -> bool {
     let Ok(settings) = read_json(&paths.claude_settings) else {
         return false;

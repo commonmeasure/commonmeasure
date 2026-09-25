@@ -221,6 +221,6 @@ demo-arc: the demonstration home is regenerated at $home
 Read it back:
   COMMONMEASURE_HOME=$home $bin session arc-mediated-strict
   COMMONMEASURE_HOME=$home $bin serve --listen 127.0.0.1:4180
-Pre-share check (docs/RUN-THE-DEMONSTRATION.md): review every host, cwd and
+Pre-share check (demo/RUN-THE-DEMONSTRATION.md): review every host, cwd and
 session id this store will render before any screen is shared.
 EOF

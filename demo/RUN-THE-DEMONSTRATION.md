@@ -1,26 +1,26 @@
 ---
-title: Run the security demonstration
+domain: edge
+audience: contributor
 ---
 
 # Run the security demonstration
 
-This walkthrough performs the security demonstration from a clean shell. It
-shows a malicious web page being blocked before its content reaches the
-model, with the block recorded and explained, using the real product end to
-end rather than a staged recording. Terms like crossing, engagement,
-clearance and admission are defined in [`docs/GLOSSARY.md`](GLOSSARY.md).
+For a presenter with a checkout of this repository. The demonstration shows
+a malicious web page refused before its content reaches the model, with the
+refusal recorded and explained, using the shipped binary end to end. Terms
+such as crossing, engagement, clearance and admission are defined in
+[`docs/GLOSSARY.md`](../docs/GLOSSARY.md).
 
-Keep the claim accurate throughout: the injection screen is a deterministic
-pattern matcher that names the exact rule it matched. It is screening, not a
-complete defence, and a page it does not match is "clean under these rules",
-not "safe".
+State the claim accurately: the injection screen is a deterministic pattern
+matcher that names the rule it matched. It is screening, not a complete
+defence, and a page it does not match is "clean under these rules", not
+"safe".
 
-Every fenced command below was run, in this order, from the repository root,
-while the document was written. Two steps are performed live by the
-presenter, a real coding-agent session and the policy switch, and §3
-explains both, each with a scripted fallback that already exercises the same
-code. Nothing here needs credentials, contacts any external server, or costs
-money; every network connection is to another process on this machine.
+Run every command from the repository root, in order. Two steps are
+performed live: a real coding-agent session and the policy switch (§3);
+each has a fallback in the generated data. Nothing here needs credentials,
+contacts an external server or costs money; every network connection is to
+another process on this machine.
 
 ## 0. Generate the demonstration data
 
@@ -54,10 +54,12 @@ can perform the switch live.
 COMMONMEASURE_HOME=demo/arc/home cargo run -q -p commonmeasure-cli -- session arc-mediated-strict
 ```
 
-Two fetches: the clean page went through and into the model's context; the
-malicious page was refused, and the record names the three matched pattern
-rules (`instruction_override`, `role_reassignment`, `tool_directive`). The
-point to make aloud: the record names the rules but never quotes the attack
+The script ran the observe and strict sessions from one process, so the
+report joins them: four mediated crossings. Under observe, the clean page
+and the malicious page were both carried into the model's context. Under
+strict, the clean page was carried and the malicious page refused, and the
+record names the three matched pattern rules (`instruction_override`,
+`role_reassignment`, `tool_directive`). The point to make aloud: the record names the rules but never quotes the attack
 text itself, so the evidence cannot become a copy of the payload.
 
 ## 2. The console and the run report
@@ -82,7 +84,7 @@ cargo run -q -p commonmeasure-cli -- inspect target/demo/injection
 
 The block resolves to the named rules, every integrity hash is recomputed
 at inspect time, and the original page bytes are preserved on disk while no
-report quotes them ([`docs/contracts/run-output.md`](contracts/run-output.md)
+report quotes them ([`docs/contracts/run-output.md`](../docs/contracts/run-output.md)
 defines the run directory).
 
 ## 3. The two live steps
@@ -101,9 +103,16 @@ nudge, so that request does not need pasting.) Then start a
 real Claude Code session and paste `demo/arc/session-prompt.txt` as the first
 message: it states the task, and repeats the request for these pages only
 because they are served from loopback, which the standing wording ("external
-web content") does not clearly name. With the local test server from
-`just demo-arc` still running, the session produces live what step 2 of the
-script produced synthetically. *Fallback:* the `arc-mediated-observe`
+web content") does not clearly name. `just demo-arc` stops its test server
+when it finishes, so start it again, and launch the session against the
+demonstration store rather than your own:
+
+```sh
+python3 -m http.server 8377 --bind 127.0.0.1 --directory demo/injection/corpus &
+COMMONMEASURE_HOME="$PWD/demo/arc/home" claude
+```
+
+The session then produces live what step 2 of the script produced. *Fallback:* the `arc-mediated-observe`
 session in the console, plus its raw transcript in `demo/arc/home/scripted/`.
 
 **The policy switch.** Edit `demo/arc/home/policy.json` and set
@@ -142,7 +151,7 @@ the other engagement appears nowhere in what arrived.
 
 Attendees can take the plugin away and install it with no repository access
 and no Rust toolchain. Every release publishes the archive, and the installer
-fetches it with its checksum verified ([`docs/RELEASE.md`](RELEASE.md)). To build it from
+fetches it with its checksum verified ([`docs/GETTING-STARTED.md`](../docs/GETTING-STARTED.md) §1). To build it from
 this checkout instead:
 
 ```sh

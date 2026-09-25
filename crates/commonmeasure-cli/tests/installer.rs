@@ -6,7 +6,7 @@
 //! a checksum list naming every asset a release holds. No credential is sent
 //! or needed. The checksum, version and missing-binary refusals are driven
 //! with no network; the release itself is exercised by the release workflow's
-//! verify job and the container check `docs/RELEASE.md` records.
+//! verify job and the container check `RELEASING.md` records.
 
 #![cfg(unix)]
 

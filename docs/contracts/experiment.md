@@ -1,5 +1,8 @@
 ---
 title: Experiment contract
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Experiment contract
@@ -64,5 +67,9 @@ hash.
 
 ## Output
 
-The console may show Pareto frontiers and job-specific winners. It must not
+A run names at most one selected plan per job, and only when the job's
+objective is computable from measurements the run obtained
+([`docs/contracts/run-output.md`](run-output.md) §Selection);
+`commonmeasure inspect` prints it. A console view of Pareto frontiers across
+runs is `planned`: the console does not render run directories. No output may
 publish a universal provider ranking from heterogeneous tests.

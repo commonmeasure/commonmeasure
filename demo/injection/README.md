@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The injection-screen bundle
 
 A synthetic bundle: two documents that answer the
@@ -39,12 +44,16 @@ inference.
 just injection-example
 ```
 
-Offline, no gateway, no credentials, no network. The run publishes with the
+Offline, no gateway, no credentials, no network. The recipe writes to
+`output/injection` under `COMMONMEASURE_PRIVATE_EVIDENCE` and refuses to run
+without it (`CONTRIBUTING.md`); the same `commonmeasure run` with
+`COMMONMEASURE_INTERNAL_CORPUS=demo/injection/corpus` and any new `--output`
+directory produces the same run. The run publishes with the
 internal plan `unavailable` (there is no gateway to answer, by design) while
 its admission evidence is complete: `community-answer-thread.md` is refused by
 the injection screen before the model sees it, `connecting-a-data-source.md`
 is admitted beside it, and `commonmeasure inspect` on the run directory resolves
-the refusal to the named rules, and the matched text is not recorded. The
+the refusal to the named rules. The matched text is not recorded. The
 manifest hash is stable across regenerations; the run's own id and timestamps
 are its only volatile fields.
 

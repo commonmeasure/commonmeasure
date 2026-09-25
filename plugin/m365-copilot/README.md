@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: operator
+---
+
 # Microsoft 365 Copilot
 
 This package adds a Common Measure Research declarative agent to Microsoft 365
@@ -7,13 +12,12 @@ in the [host contract](../../docs/contracts/host-integration.md).
 
 ## Status
 
-- **Copilot in the browser, `live-verified`** on 17 September 2026 with
-  personal packages 1.0.5 and 1.0.6: Hub consent and token exchange, an
+- **Copilot in the browser, `live-verified`** with packages 1.0.5 and
+  1.0.6: Hub consent and token exchange, an
   authenticated `context_status`, an admitted public fetch and a policy
   refusal in one MCP session, and the cleared public-source metadata and
   aggregate refusal count delivered to the Hub.
-- **Word on Mac (16.113.914.0), `live-verified`** on 17 September 2026:
-  Word's own status call and a paired public fetch and refusal matched the
+- **Word on Mac (16.113.914.0), `live-verified`**: Word's own status call and a paired public fetch and refusal matched the
   edge's source record and the Hub's receipt.
 - Direct sign-in from Word does not complete: the Hub email link opens
   outside Word's dialog and Microsoft does not finish the connection. Sign
@@ -106,13 +110,14 @@ include internal activity in publisher reporting.
 python3 -m unittest discover -s plugin/m365-copilot -p 'test_*.py'
 ```
 
-On 16 September 2026 a fixture archive with reserved example URLs and a
-dummy vault reference passed validation against Microsoft's app 1.23,
-declarative agent 1.8 and plugin 2.4 JSON schemas, and the corrected archive
-passed all 59 of Microsoft's package rules. The Python `jsonschema`
-validators are instantiated directly, because their schema self-check
-rejects an unused ECMAScript `\p{L}` expression in Microsoft's app schema.
-This establishes local validity, not acceptance by a tenant.
+The tests check the archive's references, OAuth fields, pinned tools and
+refusals. Schema validity was checked by hand on 16 September 2026: a
+fixture archive with reserved example URLs and a dummy vault reference
+validated against Microsoft's app 1.23, declarative agent 1.8 and plugin
+2.4 JSON schemas and passed Microsoft's package rules. The Python `jsonschema` validators are instantiated
+directly, because their schema self-check rejects an unused ECMAScript
+`\p{L}` expression in Microsoft's app schema. This establishes local
+validity, not acceptance by a tenant.
 
 Microsoft references, checked 16 September 2026:
 

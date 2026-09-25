@@ -1,4 +1,13 @@
+---
+title: SimpleQA benchmark
+domain: edge
+audience: integrator
+section: reference
+---
+
 # SimpleQA benchmark
+
+This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 
 The local `commonmeasure benchmark` command runs a deterministic subset of
 SimpleQA through the existing batch runtime: governed search, context
@@ -61,7 +70,7 @@ and executed model/provider fields remain whatever the response reports.
 OpenRouter account routing and fallback defaults apply; fixed upstream-provider
 routing and monetary inference-charge parsing are not implemented. Setup is in
 `demo/benchmarks/simpleqa/README.md`. Direct environment-key authentication is
-**live-verified** by the five-case smoke run on 22 September 2026; key-file
+**live-verified** by a five-case smoke run; key-file
 loading remains fixture-tested. All successful answer and grader calls reported
 the requested `openai/gpt-4.1` model and provider `OpenAI`. Three HTTP 429
 responses left two supplier grades and one baseline answer unmeasured; no
@@ -79,7 +88,7 @@ did not attempt the question; a transport failure is not an abstention.
 The invocation preserves the exact grader request and reply, requested and
 reported executed models, token counts, latency, and unknown monetary charge.
 The rubric and its licence are included in the repository; attribution and
-walkthrough are in `demo/benchmarks/simpleqa/README.md` in the product repository.
+walkthrough are in `demo/benchmarks/simpleqa/README.md`.
 
 Each provider, including the separately named `none` no-context baseline,
 retains the full selected-case denominator. Summary counts distinguish

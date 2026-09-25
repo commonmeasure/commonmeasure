@@ -1,5 +1,8 @@
 ---
 title: Grant contract
+domain: network
+audience: integrator
+section: reference
 ---
 
 # Grant contract
@@ -230,7 +233,7 @@ envelope does not grant or renew supplier entitlements"; this section
 supersedes that sentence, and the envelope contract now carries a paragraph
 labelled planned in its place. Its §The envelope says "one revision names one
 policy"; with this addition a revision names one policy and one grant set,
-the opposite choice to its §Directory reporting grants, which keeps a separate
+the opposite choice to its §Reporting approvals, which keeps a separate
 revision space (§Open questions 2). The addition this contract needs:
 
 - `payload.grants`: the catalogue's grant documents whose
@@ -450,7 +453,7 @@ exists, so that duty cannot reach `delivered` until one is agreed.
 
 ## Open questions
 
-Owner choices. Recommendations are not decisions.
+Open choices. Recommendations are not decisions.
 
 1. **Should RSL carry grantee scope?** Options: (a) keep it outside RSL, as
    now; (b) propose it for RSL's licence vocabulary; (c) propose it as claims
@@ -461,8 +464,9 @@ Owner choices. Recommendations are not decisions.
    principals and engagements, and does not belong in a published file. The
    token exchange is already bilateral and per licensee.
 2. **Envelope or a separate signed snapshot.** The adopted product direction
-   distributes self-issued grants in the signed policy envelope. The alternative is the directory-grant precedent
-   ([`directory-enrolment.md`](directory-enrolment.md#signed-grant-snapshot)):
+   distributes self-issued grants in the signed policy envelope. The
+   alternative is the reporting-approval precedent
+   ([`directory-enrolment.md`](directory-enrolment.md#signed-reporting-approvals)):
    its own revision space and expiry. The envelope needs no change to the
    registration request, because registration already binds the envelope, but
    every grant edit becomes a policy revision that each edge must fetch before
@@ -493,11 +497,11 @@ Owner choices. Recommendations are not decisions.
 8. **Revocation bounds.** A self-issued grant is bounded by the envelope's
    expiry. An external grant is distributed only within a bound its issuer
    agreed, with the evidence in the document (§Offline use of an external
-   grant). The numbers are the owner's and each issuer's, and this contract
-   sets none. The custody contract's 300 second refresh is the precedent for
-   a hosted edge. The owner's part is what bound to ask each issuer for, and
-   whether the hub applies a ceiling of the organisation's own to any agreed
-   bound.
+   grant). The numbers are agreed between the organisation and each issuer,
+   and this contract sets none. The custody contract's 300 second refresh is
+   the precedent for a hosted edge. Open: what bound to ask each issuer for,
+   and whether the hub applies a ceiling of the organisation's own to any
+   agreed bound.
 9. **How far rule 3 reaches.** As written it applies to all work of the
    organisation, registered or not, for as long as a grant is carried.
    Options: (a) as written; (b) only to registered instances, so a session

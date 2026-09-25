@@ -528,12 +528,97 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
         [None, Some(1), Some(1), Some(2), Some(2)]
     );
 
+    // A session paced by a host's `Crawl-delay`: the retrieval of a page
+    // sent after waiting its turn carries the delay kept, and its grounding
+    // does not; a host stating `Crawl-delay: 0` paces nothing and its
+    // retrieval carries no delay.
+    let paced_crossing = |minute: u8, url: &str, robots: Value, grounded: bool| {
+        let mut record = json!({
+            "event": "crossing_mediated",
+            "payload": {
+                "timestamp": format!("2026-09-24T09:{minute:02}:00.250Z"),
+                "mode": "mediated",
+                "host": "claude-code",
+                "url": url,
+                "http_status": 200,
+                "grounded": grounded,
+                "licence": {"state": "unknown"},
+                "declarations": {"robots": robots},
+            },
+        });
+        if grounded {
+            record["payload"]["content_hash"] =
+                json!("sha256:0f343b0931126a20f133d67c2b018a3b5c1d4e7f80a9b2c3d4e5f60718293a4b");
+            record["payload"]["estimated_tokens"] = json!(418);
+            record["payload"]["token_basis"] = json!("characters/4");
+        }
+        record
+    };
+    let paced = commonmeasure_relay::project::project_session(
+        None,
+        "golden-session-paced",
+        &[
+            json!({
+                "event": "edge_identity",
+                "payload": {
+                    "timestamp": "2026-09-24T08:59:00.000Z",
+                    "host": "claude-code",
+                    "hub": "https://hub.example",
+                    "key_id": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+                    "standing": "enrolled",
+                },
+            }),
+            paced_crossing(
+                0,
+                "https://publisher.example.org/analysis",
+                json!({
+                    "requested_url": "https://publisher.example.org/analysis",
+                    "url": "https://publisher.example.org/robots.txt",
+                    "reading": {"group": "CommonMeasureBot", "group_is_wildcard": false,
+                                "crawlable": true, "access_rule": "Allow: /",
+                                "crawl_delay": {"value": "2", "delay_ms": 2000,
+                                                "honoured_ms": 2000, "capped": false}},
+                    "mode": "strict", "outcome": "allowed",
+                    "delay": {"host": "publisher.example.org", "delay_ms": 2000,
+                              "outcome": "waited", "wait_ms": 1732, "budget_ms": 60000},
+                }),
+                true,
+            ),
+            paced_crossing(
+                1,
+                "https://unpaced.example.net/notes",
+                json!({
+                    "requested_url": "https://unpaced.example.net/notes",
+                    "url": "https://unpaced.example.net/robots.txt",
+                    "reading": {"group": "*", "group_is_wildcard": true, "crawlable": true,
+                                "crawl_delay": {"value": "0", "delay_ms": 0,
+                                                "honoured_ms": 0, "capped": false}},
+                    "mode": "strict", "outcome": "allowed",
+                }),
+                false,
+            ),
+        ],
+        &[],
+        &|_| true,
+    )
+    .batches;
+
     let [turn_batch] = <[_; 1]>::try_from(turns).expect("one turn batch");
     let [session_batch] = <[_; 1]>::try_from(session).expect("one session batch");
     let [run_batch] = <[_; 1]>::try_from(run).expect("one run batch");
     let [supplied_batch] = <[_; 1]>::try_from(supplied).expect("one supplied session batch");
     let [supplied_run_batch] = <[_; 1]>::try_from(supplied_run).expect("one supplied run batch");
     let [refused_batch] = <[_; 1]>::try_from(refused).expect("one refused session batch");
+    let [paced_batch] = <[_; 1]>::try_from(paced).expect("one paced session batch");
+    assert_eq!(
+        paced_batch
+            .events
+            .iter()
+            .map(|event| event.data.get("commonmeasure-crawl-delay").cloned())
+            .collect::<Vec<_>>(),
+        [Some(json!({"delay_ms": 2000})), None, None],
+        "the waited retrieval alone carries the delay"
+    );
     assert_eq!(refused_batch.refused, Some(2));
     assert_eq!(
         refused_batch.events.len(),
@@ -548,6 +633,7 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
         ("run-supplied.json", supplied_run_batch),
         ("session-refused.json", refused_batch),
         ("session-registered.json", registered_batch),
+        ("session-paced.json", paced_batch),
     ]
 }
 

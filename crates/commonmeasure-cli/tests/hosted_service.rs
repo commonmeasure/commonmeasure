@@ -75,6 +75,12 @@ struct Hub {
     /// Set, the release route answers `503` and rules on nothing: an
     /// injected fault standing for a hub outage.
     release_outage: Arc<AtomicBool>,
+    /// Set, the telemetry receiver answers `503` and records nothing: an
+    /// injected fault that leaves a batch queued on the edge.
+    delivery_outage: Arc<AtomicBool>,
+    /// The signed reporting-approval snapshot the approvals route serves the
+    /// enrolled edge; unset, the route answers `404`.
+    approvals: Arc<Mutex<Option<Value>>>,
 }
 
 impl Hub {
@@ -99,6 +105,8 @@ impl Hub {
         let released = Arc::new(Mutex::new(Vec::<Value>::new()));
         let release_requests = Arc::new(AtomicUsize::new(0));
         let release_outage = Arc::new(AtomicBool::new(false));
+        let delivery_outage = Arc::new(AtomicBool::new(false));
+        let approvals = Arc::new(Mutex::new(None::<Value>));
         let release_nonces = Mutex::new(std::collections::HashSet::new());
         let listener = Server::bind("127.0.0.1:0").expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
@@ -110,13 +118,21 @@ impl Hub {
                     Arc::clone(&batches),
                     Arc::clone(&directory),
                 );
-                let (released, release_requests, release_outage) = (
+                let (released, release_requests, release_outage, delivery_outage) = (
                     Arc::clone(&released),
                     Arc::clone(&release_requests),
                     Arc::clone(&release_outage),
+                    Arc::clone(&delivery_outage),
                 );
+                let served_approvals = Arc::clone(&approvals);
                 let url = url.clone();
                 move |request| match request.target.as_str() {
+                    "/api/v1/edge/reporting-approvals" => {
+                        match served_approvals.lock().expect("lock").as_ref() {
+                            Some(snapshot) => Response::json(200, &snapshot.to_string()),
+                            None => Response::json(404, r#"{"detail":"not found"}"#),
+                        }
+                    }
                     "/api/v1/policy/desired" => {
                         policy_requests.fetch_add(1, Ordering::SeqCst);
                         let authority = request.headers.get("Host").unwrap_or_default().to_owned();
@@ -212,6 +228,13 @@ impl Hub {
                             .to_string(),
                         )
                     }
+                    target
+                        if request.method == "POST"
+                            && target.contains("events")
+                            && delivery_outage.load(Ordering::SeqCst) =>
+                    {
+                        Response::json(503, r#"{"detail":"unavailable"}"#)
+                    }
                     target if request.method == "POST" && target.contains("events") => {
                         let body: Value =
                             serde_json::from_slice(&request.body).unwrap_or(Value::Null);
@@ -238,6 +261,8 @@ impl Hub {
             released,
             release_requests,
             release_outage,
+            delivery_outage,
+            approvals,
         }
     }
 

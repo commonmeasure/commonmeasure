@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::config::RelayConfig;
-use crate::spool::Spool;
+use crate::spool::{RefusedSpool, Spool};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Receipts {
@@ -40,8 +40,8 @@ pub struct Receipts {
     /// Separate from `receiver`, which a later failed attempt to another
     /// receiver overwrites while the accepted delivery stands: reading the
     /// two as one attributes a delivery to a receiver that never took it.
-    /// Absent on receipts written before this field existed, and the reader
-    /// then names no receiver rather than guessing one.
+    /// Written with every accepted delivery; 0.3.4 and earlier wrote
+    /// receipts without it, which [`last_delivery_text`] does not read.
     #[serde(default)]
     pub delivered_to: Option<String>,
     #[serde(default)]
@@ -307,15 +307,22 @@ pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
     let Some(at) = receipts.last_delivered_at else {
         return "last delivery: none recorded".to_owned();
     };
+    let Some(delivered_to) = receipts.delivered_to else {
+        return format!(
+            "last delivery: unknown, {} was written by commonmeasure 0.3.4 or earlier and names \
+             no receiver; the next accepted delivery rewrites it",
+            path.display()
+        );
+    };
     let configured = RelayConfig::load(home)
         .ok()
         .flatten()
         .map(|config| config.receiver);
-    let to = receipts
-        .delivered_to
-        .filter(|delivered_to| configured.as_deref() != Some(delivered_to.as_str()))
-        .map(|receiver| format!(" to {receiver}"))
-        .unwrap_or_default();
+    let to = if configured.as_deref() == Some(delivered_to.as_str()) {
+        String::new()
+    } else {
+        format!(" to {delivered_to}")
+    };
     match chrono::DateTime::parse_from_rfc3339(&at) {
         Ok(delivered) => format!(
             "last delivery: {at}{to}, {} ago",
@@ -360,6 +367,11 @@ pub fn egress_report(home: &Path) -> Value {
     let receipts = state.receipts();
     let queue = queue_report(home, Utc::now());
     let pending = queue.as_ref().ok().map(|q| q.pending);
+    // Read only when the spool is refused, and then only its current parts.
+    let refused_spool = queue
+        .as_ref()
+        .err()
+        .and_then(|_| Spool::read_only(home).refused().ok().flatten());
     let skipped_result = state.skipped_sessions();
     let state_error = delivered_result
         .err()
@@ -447,6 +459,9 @@ pub fn egress_report(home: &Path) -> Value {
         // Null when the file did not read; `unavailable` says why.
         "skipped_sessions": skipped,
         "unavailable": state_error.or(config_error),
+        // Null unless the spool is refused as one 0.3.4 or earlier wrote.
+        // `incomplete` says why its counts, if so, are only lower bounds.
+        "refused_spool": refused_spool,
         "receiver": receiver,
         "delivered": delivered,
         "pending": pending,
@@ -454,6 +469,52 @@ pub fn egress_report(home: &Path) -> Value {
         "key_id": enrolment.as_ref().map(|record| record.key_id.clone()),
         "key_standing": enrolment.as_ref().map(|record| record.standing()),
     })
+}
+
+/// What a refused spool still owes, as far as its current parts show. A
+/// count claims nothing about batches it could not read, so only a complete
+/// count of zero is stated as nothing outstanding.
+fn refused_spool_text(refused: &RefusedSpool) -> String {
+    let count = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let owed = refused.outstanding + refused.unknown + refused.unindexed;
+    let mut text = "refused spool: ".to_owned();
+    if let Some(reason) = &refused.incomplete {
+        if owed == 0 {
+            return format!(
+                "{text}the count is incomplete ({reason}), so what the spool owes is unknown\n"
+            );
+        }
+        text.push_str(&format!("the count is incomplete ({reason}); at least "));
+    }
+    text.push_str(&count(
+        refused.outstanding,
+        "batch is queued or dead",
+        "batches are queued or dead",
+    ));
+    text.push_str(" in lines with an index");
+    if refused.unknown > 0 {
+        text.push_str(&format!(
+            "; {} no recorded delivery state, and outbound.ack may record {} as accepted",
+            count(refused.unknown, "more has", "more have"),
+            if refused.unknown == 1 { "it" } else { "them" }
+        ));
+    }
+    if refused.unindexed > 0 {
+        text.push_str(&format!(
+            "; {} without an index {} not read",
+            count(refused.unindexed, "line", "lines"),
+            if refused.unindexed == 1 { "is" } else { "are" }
+        ));
+    }
+    if owed > 0 {
+        text.push_str(
+            "; each is projected again only if its session log remains, or its run is passed \
+             again with --run\n",
+        );
+    } else {
+        text.push_str("; no indexed batch is outstanding\n");
+    }
+    text
 }
 
 /// One skipped session as `detail`, `status` and `doctor` state it.
@@ -636,6 +697,9 @@ pub fn egress_text(report: &Value) -> String {
     if let Some(error) = report["unavailable"].as_str() {
         text.push_str(&format!("relay state unavailable: {error}\n"));
     }
+    if let Ok(refused) = serde_json::from_value::<RefusedSpool>(report["refused_spool"].clone()) {
+        text.push_str(&refused_spool_text(&refused));
+    }
     if report["dead"].as_u64().is_some_and(|n| n > 0) {
         text.push_str("requeue dead batches with `commonmeasure relay requeue`, then run `commonmeasure relay`\n");
     }
@@ -667,17 +731,20 @@ mod tests {
             last_delivery_text(home.path(), now).starts_with("last delivery: unknown, "),
             "an unreadable file is not a delivery that never happened"
         );
-        // Receipts written before `delivered_to` existed name no receiver:
-        // `receiver` there is the last attempt, which a failure may have
-        // moved to another receiver after this delivery was accepted.
+        // Receipts 0.3.4 and earlier wrote name no receiver: `receiver`
+        // there is the last attempt, which a failure may have moved to
+        // another receiver after this delivery was accepted. They are not
+        // read as a delivery to the configured receiver.
         std::fs::write(
             &receipts,
             r#"{"receiver":"https://hub.example/api/v1/telemetry","last_delivered_at":"2026-09-16T10:00:00.000Z","last_error":null}"#,
         )
         .unwrap();
-        assert_eq!(
-            last_delivery_text(home.path(), now),
-            "last delivery: 2026-09-16T10:00:00.000Z, 6d 2h ago"
+        let text = last_delivery_text(home.path(), now);
+        assert!(
+            text.starts_with("last delivery: unknown, ")
+                && text.contains("receipts.json was written by commonmeasure 0.3.4 or earlier"),
+            "{text}"
         );
         // A delivery made under `--receiver` went somewhere the configured
         // lines do not name, so this line names it.

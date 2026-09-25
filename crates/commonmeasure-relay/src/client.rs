@@ -1,28 +1,24 @@
-//! The delivery client: one batch document, one POST, one parsed answer.
+//! The delivery client: one batch document, one POST, one status.
 //!
-//! Designed from the receiver's published API reference (oa-server's
-//! `docs/api-reference.md`), not from its handlers: `POST {receiver}/events`
-//! with the `event_batch` document as the body and the API key in `X-API-Key`,
-//! answered 200 or 201 with `{"status": "ok", "events_created": n}` where
-//! `events_created` counts only newly inserted events, so a fully redelivered
-//! batch is a success that created nothing.
-//!
-//! That answer is the whole of acceptance. A 2xx alone proves only that
-//! something on the other end of the socket replied — a proxy, a captive
-//! portal, a wrong path on the right host — and accepting it would burn the
-//! batch's event ids against a receiver that never recorded them, leaving the
-//! true receiver permanently unreachable for those facts. Anything that is not
-//! the documented answer is therefore a delivery failure, and a failure keeps
-//! the spool.
+//! `POST {receiver}/events` with the `event_batch` document as the body and
+//! the API key in `X-API-Key`. The Content Telemetry standard defines no
+//! response body, so any 2xx is acceptance, as the hub's onward delivery
+//! counts it; requiring one receiver's body would make that receiver the only
+//! conforming one. A body is optional. When it is JSON with an unsigned
+//! `events_created`, that count of newly recorded events is kept (0 on a
+//! redelivery, which is the idempotency working); otherwise the count is
+//! unknown, never zero (`docs/FAIL-POLICY.md` §7). Anything other than a 2xx
+//! is a delivery failure, and a failure keeps the spool.
 
 use anyhow::{Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// What the receiver said about one accepted batch.
 pub struct Acceptance {
-    /// Events newly recorded by the receiver; a redelivery reports 0 here and
-    /// that is the idempotency working, not a failure.
-    pub events_created: u64,
+    /// Events newly recorded by the receiver, when its answer states the
+    /// count; `None` when it answered without one (a 204, an empty or
+    /// non-JSON body, or JSON with no unsigned `events_created`).
+    pub events_created: Option<u64>,
 }
 
 /// The product token every delivery carries. The wire document is the
@@ -41,35 +37,20 @@ pub fn deliver(receiver: &str, api_key: Option<&str>, document: &Value) -> Resul
     let url = format!("{}/events", receiver.trim_end_matches('/'));
     let response = commonmeasure_http::send(&url, request)?;
     let answer = serde_json::from_slice::<Value>(&response.body).ok();
-    if !matches!(response.status, 200 | 201) {
+    if !(200..300).contains(&response.status) {
         let detail = answer
             .as_ref()
             .and_then(|parsed| parsed["detail"].as_str().map(str::to_owned))
             .unwrap_or_else(|| summarise(&response.body));
         bail!("receiver answered {}: {detail}", response.status);
     }
-    let Some(answer) = answer.filter(|answer| answer["status"] == json!("ok")) else {
-        bail!(
-            "receiver answered {} but not as a telemetry receiver: expected a JSON body with \
-             status \"ok\", got {}",
-            response.status,
-            summarise(&response.body)
-        );
-    };
-    let Some(events_created) = answer["events_created"].as_u64() else {
-        bail!(
-            "receiver answered {} with status \"ok\" but no events_created count, so nothing \
-             says the batch was recorded: {}",
-            response.status,
-            summarise(&response.body)
-        );
-    };
-    Ok(Acceptance { events_created })
+    Ok(Acceptance {
+        events_created: answer.and_then(|answer| answer["events_created"].as_u64()),
+    })
 }
 
 /// The body as it can be quoted in an error: one line, bounded, so an HTML
-/// error page or a captive portal's login form names itself in the receipts
-/// without filling them.
+/// error page names itself in the receipts without filling them.
 fn summarise(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");

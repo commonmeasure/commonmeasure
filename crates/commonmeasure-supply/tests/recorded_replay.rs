@@ -479,11 +479,10 @@ fn firecrawl_fetch_replays_its_recorded_scrape_response() {
     assert_eq!(native.basis, ChargeBasis::Observed);
 }
 
-/// Parallel is `live-verified` for search and fetch: the sealed responses are
-/// in runs of 20 August 2026 that are not in this repository. No recon capture is committed under `recon/`, so there
-/// is nothing to serve from a recording and the parser is exercised over
-/// Parallel's documented response shape through the real transport and a
-/// loopback origin.
+/// Parallel's recorded search and fetch responses are replayed through runs
+/// in `crates/commonmeasure-cli/tests/replay_contract.rs`. These tests
+/// exercise the parser over Parallel's documented response shape through the
+/// real transport and a loopback origin, so they run without the recordings.
 /// The request must carry the objective and query, and the reply's `excerpts`
 /// array must become the envelope's text, `publish_date` its date, `search_id`
 /// the request id, and the `sku_search` usage count its observed charge.

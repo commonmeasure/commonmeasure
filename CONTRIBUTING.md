@@ -1,3 +1,8 @@
+---
+domain: shared
+audience: contributor
+---
+
 # Contributing
 
 Common Measure is source-available under the Functional Source License
@@ -12,11 +17,13 @@ not to a public issue.
 
 [ARCHITECTURE.md](ARCHITECTURE.md), [docs/contracts/](docs/contracts/) and
 [AGENTS.md](AGENTS.md) describe the components, formats and conventions for
-anyone reading or building the code.
+anyone reading or building the code. [DOCUMENTATION.md](DOCUMENTATION.md)
+sets how the pages under `docs/` are written so the website can publish
+them, and [RELEASING.md](RELEASING.md) how a release is cut.
 
 ## Recorded fixtures (optional, for maintainers)
 
-About 120 tests read recorded fixtures that this repository does not carry:
+Some tests read recorded fixtures that this repository does not carry:
 third-party provider responses (`recon/`), committed runs (`output/`) and
 recorded host sessions (`host-sessions/`). Without them those tests report
 as ignored, with the missing directory named, and `just gates` still passes.

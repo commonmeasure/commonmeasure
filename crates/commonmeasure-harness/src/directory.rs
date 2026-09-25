@@ -1,4 +1,4 @@
-//! Local project selection and independently signed, edge-bound reporting grants.
+//! Local project selection and independently signed, edge-bound reporting approvals.
 //! Directory selection never changes source policy or provider credentials.
 
 use crate::{declaration, enrolment::EnrolmentRecord, managed::Deployment};
@@ -7,6 +7,9 @@ use commonmeasure_types::canonical::{canonical_digest, canonical_json};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+
+const FORMAT: &str = "commonmeasure-reporting-approvals/v1";
+const FILE: &str = "reporting-approvals.json";
 
 /// One explicitly selected root. Paths and OS identities remain on this edge.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,8 +121,9 @@ impl Registry {
                 .map(Some)
                 .map_err(|e| format!("invalid directory registry: {e}")),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Consent data disappearing must not restore legacy reporting.
-                // An empty selection withholds egress without changing admission.
+                // Consent data disappearing must not fall back to scope
+                // clearances. An empty selection withholds egress without
+                // changing admission.
                 let enabled = home
                     .join("directory-selection.json")
                     .try_exists()
@@ -211,12 +215,12 @@ impl Registry {
     }
 }
 
-/// Verified reporting grants use a separate revision space from source policy.
+/// Verified reporting approvals use a separate revision space from source policy.
 #[derive(Clone, Debug, Default)]
 pub struct Selection {
     pub registry: Option<Registry>,
     pub managed: bool,
-    pub grants: Vec<Value>,
+    pub approvals: Vec<Value>,
 }
 
 impl Selection {
@@ -226,11 +230,11 @@ impl Selection {
             return Ok(Self::default());
         }
         let managed = crate::managed::is_managed(home)?;
-        let grants = if managed && source_policy_applied(home) {
-            // Grant failures remove reporting authority without replacing the
-            // source policy with an unavailable or permissive admission mode.
+        let approvals = if managed && source_policy_applied(home) {
+            // Approval failures remove reporting authority without replacing
+            // the source policy with an unavailable or permissive admission mode.
             match snapshot(home) {
-                Ok(Some(value)) if fresh(&value) => value["payload"]["grants"]
+                Ok(Some(value)) if fresh(&value) => value["payload"]["approvals"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default(),
@@ -242,7 +246,7 @@ impl Selection {
         Ok(Self {
             registry,
             managed,
-            grants,
+            approvals,
         })
     }
 
@@ -250,9 +254,9 @@ impl Selection {
         project.reporting
             && (!self.managed
                 || self
-                    .grants
+                    .approvals
                     .iter()
-                    .any(|g| g["project_id"] == project.id && g["binding"] == project.binding))
+                    .any(|a| a["project_id"] == project.id && a["binding"] == project.binding))
     }
 }
 
@@ -278,7 +282,7 @@ fn source_policy_applied(home: &Path) -> bool {
 }
 
 fn snapshot(home: &Path) -> Result<Option<Value>, String> {
-    match std::fs::read(home.join("directory-grants.json")) {
+    match std::fs::read(home.join(FILE)) {
         Ok(bytes) => {
             let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
             verify(home, &value, false)?;
@@ -306,7 +310,7 @@ fn hex(text: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// Verify identity, stable payload digest, signature and bounded validity.
+/// Verify format, identity, stable payload digest, signature and bounded validity.
 /// Old source-policy envelopes are never accepted here, or changed by this code.
 pub fn verify(home: &Path, value: &Value, require_fresh: bool) -> Result<(), String> {
     let Deployment::Managed {
@@ -315,57 +319,57 @@ pub fn verify(home: &Path, value: &Value, require_fresh: bool) -> Result<(), Str
         ..
     } = Deployment::read(home)?
     else {
-        return Err("directory grants require managed enrolment".into());
+        return Err("reporting approvals require managed enrolment".into());
     };
     let edge = EnrolmentRecord::load(home)?.ok_or("connect to a named hub first")?;
     let payload = &value["payload"];
     if signer.algorithm != "ed25519"
         || edge.revoked_at.is_some()
         || edge.organization.id != organisation
-        || payload["schema"] != "commonmeasure-directory-grants/v1"
+        || payload["schema"] != FORMAT
         || payload["organisation"] != organisation
         || payload["edge_key_id"] != edge.key_id
         || value["key_id"] != signer.key_id
         || payload["revision"].as_u64().is_none()
-        || !payload["grants"].is_array()
+        || !payload["approvals"].is_array()
         || value["digest"] != canonical_digest(payload)
     {
-        return Err("directory grant identity, format or digest mismatch".into());
+        return Err("reporting approval identity, format or digest mismatch".into());
     }
     let issued = value["issued_at"]
         .as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .ok_or("invalid grant issue time")?;
+        .ok_or("invalid reporting approval issue time")?;
     let expires = value["expires_at"]
         .as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .ok_or("invalid grant expiry")?;
+        .ok_or("invalid reporting approval expiry")?;
     if issued > Utc::now() + chrono::Duration::minutes(5)
         || expires <= issued
         || expires - issued > chrono::Duration::days(1)
         || (require_fresh && !fresh(value))
     {
-        return Err("directory grant expired or invalid validity window".into());
+        return Err("reporting approval expired or invalid validity window".into());
     }
     let signature = hex(value["signature"]
         .as_str()
-        .ok_or("missing grant signature")?)?;
+        .ok_or("missing reporting approval signature")?)?;
     let mut signed = value.clone();
     signed
         .as_object_mut()
-        .ok_or("invalid grant envelope")?
+        .ok_or("invalid reporting approval envelope")?
         .remove("signature");
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, hex(&signer.public_key)?)
         .verify(canonical_json(&signed).as_bytes(), &signature)
-        .map_err(|_| "invalid directory grant signature".to_owned())
+        .map_err(|_| "invalid reporting approval signature".to_owned())
 }
 
 /// Accept an independently numbered snapshot, refusing rollback and revision reuse.
 pub fn accept(home: &Path, value: &Value) -> Result<(), String> {
     verify(home, value, true)?;
-    let _lock = declaration::lock(&home.join("directory-grants.lock"))
-        .map_err(|e| format!("grant lock: {e:?}"))?;
-    let path = home.join("directory-grants.json");
+    let _lock = declaration::lock(&home.join("reporting-approvals.lock"))
+        .map_err(|e| format!("reporting approval lock: {e:?}"))?;
+    let path = home.join(FILE);
     match std::fs::read(&path) {
         Ok(bytes) => {
             let old: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
@@ -376,7 +380,7 @@ pub fn accept(home: &Path, value: &Value) -> Result<(), String> {
                 .as_u64()
                 .ok_or("invalid revision")?;
             if after < before || (after == before && old["digest"] != value["digest"]) {
-                return Err("directory grant rollback or revision reuse".into());
+                return Err("reporting approval rollback or revision reuse".into());
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -414,7 +418,7 @@ fn hub_request(home: &Path, path: &str, body: Option<Value>) -> Result<Value, St
         .map_err(|_| "directory enrolment hub is unreachable".to_owned())?;
     if !(200..300).contains(&response.status) {
         return Err(format!(
-            "directory enrolment hub returned HTTP {}; no grant state was changed",
+            "directory enrolment hub returned HTTP {}; no reporting approval was changed",
             response.status
         ));
     }
@@ -432,13 +436,14 @@ pub fn request(home: &Path, project: &Project) -> Result<Value, String> {
     )
 }
 
-/// Refresh signed grants on demand and before relay. A failure preserves the
-/// previous snapshot and its original expiry; 404 is never a revocation.
+/// Refresh signed reporting approvals on demand and before relay. A failure
+/// preserves the previous snapshot and its original expiry; 404 is never a
+/// revocation.
 pub fn sync(home: &Path) -> Result<(), String> {
     if Registry::read(home)?.is_none() || !crate::managed::is_managed(home)? {
         return Ok(());
     }
-    let value = hub_request(home, "/api/v1/edge/directory-grants", None)?;
+    let value = hub_request(home, "/api/v1/edge/reporting-approvals", None)?;
     accept(home, &value)
 }
 
@@ -473,7 +478,7 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
             }
         }
     }
-    let grants = match snapshot(home) {
+    let approvals = match snapshot(home) {
         Ok(Some(value)) => {
             json!({"state": if fresh(&value) {"current"} else {"expired"}, "revision":value["payload"]["revision"], "digest":value["digest"], "expires_at":value["expires_at"]})
         }
@@ -496,8 +501,8 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
         Some(_) if management.mode == "managed" && !source_policy_applied(home) => {
             "managed_policy_unapplied"
         }
-        Some(_) if grants["state"] == "expired" => "grant_expired",
-        Some(_) if grants["state"] == "unavailable" => "grant_unavailable",
+        Some(_) if approvals["state"] == "expired" => "approval_expired",
+        Some(_) if approvals["state"] == "unavailable" => "approval_unavailable",
         Some(_) => "approval_pending",
     };
     Ok(json!({
@@ -505,14 +510,14 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
         "project": project, "edge": enrolment,
         "deployment_mode": management.mode, "applied_revision": management.applied_revision,
         "policy_digest": document.digest(), "policy": resolved.describe(),
-        "reporting": reporting, "receiver": receiver, "grants": grants,
+        "reporting": reporting, "receiver": receiver, "approvals": approvals,
         "historical_evidence": "reporting includes existing eligible witnessed evidence under this root; previously delivered evidence is not recalled",
         "first_evidence": {"state": if witnessed == 0 { "no_witnessed_crossing" } else { "witnessed_locally" }, "witnessed_crossings": witnessed, "delivery": "run commonmeasure relay --dry-run, then commonmeasure relay; delivery totals distinguish eligible and accepted events"},
         "connect": if enrolment.is_none() { Some("commonmeasure connect <named-hub> --token <token> --managed") } else { None },
     }))
 }
 
-/// Refresh source policy using this edge's existing key, then refresh grants.
+/// Refresh source policy using this edge's existing key, then refresh reporting approvals.
 pub fn sync_all(home: &Path) -> Result<(), String> {
     if crate::managed::is_managed(home)? {
         let key = crate::enrolment::enrolled_key_id(home)?
@@ -558,8 +563,8 @@ mod tests {
         std::fs::write(home.path().join("managed/state.json"),json!({"applied":{"revision":1,"digest":"test","issued_at":Utc::now(),"expires_at":Utc::now()+chrono::Duration::days(7),"activated_at":Utc::now(),"signer_key_id":"test-signer"}}).to_string()).unwrap();
         (home, key, project)
     }
-    fn signed(key: &SigningKey, revision: u64, grants: Value, expired: bool) -> Value {
-        let payload = json!({"schema":"commonmeasure-directory-grants/v1","organisation":"test-org","edge_key_id":"test-edge","revision":revision,"grants":grants});
+    fn signed(key: &SigningKey, revision: u64, approvals: Value, expired: bool) -> Value {
+        let payload = json!({"schema":FORMAT,"organisation":"test-org","edge_key_id":"test-edge","revision":revision,"approvals":approvals});
         let issued = Utc::now() - chrono::Duration::hours(if expired { 25 } else { 1 });
         let mut value = json!({"payload":payload,"digest":canonical_digest(&payload),"key_id":"test-signer","issued_at":issued,"expires_at":issued+chrono::Duration::hours(24)});
         value["signature"] = json!(crate::managed::encode_hex(
@@ -568,10 +573,10 @@ mod tests {
         value
     }
     #[test]
-    fn signed_grants_bind_edge_org_project_and_preserve_monotonic_revocation() {
+    fn signed_approvals_bind_edge_org_project_and_preserve_monotonic_revocation() {
         let (home, key, project) = home();
-        let grants = json!([{"project_id":project.id,"binding":project.binding}]);
-        let first = signed(&key, 1, grants.clone(), false);
+        let approvals = json!([{"project_id":project.id,"binding":project.binding}]);
+        let first = signed(&key, 1, approvals.clone(), false);
         accept(home.path(), &first).unwrap();
         assert!(Selection::read(home.path()).unwrap().permitted(&project));
         let mut wrong = first.clone();
@@ -590,10 +595,10 @@ mod tests {
             accept(home.path(), &first).is_err(),
             "rollback cannot reinstate approval"
         );
-        assert!(accept(home.path(), &signed(&key, 3, grants.clone(), true)).is_err());
-        let expired = signed(&key, 3, grants, true);
+        assert!(accept(home.path(), &signed(&key, 3, approvals.clone(), true)).is_err());
+        let expired = signed(&key, 3, approvals, true);
         private_replace(
-            &home.path().join("directory-grants.json"),
+            &home.path().join(FILE),
             &serde_json::to_vec(&expired).unwrap(),
         )
         .unwrap();
@@ -604,19 +609,19 @@ mod tests {
                 .describe()["mode"],
             "strict"
         );
-        let before = std::fs::read(home.path().join("directory-grants.json")).unwrap();
+        let before = std::fs::read(home.path().join(FILE)).unwrap();
         assert!(sync(home.path()).is_err());
         assert_eq!(
             before,
-            std::fs::read(home.path().join("directory-grants.json")).unwrap(),
+            std::fs::read(home.path().join(FILE)).unwrap(),
             "failed refresh cannot renew expiry"
         );
     }
     // EGR-07. `relay.json` re-pointed at another receiver holds that
-    // receiver's key, and the grant refresh asks the enrolled hub. The
+    // receiver's key, and the approval refresh asks the enrolled hub. The
     // server records what it is sent; it is not a hub.
     #[test]
-    fn a_grant_refresh_sends_the_hub_only_a_key_held_for_the_hub() {
+    fn an_approval_refresh_sends_the_hub_only_a_key_held_for_the_hub() {
         use std::sync::{Arc, Mutex};
 
         let (home, _, _) = home();
@@ -665,7 +670,7 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), vec![Some("hub-key".to_owned())]);
     }
     #[test]
-    fn another_local_binding_or_recreated_folder_does_not_inherit_a_grant() {
+    fn another_local_binding_or_recreated_folder_does_not_inherit_an_approval() {
         let (home, key, project) = home();
         accept(
             home.path(),
@@ -682,5 +687,30 @@ mod tests {
         std::fs::rename(&project.root, home.path().join("old-project")).unwrap();
         std::fs::create_dir(&project.root).unwrap();
         assert!(registry.matching(project.root.to_str().unwrap()).is_none());
+    }
+    // Pre-release formats have no reader: the renamed format is the only one
+    // accepted, and a file left under the old name authorises nothing.
+    #[test]
+    fn only_the_reporting_approval_format_and_file_are_read() {
+        let (home, key, project) = home();
+        let approvals = json!([{"project_id":project.id,"binding":project.binding}]);
+        let mut old = signed(&key, 1, json!([]), false);
+        old["payload"] = json!({"schema":"commonmeasure-directory-grants/v1","organisation":"test-org","edge_key_id":"test-edge","revision":1,"grants":approvals.clone()});
+        old["digest"] = json!(canonical_digest(&old["payload"]));
+        old.as_object_mut().unwrap().remove("signature");
+        old["signature"] = json!(crate::managed::encode_hex(
+            &key.sign(canonical_json(&old).as_bytes()).to_bytes()
+        ));
+        assert!(accept(home.path(), &old).is_err());
+        std::fs::write(
+            home.path().join("directory-grants.json"),
+            serde_json::to_vec(&signed(&key, 1, approvals, false)).unwrap(),
+        )
+        .unwrap();
+        assert!(!Selection::read(home.path()).unwrap().permitted(&project));
+        assert_eq!(
+            status(home.path(), &project.root).unwrap()["approvals"]["state"],
+            "missing"
+        );
     }
 }

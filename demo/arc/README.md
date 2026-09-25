@@ -1,6 +1,11 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The demonstration's generated data store
 
-The security demonstration (`docs/RUN-THE-DEMONSTRATION.md`) runs against a generated data store,
+The security demonstration (`demo/RUN-THE-DEMONSTRATION.md`) runs against a generated data store,
 `demo/arc/home/`, not against the operator's real `~/.commonmeasure`,
 because the real store contains client names, paths and URLs that must
 not be screen-shared. `just demo-arc` (which runs `regenerate.sh` here) deletes
@@ -28,17 +33,19 @@ stand-in replaces a shipped component:
   `policy.json`, the same edit an operator makes; the console reads the
   declared policy and does not write it.
 - **The relay step** is the shipped `commonmeasure relay` delivering to
-  `receiver.py`, a small local server that answers the documented
-  acceptance response and writes every batch it accepts to disk. It
-  evidences which records left and under whose permission. It does not
-  evidence an integration with any real receiver product.
+  `receiver.py`, a small local server that answers `200` to every
+  `POST /events` and writes each batch it receives to disk. The relay
+  counts any `2xx` as acceptance and needs no particular body
+  (`crates/commonmeasure-relay/src/client.rs`). The step evidences which
+  records left and under whose permission. It does not evidence an
+  integration with any real receiver product.
 - **The observed sessions** (`arc-fictive-observed`,
   `arc-other-client-observed`) are the shipped hook entry point
   (`commonmeasure hook post-tool-use`) fed the documented payload shape a
   coding agent would send (`plugin/README.md` §Observed). This step is
   scripted: no coding agent ran, and the store does not claim one did.
   In the live demonstration the presenter's real session supplies this
-  part (`docs/RUN-THE-DEMONSTRATION.md` §3).
+  part (`demo/RUN-THE-DEMONSTRATION.md` §3).
 
 No credentials are read, no external server is contacted, nothing costs
 money, and every connection is to another process on this machine.
@@ -79,7 +86,7 @@ cannot start, the generator prints the end of its log before failing.
   (both local-only).
 - `receiver.py` — the local stand-in telemetry receiver.
 - `session-prompt.txt` — the task message pasted into one live
-  coding-agent session (`docs/RUN-THE-DEMONSTRATION.md` §3). The request
+  coding-agent session (`demo/RUN-THE-DEMONSTRATION.md` §3). The request
   to prefer the mediated tools is not pasted: the installed plugin's
   `SessionStart` hook delivers it to every session as a standing nudge
   (`plugin/README.md` §The standing nudge). The prompt asks for the

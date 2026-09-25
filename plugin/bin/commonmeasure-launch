@@ -56,7 +56,7 @@ fi
 
 if [ -z "$bin" ]; then
   echo "commonmeasure: no binary found: nothing bundled for $os/$arch in $dir, none on PATH, none at ~/.local/bin." >&2
-  echo "            Install one with install.sh from a release (docs/RELEASE.md) or cargo install --path crates/commonmeasure-cli." >&2
+  echo "            Install one with install.sh from a release (docs/GETTING-STARTED.md) or cargo install --path crates/commonmeasure-cli." >&2
   case "$1" in
     hook) exit 0 ;;
     *)    exit 1 ;;

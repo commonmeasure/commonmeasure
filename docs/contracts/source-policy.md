@@ -1,6 +1,9 @@
 ---
 title: Source policy contract
 description: The policy file every edge loads — its fields, what a scope and a principal replace, the order admission applies, every check the loader makes, and the schema and vectors a second implementation is held to.
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Source policy contract
@@ -35,9 +38,8 @@ is valid can always be settled by the engine itself.
 object. An absent file is not an error: the mode is `observe`, every
 crossing is recorded and nothing is refused. A file that is present and
 cannot be loaded is an error, reported where the policy would be used, and
-never replaced by a permissive default. That includes a field the installed
-binary does not know, so a policy written for a newer binary refuses every
-mediated crossing on an older one until that binary is upgraded.
+never replaced by a permissive default. A policy containing an unknown field
+refuses every mediated crossing until the policy is corrected.
 
 On a managed edge the file is the desired policy the hub distributed, and
 the edge replaces it only through
@@ -114,8 +116,7 @@ the allowed-host list. The dispatch path supplies that identity; a URL or
 supplier-native metadata cannot claim it. Direct fetches and observed sources
 do not inherit this permission. Explicit host denials, ordered access rules,
 provider eligibility and required licences still apply. This rule supplies no
-licence or cost evidence. An older Edge rejects the unknown constraint kind;
-upgrade the Edge before publishing a policy that uses it.
+licence or cost evidence.
 
 Every kind but one is a set, and the order of its entries means nothing.
 `access_rule` is the exception. Access rules are read in the order written
@@ -232,7 +233,7 @@ the record. Nothing is ever left unrecorded because of the mode.
 - A witnessed public crossing leaves the machine only where its scope names
   an `engagement` and sets `allow_telemetry_egress: true`; an absent policy,
   an unmatched directory or a scope without both keeps it local. What leaves
-  is [`docs/contracts/session-evidence.md`](session-evidence.md). The scope's
+  is [`docs/contracts/telemetry-projection.md`](telemetry-projection.md). The scope's
   `engagement` is the governing engagement; the name the console reports
   work under is resolved separately, from the attribution rules.
 
@@ -490,9 +491,9 @@ policy carries states the same for the hub.
 ## Directory selection and managed reporting
 
 Directory enrolment does not edit this schema or a managed policy file.
-A separate local root selection and signed edge-bound reporting grant narrow
+A separate local root selection and signed edge-bound reporting approval narrow
 egress. Every winning false scope vetoes reporting, including an omitted bool;
-grants never replace admission rules. Absolute existing directory matchers
+reporting approvals never replace admission rules. Absolute existing directory matchers
 also recognise canonical targets, and conflicting symlink/worktree scopes fail
 closed. Resolver version 2 records these semantics. See
 [directory enrolment](directory-enrolment.md).

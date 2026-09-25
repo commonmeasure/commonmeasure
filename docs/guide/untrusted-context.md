@@ -1,5 +1,7 @@
 ---
 title: "How agents use outside content"
+domain: shared
+audience: reader
 ---
 
 # How agents use outside content
@@ -1643,13 +1645,9 @@ identify where material was obtained through reporting or a search provider's co
     screen flagged an injection paper’s abstract and Google’s injection article,
     but missed a supplier terms-page footer telling AI agents to fetch and follow
     a URL.
-[^implementation-robots]: A link-shortener request on 14 September 2026 was
-    reported as robots-disallowed without naming the host, although the target
-    site allowed the fetch; only the requested host's file was read and the
-    breach text gave only the group. Since 15 September 2026 every hop is
-    evaluated against its own file and the record and explanation name the
-    URL, file, group and rule (`docs/contracts/session-evidence.md` §Source
-    declarations).
+[^implementation-robots]: Every redirect hop is evaluated against its own
+    robots file. The record and explanation name the URL, file, group and
+    rule (`docs/contracts/session-evidence.md` §Source declarations).
 <!-- product-only:end -->
 
 [^news-integrity]: BBC/EBU, *News Integrity in AI Assistants: Toolkit*, October

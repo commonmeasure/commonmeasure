@@ -371,6 +371,19 @@ pub fn fetch(
     now: DateTime<Utc>,
     budget: Duration,
 ) -> Result<Fetch, String> {
+    fetch_with_clock(home, store, now, budget, &Instant::now)
+}
+
+/// Fetch using an injected monotonic clock for the shared request budget.
+/// The transport still uses real socket deadlines; the clock controls the
+/// retry decision, its remaining timeout and the time used to sign it.
+pub fn fetch_with_clock(
+    home: &Path,
+    store: &ReleasedStore,
+    now: DateTime<Utc>,
+    budget: Duration,
+    clock: &dyn Fn() -> Instant,
+) -> Result<Fetch, String> {
     let Some(enrolment) = EnrolmentRecord::load(home)? else {
         return Err(format!(
             "this edge is not enrolled with a hub, so no hub releases credentials to it: no \
@@ -423,9 +436,9 @@ pub fn fetch(
         fetch.reason = Some(NO_USABLE_ANSWER.to_owned());
         return conclude(home, store, fetch);
     };
-    let started = Instant::now();
+    let started = clock();
     let response = loop {
-        let elapsed = started.elapsed();
+        let elapsed = clock().saturating_duration_since(started);
         let remaining = budget.saturating_sub(elapsed);
         let signed_at = now + chrono::Duration::from_std(elapsed).unwrap_or_default();
         let request = match signed_request(&identity, &url, signed_at) {
@@ -442,7 +455,9 @@ pub fn fetch(
         if response.status == 401
             && let Some(code) = fault_code(&response.body)
         {
-            if fetch.retried_after.is_none() && worth_retrying(budget, started.elapsed()) {
+            if fetch.retried_after.is_none()
+                && worth_retrying(budget, clock().saturating_duration_since(started))
+            {
                 fetch.retried_after = Some(code);
                 continue;
             }

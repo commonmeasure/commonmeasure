@@ -3,11 +3,11 @@
 
 The relay refuses to run without a receiver, and the demonstration's closing
 beat is watching exactly which events cross that boundary. This receiver is
-the audience's window, not a receiver-product claim: it answers the documented
-acceptance shape the shipped relay client requires (`POST /events`, answered
-200 with ``{"status": "ok", "events_created": n}``,
-crates/commonmeasure-relay/src/client.rs) and appends every batch it accepts, verbatim,
-to an NDJSON file so what arrived can be read after the run. The claim it
+the audience's window, not a receiver-product claim: it accepts `POST /events`,
+answers 200 with ``{"status": "ok", "events_created": n}`` (the relay takes
+any 2xx as acceptance and reads `events_created` when present,
+crates/commonmeasure-relay/src/client.rs) and appends every batch it accepts,
+verbatim, to an NDJSON file so what arrived can be read after the run. The claim it
 supports is about the relay's boundary — what left the machine and under whose
 clearance — and the delivered bytes on disk are that claim's evidence. It
 asserts nothing about integration with a real receiver.

@@ -1,10 +1,9 @@
-# The Common Measure plugin
+---
+domain: edge
+audience: operator
+---
 
-The [Microsoft 365 Copilot package](m365-copilot/README.md) builds a declarative
-agent for the hosted edge. Its paired mediated read and policy refusal are
-`live-verified` from a recorded session; answer-use observation is
-unavailable on that host. The local
-Claude Code plugin is described below.
+# The Common Measure plugin
 
 The Claude Code plugin is one of two ways to register Common Measure with a
 host so that it records the content the agent takes in and, through the
@@ -52,9 +51,9 @@ no reinstall of the plugin.
 ## Install
 
 From a release, with no checkout, `install.sh` places the binary and can
-unpack the standalone archive beside it (`docs/RELEASE.md` §Installing from a
-release). From this checkout, with the binary already installed
-(`docs/GETTING-STARTED.md` §8):
+unpack the standalone archive beside it (`docs/GETTING-STARTED.md` §1). From
+this checkout, with the binary already installed (`docs/GETTING-STARTED.md`
+§8):
 
 ```sh
 claude plugin marketplace add "$PWD"   # from the repository root
@@ -110,7 +109,7 @@ bundles; the list is interpolated at packaging time, not a fixed example. The
 launcher prefers a bundled binary beside it, so the archive works on a
 machine with no other binary. Every release publishes the same archive,
 packaged from the release's own binaries for every supported platform
-(`docs/RELEASE.md`). The binaries are build outputs and are gitignored; the
+(`RELEASING.md`). The binaries are build outputs and are gitignored; the
 checkout's plugin directory never holds one.
 
 ## Disabling and uninstalling
@@ -202,8 +201,8 @@ agent.
 
 ### Mediated — `.mcp.json`
 
-`context_fetch`, `context_search` and `context_status`, served over stdio. These
-run *before* the crossing, so policy can refuse.
+`context_fetch`, `context_search`, `context_status` and `context_enrol`,
+served over stdio. These run *before* the crossing, so policy can refuse.
 
 - `context_fetch` needs no credentials. It fetches over the real transport,
   checks the operator's source policy first, records the crossing either way,
@@ -225,6 +224,8 @@ run *before* the crossing, so policy can refuse.
   the agent still gets its result and the record is withheld.
 - `context_status` reports the session, where its evidence is written, the
   policy in force and which providers are configured.
+- `context_enrol` shows or sets the enrolment of the directory the server
+  started in (§Enrol the current project).
 
 The host starts the MCP server without a session identifier, so mediated
 crossings are recorded under the server's own `local-*` session id, in a
@@ -287,8 +288,7 @@ serves three programs: the Codex CLI, the ChatGPT desktop app (which
 carries Codex) and the Codex IDE extension all read `~/.codex/config.toml`
 and start the server from it.
 
-Every Codex session then carries `context_fetch`, `context_search` and
-`context_status` under the same operator policy as Claude Code, with
+Every Codex session then carries the mediated tools under the same operator policy as Claude Code, with
 crossings recorded as `host: codex` under the server's own `local-*` session
 id, each carrying the client's own name and version (`codex-mcp-client`,
 with the version telling the CLI from the desktop app;
@@ -312,8 +312,8 @@ commonmeasure uninstall pi
 The extension names the binary by absolute path. At each session start it
 spawns `commonmeasure mcp --host pi --session <Pi's session id>` in the
 session's working directory, lists the server's tools over stdio and
-registers each with Pi under its own name, so the agent calls
-`context_fetch`, `context_search` and `context_status` as on any other host
+registers each with Pi under its own name, so the agent calls the mediated
+tools as on any other host
 and every call is carried by the server under operator policy. Crossings
 are recorded as `host: pi` under Pi's own session id. A server that cannot
 start leaves the session without the tools and says so once in Pi's
@@ -406,8 +406,8 @@ sends, recording and printing nothing.
 
 ## Chrome
 
-ChatGPT on the web, Google AI Overviews and Bing Copilot Search are
-observed through the browser extension in `browser/` (`browser/README.md`),
+ChatGPT on the web and Bing Copilot Search are observed through the
+browser extension in `browser/` (`browser/README.md`),
 which reaches the binary over Chrome native messaging:
 
 ```sh
@@ -418,12 +418,20 @@ commonmeasure uninstall chrome
 The manifest names the binary by absolute path and allows only the Common
 Measure extension to start it; Chromium and Brave get the same file where
 their directories exist. Each answer's sources are recorded as observed
-crossings under `host: chatgpt-web`, `google-ai-overview` or
-`bing-copilot-search`, retrieved and never grounded, and nothing is
+crossings under `host: chatgpt-web` or `bing-copilot-search`, retrieved and never grounded, and nothing is
 refused: the model's own search on those surfaces crosses no tool this
-product offers. ChatGPT's conversation id is the session; Google and Bing
-give none, so each answer is its own `local-*` session. What each surface
+product offers. ChatGPT's conversation id is the session; Bing gives none,
+so each answer is its own `local-*` session. The extension also reads
+Google AI Overviews, but on the live page it finds no source and records
+nothing (`browser/README.md`). What each surface
 supplies is `docs/contracts/host-integration.md` §2.
+
+## Microsoft 365 Copilot
+
+The [Microsoft 365 Copilot package](m365-copilot/README.md) is a
+declarative agent that calls a hosted edge's mediated tools. Its mediated
+read and policy refusal are `live-verified` from a recorded session;
+whether an answer used what was read cannot be observed on that host.
 
 ## Policy
 
@@ -470,38 +478,35 @@ session record, `doctor` and `status` say `stale since` its expiry until
 the hub renews it or publishes a later revision. Nothing about a refresh is
 said to the agent, and a hub that cannot be reached changes nothing.
 
-## What this does not contain
-
-No binary, no provider credentials and no routing logic beyond the operator's
-declared policy. Credentials come from the environment and the operator's own
-`~/.commonmeasure/credentials.env` and travel only in request headers.
-
-
 ## Enrol the current project
 
-The plugin includes `/commonmeasure:enrol`. It uses `context_enrol` on the local
-MCP server or the packaged launcher and shows the actual directory, policy and
-reporting status. Upgrade the plugin/archive to obtain the command; replacing
-only an older standalone binary does not add new plugin files. The archive
-bundles the command and the Codex skill. Removing the plugin removes its command
-and MCP prompt entry without deleting project selection or evidence.
+The plugin carries the `/commonmeasure:enrol` command. It calls
+`context_enrol` and shows the directory, the policy and the reporting
+state; what enrolment does is `docs/GETTING-STARTED.md` §9. The command
+is installed with the plugin or the archive. Removing the plugin removes the
+command and leaves project enrolments and evidence in place.
 
-`commonmeasure install codex` installs `$commonmeasure-enrol` under
-`~/.agents/skills/commonmeasure-enrol`, alongside its existing MCP registration.
-Repeat installation updates the owned skill and preserves other host settings.
-It refuses to overwrite a foreign skill at that path. `uninstall codex` removes
-only the owned skill files and its MCP table, leaving evidence and selections.
-`HOME` controls the user skill root and `CODEX_HOME` the Codex config directory;
-use isolated values for both when testing installation.
+`commonmeasure install codex` also installs the `$commonmeasure-enrol`
+skill under `~/.agents/skills/commonmeasure-enrol`. Installing again
+updates it; a skill at that path that this product did not write is left
+alone and the install refuses. `uninstall codex` removes only that skill
+and the MCP table. `HOME` sets the skill root and `CODEX_HOME` the Codex
+configuration directory; set both to throwaway directories to test an
+install.
 
-Local MCP also exposes the `commonmeasure_enrol` prompt. Claude Code documents
-MCP prompts as slash commands; other hosts must expose them before this surface
-can be invoked. The plugin command and Codex skill do not require such support.
-These host surfaces are specification-verified and tested at packaging and
-CLI/MCP boundaries; interactive invocation in actual Claude/Codex hosts remains
-unverified. Host references: [Claude plugin commands](https://code.claude.com/docs/en/plugins-reference),
+The MCP server also offers a `commonmeasure_enrol` prompt, which Claude
+Code shows as a slash command; other hosts show it only if they support MCP
+prompts. The command, the skill and the prompt are `spec-verified` and
+tested at the packaging, CLI and MCP boundaries; they have not been invoked
+interactively in Claude Code or Codex. Host references: [Claude plugin commands](https://code.claude.com/docs/en/plugins-reference),
 [Claude MCP prompts](https://code.claude.com/docs/en/mcp), and
 [Codex local skills](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
 
 The [directory enrolment contract](../docs/contracts/directory-enrolment.md)
 states the reporting, history and managed-approval boundaries.
+
+## What this does not contain
+
+No binary, no provider credentials and no routing logic beyond the operator's
+declared policy. Credentials come from the environment and the operator's own
+`~/.commonmeasure/credentials.env` and travel only in request headers.

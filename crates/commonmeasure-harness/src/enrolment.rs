@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::{DIRECTORY_PROOF_MARGIN_SECS, authority_of};
 
+/// The release reported and recorded by every directory proof upload.
+pub const RELEASE: &str = env!("CARGO_PKG_VERSION");
+
 /// Where the hub publishes this edge's key and what it tells publishers, as
 /// the hub returned it at enrolment. Absolute URLs on the origin the hub
 /// serves its identity documents on: the edge never builds one, so it cannot
@@ -83,9 +86,8 @@ pub struct EnrolmentRecord {
 pub const DIRECTORY_PROOF_REFRESH_SECS: i64 = 86_400;
 
 /// How long a session or server start waits before trying again after an
-/// attempt to hold a current proof failed. A relay run or `connect` always
-/// asks; a start that has the host waiting does not pay for a hub that did
-/// not answer a moment ago.
+/// attempt to hold a current proof failed. Relay runs also wait when only
+/// the release changed; proofs due by age or expiry still upload each run.
 pub const DIRECTORY_PROOF_RETRY_SECS: i64 = 3_600;
 
 /// What this edge last learnt about its listing in the hub's key directory,
@@ -98,19 +100,25 @@ pub struct DirectoryListing {
     /// The key this was learnt for. A file naming another key is from an
     /// earlier enrolment and is not read.
     pub key_id: String,
-    /// When this edge last asked the hub, or tried to.
+    /// When this edge last asked the hub, or tried to. During a release-only
+    /// retry delay, status reads preserve the failed attempt's time.
     pub checked_at: String,
+    /// The binary release that made the last accepted proof upload. This is
+    /// the edge's own record, independent of the hub's statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_uploaded_release: Option<String>,
     /// What the hub stated. Absent when its answer carried no statement,
     /// which is a hub that does not take directory proofs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stated: Option<ProofStatement>,
     /// Why the last attempt to hold a current proof at the hub did not
-    /// succeed. Absent when it did, or when none was due.
+    /// succeed, or why an accepted upload's statement could not be read.
+    /// Absent when both succeeded, or when none was due.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
 }
 
-/// The hub's `directory_proof` statement on the exchange and status answers.
+/// The hub's `directory_proof` statement on exchange, upload and status answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofStatement {
     /// The authority the hub serves its key directory from, which is the
@@ -122,6 +130,12 @@ pub struct ProofStatement {
     /// authority; absent when it holds none.
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// The hub's whole listing decision, independent of proof expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<bool>,
+    /// The hub's explanation, preserved verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlisted_reason: Option<String>,
 }
 
 /// Whether a new directory proof should be signed and uploaded.
@@ -151,8 +165,14 @@ impl ProofStatement {
     /// Whether a proof is due, against the authority this edge enrolled
     /// under. The edge signs only for that authority, never for one a hub
     /// names later, so an edge cannot be listed at an origin it was not
-    /// enrolled on.
-    pub fn need(&self, enrolled_authority: &str, now: DateTime<Utc>) -> ProofNeed {
+    /// enrolled on. A new release uploads even while the held proof is current,
+    /// so the hub can reconsider its listing against the reported release.
+    pub fn need(
+        &self,
+        enrolled_authority: &str,
+        now: DateTime<Utc>,
+        last_uploaded_release: Option<&str>,
+    ) -> ProofNeed {
         if self.authority != enrolled_authority {
             return ProofNeed::Unsignable(format!(
                 "the hub serves its key directory from {} but this edge enrolled under {}, and \
@@ -187,6 +207,11 @@ impl ProofStatement {
             return ProofNeed::Due(format!(
                 "the held proof, expiring at {expires_at}, was signed more than a day ago"
             ));
+        }
+        if last_uploaded_release != Some(RELEASE) {
+            return ProofNeed::Due(
+                "this release has no recorded accepted directory proof upload".to_owned(),
+            );
         }
         ProofNeed::Current
     }
@@ -356,7 +381,7 @@ impl EnrolmentRecord {
     }
 
     /// [`Self::directory_proof_due_at`] over a listing already read. A relay
-    /// run and `connect` judge from the hub's own answer instead
+    /// run and `connect` use the hub's answer and the last uploaded release
     /// ([`ProofStatement::need`]).
     pub fn directory_proof_due(
         &self,
@@ -384,7 +409,7 @@ impl EnrolmentRecord {
         let Ok(authority) = self.enrolled_authority() else {
             return false;
         };
-        match stated.need(&authority, now) {
+        match stated.need(&authority, now, listing.last_uploaded_release.as_deref()) {
             ProofNeed::Current => false,
             ProofNeed::Due(_) => true,
             ProofNeed::Unsignable(_) => !asked_today,
@@ -419,6 +444,12 @@ impl EnrolmentRecord {
                 listing.checked_at
             ));
         };
+        if stated.listed == Some(false) {
+            return Listing::Unlisted(match &stated.unlisted_reason {
+                Some(reason) => format!("hub: {reason}"),
+                None => "the hub states that this key is unlisted; no reason supplied".to_owned(),
+            });
+        }
         match self.enrolled_authority() {
             Ok(authority) if authority == stated.authority => {}
             Ok(authority) => {
@@ -489,7 +520,49 @@ mod tests {
             authority: "hub.example".to_owned(),
             lifetime_secs: 604_800,
             expires_at: expires_at.map(str::to_owned),
+            listed: None,
+            unlisted_reason: None,
         }
+    }
+
+    #[test]
+    fn proof_statements_preserve_listing_decisions_and_ignore_unknown_members() {
+        let stated: ProofStatement = serde_json::from_value(serde_json::json!({
+            "authority": "hub.example",
+            "lifetime_secs": 604_800,
+            "expires_at": "2026-09-21T11:00:00Z",
+            "listed": false,
+            "unlisted_reason": "the hub withheld this key",
+            "future_member": {"anything": true}
+        }))
+        .unwrap();
+        assert_eq!(stated.listed, Some(false));
+        assert_eq!(
+            stated.unlisted_reason.as_deref(),
+            Some("the hub withheld this key")
+        );
+        let held = DirectoryListing {
+            key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
+            checked_at: "2026-09-14T12:00:00Z".to_owned(),
+            stated: Some(stated.clone()),
+            failure: None,
+        };
+        assert_eq!(
+            record().listing(Some(&held), at("2026-09-14T12:00:00Z")),
+            Listing::Unlisted("hub: the hub withheld this key".to_owned())
+        );
+        let no_reason = DirectoryListing {
+            stated: Some(ProofStatement {
+                unlisted_reason: None,
+                ..stated
+            }),
+            ..held
+        };
+        assert!(matches!(
+            record().listing(Some(&no_reason), at("2026-09-14T12:00:00Z")),
+            Listing::Unlisted(_)
+        ));
     }
 
     /// A held proof signed within the day is current; one signed more than
@@ -499,20 +572,20 @@ mod tests {
     fn a_proof_is_due_when_absent_more_than_a_day_old_or_about_to_leave() {
         let now = at("2026-09-14T12:00:00Z");
         assert_eq!(
-            statement(Some("2026-09-21T11:00:00Z")).need("hub.example", now),
+            statement(Some("2026-09-21T11:00:00Z")).need("hub.example", now, Some(RELEASE)),
             ProofNeed::Current,
             "signed an hour ago"
         );
         assert!(matches!(
-            statement(Some("2026-09-20T11:59:00Z")).need("hub.example", now),
+            statement(Some("2026-09-20T11:59:00Z")).need("hub.example", now, Some(RELEASE)),
             ProofNeed::Due(_)
         ));
         assert!(matches!(
-            statement(Some("2026-09-14T13:59:00Z")).need("hub.example", now),
+            statement(Some("2026-09-14T13:59:00Z")).need("hub.example", now, Some(RELEASE)),
             ProofNeed::Due(_)
         ));
         assert!(matches!(
-            statement(None).need("hub.example", now),
+            statement(None).need("hub.example", now, Some(RELEASE)),
             ProofNeed::Due(_)
         ));
     }
@@ -522,7 +595,9 @@ mod tests {
     #[test]
     fn a_proof_for_another_authority_or_an_unservable_lifetime_is_not_made() {
         let now = at("2026-09-14T12:00:00Z");
-        let ProofNeed::Unsignable(reason) = statement(None).need("other.example", now) else {
+        let ProofNeed::Unsignable(reason) =
+            statement(None).need("other.example", now, Some(RELEASE))
+        else {
             panic!("another authority is not signed for");
         };
         assert!(reason.contains("enrolled under other.example"), "{reason}");
@@ -531,7 +606,7 @@ mod tests {
             ..statement(None)
         };
         assert!(matches!(
-            short.need("hub.example", now),
+            short.need("hub.example", now, Some(RELEASE)),
             ProofNeed::Unsignable(_)
         ));
     }
@@ -545,6 +620,7 @@ mod tests {
 
         let current = DirectoryListing {
             key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
             checked_at: "2026-09-14T11:00:00.000Z".to_owned(),
             stated: Some(statement(Some("2026-09-21T11:00:00Z"))),
             failure: None,
@@ -553,6 +629,7 @@ mod tests {
 
         let failed = DirectoryListing {
             key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
             checked_at: "2026-09-14T11:30:00.000Z".to_owned(),
             stated: Some(statement(None)),
             failure: Some("the hub could not be reached".to_owned()),
@@ -584,6 +661,7 @@ mod tests {
 
         let listing = DirectoryListing {
             key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
             checked_at: "2026-09-14T11:00:00.000Z".to_owned(),
             stated: Some(statement(Some("2026-09-21T11:00:00Z"))),
             failure: None,
@@ -625,6 +703,7 @@ mod tests {
         let now = at("2026-09-14T12:00:00Z");
         let listed = DirectoryListing {
             key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
             checked_at: "2026-09-14T11:00:00.000Z".to_owned(),
             stated: Some(statement(Some("2026-09-21T11:00:00Z"))),
             failure: None,
@@ -646,6 +725,7 @@ mod tests {
 
         let refused = DirectoryListing {
             key_id: "key-1".to_owned(),
+            last_uploaded_release: Some(RELEASE.to_owned()),
             checked_at: "2026-09-14T11:00:00.000Z".to_owned(),
             stated: Some(statement(None)),
             failure: Some("the hub refused the proof (422): created is in the future".to_owned()),

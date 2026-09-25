@@ -1,5 +1,8 @@
 ---
 title: Fleet-status contract
+domain: hub
+audience: integrator
+section: reference
 ---
 
 # Fleet-status contract
@@ -23,6 +26,12 @@ no document in this repository describes it as such.
 
 `commonmeasure status --json` prints it; `commonmeasure status` prints the
 readable summary of the same values. Nothing is sent anywhere by either.
+
+On an enrolled edge, the local CLI also includes `directory_listing`, read
+from `directory-listing.json`: `listed_until` or `unlisted` with the reason.
+Hub-supplied reasons retain their text with a `hub:` prefix. This is a local
+status extension; it does not change the fleet policy document. Reading it
+makes no network request.
 
 ```json
 {
@@ -118,7 +127,7 @@ count travels on the telemetry wire as `refused` on every batch of a
 session, the session's running total of refused crossings at the time the
 batch is projected and never a per-batch difference, so a receiver keeps
 the larger value it has seen for the session and a redelivery cannot
-double-count ([`docs/contracts/session-evidence.md`](session-evidence.md)
+double-count ([`docs/contracts/telemetry-projection.md`](telemetry-projection.md)
 §The refused count on the wire).
 
 ## Policy digest
@@ -193,10 +202,10 @@ those and the document alone it reaches one of four answers:
 
 | Answer | When |
 |---|---|
-| `current` | `applied.revision` equals the desired revision, `applied.digest` equals the desired digest and `applied.edited_locally` is not `true` (an edge reporting no `applied.digest` is compared on `applied.policy_digest`) |
+| `current` | `applied.revision` equals the desired revision, `applied.digest` equals the desired digest and `applied.edited_locally` is not `true` |
 | `stale` | `applied.revision` is earlier than the desired revision |
 | `divergent` | `applied.revision` equals the desired revision but the digest differs or the policy was changed on the edge after activation, or `applied.revision` is later than the desired revision |
-| `unknown` | `applied.revision` is `null` (a local edge, or a managed edge that has activated nothing), or `applied.policy_digest` is `null` (no policy, or one that did not load) |
+| `unknown` | `applied.revision` is `null` (a local edge, or a managed edge that has activated nothing), or `applied.policy_digest` is `null` (no policy, or one that did not load), or `applied.digest` is `null` beside a revision that is not earlier than the desired one (the loader's digest does not stand in for the envelope digest) |
 
 `crates/commonmeasure-harness/src/fleet.rs` implements this classification
 and tests each answer. No answer needs the policy document.
@@ -231,5 +240,5 @@ Directory enrolment advances the effective-policy resolver to version `2`:
 canonical directory identity, conservative linked-worktree checks, and separate
 local/signed reporting clearance. Source-policy declaration digests and the
 fleet-status schema remain unchanged. Directory status exposes the independent
-grant revision and expiry; these are never presented as source-policy revisions.
+reporting approval revision and expiry; these are never presented as source-policy revisions.
 See [directory enrolment](directory-enrolment.md).

@@ -32,6 +32,9 @@ use sha2::{Digest, Sha256};
 
 use crate::declarations::MAX_CRAWL_DELAY;
 
+mod backoff;
+pub use backoff::{Backoff, BackoffEvent};
+
 /// The most one `context_fetch` spends asleep for `Crawl-delay` on an edge a
 /// person runs for themselves, over the page, every redirect hop and the
 /// licence and manifest probes.
@@ -277,6 +280,9 @@ pub struct Pacing {
     /// requests and the waiting share one host timeout.
     started: Instant,
     ceiling: Duration,
+    backoff_events: RefCell<Vec<BackoffEvent>>,
+    reservations: RefCell<BTreeMap<String, String>>,
+    probe_reserve: std::cell::Cell<Duration>,
 }
 
 #[cfg(not(test))]
@@ -315,6 +321,9 @@ impl Pacing {
             pace,
             started: Instant::now(),
             ceiling: ceiling_for(pace),
+            backoff_events: RefCell::new(Vec::new()),
+            reservations: RefCell::new(BTreeMap::new()),
+            probe_reserve: std::cell::Cell::new(Duration::ZERO),
         }
     }
 
@@ -368,6 +377,11 @@ impl Pacing {
     pub fn request_timeout(&self, limit: Duration) -> Option<Duration> {
         let left = self.left();
         (!left.is_zero()).then(|| limit.min(left))
+    }
+
+    /// End a probe's reservation of wait budget before the page proceeds.
+    pub fn end_probe(&self) {
+        self.probe_reserve.set(Duration::ZERO);
     }
 
     /// What the call may still spend asleep: what is left of the wait budget,
@@ -474,7 +488,14 @@ impl Pacing {
         if self.over_ceiling() {
             return Err(format!("not sent: {}", self.ceiling_reason()));
         }
+        self.probe_reserve
+            .set(self.spendable().saturating_sub(budget));
         let host = crate::grounding::host_of(url);
+        let before = self.budget.left();
+        self.before_turn(&host, budget)?;
+        let waited = before.saturating_sub(self.budget.left());
+        let now = if waited.is_zero() { now } else { Utc::now() };
+        let budget = budget.saturating_sub(waited);
         let Some(delay_ms) = self.delay_ms(&host) else {
             return Ok(now);
         };
@@ -776,14 +797,25 @@ impl CrawlDelayStore {
                 return;
             }
         }
+        // Prune only while this caller already holds the host lock. A
+        // healthy response otherwise requires no write access to the store.
+        if let Ok(Some(backoff)) = self.backoff(host)
+            && backoff.failures == 0
+            && backoff.until <= Utc::now()
+        {
+            std::fs::remove_file(self.path_for(host, "backoff.json")).ok();
+        }
         let prefix = format!("{}.json.", file_name(host));
+        let backoff_prefix = format!("{}.backoff.json.", file_name(host));
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with(&prefix) && name.ends_with(".tmp") {
+            if (name.starts_with(&prefix) || name.starts_with(&backoff_prefix))
+                && name.ends_with(".tmp")
+            {
                 std::fs::remove_file(entry.path()).ok();
             }
         }

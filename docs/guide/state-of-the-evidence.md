@@ -1,5 +1,7 @@
 ---
 title: The state of the evidence, August 2026
+domain: shared
+audience: reader
 ---
 
 # The state of the evidence, August 2026

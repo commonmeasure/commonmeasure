@@ -331,7 +331,7 @@ fn local_only_ancestor_vetoes_nested_git_repositories_and_submodules() {
 }
 
 #[test]
-fn missing_registry_withholds_queued_and_new_egress_even_with_a_legacy_scope() {
+fn missing_registry_withholds_queued_and_new_egress_even_with_a_scope_clearance() {
     for scope in [false, true] {
         queued_consent_removal("registry", scope);
     }
@@ -344,8 +344,11 @@ fn queued_consent_provenance_survives_loss_of_registry_and_mode_marker() {
     }
 }
 
+/// A spooled batch without `directory_selection` has no consent provenance.
+/// The relay records the field on every batch it queues and never defaults
+/// it: the line is damage, and nothing is sent until it is repaired.
 #[test]
-fn legacy_home_delivers_old_spool_entries_without_directory_provenance() {
+fn a_spooled_batch_without_directory_provenance_is_never_sent() {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -355,8 +358,8 @@ fn legacy_home_delivers_old_spool_entries_without_directory_provenance() {
     let root = temp.path().join("project");
     std::fs::create_dir(&home).unwrap();
     std::fs::create_dir(&root).unwrap();
-    std::fs::write(home.join("policy.json"), json!({"policy_mode":"observe", "scopes":[{"match":"project", "engagement":"legacy", "allow_telemetry_egress":true}]}).to_string()).unwrap();
-    record_public(&home, &root, "legacy");
+    std::fs::write(home.join("policy.json"), json!({"policy_mode":"observe", "scopes":[{"match":"project", "engagement":"cleared", "allow_telemetry_egress":true}]}).to_string()).unwrap();
+    record_public(&home, &root, "unselected");
     let fail = Arc::new(AtomicBool::new(true));
     let accepted = Arc::new(AtomicUsize::new(0));
     let failing = fail.clone();
@@ -364,14 +367,14 @@ fn legacy_home_delivers_old_spool_entries_without_directory_provenance() {
     let mut receiver = commonmeasure_http::Server::bind("127.0.0.1:0")
         .unwrap()
         .spawn(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert!(
+                body.get("directory_selection").is_none(),
+                "local provenance must not enter the wire document"
+            );
             if failing.load(Ordering::SeqCst) {
                 commonmeasure_http::Response::text(503, "try later")
             } else {
-                let body: Value = serde_json::from_slice(&request.body).unwrap();
-                assert!(
-                    body.get("directory_selection").is_none(),
-                    "local provenance must not enter the wire document"
-                );
                 let count = body["events"].as_array().unwrap().len();
                 received.fetch_add(count, Ordering::SeqCst);
                 commonmeasure_http::Response::json(
@@ -395,10 +398,14 @@ fn legacy_home_delivers_old_spool_entries_without_directory_provenance() {
     std::fs::write(spool, format!("{entry}\n")).unwrap();
     fail.store(false, Ordering::SeqCst);
     make_relay_retry_due(&home);
-    success(cli(&home, &root, &["relay"]));
-    assert_eq!(accepted.load(Ordering::SeqCst), 2);
-    success(cli(&home, &root, &["relay"]));
-    assert_eq!(accepted.load(Ordering::SeqCst), 2);
+    let output = cli(&home, &root, &["relay"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parse spool line 0; nothing is delivered until the line is repaired"),
+        "{stderr}"
+    );
+    assert_eq!(accepted.load(Ordering::SeqCst), 0);
     assert!(!home.join("directory-selection.json").exists());
     assert!(directory::Registry::read(&home).unwrap().is_none());
     receiver.stop();
@@ -424,7 +431,7 @@ fn record_url(home: &Path, root: &Path, session: &str, url: &str) {
 
 // A loopback fault-injection receiver proves withholding/retry behaviour; it
 // does not establish a live Hub or external supplier integration.
-fn queued_consent_removal(removal: &str, legacy_scope: bool) {
+fn queued_consent_removal(removal: &str, scope_clearance: bool) {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -434,8 +441,8 @@ fn queued_consent_removal(removal: &str, legacy_scope: bool) {
     let root = t.path().join("project");
     std::fs::create_dir(&root).unwrap();
     std::fs::create_dir(&home).unwrap();
-    let scopes = if legacy_scope {
-        json!([{"match":"project", "engagement":"legacy", "allow_telemetry_egress":true}])
+    let scopes = if scope_clearance {
+        json!([{"match":"project", "engagement":"cleared", "allow_telemetry_egress":true}])
     } else {
         json!([])
     };
@@ -495,7 +502,7 @@ fn queued_consent_removal(removal: &str, legacy_scope: bool) {
             .allows_telemetry_egress()
     );
     // Fresh evidence and queued evidence must both stay local when the
-    // registry is missing, even if the source policy contains a legacy grant.
+    // registry is missing, even if the source policy clears the scope.
     if removal != "registry_and_marker" {
         record_public(&home, &root, "after-removal");
     }

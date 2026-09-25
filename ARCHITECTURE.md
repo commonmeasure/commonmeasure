@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # Architecture
 
 Common Measure mediates the acquisition paths integrated by the operator,
@@ -65,7 +70,8 @@ Neither needs the inference component: the model is the host's.
 Copilot CLI, and the MCP server alone with Codex, Pi, Claude Desktop and VS
 Code, whose crossings are mediated or nothing; `install chrome` registers the
 binary for the browser extension in `browser/`, which observes the sources
-three browser answer surfaces show (`docs/contracts/host-integration.md`);
+ChatGPT on the web and Bing Copilot Search show (Google AI Overviews is
+`planned` and records nothing: `docs/contracts/host-integration.md` §6);
 `plugin/` is the marketplace registration for Claude Code
 (`plugin/README.md`). Any host that speaks MCP can attach the
 server the same way, and a Rust harness can link `commonmeasure-runtime` and
@@ -167,9 +173,11 @@ explicit gap record, written by the next successful write, and a run is
 published atomically or not at all (`docs/FAIL-POLICY.md`).
 
 Eight add-on processors run in-process (`docs/contracts/processor.md`
-§Status). Five run at the crossings the runtime carries, all deterministic: a PII detector, an injection screen and a
-support-status governor at the admit stage, and an HTML text extractor and a
-context optimiser at the transform stage. The extractor runs on every
+§Status). Five run at the crossings the runtime carries: a PII detector, an
+injection screen and a support-status governor at the admit stage, and an
+HTML text extractor and a context optimiser at the transform stage. The
+fidelity verifier and judge run after inference and the output provenance
+labeller on the answer. The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
 screens rule on the text the agent would read; its record carries the hash
 of the bytes the origin served beside the hash of the text delivered, and
@@ -212,36 +220,22 @@ resource bounds and the limits of unsigned declarations.
 ### Console and relay
 
 `commonmeasure serve` (`crates/commonmeasure-console`) serves the console on loopback: a
-maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with six
-sections rendered server-side over an SQLite index derived from the session
+maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with seven
+sections, rendered server-side over an SQLite index derived from the session
 evidence logs, from the same JSON values the `/api/*` routes serve, with
-vendored htmx as the only client script. A published run directory is read
-with `commonmeasure inspect`, not served. The logs are authoritative: the index
-can be rebuilt from them, and witnessed and reconstructed evidence stay
+vendored htmx as the only client script. The logs are authoritative: the
+index can be rebuilt from them, and witnessed and reconstructed evidence stay
 separate in every aggregate. Attribution rules
 (`~/.commonmeasure/attribution.json`) are applied at query time as a projection
-over the unchanged store. The Compare section runs live provider searches on
-the operator's submission and records nothing. The Policy section edits the
-policy mode, a scope's denied hosts and the attribution rules, each
-revision-checked and saved through the artefact's own loader, and forecasts
-a draft rule over the recorded history with the runtime's own admission
-check before any save. Apart from the Compare query, those declaration
-edits are the console's only writes: it cannot start a run, fetch outside
-Compare or modify existing evidence. The console is the one component
-that reads both engagement identities, so its Policy section names every
-scope where they differ.
-The Budget section renders `/api/budget`, including the footprint, declared
-caps and principal allowance standing. `/api/providers` serves the Sources
-list; `/api/policy/forecast` serves the forecast and its draft; `/api/compare`
-runs the Compare submission through the same runner as the page. All four
-writes accept form fields or a JSON object and return JSON when requested
-with `Accept: application/json`; their `/api/` aliases always return JSON.
-The answer carries `kind`, `status`, `notice` and the revision now in force
-(`null` for a comparison, which changes no declaration). JSON attribution
-edits carry an ordered `rules` array of `match` and `engagement` strings.
-The Record detail shows the fields a crossing carries and resolves its
-manifest reference within that session; it invents no fields for older or
-observed records.
+over the unchanged store. The console's writes are the policy mode, a scope's
+denied hosts and the attribution rules, each revision-checked and saved
+through the artefact's own loader, and the record of each Compare
+comparison, kept in `<home>/comparisons/` outside the relay's session scan.
+It cannot start a run or modify existing evidence, and it sends no record
+anywhere. It is the one component that reads both engagement identities, so
+its Policy section names every scope where they differ. A published run
+directory is read with `commonmeasure inspect`, not served. What each
+section shows, its routes and its answers are `docs/CONSOLE.md`.
 
 The relay (`crates/commonmeasure-relay`, driven by `commonmeasure relay`) builds a
 purpose-limited projection at the operator boundary: witnessed retrieval and
@@ -254,10 +248,14 @@ crash cannot double-count. The relay persists a claim before each HTTP
 attempt, applies bounded retry deadlines (ten attempts, 60 seconds doubling
 to an hour) and retains exhausted batches for explicit `relay requeue`. CLI
 and service mode share an exclusive spool lock and the same schedule; status,
-doctor and the console distinguish queued, held, dead and accepted batches. No console row is assumed safe for egress:
+doctor and the console distinguish queued, held, dead and accepted batches.
+Before each delivery the relay rechecks queued sessions against the current
+source policy and, where directories have been selected, the local selection
+and the hub's signed reporting approvals; a batch with nothing still cleared
+is held, not dropped (`docs/contracts/directory-enrolment.md`). No console row is assumed safe for egress:
 reconstructed crossings, refusals and rejected sources are never projected,
 and of the refusals only a count per session crosses, as an integer on the
-batch (`docs/contracts/session-evidence.md` §The refused count on the wire).
+batch (`docs/contracts/telemetry-projection.md` §The refused count on the wire).
 The console's egress block, and the Overview's hub card that renders it,
 report the configured receiver and delivered counts, or the absence of
 both, and the enrolled key id with its standing.
@@ -269,31 +267,27 @@ with the session named. The sessions last skipped are kept in
 `commonmeasure doctor` and the console's egress block. A prune writes
 `relay/spool/outbound.pruned` before the queue first loses a batch, so a
 missing journal reads as an unknown delivered count where the queue shows no
-gap (`docs/contracts/session-evidence.md` §Delivery state).
+gap (`docs/contracts/telemetry-projection.md` §Delivery state).
 
 Enrolment (`commonmeasure connect`, `crates/commonmeasure-relay/src/enrolment.rs`)
 is how an edge joins the hub in one command: it mints an Ed25519 key pair,
 exchanges the owner's short-lived token for an org-scoped ingest key and
 registers the public key in the same call, with a proof of possession. The
-private key stays in `~/.commonmeasure/edge-key.json`; the ingest key is
-written into `relay.json` without passing through a shell; the public
-facts, the hub, the organisation, the key id the hub assigned, go to
-`enrolment.json`, from which every session records an `edge_identity`
-line. `connect` also signs and uploads the directory proof that lists the
-key in the hub's key directory, and what the hub then holds goes to
-`directory-listing.json`, a file of its own so that `enrolment.json` keeps
-the shape released binaries sharing the home read. Each relay run asks the
-hub for the key's standing, records a revocation and renews the proof once
-it is a day old; `commonmeasure disconnect` revokes both credentials at the
-hub and removes the four files.
+private key stays in the edge home; the ingest key goes into `relay.json`;
+the public facts go to `enrolment.json`, from which every session records an
+`edge_identity` line. `connect` also uploads the directory proof that lists
+the key in the hub's key directory. Each relay run asks the hub for the
+key's standing, records a revocation and renews the proof once it is a day
+old; `commonmeasure disconnect` revokes both credentials at the hub and
+removes the enrolment files. The files and the exchange are
+`docs/contracts/enrolment.md`; the key directory and proof are
+`docs/contracts/bot-identity.md`.
 
 A hosted service that fetches supplier credentials from its hub keeps the
 last release fetch, by name and never by value, in
 `supplier-credentials.json` in the same home
-(`docs/contracts/supplier-credentials.md` §Edge side). That path is
-fixture-tested against a test double and met a real hub once, on loopback, on
-19 September 2026 (hub `f1a37cd`); no supplier has been called with a released
-value.
+(`docs/contracts/supplier-credentials.md` §Edge side, with its verification
+state in §Status).
 
 The relay's own report states which clearance was used when events left. It
 names each governing engagement whose declared clearance let events leave,
@@ -319,8 +313,8 @@ The host launches hooks or an MCP process, or a native harness links the runtime
 Local acquisition needs no continuously running Common Measure service:
 
 - `install.sh` places a released, checksum-verified binary on `PATH`, or
-  `cargo install --path crates/commonmeasure-cli` builds one from a checkout
-  (`docs/RELEASE.md`); the `justfile` is the operator surface.
+  `cargo install --locked --path crates/commonmeasure-cli` builds one from a
+  checkout (`docs/GETTING-STARTED.md` §1 and §8).
 - `commonmeasure install <host>` writes the host's registration naming the
   binary by absolute path, `doctor` reads it back and `uninstall` removes
   it; the plugin declares the same hooks and MCP server for the marketplace
@@ -336,6 +330,9 @@ Local acquisition needs no continuously running Common Measure service:
 Multiple registered hosts may use that same home and enrolled identity, even
 when each starts its own MCP process. Process separation alone does not create
 separate credentials, records or tenant boundaries.
+
+Every process using an Edge home runs the same release. Upgrade by stopping
+all of them, including `commonmeasure hosted service`.
 
 ### Hosted integration
 
@@ -355,22 +352,22 @@ their authenticated subjects. Separately registered working instances follow
 `docs/contracts/instance-registration.md`; creating a hosted session is not that
 registration.
 
-The current hosting design uses a stateful virtual machine per organisation's
-hosted Edge. The VM is an infrastructure choice, not the definition of an Edge
-or a requirement for each user.
+A hosted Edge runs on one stateful virtual machine per organisation, not one
+per user.
 
 ### Hub
 
 The hosted tier, Common Measure Hub, is one multi-tenant service run by
 Common Measure Ltd at hub.commonmeasure.ai, which is also the identity
-origin in every enrolled edge's signature. The split between edge and hub is fixed by the architecture:
+origin in every enrolled edge's signature. The split between edge and hub:
 
 - **Decisions stay at the edge.** The runtime refuses before bytes reach the
   host's context through mediated tools. With local integration that runtime
-  is beside the host; with remote integration it is on the hosted Edge. Hub
-  distributes management state and receives cleared evidence rather than
-  proxying these content requests. Online supplier authority and credentials
-  retain their separate availability conditions.
+  is beside the host; with remote integration it is on the hosted Edge. The
+  hub distributes management state and receives cleared evidence; content
+  requests do not pass through it. A hosted edge's supplier credentials come from
+  the hub and lapse on their own schedule
+  (`docs/contracts/supplier-credentials.md`).
 - **Evidence goes up.** The relay spools durably and derives event identity
   from the record each event projects. The hub accepts the Content Telemetry
   v1.0 wire under an organisation-scoped ingest key and shows an
@@ -402,8 +399,9 @@ origin in every enrolled edge's signature. The split between edge and hub is fix
   has no authority, stops signing and records why. An edge with no
   enrolment has no hub origin and fetches as before.
 
-Fleet status travels on a management contract separate from Content
-Telemetry (`docs/contracts/fleet-status.md`). It reports the edge's key id,
+Fleet status is a management document separate from Content Telemetry
+(`docs/contracts/fleet-status.md`), printed by `commonmeasure status --json`
+and sent nowhere. It reports the edge's key id,
 the deployment mode, the desired and applied revisions, the digest of the
 declared policy and the identity of the canonical effective policy,
 software and resolver versions, principal identity and authentication
@@ -439,19 +437,14 @@ before testing interactions, so the console can explain why a route won.
 
 ## Content Telemetry boundary
 
-The relay also sends the operator's own hub, where it issued the instance,
-an event-level `instance` member on content events; the hub removes it
-before onward delivery, so no publisher receives it
-(`docs/contracts/session-evidence.md` §Instance reference).
-
 Content Telemetry is the interoperable projection format, not the complete
 operator record and not the optimiser. It supports the reporting some
 licensed suppliers require while the local source record stays the source of
 truth.
 
 The projection emits retrieval, grounding and cleared minimal turn boundaries
-at Grounding level, with selected coverage (`docs/contracts/session-evidence.md`
-§Content Telemetry projection), as Content Telemetry v1.0
+at Grounding level, with selected coverage (`docs/contracts/telemetry-projection.md`),
+as Content Telemetry v1.0
 (`schema/SOURCE.md`, `crates/commonmeasure-relay/tests/conformance.rs`). The relay's
 wire types (`crates/commonmeasure-relay/src/wire.rs`) have no variant for citation,
 display, reproduction or engagement, because the evidence log witnesses
@@ -459,6 +452,11 @@ nothing for them. Evidence-backed reproduction and citation events, drawn
 from the grounding evaluator's verdicts, are planned. The boundary rules
 hold for them: the evaluator's verdict vocabulary stays local, and only
 positive claims the sealed evidence supports are projected.
+
+The relay also sends the operator's own hub, where it issued the instance,
+an event-level `instance` member on content events; the hub removes it
+before onward delivery, so no publisher receives it
+(`docs/contracts/telemetry-projection.md` §Instance reference).
 
 The standard never receives the full prompt, the response, the supply
 alternatives, the commercial objective, evaluator output, the workforce trace

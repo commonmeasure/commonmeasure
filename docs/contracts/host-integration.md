@@ -1,5 +1,8 @@
 ---
 title: Host integration contract
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Host integration contract
@@ -12,8 +15,10 @@ an agent framework: it is the component between an agent and the content
 the agent reads. A **harness** is the agent system the operator runs, bought
 or built. A **host** is the specific program the integration attaches to;
 Claude Code, Codex, Pi, Claude Desktop, Cursor, the Copilot CLI and VS Code
-are the hosts integrated today, and a Chrome extension observes three
-browser answer surfaces (§2, Browser answer surfaces). Terms like
+are the hosts integrated today; hosts that reach MCP servers only from their
+vendor's cloud, such as Microsoft 365 Copilot, use the hosted service (§1, The
+hosted path); and a Chrome extension
+observes browser answer surfaces (§2, Browser answer surfaces). Terms like
 crossing, admission, principal and scope are defined in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 Every claim below names the code or test it rests on. The binary is
 `commonmeasure` and its home directory is `~/.commonmeasure`.
@@ -102,12 +107,13 @@ The last is an absolute existing directory explicitly enrolled locally under
 the service account, with a current binding. It is the operator-declared scope
 for every session on this service, never client-supplied. A `hosted_scope`
 record states that basis. It enables no reporting by itself: local reporting
-opt-in, a current signed Hub owner grant and the source-policy/privacy checks
+opt-in, a current signed Hub owner reporting approval and the source-policy/privacy checks
 remain necessary. Omission preserves no-directory sessions. Relay clearance
 still resolves under the service OS principal. Policies restricted to bearer
 principals or their owned scopes can therefore withhold reporting even when
-acquisition succeeds; that configuration needs separate acceptance. The first
-Copilot test uses top-level policy with no principal bindings or scopes. It refuses to start
+acquisition succeeds; that configuration is not verified. The Microsoft 365
+Copilot verification (§6) used top-level policy with no principal bindings or
+scopes. The service refuses to start
 without that file, unenrolled, under local deployment mode, or while
 another process holds `~/.commonmeasure/hosted-service.lock`, and it holds
 the private-address floor whatever the policy says: `allow_private_hosts`
@@ -346,7 +352,7 @@ The hook command reads a session-end event as `session-end` from any host
 it reads the other events from, and where `relay.json` names a receiver and
 the `relay/manual` marker is absent it starts a relay run in the background
 without waiting for it
-([`docs/contracts/session-evidence.md`](session-evidence.md) §Relay at
+([`docs/contracts/telemetry-projection.md`](telemetry-projection.md) §Relay at
 session end). `install` registers it for Claude Code only. Cursor and the
 Copilot CLI each document a `sessionEnd` event in their hooks
 references, and `install cursor` and
@@ -533,19 +539,17 @@ Facts behind the table:
 ## 3. The screening-proxy socket
 
 Status: `planned`. No code in this repository serves an HTTP screening
-endpoint; the only HTTP server is the operator console, which reads
+endpoint. The binary runs two HTTP servers: the operator console, which reads
 evidence and takes the writes [`docs/GLOSSARY.md`](../GLOSSARY.md) §Console lists
-(`crates/commonmeasure-console`). The mediated path exists only as MCP over stdio.
+(`crates/commonmeasure-console`), and the hosted service, which serves the
+mediated path as MCP over Streamable HTTP (§1, The hosted path). Neither
+accepts a screening request.
 
-The socket is a contract some harnesses already expose from their side:
-a harness posts the text it is about to admit to an operator-configured
-endpoint and acts on the verdict. The QM harness does this with
-`SECURITY_SCREEN_BACKEND=proxy`, posting `{text, hook, metadata}` and
-expecting `{score, threshold, primary_outcome}`, with a shadow mode that
-audits agreement between its own model and the proxy per event, and every
-tool call from its adapters landing in one `ToolContext` seam
-(`https://github.com/yc-software/qm` at commit `866764e`, read on
-5 August 2026).
+Some harnesses already expose this socket from their side: the harness
+posts the text it is about to admit to an operator-configured endpoint,
+typically with the hook and some metadata, expects a score against a
+threshold, and acts on the verdict, sometimes in a shadow mode that records
+agreement between its own screen and the proxy.
 
 What Common Measure offers on that socket, when built:
 
@@ -591,16 +595,6 @@ its own contract in this directory.
 
 ## 5. What runs where
 
-The controlled Pi runner, a Pi SDK probe kept outside the published tree,
-uses the real
-local CM MCP process and its acknowledged `commonmeasure/observe` ingress
-([session evidence](session-evidence.md#acquisition-handles)). It opts in before
-fetching, uses CM's durable acquisition handles and submits hash-only context
-and output observations. CM appends these to the same session file as the
-crossings. The runner stops work if an observation cannot be recorded. Its
-synthetic loopback sources remain private under the relay's address floor.
-
-
 - **Everything decides locally.** Policy, admission, the allowance ledger,
   the processors and the evidence log run in the operator's process on the
   operator's machine, reading `~/.commonmeasure` (or `$COMMONMEASURE_HOME`).
@@ -611,7 +605,7 @@ synthetic loopback sources remain private under the relay's address floor.
   and the hosted service runs it on its interval, unless the operator wrote
   the `relay/manual` marker
   ([`docs/GLOSSARY.md`](../GLOSSARY.md) §Relay). Records leave only under a scope with a named
-  governing engagement and explicit clearance ([`docs/contracts/session-evidence.md`](session-evidence.md)).
+  governing engagement and explicit clearance ([`docs/contracts/telemetry-projection.md`](telemetry-projection.md) §Selected coverage).
 - **A hosted edge is the same edge on another machine.** `commonmeasure
   hosted service` runs one enrolled, managed edge per organisation in the
   operator's or Common Measure Ltd's cloud, holding the operator record on
@@ -622,7 +616,7 @@ synthetic loopback sources remain private under the relay's address floor.
   session has no client working directory. With no declared
   `session_directory`, no directory scope matches and its crossings remain
   private. An explicitly enrolled service directory uses the existing signed
-  reporting-grant path (§1); it creates no automatic egress permission.
+  reporting-approval path (§1); it creates no automatic egress permission.
 - **Local policy remains authoritative.** Common Measure Hub receives cleared
   records and coordinates managed policy. Current acquisition does not require
   Hub entitlement issuance. The planned organisational entitlement route may
@@ -632,6 +626,13 @@ synthetic loopback sources remain private under the relay's address floor.
   model answers; the runtime never calls one. In a batch run the model is
   reached through the gateway named by `COMMONMEASURE_INFERENCE_ENDPOINT`
   ([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md)).
+- **A host can report what it did with the content.** A host that drives the
+  MCP server itself can opt in to the `commonmeasure/observe` ingress
+  ([session evidence](session-evidence.md#acquisition-handles)) before
+  fetching, fetch through durable acquisition handles, and submit hash-only
+  context and output observations. The edge appends them to the same session
+  file as the crossings. Loopback sources used this way stay private under
+  the relay's address floor.
 
 ## 6. Verification state of each path
 
@@ -641,9 +642,9 @@ defines and are never collapsed.
 | Path | State | Evidence |
 |---|---|---|
 | Claude Code, observed (hooks) | `fixture-tested` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the host's payload shapes |
-| Claude Code, mediated (MCP over stdio) | `live-verified` (bounded configuration) | Claude Code 2.1.273 on macOS 26.4 admitted the public Common Measure page and refused `example.com` in an interactive session under hosted policy and a signed directory grant. The host tool response hash matches the source record; the selected session reached the correct Hub organisation and a separate unselected host session stayed local. The trial ran on 16 September 2026 against the hosted Hub; its configuration, limits and redacted records are kept privately. Loopback refusal and privacy-floor tests remain in `mediated_e2e.rs`. |
+| Claude Code, mediated (MCP over stdio) | `live-verified` (bounded configuration) | Claude Code 2.1.273 on macOS 26.4 admitted the public Common Measure page and refused `example.com` in an interactive session under hosted policy and a signed reporting approval. The host tool response hash matches the source record; the selected session reached the correct Hub organisation and a separate unselected host session stayed local. The trial ran against the hosted Hub; its configuration, limits and redacted records are not published. Loopback refusal and privacy-floor tests remain in `mediated_e2e.rs`. |
 | Claude Code, reconstructed (import) | `fixture-tested` | `crates/commonmeasure-cli/tests/import_e2e.rs` |
-| Claude Code, registration (`install`, `uninstall`, `doctor`) | `live-verified` for installation and use; remaining operations `fixture-tested` | The 16 September trial ran `install claude` into an isolated configuration directory and loaded the generated hooks/MCP files into Claude Code 2.1.273 using its explicit settings/config options, and the interactive session of the mediated Claude Code row ran through them. `install_e2e.rs` still covers removal and diagnosis. |
+| Claude Code, registration (`install`, `uninstall`, `doctor`) | `live-verified` for installation and use; remaining operations `fixture-tested` | The same trial ran `install claude` into an isolated configuration directory and loaded the generated hooks/MCP files into Claude Code 2.1.273 using its explicit settings/config options, and the interactive session of the mediated Claude Code row ran through them. `install_e2e.rs` still covers removal and diagnosis. |
 | Codex CLI, registration and mediated | `fixture-tested` | the `[mcp_servers.commonmeasure]` table `install codex` writes, with `default_tools_approval_mode = "approve"`, is pinned by `crates/commonmeasure-cli/tests/install_e2e.rs`; the session a real Codex CLI run (`codex exec`, client `codex-mcp-client` 0.154.0) recorded through that table, one mediated fetch of `https://example.com`, is read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` from a recording that is not published |
 | ChatGPT desktop app (Codex), the same registration | `spec-verified` | Codex's documentation states the app reads the same table; no session through the app is recorded here |
 | Claude Desktop, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the `mcpServers` entry around the operator's keys, content-exact, and byte for byte for a file already in this writer's format; the application's own MCP log on one operator machine recorded the server start and tool listing from that entry, which is the operator's record and not committed |
@@ -659,7 +660,7 @@ defines and are never collapsed.
 | VS Code, registration | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the `servers` entry beside a foreign server and `inputs`, byte for byte, keeps the content of a tab-indented file as VS Code writes it, and refuses a file with a comment; on one operator machine VS Code, opened with the entry in place, created the server's output log `mcpServer.mcp.config.usrlocal.commonmeasure.log`, empty because the server starts on first use in a chat; not committed |
 | VS Code, mediated | `planned` | no session is recorded; a call needs a chat with a model, through Copilot or a model key for VS Code's own harness |
 | Codex IDE extension, the same registration | `spec-verified` | Codex's documentation states the extension reads the same table, and the installed extension's bundle resolves that file; no session through the extension is recorded here |
-| Controlled Pi runner, acquisition handles and host observations | `fixture-tested` | the runner's probe test (not published) checks the real CM session file for unused acquisition, context entry, history reuse, output associations and refusal. `crates/commonmeasure-relay/src/project.rs` tests projection counts and privacy with public-shaped fixture records. No supplier or independent receiver acceptance is claimed. |
+| Acquisition handles and host observations (`commonmeasure/observe`) | `fixture-tested` | `crates/commonmeasure-harness/src/observations.rs` tests opt-in, handles surviving a reopened log, duplicate and failed-write rejection, observations bound to admitted bytes, and a killed writer's output joining its acquisition; `crates/commonmeasure-cli/tests/mediated_e2e.rs` drives the ingress through the real binary; `crates/commonmeasure-relay/src/project.rs` tests projection counts and privacy with public-shaped fixture records. No host outside this repository's tests is recorded using it, and no supplier or independent receiver acceptance is claimed. |
 | Pi, registration and mediated | `fixture-tested` | `crates/commonmeasure-cli/tests/install_e2e.rs` writes, reads back and removes the extension; a real Pi session recorded through it is read by `crates/commonmeasure-cli/tests/recorded_sessions.rs` from a recording that is not published |
 | Gemini CLI, mediated | `planned` | no `install` for the host; a hand-written `mcpServers` entry started the server and listed the tools before sign-in on one operator machine; no session through it is recorded |
 | Gemini CLI, observed | `planned` | no reader for Gemini's `AfterTool` exists; a hook Gemini runs from Claude Code's registration is refused under `GEMINI_SESSION_ID` and, carrying `timestamp`, by its shape (`crates/commonmeasure-cli/tests/hook_e2e.rs`) |
@@ -677,16 +678,17 @@ defines and are never collapsed.
 | Hosted edge, transport and resource server (`hosted serve`, `hosted service`) | `fixture-tested` | `crates/commonmeasure-cli/tests/hosted_mcp.rs` drives the real binary over HTTP against a loopback origin and a loopback issuer that serves a JWKS and signs tokens: a fetch recorded under the subject, two concurrent sessions, the refusal table, fifteen token checks refused by name, a revoked and a bound edge token; `crates/commonmeasure-cli/tests/hosted_service.rs` runs the service against a loopback hub: the three refusals to start and the locked home, five private addresses refused under a managed policy that admits them, the relay and the key refresh on the interval with no command run |
 | Claude custom connector (`/mcp/claude-connector`), mediated | `planned` | no `initialize` from the host is recorded; which `Origin` and `clientInfo` it sends is unknown until one is |
 | ChatGPT (`/mcp/chatgpt`), mediated | `planned` | the same |
-| Microsoft 365 Copilot (`/mcp/m365-copilot`), mediated | `live-verified` | Personal package 1.0.5, 17 September 2026: static OAuth with explicit resource, S256 and confidential-client authentication; approved AnyApp/HomeTenant vault setting. Sydney 1.0.0 negotiated MCP 2025-11-25. A paired session acquired an allowed public page and refused a denied host under `oauth_subject`; approved metadata and refusal count reached Hub. `recorded_sessions.rs` reads back the redacted capture, which is not published. Version 1.0.6 removed pinned definitions and verified dynamic discovery plus status/admission/refusal. Output-use observation and Studio remain unverified. |
+| Microsoft 365 Copilot (`/mcp/m365-copilot`), mediated | `live-verified` | Personal package 1.0.5: static OAuth with explicit resource, S256 and confidential-client authentication; approved AnyApp/HomeTenant vault setting. Sydney 1.0.0 negotiated MCP 2025-11-25. A paired session acquired an allowed public page and refused a denied host under `oauth_subject`; approved metadata and refusal count reached Hub. `recorded_sessions.rs` reads back the redacted capture, which is not published. Package 1.0.6 discovers the tools dynamically, with no pinned definitions; status, admission and refusal are verified through it. Output-use observation and Studio are unverified. |
 | Copilot cloud agent (`/mcp/copilot-cloud-agent`), mediated | `planned` | the same; authenticates with an edge token, so it needs no authorisation server |
 | Screening-proxy socket | `planned` | no implementation |
 | Crates linked directly | no state claimed | the crates are the binary's own dependencies; no external consumer is evidenced |
 
-Most operator sessions remain private and do not establish a live claim here.
-The bounded hosted Claude Code trial of 16 September 2026 retains redacted
-source records and its raw evidence privately. `demo/arc/regenerate.sh` produces a complete session store
+Operator sessions that are not published do not establish a live claim here,
+except where a row above names what was verified and how. The bounded hosted
+Claude Code trial keeps its redacted source records and raw evidence
+unpublished. `demo/arc/regenerate.sh` produces a complete session store
 offline from the same binary, which is the committed demonstration of both
-paths end to end ([`docs/RUN-THE-DEMONSTRATION.md`](../RUN-THE-DEMONSTRATION.md)).
+paths end to end (`demo/RUN-THE-DEMONSTRATION.md`).
 
 
 ## Directory enrolment surfaces

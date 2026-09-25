@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use commonmeasure_harness::enrolment::RELEASE;
 use commonmeasure_http::{Request, Response, Server, ServerHandle, send};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::{Value, json};
@@ -71,6 +72,14 @@ struct HubState {
     uploads: Vec<Value>,
     /// When set, an upload is refused with this status and detail.
     refuse_upload: Option<(u16, &'static str)>,
+    /// A raw error response, before proof acceptance.
+    upload_error: Option<(u16, String)>,
+    /// An answer substituted after proof acceptance, for malformed replies.
+    upload_answer: Option<String>,
+    /// The listing decision on exchange, status and upload answers.
+    listing_decision: Option<(bool, Option<&'static str>)>,
+    /// A changed decision first learnt on the next upload.
+    upload_decision: Option<(bool, Option<&'static str>)>,
     /// The proof the hub holds: the params, the signature and the expiry.
     held: Option<(String, String, i64)>,
 }
@@ -88,11 +97,16 @@ impl HubState {
     /// The `directory_proof` member as the hub states it, or nothing.
     fn statement(&self) -> Option<Value> {
         self.proof_authority.map(|authority| {
-            json!({
+            let mut statement = json!({
                 "lifetime_secs": LIFETIME_SECS,
                 "authority": authority,
                 "expires_at": self.held.as_ref().map(|(_, _, expires)| rfc3339(*expires)),
-            })
+            });
+            if let Some((listed, reason)) = self.listing_decision {
+                statement["listed"] = json!(listed);
+                statement["unlisted_reason"] = json!(reason);
+            }
+            statement
         })
     }
 
@@ -103,6 +117,7 @@ impl HubState {
         if let (Some(x), Some((params, signature, expires)), None) =
             (&self.x, &self.held, self.revoked)
             && *expires - now() >= 7_200
+            && self.listing_decision.is_none_or(|(listed, _)| listed)
         {
             let raw: [u8; 32] = URL_SAFE_NO_PAD.decode(x).unwrap().try_into().unwrap();
             directory.publish(&raw, params, signature);
@@ -197,8 +212,12 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                     if api_key.as_deref() != Some(API_KEY) {
                         return Response::json(404, r#"{"detail":"no edge key for this ingest key"}"#);
                     }
+                    if let Some((status, body)) = &state.upload_error {
+                        return Response::new(*status, body.as_bytes().to_vec());
+                    }
                     if let Some((status, detail)) = state.refuse_upload {
-                        return Response::json(status, &json!({"detail": detail}).to_string());
+                        let body = json!({"detail": detail});
+                        return Response::json(status, &body.to_string());
                     }
                     if body["key_id"] != json!(state.key_id) {
                         return Response::json(422, r#"{"detail":"keyid is not this edge's key"}"#);
@@ -240,7 +259,17 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                     {
                         state.held = Some((params, signature, expires));
                     }
-                    Response::new(204, Vec::new())
+                    if let Some(decision) = state.upload_decision.take() {
+                        state.listing_decision = Some(decision);
+                    }
+                    if let Some(body) = &state.upload_answer {
+                        return Response::json(200, body);
+                    }
+                    Response::json(200, &json!({
+                        "key_id": state.key_id,
+                        "stored": true,
+                        "directory_proof": state.statement(),
+                    }).to_string())
                 }
                 ("GET", "/.well-known/http-message-signatures-directory") => {
                     let (body, input, signature) = state.directory().response();
@@ -819,6 +848,7 @@ fn connect_lists_the_key_with_a_proof_that_verifies_and_a_start_renews_it_when_d
         assert_eq!(state.uploads.len(), 1, "one proof, not one per request");
         let upload = &state.uploads[0];
         assert_eq!(upload["key_id"], json!(key_id));
+        assert_eq!(upload["release"], RELEASE);
         assert!(
             upload["signature_input"]
                 .as_str()
@@ -874,6 +904,7 @@ fn connect_lists_the_key_with_a_proof_that_verifies_and_a_start_renews_it_when_d
     age_listing(home.path(), aged);
     session_start(home.path(), "s-renewed");
     assert_eq!(state.lock().unwrap().uploads.len(), 2, "renewed once");
+    assert_eq!(state.lock().unwrap().uploads[1]["release"], RELEASE);
     let identity = &edge_identity_records(home.path(), "s-renewed")[0]["payload"];
     let renewed =
         chrono::DateTime::parse_from_rfc3339(identity["listed_until"].as_str().unwrap()).unwrap();
@@ -1005,6 +1036,468 @@ fn a_refused_directory_proof_leaves_the_enrolment_standing_and_the_record_says_w
     assert!(unlisted.contains("created is later than now"), "{unlisted}");
     assert!(usable_in_directory(&server.url()).is_empty());
     server.stop();
+}
+
+/// The hub's listing decision survives an accepted proof and a relay status
+/// response, and the next session and local status use the stored statement.
+#[test]
+fn the_hubs_unlisted_reason_survives_enrolment_renewal_and_local_reads() {
+    const REASON: &str = "release below the hub's floor; upgrade this edge";
+    for on_renewal in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            listing_decision: (!on_renewal).then_some((false, Some(REASON))),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if on_renewal {
+            let aged = now() + LIFETIME_SECS - 2 * 86_400;
+            {
+                let mut state = state.lock().unwrap();
+                state.held.as_mut().unwrap().2 = aged;
+                state.upload_decision = Some((false, Some(REASON)));
+            }
+            age_listing(home.path(), aged);
+            session_start(home.path(), "s-renewal-refused");
+        }
+        let listing = directory_listing(home.path());
+        assert_eq!(listing["stated"]["listed"], false);
+        assert_eq!(listing["stated"]["unlisted_reason"], REASON);
+        let calls = state.lock().unwrap().status_keys.len();
+        session_start(home.path(), "s-unlisted");
+        let identity = &edge_identity_records(home.path(), "s-unlisted")[0]["payload"];
+        assert_eq!(identity["unlisted"], format!("hub: {REASON}"));
+        assert!(identity.get("listed_until").is_none());
+        let output = commonmeasure(home.path(), &["status"]);
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("hub: {REASON}")));
+        let output = commonmeasure(home.path(), &["status", "--json"]);
+        assert!(output.status.success());
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            status["directory_listing"]["unlisted"],
+            format!("hub: {REASON}")
+        );
+        assert_eq!(
+            state.lock().unwrap().status_keys.len(),
+            calls,
+            "local reads need no hub call"
+        );
+
+        // A current proof still learns a changed decision through relay status.
+        state.lock().unwrap().listing_decision = Some((true, None));
+        let uploads = state.lock().unwrap().uploads.len();
+        let output = commonmeasure(home.path(), &["relay"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(state.lock().unwrap().uploads.len(), uploads);
+        session_start(home.path(), "s-listed-again");
+        assert!(
+            edge_identity_records(home.path(), "s-listed-again")[0]["payload"]["listed_until"]
+                .is_string()
+        );
+        server.stop();
+    }
+}
+
+/// A release change requires an upload independently of the hub's listing
+/// decision. Both start-time and relay refreshes must remember its acceptance.
+fn check_release_refresh(recorded_release: Option<&str>, upload_due: bool) {
+    for at_start in [true, false] {
+        for listed in [true, false] {
+            let home = tempfile::tempdir().unwrap();
+            let state = Arc::new(Mutex::new(HubState {
+                proof_authority: Some("hub.example"),
+                listing_decision: Some((listed, (!listed).then_some("the hub withheld this key"))),
+                ..HubState::default()
+            }));
+            let mut server = hub(state.clone());
+            let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+            assert!(output.status.success());
+            assert_eq!(state.lock().unwrap().uploads.len(), 1);
+            assert_eq!(
+                directory_listing(home.path())["last_uploaded_release"],
+                RELEASE
+            );
+            let mut listing = directory_listing(home.path());
+            if let Some(release) = recorded_release {
+                listing["last_uploaded_release"] = json!(release);
+            } else {
+                listing
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("last_uploaded_release");
+            }
+            std::fs::write(
+                home.path().join("directory-listing.json"),
+                listing.to_string(),
+            )
+            .unwrap();
+
+            if at_start {
+                session_start(home.path(), "s-release");
+            } else {
+                let output = commonmeasure(home.path(), &["relay"]);
+                assert!(output.status.success());
+            }
+            let expected_uploads = if upload_due { 2 } else { 1 };
+            assert_eq!(
+                state.lock().unwrap().uploads.len(),
+                expected_uploads,
+                "release {recorded_release:?}, session start {at_start}, listed {listed}"
+            );
+            let listing = directory_listing(home.path());
+            assert_eq!(listing["last_uploaded_release"], RELEASE);
+            assert!(listing["stated"].get("last_uploaded_release").is_none());
+            assert_eq!(
+                state.lock().unwrap().uploads.last().unwrap()["release"],
+                RELEASE
+            );
+
+            // A status read must retain the accepted release, and neither
+            // entry point uploads again while this release's proof is current.
+            assert!(commonmeasure(home.path(), &["relay"]).status.success());
+            session_start(home.path(), "s-after-release");
+            assert_eq!(state.lock().unwrap().uploads.len(), expected_uploads);
+            assert_eq!(
+                directory_listing(home.path())["last_uploaded_release"],
+                RELEASE
+            );
+            server.stop();
+        }
+    }
+}
+
+#[test]
+fn a_listing_without_a_release_uploads_at_session_start_and_relay() {
+    check_release_refresh(None, true);
+}
+
+#[test]
+fn a_listing_from_another_release_uploads_at_session_start_and_relay() {
+    check_release_refresh(Some("0.0.0"), true);
+}
+
+#[test]
+fn a_listing_from_this_release_does_not_upload_at_session_start_or_relay() {
+    check_release_refresh(Some(RELEASE), false);
+}
+
+#[test]
+fn a_400_or_422_proof_refusal_preserves_a_current_listing_and_records_the_failure() {
+    for (status, reason) in [
+        (400, "release is malformed: expected a semantic version"),
+        (422, "created is later than now plus 60 seconds"),
+    ] {
+        for decision in [None, Some((true, None))] {
+            let home = tempfile::tempdir().unwrap();
+            let state = Arc::new(Mutex::new(HubState {
+                proof_authority: Some("hub.example"),
+                listing_decision: decision,
+                ..HubState::default()
+            }));
+            let mut server = hub(state.clone());
+            let output = commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]);
+            assert!(output.status.success());
+            let mut listing = directory_listing(home.path());
+            let statement = listing["stated"].clone();
+            listing["last_uploaded_release"] = json!("0.0.0");
+            std::fs::write(
+                home.path().join("directory-listing.json"),
+                listing.to_string(),
+            )
+            .unwrap();
+            state.lock().unwrap().refuse_upload = Some((status, reason));
+
+            session_start(home.path(), "s-refused-release");
+            assert_eq!(state.lock().unwrap().uploads.len(), 2);
+            let identity = &edge_identity_records(home.path(), "s-refused-release")[0]["payload"];
+            assert!(identity["listed_until"].is_string(), "{identity}");
+            assert!(identity.get("unlisted").is_none(), "{identity}");
+            let listing = directory_listing(home.path());
+            assert_eq!(listing["stated"], statement);
+            assert_eq!(listing["last_uploaded_release"], "0.0.0");
+            assert_eq!(
+                listing["failure"],
+                format!("the hub refused the proof ({status}): {reason}")
+            );
+            assert_eq!(
+                usable_in_directory(&server.url()),
+                vec![state.lock().unwrap().key_id.clone().unwrap()]
+            );
+            let output = commonmeasure(home.path(), &["status", "--json"]);
+            assert!(output.status.success());
+            let local_status: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(local_status["directory_listing"]["listed_until"].is_string());
+
+            session_start(home.path(), "s-backoff");
+            assert_eq!(
+                state.lock().unwrap().uploads.len(),
+                2,
+                "the failure retry delay still applies"
+            );
+            server.stop();
+        }
+    }
+}
+
+#[test]
+fn upload_refusals_of_401_404_and_409_still_mark_the_key_unlisted() {
+    const REASON: &str = "the hub refused this key";
+    for status in [401, 404, 409] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        assert!(
+            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+                .status
+                .success()
+        );
+        let mut listing = directory_listing(home.path());
+        listing["last_uploaded_release"] = json!("0.0.0");
+        std::fs::write(
+            home.path().join("directory-listing.json"),
+            listing.to_string(),
+        )
+        .unwrap();
+        state.lock().unwrap().refuse_upload = Some((status, REASON));
+        session_start(home.path(), "s-key-refused");
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        let identity = &edge_identity_records(home.path(), "s-key-refused")[0]["payload"];
+        assert_eq!(identity["unlisted"], format!("hub: {REASON}"));
+        let listing = directory_listing(home.path());
+        assert_eq!(listing["last_uploaded_release"], "0.0.0");
+        assert_eq!(
+            listing["failure"],
+            format!("the hub refused the proof ({status}): {REASON}")
+        );
+        server.stop();
+    }
+}
+
+/// Make a current held proof due only because this release has not uploaded.
+fn change_recorded_release(home: &Path) {
+    let mut listing = directory_listing(home);
+    listing["last_uploaded_release"] = json!("0.0.0");
+    std::fs::write(home.join("directory-listing.json"), listing.to_string()).unwrap();
+}
+
+#[test]
+fn a_large_html_upload_refusal_is_bounded_in_the_listing_session_and_status() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    change_recorded_release(home.path());
+    // The 2 KiB boundary falls inside a multi-byte character.
+    let html = format!("<html>{}</html>", "界".repeat(4_000));
+    let expected = format!("{}… (truncated, {} bytes)", &html[..2046], html.len());
+    state.lock().unwrap().upload_error = Some((404, html));
+    session_start(home.path(), "s-html-refusal");
+    let listing = directory_listing(home.path());
+    assert_eq!(listing["stated"]["unlisted_reason"], expected);
+    assert_eq!(
+        listing["failure"],
+        format!("the hub refused the proof (404): {expected}")
+    );
+    let identity = &edge_identity_records(home.path(), "s-html-refusal")[0]["payload"];
+    assert_eq!(identity["unlisted"], format!("hub: {expected}"));
+    let output = commonmeasure(home.path(), &["status", "--json"]);
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        status["directory_listing"]["unlisted"],
+        format!("hub: {expected}")
+    );
+    assert_eq!(state.lock().unwrap().uploads.len(), 2);
+    server.stop();
+}
+
+#[test]
+fn an_accepted_upload_with_an_unreadable_statement_records_the_release() {
+    for answer in [
+        json!({"directory_proof": {"authority": "hub.example", "lifetime_secs": LIFETIME_SECS, "listed": "false"}}).to_string(),
+        json!({"directory_proof": {"authority": "hub.example", "lifetime_secs": LIFETIME_SECS, "unlisted_reason": 42}}).to_string(),
+        "not JSON".to_owned(),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            listing_decision: Some((false, Some("the hub withheld this key"))),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        assert!(commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN]).status.success());
+        change_recorded_release(home.path());
+        let before = directory_listing(home.path())["stated"].clone();
+        state.lock().unwrap().upload_answer = Some(answer);
+        let output = commonmeasure(home.path(), &["relay"]);
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("signed and accepted by the hub"));
+        let listing = directory_listing(home.path());
+        assert_eq!(listing["stated"], before);
+        assert_eq!(listing["last_uploaded_release"], RELEASE);
+        assert!(listing["failure"].as_str().unwrap().contains("not readable"));
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        session_start(home.path(), "s-after-unreadable");
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        server.stop();
+    }
+}
+
+#[test]
+fn a_statement_less_accepted_upload_clears_the_old_listing_decision() {
+    for later_held in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            listing_decision: Some((false, Some("no release was reported"))),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        assert!(
+            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+                .status
+                .success()
+        );
+        change_recorded_release(home.path());
+        // Force either the uploaded or the pre-existing proof to expire later.
+        let previous_expiry = now() + LIFETIME_SECS + if later_held { 600 } else { -600 };
+        {
+            let mut hub = state.lock().unwrap();
+            hub.held.as_mut().unwrap().2 = previous_expiry;
+            hub.upload_answer = Some(json!({"stored": !later_held}).to_string());
+        }
+        session_start(home.path(), "s-without-statement");
+        let listing = directory_listing(home.path());
+        assert!(listing["stated"].get("listed").is_none());
+        assert!(listing["stated"].get("unlisted_reason").is_none());
+        assert!(listing.get("failure").is_none());
+        assert_eq!(listing["last_uploaded_release"], RELEASE);
+        let expiry =
+            chrono::DateTime::parse_from_rfc3339(listing["stated"]["expires_at"].as_str().unwrap())
+                .unwrap()
+                .timestamp();
+        if later_held {
+            assert_eq!(expiry, previous_expiry);
+        } else {
+            assert!(expiry > previous_expiry);
+            assert_eq!(expiry, state.lock().unwrap().held.as_ref().unwrap().2);
+        }
+        let identity = &edge_identity_records(home.path(), "s-without-statement")[0]["payload"];
+        assert!(identity["listed_until"].is_string());
+        assert!(identity.get("unlisted").is_none());
+        server.stop();
+    }
+}
+
+#[test]
+fn relay_retries_a_refused_release_only_upload_after_an_hour() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    change_recorded_release(home.path());
+    state.lock().unwrap().refuse_upload = Some((422, "created is later than now plus 60 seconds"));
+    assert!(commonmeasure(home.path(), &["relay"]).status.success());
+    assert_eq!(state.lock().unwrap().uploads.len(), 2);
+    let failed = directory_listing(home.path());
+    let mut recent = failed.clone();
+    // Move only the recorded attempt time; no clock or network test double.
+    recent["checked_at"] = json!(rfc3339(now() - 1_800));
+    std::fs::write(
+        home.path().join("directory-listing.json"),
+        recent.to_string(),
+    )
+    .unwrap();
+    state.lock().unwrap().listing_decision = Some((false, Some("the hub withheld this key")));
+    for _ in 0..3 {
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        let listing = directory_listing(home.path());
+        assert_eq!(listing["checked_at"], recent["checked_at"]);
+        assert_eq!(listing["failure"], failed["failure"]);
+        assert_eq!(listing["last_uploaded_release"], "0.0.0");
+        assert_eq!(
+            listing["stated"]["unlisted_reason"],
+            "the hub withheld this key"
+        );
+    }
+    assert_eq!(state.lock().unwrap().uploads.len(), 2);
+    let mut elapsed = directory_listing(home.path());
+    elapsed["checked_at"] = json!(rfc3339(now() - 3_600));
+    std::fs::write(
+        home.path().join("directory-listing.json"),
+        elapsed.to_string(),
+    )
+    .unwrap();
+    assert!(commonmeasure(home.path(), &["relay"]).status.success());
+    assert_eq!(state.lock().unwrap().uploads.len(), 3);
+    assert_ne!(
+        directory_listing(home.path())["checked_at"],
+        elapsed["checked_at"]
+    );
+    assert!(commonmeasure(home.path(), &["relay"]).status.success());
+    assert_eq!(state.lock().unwrap().uploads.len(), 3);
+    server.stop();
+}
+
+#[test]
+fn relay_keeps_retrying_refused_proofs_due_by_age_or_expiry() {
+    for remaining in [LIFETIME_SECS - 86_401, 7_199] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        assert!(
+            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+                .status
+                .success()
+        );
+        change_recorded_release(home.path());
+        state.lock().unwrap().refuse_upload = Some((422, "the proof was refused"));
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        state.lock().unwrap().held.as_mut().unwrap().2 = now() + remaining;
+        for expected in 3..=5 {
+            assert!(commonmeasure(home.path(), &["relay"]).status.success());
+            assert_eq!(state.lock().unwrap().uploads.len(), expected);
+            assert_eq!(
+                directory_listing(home.path())["last_uploaded_release"],
+                "0.0.0"
+            );
+        }
+        server.stop();
+    }
 }
 
 /// A hub that serves its directory from another authority than the origin

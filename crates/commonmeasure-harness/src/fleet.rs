@@ -306,15 +306,20 @@ pub fn classify(
             format!("the edge applied revision {revision}; revision {desired_revision} is desired"),
         );
     }
-    // An edge that reports the digest its envelope named the revision by is
-    // compared on that, whatever form the receiver published the policy in,
-    // and says itself whether the file has moved since; an older edge is
-    // compared on the loader's digest of the file, which agrees only where
-    // the receiver published the loader's form.
-    let (compared, edited) = match applied["digest"].as_str() {
-        Some(named) => (named, applied["edited_locally"] == json!(true)),
-        None => (digest, false),
+    // The edge is compared on the digest its envelope named the revision by,
+    // whatever form the receiver published the policy in, and says itself
+    // whether the file has moved since. The loader's digest of the file
+    // agrees with the published one only where the loader's form was
+    // published, so it does not stand in for a missing envelope digest.
+    let Some(compared) = applied["digest"].as_str() else {
+        return (
+            Convergence::Unknown,
+            format!(
+                "the edge reports revision {revision} without the digest its envelope named it by"
+            ),
+        );
     };
+    let edited = applied["edited_locally"] == json!(true);
     if revision == desired_revision && compared == desired_digest && !edited {
         return (
             Convergence::Current,
@@ -468,7 +473,7 @@ mod tests {
                     mode: "managed".to_owned(),
                     desired: json!({"revision": applied_revision, "outcome": "accepted"}),
                     applied_revision,
-                    applied_digest: None,
+                    applied_digest: applied_revision.map(|_| digest.clone()),
                     applied_edited: None,
                     applied_expires_at: None,
                     stale_since: None,
@@ -494,6 +499,13 @@ mod tests {
         let (verdict, reason) = classify(&managed(None), 7, &digest);
         assert_eq!(verdict, Convergence::Unknown);
         assert!(reason.contains("no applied revision"), "{reason}");
+        // 0.3.0 reported a revision without its envelope's digest. The
+        // loader's digest does not stand in for it.
+        let mut unnamed = managed(Some(7));
+        unnamed["applied"]["digest"] = Value::Null;
+        let (verdict, reason) = classify(&unnamed, 7, &digest);
+        assert_eq!(verdict, Convergence::Unknown);
+        assert!(reason.contains("without the digest"), "{reason}");
         assert_eq!(
             classify(&local_status(home.path()), 7, &digest).0,
             Convergence::Unknown

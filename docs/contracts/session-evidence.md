@@ -1,5 +1,8 @@
 ---
 title: Session evidence contract
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Session evidence contract
@@ -30,7 +33,7 @@ authority. The reference proves neither compliance nor fulfilment. It is
 private to the operator and the registration service that issued it. The
 relay sends it to one receiver only: the operator's own hub, where that hub is
 the reference's issuer, as an event-level `instance` member on content events
-(§Content Telemetry projection, §Instance reference). The hub removes the
+([telemetry projection §Instance reference](telemetry-projection.md#instance-reference)). The hub removes the
 member before onward delivery, so it reaches no publisher, and it adds no
 Content Telemetry or SPUR field to what a publisher receives. Emission is
 built; a reader that verifies the reference against the retained binding is
@@ -99,7 +102,7 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `turn_completed` | a hook at the end of a turn (Claude Code: `Stop`) | a turn boundary, the same |
 | `context_snapshot` | a transcript carrying the provider's usage counters and the host's own records of what it assembled, read at the end-of-turn hook (Claude Code: `Stop`) | a context-budget observation at the boundary, with its basis named, and the inventory of the window by category (§Context snapshots) |
 | `nudge_issued` | a hook at session start whose stdout the host adds to context (Claude Code: `SessionStart`) | the standing mediation nudge was emitted for the host to add to the session's context |
-| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side), and whether the hub's key directory lists the key, as the edge last learnt it: `listed_until`, the time the hub stops serving the key's directory proof (its expiry less the 7,200-second margin), or `unlisted` with the reason. The edge keeps what it last learnt in `<home>/directory-listing.json`, bound to the key id, and never in `enrolment.json`, whose shape stays the one every released binary reads. A signed request under a key the directory does not list verifies nowhere. Absent on an edge that is not enrolled |
+| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start, on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side), and whether the hub's key directory lists the key, as the edge last learnt it: `listed_until`, the time the hub stops serving the key's directory proof (its expiry less the 7,200-second margin), or `unlisted` with the reason. The edge keeps what it last learnt in `<home>/directory-listing.json`, bound to the key id, and never in `enrolment.json`, whose shape stays the one every released binary reads. A signed request under a key the directory does not list verifies nowhere. Absent on an edge that is not enrolled |
 | `credentials_loaded` | nothing; the MCP server writes it before the first record a tool call or host observation leaves | the operator credentials file was loaded at server start: its path, digest and variable names, never a value |
 | `policy_sync` | a hook at session start (Claude Code: `SessionStart`), or the MCP server's start for a session no hook refreshed | on a managed edge, what refreshing the policy from the hub did for this session: the outcome, the revision in force and whether its envelope has expired (§Policy synchronisation). Absent on a local edge |
 | `host_process` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start | the host process this path runs under, so the hook log and the MCP log of one host session can be joined (§Host process) |
@@ -148,7 +151,7 @@ could have refused it:
   "cwd": "/home/operator/code/project", "policy_scope": "code/project",
   "principal": "research-agent", "authentication_basis": "os_user",
   "url": "…", "host_name": "…",
-  "identity": {"user_agent": "CommonMeasureBot/0.2.0 (+https://…/bot; mailto:…)",
+  "identity": {"user_agent": "CommonMeasureBot/0.4.0 (+https://…/bot; mailto:…)",
                "key_id": "…", "signature_agent": "https://…"},
   "content_hash": "sha256:…", "retrieved_hash": "sha256:…",
   "estimated_tokens": 12, "token_basis": "characters/4",
@@ -181,8 +184,9 @@ receiver learns is the hash of what entered context.
 every mediated crossing whose request left the machine and on no other: a
 crossing refused before the request presented nothing, and a search result
 was fetched by a supplier under its own contract rather than by this
-runtime. An enrolled edge carries `key_id` and the `signature_agent`
-directory a verifier resolves it in; an edge that is not enrolled, or whose
+runtime. An enrolled edge carries `key_id` and `signature_agent`, the
+origin whose key directory a verifier resolves it in
+([bot identity](bot-identity.md)); an edge that is not enrolled, or whose
 key the hub has revoked, carries `unsigned` instead with the reason in it.
 The two are different facts, not a value and its absence: a publisher can
 verify the first and can only take the second on trust.
@@ -292,7 +296,7 @@ projected to Content Telemetry.
 
 ## Acquisition handles
 
-The controlled Pi runner opts into explicit host observations before any mediated
+A host opts into explicit host observations before any mediated
 crossing (including a refusal). Earlier observed hook crossings are allowed.
 It opts in by sending the MCP JSON-RPC request `commonmeasure/observe` with
 `{"event":"observations_started"}`. This is a host integration method, outside
@@ -311,8 +315,7 @@ nothing. It preserves existing bytes; it does not repair a damaged log.
 
 Observation validation reads the durable file strictly and returns unavailable
 on a malformed record or an incomplete last line. A concurrent incomplete
-append may therefore make an observation unavailable; the controlled runner
-stops on that failure. Each request reads the lines appended since the previous
+append may therefore make an observation unavailable. Each request reads the lines appended since the previous
 one and checks the request against a validation index of the earlier ones: the
 handles, generation, output and action identifiers, hashes and byte offsets the
 checks need, and no URL or text. The index is derived from the log and is not
@@ -342,8 +345,6 @@ fact leaves no record of itself.
 Explicit observations cover `context_fetch` only. `context_search` deliveries
 return no acquisition handle and retain their existing crossing semantics; they
 are not stamped `host_required` and cannot receive a context-entry observation.
-The controlled Pi runner exposes `context_fetch`, and `send_acquired_text` only
-when the operator supplies action grants (§Host action decisions).
 
 In this mode each admitted text fetch carries an `acquisition_id` (UUID) and a
 separate `crossing_id` (UUID) on its `crossing_mediated` record. `observer` is
@@ -373,24 +374,14 @@ host identity of the MCP process. It checks that the handle belongs to an
 admitted acquisition in this session. The representation hash identifies the
 bytes the host observed in its serialised model request, including any host
 transformation; the acquisition's hash remains unchanged. No text is accepted.
-The Pi runner records this after its guarded HTTP transport receives a response.
-It establishes the host's request boundary, not provider-internal context or
+The observation establishes the host's request boundary, not provider-internal context or
 model execution. Transport failure can leave an attempted request without a
 context-entry observation. History reuse records a new generation against the
 same handle, without another retrieval. Duplicate observations for the same
 handle, generation and representation are refused.
 
-The relay emits one `content_grounded` per eligible context-entry observation,
-with its representation hash and generation as `turn_id`. It derives clearance,
-source identity, licence and the private-address/internal exclusions from the
-referenced acquisition. Event IDs use the observation's original log position;
-the owning engagement remains that of the acquisition. Missing token counts
-remain absent. Retrieval of unused content emits only `content_retrieved`.
-Several representations of one acquisition in a generation produce separate
-grounding events. Their hashes describe the representations; the event count
-measures representation occurrences. Receivers measuring distinct sources per
-generation count distinct (`turn_id`, `content_url`) pairs within the session,
-not grounding events. Event IDs remain the deduplication key for delivery retries.
+Each eligible context-entry observation is projected as a grounding event
+([telemetry projection §Grounding from host observations](telemetry-projection.md#grounding-from-host-observations)).
 
 ## Output-association observations
 
@@ -416,8 +407,7 @@ If the first succeeds and the second fails, the call returns unavailable.
 An identical retry from the same host, with the same generation, output ID,
 hash and ordered association list, appends only the missing boundary. A changed
 retry or an output whose generation already has a completion boundary is refused.
-A malformed durable log remains unavailable; retry does not repair it. The Pi
-runner still stops on recording failure and does not implement this recovery.
+A malformed durable log remains unavailable; retry does not repair it.
 
 The ingress also writes a minimal `turn_completed` boundary with the generation
 as its host turn identifier and a reference to this output observation. This
@@ -428,20 +418,12 @@ process's `policy_identity` when set. It does not carry the hook boundary's
 policy-resolution fields or transcript path. Clearance uses its working
 directory independently of the acquisition. A retry uses the completing
 process's working directory and effective policy identity.
-Its custom event field
-`data.commonmeasure-output-associations.count` counts only associations whose
-acquisitions and context entries pass selected coverage and privacy checks.
-It is distinct from the number of `content_grounded` events. A receiver counts
-this field once per boundary event ID. The field is absent on boundaries without
-an output observation, so missing observation never becomes measured zero.
-The hash, local handles and output ID stay in the private source record.
-
-This extension remains Grounding-level Content Telemetry. It makes no standard
-`content_cited` event or Citation-conformance claim. The separately appended
-boundary lets a later output be projected after its grounding was already
-spooled, without changing a previously delivered event's count or identity.
-The boundary needs its own clearance and at least one eligible source event,
-as §Selected coverage requires.
+The projection counts the boundary's associations in a custom field
+([telemetry projection §Custom fields](telemetry-projection.md#custom-fields)).
+The hash, local handles and output ID stay in the private source record. The
+separately appended boundary lets a later output be projected after its
+grounding was already spooled, without changing a previously delivered
+event's count or identity.
 
 ## Host action decisions
 
@@ -474,10 +456,9 @@ CM's independent verification of its decision or its enforcement.
 An action decision refers to the generation whose output proposed the action,
 so it may follow that generation's `output_associated` and `turn_completed`
 records. A context entry is refused once its generation has an output; an
-action decision is not. In the controlled Pi loop every action record follows
-its generation's completion boundary, because the tool call that proposes the
-action ends the assistant message and the runner records that output before it
-executes the tool.
+action decision is not. Where the tool call that proposes an action ends the
+assistant message and the host records that output before it executes the
+tool, every action record follows its generation's completion boundary.
 
 `host_policy_hash` identifies the host's action policy, separately from CM's
 source policy. `target` identifies both the destination resource URL and the
@@ -492,7 +473,7 @@ a prompt, acquired text, file contents or action arguments; the URL path is its
 only free-form value.
 
 An acknowledgement follows the fsynced append. Failure makes the action
-unavailable: the controlled runner stops before sending. An `allowed` decision
+unavailable. An `allowed` decision
 records permission only; it does not establish transmission, recipient receipt,
 subsequent access or fulfilment of licence conditions. A missing decision does
 not establish refusal. Action records stay in the private source record; the
@@ -521,12 +502,13 @@ CM appends the named gap with `observer: host`, `grade: unavailable` and a fixed
 explanation. These are unavailable observations, never zero measurements and
 never telemetry events. Absence of a later context or output record alone
 establishes no negative claim: the host or process may have failed before it
-could record one. Partial assistant outputs remain in the synthetic probe's
-private journal and are not counted as completed output associations.
+could record one. Partial assistant outputs are not counted as completed
+output associations.
 
-The controlled runner and projection are **fixture-tested**: the runner's own
-probe tests (not published) and the projection tests in
-`crates/commonmeasure-relay/src/project.rs`.
+The ingress and the projection of these observations are **fixture-tested**:
+`crates/commonmeasure-harness/src/observations.rs` tests the ingress,
+`crates/commonmeasure-cli/tests/mediated_e2e.rs` drives it through the
+binary, and `crates/commonmeasure-relay/src/project.rs` tests the projection.
 The content and model responses are synthetic. Supplier authorisation,
 provider-internal events, independent receiver acceptance and delivery recovery
 are separate evidence requirements.
@@ -800,7 +782,7 @@ crossing stopped before the request; below) or `unavailable`
 address floor or the hub's origin stops requests to its origin; nothing was
 held, no rule was applied, and the page, at the same origin, is refused by
 the same check). A `Disallow` for the selected
-group binds in every policy mode (owner decision, 14 September 2026), so `refused` is written under
+group binds in every policy mode, so `refused` is written under
 `strict`, `observe` and `prefer` alike, and `mode` records the session's mode
 without having decided anything. The refusal text and the agent's
 `declarations.robots.explanation` carry the same attribution in words; the
@@ -816,8 +798,7 @@ which does not admit <target>, where the source's robots.txt redirected;
 the next crossing asks for it again; …)".
 
 A `robots.txt` over 512 KiB is parsed up to its last complete line within
-512 KiB, and the rest ignored (RFC 9309 §2.5; owner decision, 22 September
-2026). `truncated` then gives `size`, the bytes the host sent after any
+512 KiB, and the rest ignored (RFC 9309 §2.5). `truncated` then gives `size`, the bytes the host sent after any
 content coding was removed, and `read`, the bytes parsed, and the
 explanation says how much was read. Where the reading came from a held copy,
 `truncated` describes that copy. A first line longer than 512 KiB leaves
@@ -829,7 +810,7 @@ ceiling is a failed request, and so unreachable.
 ```
 
 A `robots.txt` that cannot be read is ruled as RFC 9309 §2.3.1 says for a
-crawler, in every mode (owner decision, 22 September 2026). `status` is what the file answered, where it
+crawler, in every mode. `status` is what the file answered, where it
 answered. `unreachable` is true where the file answered 429 or a 5xx (or
 any status that is neither 2xx nor 4xx), or where a timeout, name, TLS or
 connection failure left no answer, or where the file redirected to a URL
@@ -860,9 +841,9 @@ from it however old it is, `held_copy` names it (`fetched_at`,
 held, `reading` is absent, `outcome` is `unreachable`, and the refusal names
 the file, the host and the failure, and ends "An unreachable robots.txt is
 a complete disallow in every policy mode: refused before the request."
-Before 22 September 2026 a declined redirect and a body over 512 KiB were
-`unavailable` and the crossing proceeded with no rule; a cached probe of
-either kind is asked for again rather than reused.
+A cached probe that earlier releases recorded as `unavailable` for a
+declined redirect or a body over 512 KiB is asked for again rather than
+reused.
 
 A probe can fail for a reason of this edge's own rather than the host's:
 the whole-call time limit (below) left no time for the request, or the
@@ -877,9 +858,7 @@ request in every mode, because a page is not fetched under a `robots.txt`
 this edge has not read. The refusal ends ": refused before the request, in
 every policy mode." A licence probe cut short is `unread`, and so refuses
 the crossing, and is asked again at the next crossing; a manifest probe
-cut short is `unavailable` and is not kept. Before 22 September 2026 these
-cases were recorded as the host being unreachable and cached for five
-minutes.
+cut short is `unavailable` and is not kept.
 
 ```json
 "robots": {"requested_url": "https://publisher.example/private/report",
@@ -896,17 +875,16 @@ minutes.
            "mode": "observe", "outcome": "refused"}
 ```
 
-`carried` is no longer written. Under 0.3.5 and earlier, `observe`
-and `prefer` made a disallowed request and recorded the breach with outcome
-`carried`; those records still read, and a reader treats `carried` as a
-`Disallow` that was not obeyed. Preferences read from `robots.txt`
+`carried` is no longer written. Records from earlier releases, in which
+`observe` and `prefer` made a disallowed request and recorded the breach with
+outcome `carried`, still read, and a reader treats `carried` as a `Disallow`
+that was not obeyed. Preferences read from `robots.txt`
 (`Content-Usage`, `Content-Signal`) are not the access rule and still follow
 the session's mode (below).
 
 `reading.crawl_delay` is the selected group's `Crawl-delay`, and `delay` is
-what it did to this request. The delay binds in every policy mode (owner
-decision, 14 September 2026),
-signed or unsigned. `value` is the line as written and `delay_ms` that
+what it did to this request. The delay binds in every policy mode, signed
+or unsigned. `value` is the line as written and `delay_ms` that
 value in milliseconds; a value that is not a non-negative decimal number
 of seconds is listed in `unreadable` and ignored, and a group that states
 none has no `crawl_delay`. `honoured_ms` is the delay this edge keeps:
@@ -934,6 +912,67 @@ taken, `wait_ms` is the licence's wait and the page's delay together,
 `next_at` is when the host may next be asked, and where the licence was
 not sent `unavailable` says why.
 
+Response-driven back-off is recorded separately in `declarations.backoff`,
+an ordered array covering pages, redirect hops, `robots.txt`, licence and
+manifest probes. Each entry has `target` (the request URL, or the host when
+waiting before a crawl-delay turn) and `outcome`: `set`, `reset`, `waited`,
+`refused` or `unavailable`. A `backoff` object carries `failures` (the
+consecutive failure count), `status` (the failure's HTTP status), `until`
+(the earliest permitted send), `retry_after` (a usable header supplied the
+interval) and `capped` (that header exceeded one hour). Waits and refusals
+also carry `wait_ms` and `budget_ms`; refusals and unavailable decisions
+carry `reason`. Own edges keep the full failure details. `status`,
+`retry_after` and `capped` describe the failure that set the end; a shorter
+later failure does not replace them. `http_date`, when present, is the
+uncapped HTTP-date that set the end. While another request holds a reservation,
+`reserved_until` names its timeout separately from the failure's `until`.
+A reset retains the last failure's status and end time with `failures: 0`, so a successful concurrent request
+cannot revoke a wait another answer has already imposed.
+
+A 429 or 503 with a usable `Retry-After` honours delta-seconds or HTTP-date,
+up to one hour. Other 5xx answers, and 429 or 503 without a usable header,
+impose 10 seconds, doubling for consecutive failures up to 15 minutes.
+Any non-5xx answer other than 429 resets the count. No failed request is
+retried automatically. The next request waits within the fetch's remaining
+sleep and whole-call budgets, or is refused naming back-off. Own edges name
+its end; hosted disclosures are limited as described below.
+A later answer cannot shorten a wait already imposed. A failed answer adds
+one to the count only when it arrives at or after the end it found. Failures
+inside that period keep the count and may extend the end.
+
+After back-off ends, the first sender reserves the host under its lock until
+that request's timeout. Its answer clears or renews the reservation; other
+callers wait for the answer within their own budgets. A process that stops
+without an answer leaves a reservation that expires at the timeout. This
+reservation does not add a failure or resend a failed request.
+
+Back-off is kept in `<host>.backoff.json` beside the crawl-delay turn,
+under the same host lock. Every MCP process using the home shares it, and
+it survives restart. An unreadable back-off record or a failed update is
+explicitly unavailable. An unreadable record refuses before sending. A
+read-only store permits a healthy host with no active failure record: its
+successful answer takes no lock and writes nothing. When an answer needs an
+update and that update fails, the failure belongs to the edge; it is never
+cached as an unreachable `robots.txt`. After repair the next crossing asks
+again. The remedy names that host's back-off file and retains the storage
+error's cause. Crawl-delay recovery does not clear back-off. Interrupted
+back-off writes are swept with crawl-delay temporaries; expired zero-count
+records are removed when a reset has no remaining wait, or during a later
+sweep under a host lock already held for an update. Healthy sends do not take
+a lock just to prune.
+
+The later of the crawl-delay turn and back-off controls the send. Where
+both apply, back-off is waited before reserving the crawl-delay turn:
+concurrent callers must not reserve turns in the past and send together
+when back-off ends. The existing `robots.delay` ruling keeps its shape,
+and `delay_ms` remains only the honoured crawl delay. A refusal before the
+turn writes no `robots.delay`; its evidence is only in `declarations.backoff`.
+A probe refused by back-off records `cache: "not_asked"`, with no
+`fetched_at` or `expires_at` on its robots reading. The crawl-delay turn is taken
+after any back-off wait, against the remaining budget. A further check
+before transport catches back-off learned while taking that turn.
+`robots.txt` remains exempt from crawl-delay, but observes back-off.
+
 `budget_ms` is what the `context_fetch` may still spend asleep when the turn
 is taken. On an edge served over stdio one call may spend 60 seconds asleep
 in total, the same bound as the longest delay this edge keeps, so a first
@@ -951,10 +990,9 @@ and asks for nothing further: not the page, not the licence `robots.txt` names o
 page last named (a licence `robots.txt` names is recorded `not_asked`), and
 not the Content Telemetry manifest.
 
-A page is never admitted under a licence this edge has not read (owner
-decision, 22 September 2026: a reporting demand binds in every policy mode,
-and content whose reporting and licence requirements are not respected is
-not had). So a licence with no current reading in the cache is read before
+A page is never admitted under a licence this edge has not read: a
+reporting demand binds in every policy mode, and content whose reporting and
+licence requirements are not respected is not taken. So a licence with no current reading in the cache is read before
 the page: the one `robots.txt` names, and, on a host that states a delay,
 the one the page's `Link` header named when it was last fetched. Each takes
 the host's next turn, and the page waits for its own turn after them, so a
@@ -993,9 +1031,9 @@ may carry a reporting demand. The failure is recorded as `unavailable`,
 remembered for five minutes and asked again after it. A licence that is
 `missing` (404 or 410) does not refuse: the crossing proceeds in every mode
 as though no licence terms were declared, and the record and the tool
-result carry the gap naming it (owner decision, 22 September 2026:
-adoption of licensing standards is uneven, and a publisher's broken link
-should not make its site unreachable). Both rules hold where the source's
+result carry the gap naming it. Adoption of licensing standards is
+uneven, and a publisher's broken link should not make its site
+unreachable. Both rules hold where the source's
 statements govern; where an applicable operator assessment governs, the
 assessment stands in for the licence's terms, as it does for a licence
 that was read.
@@ -1010,8 +1048,7 @@ host may next be asked (`expires_at` is the delay after the attempt), so the
 next crossing after the delay asks it at its first free turn, and the record
 is not rewritten on every crossing in between.
 
-The host timeouts these bounds sit under were measured in Claude Code 2.1.278
-on 22 September 2026:
+The host timeouts these bounds sit under, measured in Claude Code 2.1.278:
 
 - **stdio:** a tool call is ended at `MCP_TOOL_TIMEOUT`, 300000 ms by default,
   a hard wall-clock limit per call that progress notifications do not extend,
@@ -1025,8 +1062,7 @@ along a five-hop redirect chain at the 30-second client timeout (180 s), two
 5-second probes a hop (60 s), the two manifest probes (10 s) and 60 seconds of
 sleeping. That exceeds the stdio default. One `context_fetch` therefore keeps
 a whole-call time limit: 240 seconds over stdio, and 50 seconds on a hosted
-edge, under the 60-second streamable-HTTP default (lead's decision, 22
-September 2026). It is checked before every turn, hop and probe: past it no
+edge, under the 60-second streamable-HTTP default. It is checked before every turn, hop and probe: past it no
 further request is sent, a probe is recorded `not_asked` and a hop is
 refused, each saying the call reached its time limit, and what may still be
 slept is never more than what is left of it. No request, page, hop or
@@ -1062,6 +1098,15 @@ neither the operator's file system nor another tenant's fetch. A `waited`
 ruling still carries `wait_ms` there, and a tenant can derive from it when
 another tenant last asked the host; the call's own elapsed time gives the
 same figure, so withholding it would hide nothing.
+
+For response-driven back-off on a hosted edge, the tenant's refusal text and
+`declarations.backoff` event say only that the host is in back-off. They
+withhold `status`, `failures`, `wait_ms` and any `until` derived from a
+response time, including delta-seconds `Retry-After` and a capped HTTP-date.
+An uncapped `Retry-After` HTTP-date that set the end may be named as `until`,
+because it is the host's own statement. The tenant's `backoff` object is
+otherwise empty; `budget_ms` remains that call's own budget. Own edges keep
+the full record.
 
 Each redirect hop is evaluated against the `robots.txt` at its own origin
 before the hop is requested: a hop its own file disallows is refused, in
@@ -1106,8 +1151,7 @@ crossing is taken under are ruled on: one that permits AI input by name
 first, else one silent on usage. Where no licence in the governing entry
 authorises AI input and the crossing goes on outside `strict`, every demand in
 the entry is ruled on: taking the page outside the licence does not excuse
-the fetcher from the report its owner asks for (owner decision,
-22 September 2026).
+the fetcher from the report its owner asks for.
 
 A licence's telemetry reporting demand is met when its profile is the Content
 Telemetry binding this runtime speaks, its conformance level is one this
@@ -1115,7 +1159,7 @@ runtime emits (`retrieval` or `grounding`), and the session can deliver:
 the policy scope clears telemetry egress, `$COMMONMEASURE_HOME/relay.json`
 names a receiver, and automatic delivery is in force. Automatic delivery
 means the events leave without anyone typing a command — the session-end
-relay (§Relay at session end) or the hosted service's interval. The marker
+relay ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)) or the hosted service's interval. The marker
 file `$COMMONMEASURE_HOME/relay/manual` switches it off, and a demand is
 then unmet however the rest is configured; the reason names the marker, so
 the operator reads what to remove. A profile this runtime does not recognise
@@ -1153,17 +1197,16 @@ the home's own state, never from host files under `$HOME`:
   failure modes are not symmetric: a Claude Code build that announced another
   name would be refused visibly and fixed by one string, where a client
   missing from a blocklist would take content whose report nothing relays.
-  The name is the one every Claude Code session recorded on the owner's
-  machine announced, `{"name": "claude-code", "title": "Claude Code"}`: 10 of
-  10 `client_identified` records, Claude Code 2.1.270 to 2.1.278, September
-  2026. Names known to belong to other hosts (`codex-mcp-client`,
+  The name is the one every recorded Claude Code session announced,
+  `{"name": "claude-code", "title": "Claude Code"}`, Claude Code 2.1.270 to
+  2.1.278. Names known to belong to other hosts (`codex-mcp-client`,
   `claude-ai`, `local-agent-mode-*`, `cursor-vscode`) only make the reason
   more precise ("is not Claude Code"). A session that sent no `clientInfo`
   trusts the host word; MCP clients must send it, so that arises only in
   tests.
 
 Whether Claude Code's `SessionEnd` hook is actually installed is `doctor`'s
-check (§Relay at session end), not the ruling's: reading it at each licence
+check ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)), not the ruling's: reading it at each licence
 ruling would make the outcome depend on the machine's host files. An
 operator on Codex, Cursor or another host without a session-end event can
 connect through a hosted endpoint where the host supports one (the service
@@ -1192,7 +1235,7 @@ telemetry one it can meet. The record shows the type as `unstated`.
 An unmet reporting demand refuses the crossing in every policy mode, whether
 the demand was known before the request or only after the bytes arrived, in
 which case they are withheld from context with their hash on the refused
-crossing (owner decision, 22 September 2026). The mode the
+crossing. The mode the
 operator set is not the source's consent, and RSL 1.0 §3.12 says an activity
 whose applicable demands are not satisfied is unlicensed. The operator's
 choice is whether to report, which the marker expresses, not whether to
@@ -1419,9 +1462,8 @@ limit. Integration state: `fixture-tested`
 (`crates/commonmeasure-relay/tests/instance_registration.rs`, against a test
 double of the hub that verifies the signature by the hub's pinned rule). The
 ignored test in `crates/commonmeasure-cli/tests/instance_e2e.rs` drives the
-binary against a running hub; it was run against the real hub server and
-database on loopback on 19 September 2026 and again on 21 September 2026. The
-second test there carries
+binary against a running hub, and has been run against the real hub server
+and database on loopback. The second test there carries
 a reporting duty through `relay` to the hub's read of it, against a hub
 started with its development onward setting (`DEV_ONWARD_LOOPBACK`, which a
 hub accepts only in development mode on a loopback listener) so that it
@@ -1433,7 +1475,7 @@ and `delivered`, with the receiver's acceptance, after the double accepts
 the hub's retry. The run establishes this for the edge and the hub on
 loopback and for no receiver.
 `crates/commonmeasure-cli/tests/instance_recovery_e2e.rs` is the third such
-test, run the same way on 18 and 21 September 2026: an instance's
+test, run the same way: an instance's
 process and a relay are each killed with `SIGKILL` and a later process
 recovers delivery (**A killed instance**, below). Its hub is started with
 the same development onward setting and stands behind a pass-through
@@ -1599,7 +1641,7 @@ begun is left to the hub's answer.
 **A killed instance.** The edge keeps no state in the instance's process that
 recovery needs. Each record is synced before its append returns and carries
 the `instance` reference it was written under, the retained binding is a file,
-and delivery state is the spool's (§Delivery state). After the process is
+and delivery state is the spool's ([telemetry projection §Delivery state](telemetry-projection.md#delivery-state)). After the process is
 killed, `commonmeasure relay` from the same home, run by any later process,
 projects the session's records and delivers them to the issuing hub with their
 reference. A relay killed after it claimed a batch leaves the claim with no
@@ -1636,7 +1678,7 @@ number of its batches left queued, after the report of what it relayed; a
 delivery failure in the same run names them as well. The hosted service
 journals the report and the skipped sessions at each interval when no
 delivery failed; a delivery failure is journalled under "relay did not run",
-with the skipped sessions named after it; the relay did run (NET-08). The
+with the skipped sessions named after it; the relay did run (EGR-42). The
 relay keeps the sessions it last skipped in `relay/skipped-sessions.json`,
 and `commonmeasure status`,
 `commonmeasure doctor` and the egress block of the console's `/api/status`
@@ -1781,8 +1823,8 @@ place. Observed and reconstructed crossings never carry the field: no MCP
 client made them.
 
 Names recorded from the hosts probed: `claude-code` with the title
-`Claude Code` (every Claude Code session recorded on the owner's machine,
-10 of 10, Claude Code 2.1.270 to 2.1.278), `codex-mcp-client` (the Codex
+`Claude Code` (every recorded Claude Code session, Claude Code 2.1.270 to
+2.1.278), `codex-mcp-client` (the Codex
 CLI at 0.154.x and the ChatGPT desktop app at 0.153.x, told apart by
 `version`), `claude-ai` and `local-agent-mode-commonmeasure` (Claude
 Desktop's two clients), `cursor-vscode` (Cursor). The relay projects
@@ -2013,417 +2055,10 @@ is.
 
 ## Content Telemetry projection
 
-The relay emits Grounding-level events only: `content_retrieved`,
-`content_grounded`, `turn_started` and `turn_completed`. It emits no citation,
-presentation, reproduction or engagement claim. The pinned schemas are listed
-in `schema/SOURCE.md`; `crates/commonmeasure-relay/src/project.rs` implements
-this selection, and `conformance/` freezes the emitted batches.
-
-### Selected coverage
-
-`commonmeasure:telemetry-selection:v1` is the opaque reference for the selection
-rule in this section. Coverage is **selected** for each emitted event type;
-the relay never declares complete coverage. Each event carries the following
-informational declaration in the schema's extension container:
-
-```json
-{"data": {"commonmeasure-projection": {
-  "conformance_level": "grounding",
-  "coverage": {"mode": "selected", "terms_ref": "commonmeasure:telemetry-selection:v1"}
-}}}
-```
-
-The extension describes the event's projection. It does not add a standard
-batch field or replace an emitter manifest. An emitter manifest advertising
-this projection uses `telemetry.conformance_level: grounding` and a
-`telemetry.coverage` entry for each of the four event types, with
-`mode: selected` and the same `terms_ref`. Manifest publication belongs to the
-participant operating the endpoint; the relay does not publish one.
-
-The relationship scope is the source activity selected for the operator's
-configured receiver. A witnessed session crossing requires a matched policy
-scope, a named governing engagement and explicit telemetry clearance. Current
-directory consent and managed grants also apply where directory reporting is
-configured. A run explicitly named to the relay contributes its admitted
-sources. Both paths exclude private addresses and named internal prefixes.
-A session also excludes crossings marked internal, reconstructed crossings,
-failed fetches and non-2xx responses. Refused sources leave only as the existing
-session count; rejected run sources do not leave. Prompts, answers, evaluator
-output, costs and private record detail are excluded. Unobserved host activity
-and records missing a usable URL or timestamp cannot establish an event.
-These exclusions mean absence of an event cannot establish absence of use.
-
-A turn boundary requires its own clearance, resolved from `payload.detail.cwd`.
-It accompanies a session only when at least one source event is eligible.
-A neighbouring public crossing never clears a private boundary. The projection
-copies the recorded `turn_id` where supplied, normalises the timestamp and
-carries `turn: {"privacy_level": "minimal"}`. It excludes the working directory,
-transcript path, privacy rationale and all conversation content. A boundary
-without a recorded `minimal` declaration or usable timestamp is excluded; the
-relay does not invent missing host boundaries or turn identifiers. Turn event
-IDs derive from the session, original log position and boundary kind, so
-changed clearance cannot renumber previously delivered events.
-
-### Instance reference
-
-A `content_retrieved` or `content_grounded` event whose source record carries
-the `instance` reference (§Where) carries it as an event-level member, beside
-`data` rather than inside it:
-
-```json
-{"instance": {"issuer": "https://hub.example", "id": "5c2f8d8e-7a41-4a0b-9e55-1f6b3c9d2e70", "revision": 1}}
-```
-
-`issuer` is the registration service's origin without a trailing slash, `id`
-the instance identifier and `revision` the integer binding revision held when
-the source record was written. Each event takes the reference of its own
-source record: a crossing's events take the crossing's, and a grounding event
-projected from a host `context_entered` observation takes the observation's.
-Records written after a renewal therefore carry the later revision, and events
-projected from earlier records keep the earlier one.
-
-The member is not a standard Content Telemetry field. It is projected only
-when the origin (scheme, host and port) of the receiver the relay is
-projecting for equals the recorded issuer: after enrolment the configured
-receiver is the hub's origin followed by its telemetry path, and the issuer is
-that origin. For any other receiver the member is absent and the batch is
-otherwise identical. The hub uses the member to join the event to the
-instance's reporting duties and removes it before onward delivery (tested
-in the hub's own repository, not here).
-
-No member is projected for a record without a reference, for a reference that
-is not a string issuer, a non-empty string identifier and an integer revision,
-for a turn boundary, or for a published run, whose summary carries no
-reference. A session with no registration projects exactly what it did before
-this member existed. Absence of the member claims nothing about registration.
-Event identifiers do not depend on it, so an event delivered before this
-member existed is not delivered again and its duty is not joined by it.
-
-The issuer check is made when the batch is projected and again on the
-document each delivery posts. A batch can wait in the spool across a change of
-receiver (`--receiver`, or an enrolment with another hub rewriting
-`relay.json`); delivery removes the member from every event whose issuer is
-not the origin of the receiver it is posting to, beside the `agent_id`
-rewrite. A batch carries no digest or signature over its events, so nothing
-is invalidated. The spooled file stays as queued, so a later delivery to the
-issuer still carries the member. A batch projected for a receiver that was
-not the issuer has no member to restore, and a later delivery of it to the
-issuer joins no duty.
-
-Delivery state is kept by event identifier, whatever the receiver
-(§Delivery state). Events another receiver accepts are recorded delivered and
-are not sent to the issuer by a later run, so the issuing hub reads nothing
-for them and a reporting duty of that instance cannot be met from them. The
-relay's report counts the members delivery withheld from batches that held
-one (`RelayReport.instance_references_withheld`), `commonmeasure relay`
-prints a warning when the count is not zero, and a dry run forecasts the
-same. A run in which another batch failed carries the same count on its
-failure (`DeliveryFailure.instance_references_withheld`) and the command
-prints the warning after the failure, because the accepted batches' events
-are recorded delivered whatever happened to the rest. The count does not cover events projected for a receiver that was not
-the issuer, which never carried the member.
-
-### Ingestion measure
-
-A grounding event carries `tokens_ingested` only when its source record has a
-non-negative integer count and a non-empty recorded `token_basis`. The relay
-copies both, preserving `token_basis` as a custom event `data` field retained
-from the existing wire format. It is not a standard field. Session counts come
-from `payload.estimated_tokens` and `payload.token_basis`; published run counts
-come from each admitted source's `tokens` and `run.token_basis` in `summary.json`.
-The projection never substitutes a current estimator for a missing recorded
-basis. An absent count or basis leaves both fields absent, and a recorded zero
-with a basis remains zero. `characters/4` and `whitespace-words` are estimates,
-not model-tokeniser counts or measurements comparable between emitters.
-
-The relay does not emit `chars_ingested`: it reads hashes and counts from the
-record, not the captured text. Multiplying a rounded token estimate would not
-recover the Unicode code points placed in context. Existing `content_hash`
-continues to identify the captured content; page text never enters telemetry.
-
-### Delivery state
-
-The relay retains each projected batch in `relay/spool/outbound.ndjson`.
-`queued_at` records when it entered the spool; older batches have an unknown
-queue age. Each line carries its spool `index`; a line written before indices
-were stored takes its line number. Private metadata records `queued`,
-`delivered` or `dead`, the attempt count, next attempt time, last attempt time,
-last error and a separate `hold_reason` for each spool index. These fields
-never enter the Content Telemetry document. A batch with no metadata is queued
-and unclaimed.
-
-The metadata is a snapshot and a journal. Each state change is one line
-appended to `relay/spool/outbound.delivery.journal` and made durable before
-the operation returns; the line carries the batch's whole state, so replaying
-it twice changes nothing. When the relay or `relay requeue` closes the spool it
-folds the journal into `relay/spool/outbound.delivery.json`, which then holds
-every retained batch, and replaces the journal with a header carrying the next
-`generation`, the next spool index and the count of pruned deliveries. After a
-clean close the journal holds its header alone; a spool that has never
-recorded a state change has no journal. A reader reads the journal before and
-after the queue and snapshot and reads again if the generation changed, so it
-never combines one generation's snapshot with another's journal. It also reads
-again when the journal states a batch its copy of the queue lacks, which a
-writer that enqueued and claimed during the read produces. After eight
-attempts the read fails with an explicit error, and status reports delivery
-state as unavailable with unknown counts. A relay stopped before it closes
-leaves the journal in place; the next reader and writer replay it, and the
-next clean close folds it.
-
-An enqueue or journal line cut short by a crash was never reported as
-written, and the next writer removes it. One case is kept: an unterminated
-final queue line that parses as a whole entry is given its newline, since a
-restored file may end that way; if it was an interrupted enqueue, its event
-ids count as spooled and nothing is projected twice. Every queue line is
-checked to be a whole entry, and every journal line parsed, whenever the spool
-is read, so damage before the last line of either file is an explicit error
-from the relay, `relay requeue`, a dry run and status, and no line is skipped
-or removed. One damaged queue line therefore stops the delivery of every
-queued batch until it is repaired. Removing the line does not repair it: the
-metadata still names its index. The number in the report is the batch's spool
-index: the line's `index` member or, for a line without one, its line number
-counted from zero, so the first line is 0. The batch's metadata is the snapshot
-member and the journal records that carry that index. For a damaged line of a
-delivered batch, replace the line with a placeholder that keeps its index, for
-example
-`{"index":7,"origin":"damaged line replaced","document":{"events":[]}}` for
-spool index 7; the spool then opens, delivery resumes and the placeholder is
-pruned under the retention rule below. For a damaged line of an undelivered
-batch the payload is lost. While no relay runs, empty the line and keep its
-newline, and remove the batch's entries from the snapshot and the journal. Do
-not delete the line: a line with no `index` member takes its index from its
-line number, so deleting a line above it would give it, and every such line
-after it, the metadata of the batch before, and a queued batch could read as
-delivered with no error. Every release to v0.3.3 wrote lines without the
-member, and they stay so until a prune rewrites the file. Then run the relay,
-which projects the events again where the session log still reads and the
-clearance in force admits them. A damaged line that has lost the start of its
-`index` member can be reported as out of order, by its line number counted
-from zero; the remedies are the same, and where the snapshot or the journal
-has an entry for the batch, its index is the one no other line carries.
-Metadata left for a line that was emptied or deleted is reported as naming
-batches the queue lacks. A journal append that fails is cut back to the last
-durable record; that process records no further change and its close folds
-and prunes nothing. A close that cannot fold the journal loses no state and
-writes its reason to `relay/spool/outbound.close-error`, which status reports
-as `close_error` until a later close succeeds; writing the reason is best
-effort. The file is read for status alone: its first 4 KiB, with bytes that
-are not UTF-8 shown as replacement characters and control characters as
-spaces. A file that does not read is reported as `close_error_unreadable`
-with `close_error` null, because it does not show whether the close failed;
-removing it is safe. Neither stops a relay run, `relay requeue` or the status
-counts.
-
-Delivered batches are pruned at close. A delivered batch is released once its
-accepted attempt is 30 days old, or once more than 1,000 delivered batches are
-retained, lowest spool index first; the second rule also bounds deliveries
-whose time is unknown. Index order is enqueue order: a batch requeued and
-delivered today is released before a newer batch delivered last week. Thirty
-days is therefore not a minimum: an edge that delivers more than 1,000 batches
-in the period keeps less. Private batch metadata records
-`instance_references_withheld`, the number of `instance` members the accepted
-attempt withheld (§Instance reference); the field is absent on deliveries
-recorded before delivery withheld the member. A batch with a count above zero
-is released by the 30-day rule only, because its retained payload is the only
-spooled copy that carries the member for the issuing hub, and a remedy that
-sends it from the spool needs a period that does not shrink with delivery
-volume. After release the member can be recovered only by projecting the
-session record again. Two exemptions apply to released batches. A delivered
-batch whose session has no pinned agent identifier
-(`relay/session-agents.json`) is kept, because its payload is the only record
-of the identifier first sent. The remaining batches are removed when they make
-up at least one eighth of the retained batches, so the queue file is not
-rewritten for every delivery. Queued, held and dead batches are never pruned.
-The journal names the batches to prune before any file loses them; a crash
-part-way is completed from that line, and readers treat the named batches as
-pruned meanwhile. A pruned batch's payload and metadata are gone from the
-spool; its event ids stay in `delivered.idx`, its source stays in the session
-record, and it stays in the delivered batch count. Only the journal holds the
-count of pruned deliveries. Before the queue first loses a batch, a prune
-writes `relay/spool/outbound.pruned`, which carries no count and which the
-relay never removes; a manual recall of the spool removes it with the journal,
-or the emptied spool's count reads unknown. If the journal is missing beside
-that file, or beside a queue whose indices have a gap, the delivered batch
-count is unknown, not the retained part of it, and stays unknown. The file
-matters where the queue shows nothing: after a prune of every batch, or of the
-newest batches alone. A spool pruned only by a version from before the file
-has the gap as its one sign, so in those two cases it reads zero once its
-journal is missing. A spool index is never given to a second batch while the
-journal exists. Batches below an existing `outbound.ack` offset are imported
-as accepted only where `delivered.idx` records every event id in a non-empty
-batch; otherwise they remain queued. Subsequent acceptances are recorded per
-batch.
-
-Before sending, the relay durably claims the attempt and its next deadline.
-The first retry waits 60 seconds, which exceeds the HTTP client's 30-second
-exchange budget. The delay doubles to a ceiling of 3,600 seconds, so a lasting
-outage receives at most one attempt per hour per batch. Ten attempts bound
-automatic work while allowing recovery from transient outages. The normal
-schedule reaches its tenth attempt after 14,580 seconds (4 hours 3 minutes).
-A failed tenth attempt becomes `dead`. If the process stops after claiming an
-attempt, that batch becomes eligible at its persisted deadline; after the final
-claim, the next due invocation marks it dead with its retained error. A claim
-whose outcome was never written explicitly records that acceptance is unknown.
-
-Only the receiver's documented acceptance (HTTP 200 or 201 with JSON
-`status: "ok"` and an unsigned `events_created` count) marks a batch delivered.
-A zero count is valid for a redelivery. Acceptance of a later batch does not
-acknowledge earlier queued or dead batches. Later batches may arrive before
-earlier ones, including within the same session; receivers deduplicate event
-ids and retain the highest refused count. A crash after acceptance but before
-local acknowledgement may send the same event identifiers again. Undelivered
-payloads, dead batches included, remain on disk. Current directory consent and
-source policy are checked when a batch is due. The relay sends the cleared subset and records
-acceptance for that delivery, leaving withheld event ids out of `delivered.idx`.
-Private batch metadata records `delivered_subset: true` when the accepted
-attempt omitted events from the retained batch, and `false` when it included
-all of them; the field is absent on older deliveries whose subset is unknown.
-Those ids can be projected again if clearance returns. If no events remain
-cleared, the batch stays queued with a separate hold reason and consumes no
-HTTP attempt; the last delivery error is preserved. Repeated unchanged holds
-do not rewrite metadata. A held batch is rechecked on later due invocations.
-
-Queued, held and dead batches are undelivered. A held reporting obligation has
-no automatic grace period. `commonmeasure status`, `commonmeasure doctor` and
-the console show queued, dead and delivered **batch** counts, oldest queued age,
-next attempt and last error. The existing delivered and pending **event** counts
-remain separate; pending includes dead batches. Unreadable delivery state is
-reported as unavailable, with unknown counts. Legacy queue ages remain unknown.
-`next_attempt_at` reports only a persisted deadline for an unheld queued batch;
-it remains null when none exists. Status and doctor distinguish due batches
-from policy holds, and report the hold reason separately from delivery errors.
-The status report exposes `held` and `due_now` batch counts and `hold_reason`
-separately. A batch whose session log does not read at the directory recheck
-is held the same way and counted in `held`; its reason states that the log
-does not read, and status, doctor and the console print it under the same
-"policy hold" label.
-A relay forecast includes only batches currently due and cleared for delivery:
-the batches earlier runs spooled that are due, and the events this run would
-project, turn boundaries included. `commonmeasure relay --dry-run` leads with
-the events and batches that would be delivered and their count per event type
-(`content_retrieved`, `content_grounded`, `turn_started`, `turn_completed`),
-and a real run prints the same lines for what it delivered. The "newly
-spooled" count that follows covers this run's projection only, so it is lower
-than the delivered count whenever earlier batches are due
-(`crates/commonmeasure-relay/tests/relay.rs`
-`a_dry_run_forecasts_per_type_exactly_what_the_real_run_then_sends`).
-
-A forecast is not the run. It makes no network call and writes nothing, so it
-syncs neither the managed policy nor the directory grants, and it projects
-against the policy and the grants already on disk. A real run syncs both
-before it projects, and the clearances and internal prefixes it then reads
-can differ from the ones forecast, on a managed edge in particular. The
-forecast ends with two lines saying what it was taken against — the applied
-managed revision and whether it is stale, the local policy file, or the draft
-passed with `--policy` — and that a real run refreshes both first. Over an
-unchanged home the counts match (open: no field evidence
-establishes which of the two caused the gap of 22 September 2026).
-
-`commonmeasure relay requeue` starts another schedule for all dead batches;
-`commonmeasure relay requeue --batch 3` selects spool index 3. This resets the
-schedule's attempt count and makes the batch due immediately, retaining its
-last attempt and error until the next claim. Requeue sends nothing; run
-`commonmeasure relay` to deliver due batches. Queued and delivered batches are
-not requeued. CLI and service-mode invocations share the same persisted cadence
-and an exclusive spool lock. Service mode checks on its existing interval;
-the standalone command does not start a background worker. On a local edge
-the session-end hook starts one relay run in the background (§Relay at session
-end). A run takes the spool lock before it asks the hub for a standing,
-refreshes a directory grant or writes to the relay directory, so a second run
-started at the same moment exits before doing any of those. The command syncs
-managed policy before the relay takes the lock, so on a managed edge the
-losing run can still fetch the policy envelope and rewrite `policy.json`
-before it exits. Do not run an older
-relay against a spool after this metadata has been written: older versions read
-only the prefix acknowledgement and cannot honour per-batch state, and a
-version from before the journal ignores it and numbers batches by line. Such a
-version sends again every batch whose acceptance is only in the journal. After
-a prune it refuses the spool where the snapshot names a line number the
-shorter queue lacks, and otherwise applies each retained state to the batch
-now on that line and gives a new batch a line number an earlier batch held.
-
-The API key in `relay.json` belongs to the receiver in `relay.json`; on an
-enrolled edge it is the hub's ingest key. The relay sends it as `X-API-Key`
-only to that receiver's origin, compared as the instance issuer is compared
-(§Instance reference). A delivery to another receiver named with `--receiver`
-carries the key given with `--api-key`, or no `X-API-Key` header. The enrolled
-key's standing is asked of the enrolled hub under the key whose receiver has
-the hub's origin, so a key given with `--api-key` for another receiver is not
-sent to the hub. The other requests an enrolled edge makes to its hub under
-the stored key follow the same rule: the directory grant refresh, the
-directory proof refresh outside a relay run and `disconnect` send the
-`relay.json` key only where the receiver in `relay.json` has the origin of the
-hub in `enrolment.json` (`EnrolmentRecord::hub_ingest_key`), and otherwise
-report that no ingest key is held for the hub and send nothing. A dry run
-sends and prints no key.
-
-### Relay at session end
-
-A local edge relays when a session ends, as well as when `commonmeasure
-relay` is run. The `session-end` hook, after recording `session_ended`,
-starts `commonmeasure relay` as a separate process when `relay.json` names a
-receiver and the marker file `relay/manual` is absent, and starts nothing
-otherwise. The run is a whole relay run: every session log and every due
-spooled batch, because the MCP server a host starts writes its crossings
-under its own session identifier and the hook's session holds only part of
-the work. Clearance, grants, backoff and the spool lock apply as to any run.
-
-The hook does not wait for the run and its exit code does not depend on it.
-The child takes no standard input or output from the hook and runs in its
-own process group, so the host neither waits for its output nor ends it with
-the hook. A run that finds the spool lock held by another relay exits at
-once, before it has asked the hub for a standing or written to the relay
-directory (on a managed edge the command's policy sync has already run); what
-it would have projected stays in the session logs, and the batches already
-spooled stay there, for the next run. The child's own output is discarded:
-its outcome is in `relay/receipts.json` and the spool, which `status` and
-`doctor` report, `doctor` with the last delivery time and its age.
-
-On Windows the child is started with `DETACHED_PROCESS`,
-`CREATE_NEW_PROCESS_GROUP` and `CREATE_BREAKAWAY_FROM_JOB`, the last so a
-host that runs its hooks in a job object configured to kill its processes
-does not take the relay with it. A job that forbids breakaway fails the
-spawn, so the child is then started without that flag and shares the job's
-fate. This path is `planned`: it has not been run on Windows, and no test
-here exercises it.
-
-Only a host that sends a session-end event to the hook relays this way.
-`install claude` registers the `SessionEnd` hook and the plugin's
-`hooks.json` registers the same events; the other hosts' installs register
-none (`docs/contracts/host-integration.md` §2), so an edge used only through
-them relays when `commonmeasure relay` is run. A session that ends without
-the event, a crash for example, relays at the next session end. Removing
-`relay.json` stops it with every other relay, and writing `relay/manual`
-stops it alone, which also leaves a licence's reporting demand unmet
-(§Source declarations). The hosted service honours the same marker: its
-interval relay does not run while the marker is present, and each skipped
-interval is a journal line naming the marker
-(`crates/commonmeasure-cli/tests/hosted_service.rs`
-`the_service_skips_its_interval_relay_while_the_manual_marker_is_present`).
-Tested in
-`crates/commonmeasure-cli/tests/hook_e2e.rs`:
-`a_session_end_relays_in_the_background_without_the_hook_waiting` against a
-loopback receiver that records the bytes posted, and
-`a_session_end_starts_nothing_without_a_receiver_or_under_the_manual_marker`
-for the two cases that start nothing. Both establish the process behaviour
-on this platform, not delivery to a hub.
-
-### Verification
-
-`crates/commonmeasure-relay/tests/relay.rs` exercises log reading, scope
-resolution, projection, durable spooling and HTTP delivery to a loopback
-receiver. It checks minimal turn disclosure and stable IDs across policy
-changes, selected coverage exclusions, and known, zero and unknown ingestion
-counts for sessions and runs. These are fixture-tested inputs through the real
-relay transport; they do not establish Hub or external receiver acceptance.
-The same tests check that the instance reference reaches only the receiver
-whose origin is its issuer, on content events only, at each source record's
-revision, that an unregistered session's batch carries none, and that a batch
-spooled for the issuer and delivered to another receiver is posted without
-the member; the receivers there record what the relay posts and are not hubs.
-`crates/commonmeasure-relay/tests/conformance.rs` validates the corpus against
-the pinned schemas, including rejection of missing or invalid turn privacy
-levels. A receiver must re-pin the changed corpus and run its own replay gate.
+What the relay projects from this record, under which clearances, and how it
+delivers and retries, is the
+[telemetry projection contract](telemetry-projection.md). The record itself
+never leaves the machine.
 
 ## Context snapshots
 
@@ -2578,45 +2213,6 @@ staleness). A local edge writes no such record, because it makes no
 management request. The refresh the relay runs before delivery writes to
 the managed state file, not to any session.
 
-## The agent id on the wire
-
-The relay initially takes `agent_id` from the session's first `edge_identity`
-record, or uses `commonmeasure` when there is none. It pins that value per
-wire session in `relay/session-agents.json` before the first delivery attempt,
-so every later batch and retry keeps the same id even when the session resumes
-or compacts after enrolment. Retained spool batches supply the first id for
-sessions delivered before a pin exists; a relay run with nothing to deliver
-keeps all pins. The pin is private relay state and adds no wire field.
-
-## The refused count on the wire
-
-The relay never projects a refused crossing: no URL, no reason, no hash of
-the bytes it withheld. What it projects, on every batch of a session it
-delivers, is `refused`: the number of `crossing_refused` records in that
-session whose working directory resolves to a scope cleared for egress, as
-an integer at the top of the batch document and nothing else about them.
-The count exists so an organisation's owner can see that policy was
-enforced across its edges, and it is a count of enforcement, not of
-sources: a refusal to a private address or a named internal prefix is
-counted like any other, because nothing about the address leaves.
-
-The count is the session's running total at the time the batch is
-projected, never a per-batch difference. Every batch of one session
-carries the same value, a later batch for the same session carries the
-later total, and a receiver keeps the larger value it has seen rather than
-summing, so a redelivered batch changes nothing. When a session's total has
-moved since a receiver last accepted a batch for it and there is no new
-event to carry it, the relay sends the session's last delivered event
-again, under its own id, on a batch carrying the new total: the receiver
-already holds the event and takes the larger count, so a refusal after the
-session's last admitted crossing still crosses. The relay keeps the highest
-count each receiver has accepted per session (`relay/refused-delivered.json`)
-and its summary states the totals it put on the wire this run and nothing
-more. A session that was refused and admitted nothing produces no batch and
-its count does not cross; a batch without the field comes from an edge that
-does not report it, which is not the same as a count of zero.
-`conformance/session-refused.json` is the vector.
-
 ## What is deliberately absent
 
 - **Prompts, responses and conversation text.** Records carry identifiers and
@@ -2702,8 +2298,8 @@ states apart and the session report attributes the change between two
 boundaries, and the standing nudge is delivered and its issuance recorded at
 session start, with delivery surviving an unreadable payload and an
 unwritable home. `crates/commonmeasure-cli/tests/recorded_sessions.rs` reads
-real recorded host sessions, which are not published, and pins the report
-over them, and the snapshot reader is tested over that Claude Code session's
+recorded host sessions, which this repository does not carry
+(`CONTRIBUTING.md`), and pins the report over them, and the snapshot reader is tested over that Claude Code session's
 transcript with its text replaced by same-length filler
 (`crates/commonmeasure-harness/tests/recorded/claude-code-transcript.jsonl`).
 
@@ -2716,18 +2312,8 @@ when it opens a session's file, before any crossing. Its payload carries
 canonical `directory`. It attests the operator's declaration only. The selected
 root must already be locally enrolled under the service account; neither
 configuration nor OAuth consent approves reporting. The existing directory
-consent, signed grant, source-policy veto and privacy filter still apply.
+consent, signed reporting approval, source-policy veto and privacy filter still apply.
 This record and its path never enter Content Telemetry.
-
-## Directory reporting consent
-
-After directory enrolment, the relay requires current local root permission
-and, on a managed edge, its current signed grant, alongside source-policy
-clearance and the privacy floor. The check applies to new projection and queued
-batches immediately before delivery. Opt-in includes existing eligible witnessed
-evidence; opt-out preserves the original record and does not recall deliveries.
-No field is added to Content Telemetry. See
-[directory enrolment](directory-enrolment.md).
 
 ## Local comparison records
 

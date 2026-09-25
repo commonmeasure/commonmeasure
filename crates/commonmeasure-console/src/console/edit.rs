@@ -376,7 +376,7 @@ mod tests {
         "constraints": [{"kind": "denied_source_host", "host": "tracker.example"}],
         "scopes": [
             {"match": "code/ozone", "engagement": "ozone", "policy_mode": "prefer"},
-            {"match": "code/spur"}
+            {"match": "code/tessera"}
         ]}"#;
 
     fn home_with(policy: &str) -> tempfile::TempDir {
@@ -395,7 +395,7 @@ mod tests {
         let outcome = set_mode(
             home.path(),
             &revision(home.path()),
-            Some("code/spur"),
+            Some("code/tessera"),
             PolicyMode::Strict,
         );
         assert_eq!(outcome.status(), 200, "{outcome:?}");
@@ -410,7 +410,7 @@ mod tests {
         assert!(outcome.notice().contains(REACH));
         let reread = PolicyDocument::read(home.path()).unwrap();
         assert_eq!(
-            reread.resolve(Some("/home/op/code/spur")).mode(),
+            reread.resolve(Some("/home/op/code/tessera")).mode(),
             PolicyMode::Strict
         );
         assert_eq!(
@@ -473,7 +473,7 @@ mod tests {
         let outcome = deny_host(
             home.path(),
             &revision(home.path()),
-            Some("code/spur"),
+            Some("code/tessera"),
             "Beacon.Example.",
         );
         assert_eq!(outcome.status(), 200, "{outcome:?}");
@@ -484,7 +484,7 @@ mod tests {
                 .contains("was inheriting the top-level constraints")
         );
         let reread = PolicyDocument::read(home.path()).unwrap();
-        let governed = reread.resolve(Some("/home/op/code/spur"));
+        let governed = reread.resolve(Some("/home/op/code/tessera"));
         assert!(
             governed
                 .admit_host("https://beacon.example/")
@@ -502,7 +502,7 @@ mod tests {
         let again = deny_host(
             home.path(),
             &revision(home.path()),
-            Some("code/spur"),
+            Some("code/tessera"),
             "beacon.example",
         );
         assert!(matches!(again, Outcome::Unchanged(_)), "{again:?}");

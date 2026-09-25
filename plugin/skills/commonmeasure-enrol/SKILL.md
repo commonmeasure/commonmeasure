@@ -29,7 +29,7 @@ CLI equivalents (quote the actual path and name safely):
 - `commonmeasure enrol --directory <path>`: status.
 - `commonmeasure enrol --directory <path> --name <name> --reporting local`.
 - `commonmeasure enrol --directory <path> --name <name> --reporting hub --include-history`.
-- `commonmeasure enrol --directory <path> --sync`: refresh applied policy and grants after owner approval.
+- `commonmeasure enrol --directory <path> --sync`: refresh applied policy and reporting approvals after owner approval.
 - `commonmeasure enrol --directory <path> --remove`: stop local reporting.
 
 Use the installed Common Measure binary. A managed pending request needs owner

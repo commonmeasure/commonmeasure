@@ -535,8 +535,8 @@ fn a_closure_the_hub_never_received_prints_closure_null() {
 /// - the onward receiver the hub delivers the owner's events to. It is a
 ///   **test double** in this file: it answers `POST /events` with 503 until
 ///   told to accept, then with the Content Telemetry acceptance body, and
-///   keeps what it accepted. It is not
-///   oa-server, not a reference receiver and not a publisher's system, so
+///   keeps what it accepted. It is not a conforming receiver, not a
+///   reference receiver and not a publisher's system, so
 ///   the run is integration evidence for this edge and the hub and for no
 ///   receiver;
 /// - the hub, which the person running the test starts.

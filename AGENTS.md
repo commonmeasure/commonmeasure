@@ -1,3 +1,8 @@
+---
+domain: shared
+audience: contributor
+---
+
 # Repository conventions
 
 Conventions for anyone changing this repository, person or agent. Common

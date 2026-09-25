@@ -1,5 +1,8 @@
 ---
 title: Glossary
+domain: shared
+audience: operator
+section: reference
 ---
 
 # Glossary
@@ -30,15 +33,12 @@ authoritative technical definitions live in the contracts under
 - **Hosted edge** — Edge running as an HTTPS service for one organisation,
   serving many authenticated users and sessions under one enrolled edge identity.
 - **Organisation tenant** — one organisation's membership, policy, enrolled
-  edges and cleared records within the shared Hub service; it is not a separate
-  Hub server.
-- **Hub** — Common Measure Hub, the service Common Measure Ltd hosts at
-  hub.commonmeasure.ai, one service serving many organisations, that
-  receives cleared evidence from many edges and distributes
-  organisation-wide policy as signed revisions the edge accepts. Current
-  admission does not wait on Hub. Planned entitlement issuance or validation
-  may require it online; its absence never relaxes local policy or extends
-  expired authority.
+  edges and cleared records within the shared Hub service.
+- **Hub** — Common Measure Hub, the multi-tenant service Common Measure Ltd
+  runs at hub.commonmeasure.ai. It enrols edges, receives the evidence they
+  are cleared to send and distributes each organisation's policy as signed
+  revisions. Admission does not wait on it, and an unreachable hub never
+  relaxes local policy.
 - **CM Attestation** — the planned arrangement stating what an agent is
   authorised to do, its reporting and payment obligations, and who stands
   behind it. A recognised issuer supports scoped assertions; later reports
@@ -52,10 +52,12 @@ authoritative technical definitions live in the contracts under
   Codex CLI, the ChatGPT desktop app and the Codex IDE extension), Pi (an
   extension that runs the MCP server), Claude Desktop (the MCP server),
   Cursor (the MCP server and hooks), the Copilot CLI (the MCP server and
-  hooks) or VS Code (the MCP server). A Chrome extension observes three
-  browser answer surfaces, recorded as the hosts `chatgpt-web`,
-  `google-ai-overview` and `bing-copilot-search` and registered with
-  `commonmeasure install chrome`. A host supplies session identity
+  hooks) or VS Code (the MCP server). A Chrome extension, registered with
+  `commonmeasure install chrome`, observes the sources ChatGPT on the web
+  and Bing Copilot Search show, recorded as the hosts `chatgpt-web` and
+  `bing-copilot-search`; the host word `google-ai-overview` exists, but
+  nothing is recorded from Google AI Overviews yet
+  ([host integration §6](contracts/host-integration.md)). A host supplies session identity
   and, where it can, lifecycle hooks. In session evidence `host` is the
   registration's word for the host, `client` is the MCP client's own name
   and version, and `host_name` is the hostname of a source URL, not this
@@ -67,10 +69,12 @@ authoritative technical definitions live in the contracts under
   instance to its operator and scoped authority. Installation, edge enrolment
   and a session identifier do not by themselves establish that relationship.
   The [instance registration contract](contracts/instance-registration.md)
-  defines its authority, renewal and closure, most of it planned; the enrolled
-  edge's `commonmeasure instance` commands and the `instance` reference on
-  session records are built
+  defines its authority, renewal and closure. The route for an enrolled edge
+  is built on both sides: the hub's lifecycle routes, the edge's
+  `commonmeasure instance` commands and the `instance` reference on session
+  records
   ([session evidence §Instance registration](contracts/session-evidence.md#instance-registration)).
+  Entitlements, shared limits and the hosted-principal route are planned.
 - **Agent instance** — one working participant with its own attribution and, for
   planned network participation, a registered authority binding. It is distinct
   from the installed edge, host program and job or session it serves; children
@@ -86,19 +90,20 @@ authoritative technical definitions live in the contracts under
 - **Processor** — a pluggable stage that checks or transforms content at a
   point in a run or a mediated crossing, behind
   [`docs/contracts/processor.md`](contracts/processor.md), and writes an evidence record per
-  invocation. Add-ons are processors.
+  invocation. Add-ons are processors. A processor is one kind of extension.
 - **Console** — the local web application served by `commonmeasure serve` on
-  loopback: Overview, Record, Policy, Sources, Compare and Budget, rendered from the
-  evidence logs. Its writes are the Compare query, the policy mode, a
-  scope's denied hosts and the attribution rules.
+  loopback, rendered from the evidence logs
+  ([`docs/CONSOLE.md`](CONSOLE.md)).
 - **Index** — the SQLite file the console derives from the evidence logs
   (`~/.commonmeasure/telemetry.db`). It can be deleted and rebuilt; the logs
   are authoritative.
 - **Gateway** — the external OpenAI-compatible service that runs model
   inference. Common Measure records the route the gateway reports and never
   calls a model provider directly.
-- **Receiver** — the service the relay delivers cleared records to. Nothing
-  is delivered unless one is configured.
+- **Receiver** — the service the relay delivers cleared records to: any
+  consumer that conforms to the Content Telemetry standard, the hub's ingest
+  among them. Nothing is delivered unless one is configured. What the relay
+  sends it is the [telemetry projection](contracts/telemetry-projection.md).
 - **Relay** — the command (`commonmeasure relay`) that sends cleared records to
   the configured receiver. It is the only way records leave the machine, and
   it refuses to run without a configured receiver.
@@ -113,14 +118,112 @@ authoritative technical definitions live in the contracts under
   Telemetry standard, stating who they are and where telemetry about their
   content goes. Distinct from a run's manifest below. It carries no
   reporting demand; a demand comes from a licence or the operator's terms.
-- **Nudge** — the standing instruction the plugin gives a host at session
-  start to prefer the mediated tools over its built-in fetch and search.
+- **Nudge** — the standing instruction the `session-start` hook gives a host
+  to prefer the mediated tools over its built-in fetch and search.
 - **Skill catalogue** — the operator's list of admitted third-party skills
   (`COMMONMEASURE_SKILL_CATALOGUE`); a skill not in it cannot be invoked.
 
+## Domains
+
+- **Domain** — one of the five areas the product is delivered in: Edge, Hub,
+  Network, Marketplace and Extensions. Each owns its scope, its contracts and
+  its part of the roadmap; a change that crosses domains has one integration
+  lead. Every contract, whichever domain owns it, is in `docs/contracts/`.
+- **Edge (domain)** — the `commonmeasure` binary: host integration, mediated
+  acquisition, source policy and admission, the private record, measurement
+  and comparison, the console, the relay client and hosted service mode.
+- **Hub (domain)** — the hosted service for organisations: accounts, members,
+  sign-in and the OAuth authorisation server, edge enrolment, signed policy
+  distribution, directory reporting approval, telemetry ingest, and fleet and
+  evidence views.
+- **Network (domain)** — Common Measure's relationships with content
+  suppliers and owners: bot identity toward publishers, agent instance
+  registration, grants and entitlements, supplier credential custody,
+  reporting interoperability and onward delivery, and crawl behaviour across
+  the fleet. What faces suppliers and publishers is Network; the
+  organisation and its edges are Hub.
+- **Marketplace** — how extensions are authored, reviewed, distributed,
+  approved and activated: Extension Studio, the public catalogue,
+  organisation approval, activation and settings per scope, mandates, and
+  later billing and payouts.
+- **Extensions (domain)** — Common Measure's own extensions and the contracts
+  every extension is built against: processors, supplier adapters, the
+  default bundle and the external processor boundary. Extensions owns what an
+  extension is; Edge owns running one (invocation, ordering, evidence).
+- **Extension** — anything distributed through the Marketplace: a processor,
+  a supplier adapter, a host integration or a service. In "the Chrome
+  extension" and "the Pi extension" the word is the browser's or host's own
+  term for its add-ons.
+- **Extension manifest** — the metadata an author submits through Extension
+  Studio for one version of an extension; the hub validates, stores and
+  digests it and runs no code. No edge reads it yet
+  ([extension manifest contract](contracts/extension-manifest.md)). Distinct
+  from a processor's manifest, a run's manifest and a discovery manifest.
+
 ## The network
 
-Planned. The [grant contract](contracts/grant.md) defines the grant format.
+Built: bot identity, onward delivery, supplier credential custody and
+instance registration for an enrolled edge. Planned: grants, whose format the
+[grant contract](contracts/grant.md) defines, and everything that rests on
+them: entitlements, CM Attestation and the network they make up.
+
+### Built
+
+- **CommonMeasureBot** — the product token every enrolled edge presents to
+  publishers in `User-Agent` and signs requests as under Web Bot Auth, each
+  edge with its own key, listed by key id in the hub's key directory and
+  agent card at hub.commonmeasure.ai. `Disallow` and `Crawl-delay` addressed
+  to it in a publisher's `robots.txt` bind in every policy mode
+  ([bot identity contract](contracts/bot-identity.md)).
+- **Identity origin** — the origin the hub publishes the bot identity
+  documents under and returns to an edge at enrolment. An edge sends it as
+  `Signature-Agent` on each signed request; it is hub configuration, never
+  read from a request.
+- **Key directory** — the hub's HTTP Message Signatures directory at
+  `<identity origin>/.well-known/http-message-signatures-directory`, listing
+  the public key of every enrolled edge that is unrevoked, belongs to an open
+  organisation and holds a current directory proof
+  ([bot identity §The key directory](contracts/bot-identity.md#the-key-directory)).
+- **Directory proof** — an edge's signature over the key directory's
+  authority, which the hub serves beside that edge's key. The edge renews it;
+  the hub cannot make one, so a key without a current proof is not listed
+  ([bot identity §The directory proof](contracts/bot-identity.md#the-directory-proof)).
+- **Agent card** — the hub's public description of `CommonMeasureBot` at
+  `<identity origin>/.well-known/signature-agent-card.json`: name, bot page,
+  key directory, purpose and the `robots.txt` records it obeys. It carries no
+  keys ([bot identity §The agent card](contracts/bot-identity.md#the-agent-card)).
+- **Onward delivery** — the hub delivering each content owner's events to
+  the endpoint the owner registers, the one its licence's reporting binding
+  names, or the one its discovery manifest declares; the routes add to each
+  other. Deliveries are not yet signed
+  ([onward delivery contract](contracts/onward-delivery.md)).
+- **Saved destination** — the onward-delivery endpoint an organisation owner
+  sets for a content owner, with an optional credential, or takes from the
+  owner's hosts' discovery manifests
+  ([onward delivery §Saved destination](contracts/onward-delivery.md#saved-destination)).
+- **Declared endpoint** — an onward-delivery endpoint the source declares
+  itself, in the reporting element of the RSL licence an event names or in
+  the discovery manifest at the event's host. It needs no registered owner
+  ([onward delivery §Declared endpoints](contracts/onward-delivery.md#declared-endpoints)).
+- **Suppression** — an organisation owner stopping onward delivery to a
+  declared endpoint's origin. It stops declared routes only; a saved
+  destination at the same origin keeps delivering
+  ([onward delivery §Suppression](contracts/onward-delivery.md#suppression)).
+- **Supplier** — the system that delivers a collection's content through a
+  supply adapter: a web search API, a licensed feed, a publisher's site or an
+  organisation's retrieval service. An internal system is a supplier in the
+  same sense.
+- **Supplier connection** — an organisation's account with one supplier, held
+  at Hub as ciphertext with no reveal route and authorised to named enrolled
+  edges ([custody contract](contracts/supplier-credentials.md)). It is access,
+  not a licence or an entitlement.
+- **Release** — Hub's signed-route answer giving an authorised hosted edge the
+  current value of each supplier connection authorised to it. The edge holds it
+  in memory, refetches on its interval and stops using it three intervals after
+  the last answered fetch. Revoking at Hub ends the edge's use within that
+  window; it does not revoke the key at the supplier.
+
+### Planned
 
 - **Common Measure network** — the intended set of participants using the
   registration, grant, attestation and reporting interfaces: operators' agent
@@ -148,18 +251,9 @@ Planned. The [grant contract](contracts/grant.md) defines the grant format.
   limit reservation its accepted binding carries
   ([instance registration §Entitlement binding](contracts/instance-registration.md#entitlement-binding)).
   Holding a grant document without the binding authorises nothing. The
-  experiment runtime's governance entitlement is an older, narrower thing: an
+  experiment runtime's governance entitlement is an
   ordered tier a run holds, sealed in the run manifest
   ([run output](contracts/run-output.md)), with no issuer, grantee or binding.
-- **Supplier connection** — an organisation's account with one supplier, held
-  at Hub as ciphertext with no reveal route and authorised to named enrolled
-  edges ([custody contract](contracts/supplier-credentials.md)). It is access,
-  not a licence or an entitlement.
-- **Release** — Hub's signed-route answer giving an authorised hosted edge the
-  current value of each supplier connection authorised to it. The edge holds it
-  in memory, refetches on its interval and stops using it three intervals after
-  the last answered fetch. Revoking at Hub ends the edge's use within that
-  window; it does not revoke the key at the supplier.
 - **Grant basis** — how a grant came to exist and what stands behind it:
   `self_issued` (an owner authored it), `issuer_signed` (the issuer signed
   it), `derived` (Hub derived it from what the issuer served, such as a
@@ -175,12 +269,12 @@ Planned. The [grant contract](contracts/grant.md) defines the grant format.
 - **Issuer** — the party that grants authority over a collection: the owner, a
   collective or a delegated licensing service. Distinct from the registration
   service, which attests the instance.
-- **Supplier** — the system that delivers a collection's content through a
-  supply adapter: a web search API, a licensed feed, a publisher's site or an
-  organisation's retrieval service. An internal system is a supplier in the
-  same sense.
-- **Receiver** — the destination a grant names for reports: the private source
-  record for a self-issued grant, otherwise the receiver the issuer designates.
+- **Reporting destination** — where a grant's reporting duty is delivered
+  (`reporting.destination`): a receiver, or the issuer's own reporting
+  interface (`issuer_api`). A grant whose duty is `private_record_only`, as
+  every self-issued grant's is, has none; its records stay in the private
+  source record. Distinct from the receiver the operator configures for the
+  relay.
 
 ## The moment content moves
 
@@ -192,8 +286,9 @@ Planned. The [grant contract](contracts/grant.md) defines the grant format.
   witnessed.
 - **Mediated crossing** — a crossing requested through the product's own
   fetch and search tools (`context_fetch`, `context_search`), so policy can
-  check it before the content moves and can refuse it. A third tool,
-  `context_status`, reports the policy state and records nothing.
+  check it before the content moves and can refuse it. The server's other
+  tools record no crossing: `context_status` reports the policy state and
+  `context_enrol` selects a directory for reporting.
 - **Reconstructed crossing** — a crossing read back from a host transcript
   afterwards, with nothing watching at the time. The weakest record of the
   three.
@@ -273,7 +368,7 @@ Planned. The [grant contract](contracts/grant.md) defines the grant format.
   uncompromised edge enforced the policy. The pre-image and the recipe are
   [`docs/contracts/fleet-status.md`](contracts/fleet-status.md).
 - **Fleet status** — the document an edge builds about the policy it
-  applies (`commonmeasure status`): edge identity, deployment mode, desired
+  applies (`commonmeasure status --json`): edge identity, deployment mode, desired
   and applied revisions, digests, versions, the last enforcement time and a
   bounded allowance summary. A management contract separate from Content
   Telemetry; it carries no policy text and no engagement name.
@@ -291,10 +386,28 @@ Planned. The [grant contract](contracts/grant.md) defines the grant format.
   policy stays in force unchanged; `status`, `doctor` and the session
   record say since when, until a refresh clears it.
 
+## Enrolment and sessions
+
 - **Enrolment** — connecting an edge to the hub (`commonmeasure connect`):
   the edge mints its signing key, the hub registers the public key under
   the organisation and issues the ingest key. Only an enrolled edge presents
-  the `CommonMeasureBot` identity to publishers.
+  the `CommonMeasureBot` identity to publishers
+  ([enrolment contract](contracts/enrolment.md)).
+- **Enrolment token** — the single-use token (`et_…`) a hub member mints to
+  connect one edge. It is shown once, lasts 15 minutes and buys one edge key
+  and one ingest key
+  ([enrolment §The enrolment token](contracts/enrolment.md#the-enrolment-token)).
+- **Reporting approval** — an organisation owner's approval for an enrolled
+  edge to report one selected directory, bound to the project's id and
+  binding. The hub signs an edge's current approvals as one snapshot
+  (`commonmeasure-reporting-approvals/v1`), valid for at most 24 hours; the
+  edge stores it as `reporting-approvals.json`. It permits reporting only
+  where source policy and local consent also do. Distinct from a grant
+  ([directory enrolment](contracts/directory-enrolment.md)).
+- **Ingest key** — the API key the hub issues at enrolment, with the scope
+  `telemetry:ingest`, kept in `relay.json`. The relay sends it only to the
+  origin of the receiver `relay.json` names
+  ([enrolment §The ingest key](contracts/enrolment.md#the-ingest-key)).
 - **Key id** — the pseudonymous identifier of an enrolled edge: the
   thumbprint of its public key, published in the `CommonMeasureBot` key
   directory at hub.commonmeasure.ai and carried as the agent identifier on

@@ -1,18 +1,23 @@
 ---
-title: Evidence-integrity contract
+title: Failure policy
+domain: edge
+audience: integrator
+section: reference
 ---
 
-# Evidence-integrity contract
+# Failure policy
 
-When the runtime could not observe, record or enforce something, it writes a
-gap record saying so, in the same log as everything else. A reader can always
-tell "nothing happened" from "this could not say what happened".
+The rules the edge follows when a dependency is missing, a write fails or a
+measurement is unknown. When the runtime could not observe, record or
+enforce something, it writes a gap record saying so, in the same log as
+everything else, so a reader can tell "nothing happened" from "this could
+not say what happened".
 
-Binding on the implementation, for both batch runs and harness sessions. Every
-clause names what enforces it — the test, where the behaviour can be witnessed
-from outside; the implementation, where it cannot, and the clause says which. A
-behaviour change and a contract change are made in the same commit. Terms like
-crossing, run, evidence log and gap are defined in [`docs/GLOSSARY.md`](GLOSSARY.md).
+The rules apply to batch runs and host sessions alike. Each clause names
+what holds it: a test where the behaviour can be witnessed from outside,
+otherwise the implementation, and the clause says which. A change to the
+behaviour changes this page in the same commit. Terms such as crossing, run,
+evidence log and gap are defined in [`docs/GLOSSARY.md`](GLOSSARY.md).
 
 ## 1. Durable before acknowledged
 
@@ -208,8 +213,8 @@ governed before it happened and could have been refused; an observed one was
 seen after it had happened. Recording them alike would claim enforcement that
 did not occur.
 
-This plugin's own MCP tools are therefore excluded from observed capture: they
-are already recorded by the server that carried them.
+Common Measure's own MCP tools are therefore excluded from observed capture:
+they are already recorded by the server that carried them.
 
 - `a_mediated_fetch_returns_the_bytes_and_records_the_crossing`,
   `strict_policy_refuses_the_crossing_and_records_the_refusal`
@@ -289,14 +294,56 @@ disagreement; nothing is published.
   `an_altered_capture_refuses_to_serve`
   (`crates/commonmeasure-runtime/tests/replay_mode.rs`)
 
+## 14. A host's failure paces its next request
+
+Mediated fetches keep response-driven back-off per host and per edge in the
+crawl-delay store. A 429 or 503 honours a usable `Retry-After` in seconds
+or HTTP-date, capped at one hour and recorded as capped. Other 5xx answers,
+or 429 and 503 without a usable header, start at 10 seconds, double for
+consecutive failure periods and stop at 15 minutes. Failed answers inside
+one period keep the count and the later end. Every non-5xx answer other
+than 429 resets the count. A success does not shorten a wait another
+concurrent answer already imposed.
+
+The edge does not retry a failed request. Pages, redirect hops, robots,
+licence and manifest probes all observe back-off. The next request waits
+only if the wait fits the fetch's remaining budget; otherwise it is refused
+with back-off named. Own edges name the host and the end. Hosted refusals
+withhold another tenant's status, failure count and timing; they name the end
+only when an uncapped `Retry-After` HTTP-date set it. Crawl-delay and back-off both
+bind: the later permitted send wins. The crossing records back-off
+separately from its crawl-delay ruling, including waits, refusals and store
+failures. A back-off refusal before a crawl-delay turn writes no delay ruling.
+After back-off ends, one sender reserves the host for its request timeout;
+other callers wait for its answer within their budgets. Its answer clears or
+renews the reservation, and a reservation left by a stopped process expires.
+
+An unreadable store refuses before the request. A read-only store does not
+prevent a healthy host's successful answer when no failure needs resetting:
+that answer takes no lock and writes nothing. An update that cannot be kept
+is an edge failure, never cached or attributed to the host as an unreachable
+`robots.txt`. The error retains its cause and names that host's back-off file
+to repair; the next crossing asks again after repair.
+
+- `retry_after_is_shared_by_sessions_and_a_restarted_process`,
+  `a_503_http_date_sets_the_next_send_and_refuses_a_short_budget`,
+  `a_429_without_retry_after_waits_ten_seconds_then_success_resets_the_count`,
+  `robots_licence_and_manifest_failures_all_set_host_backoff`
+  (`crates/commonmeasure-cli/tests/crawl_delay.rs`) — loopback transport,
+  session evidence, shared state and restart
+- `failures_double_cap_and_reset_using_response_times`
+  (`crates/commonmeasure-harness/src/crawl_delay/backoff.rs`) — injected
+  response times, exponential cap and reset
+
 ## Execution modes
 
-Execution modes must stay visibly distinct in code, output and UI:
+Each execution mode is named in the run's output and in the console, and
+no mode is presented as another:
 
 | Mode | Context supply | Inference | Evidence claim |
 |---|---|---|---|
 | no external acquisition | internal corpus query, if configured; no external call | configured gateway, if any | internal and baseline plans may complete; external plans are `unavailable` |
-| recorded replay | committed redacted response data through the real adapters | real local or configured model route | replay-tested |
+| recorded replay | recorded provider responses served through the real adapters | real local or configured model route | replay-tested |
 | live experiment | authenticated provider calls, response bytes sealed | real pinned model route | `live-verified` per plan |
 | harness session | observed or mediated harness activity | model used by the host | real local evidence |
 

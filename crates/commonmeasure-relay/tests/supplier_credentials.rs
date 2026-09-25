@@ -88,6 +88,7 @@ struct Double {
     faults: VecDeque<&'static str>,
     /// Hold each answer this long before sending it.
     delay: std::time::Duration,
+    before_answer: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Each request as it arrived, for replaying one.
     received: Vec<Request>,
     /// What an audit row would name for each `200`: key id and connections.
@@ -353,10 +354,17 @@ fn double() -> (Arc<Mutex<Double>>, ServerHandle) {
     let state = Arc::clone(&double);
     let handle = server
         .spawn(move |request| {
-            let (response, delay) = {
+            let (response, delay, before_answer) = {
                 let mut double = state.lock().unwrap();
-                (double.handle(&request), double.delay)
+                (
+                    double.handle(&request),
+                    double.delay,
+                    double.before_answer.clone(),
+                )
             };
+            if let Some(before_answer) = before_answer {
+                before_answer();
+            }
             std::thread::sleep(delay);
             response
         })
@@ -857,20 +865,28 @@ fn the_retry_is_sent_inside_the_first_requests_budget() {
     let store = store();
     assert_eq!(fetch(home.path(), &store).outcome, Outcome::Accepted);
 
-    // Each answer takes 3 s against a budget of 5 s. The fault arrives at
-    // 3 s, leaving 2 s, above the quarter (1.25 s) a retry needs, so the
-    // margins allow 0.75 s of scheduling delay. The retry's answer is due at
-    // 6 s: under a fresh budget it would be accepted.
-    let delay = std::time::Duration::from_secs(3);
+    // The first answer advances the budget clock by three seconds. Only
+    // the retry's answer is held: it exceeds the two seconds left, but
+    // would fit a fresh five-second budget. Scheduling before the first
+    // answer cannot change the retry decision.
     let budget = std::time::Duration::from_secs(5);
+    let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
     {
+        let elapsed = Arc::clone(&elapsed);
         let mut double = double.lock().unwrap();
-        double.delay = delay;
+        double.before_answer = Some(Arc::new(move || {
+            if elapsed.swap(3, std::sync::atomic::Ordering::SeqCst) == 3 {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }));
         double.faults.push_back("nonce_repeated");
     }
     let started = std::time::Instant::now();
-    let timed_out = client::fetch(home.path(), &store, Utc::now(), budget).expect("recorded");
-    let elapsed = started.elapsed();
+    let clock = || {
+        started + std::time::Duration::from_secs(elapsed.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let timed_out = client::fetch_with_clock(home.path(), &store, Utc::now(), budget, &clock)
+        .expect("recorded");
     assert_eq!(timed_out.outcome, Outcome::Unreachable, "{timed_out:?}");
     assert_eq!(timed_out.http_status, None);
     assert!(
@@ -882,12 +898,12 @@ fn the_retry_is_sent_inside_the_first_requests_budget() {
     );
     assert_eq!(timed_out.retried_after.as_deref(), Some("nonce_repeated"));
     assert_eq!(asked(&double), 3, "the retry did not reach the double");
-    assert!(elapsed < delay * 2, "{elapsed:?}");
     assert_eq!(store.names().len(), 1);
     let (first, second) = last_two_created(&double);
-    assert!(
-        second >= first + delay.as_secs() as i64,
-        "the retry's created {second} is not the first's {first} plus the delay"
+    assert_eq!(
+        second,
+        first + 3,
+        "the retry is signed at the advanced clock"
     );
 }
 
@@ -899,19 +915,26 @@ fn a_fault_that_leaves_too_little_budget_stands_as_the_answer() {
     let store = store();
     assert_eq!(fetch(home.path(), &store).outcome, Outcome::Accepted);
 
-    // The fault arrives at 3.2 s of a 4 s budget: 0.8 s is left, under the
-    // quarter (1 s). The fetch fails the test only if the answer is held past
-    // 4 s, 0.8 s of scheduling delay.
+    let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
     {
+        let elapsed = Arc::clone(&elapsed);
         let mut double = double.lock().unwrap();
-        double.delay = std::time::Duration::from_millis(3_200);
+        double.before_answer = Some(Arc::new(move || {
+            elapsed.store(3_200, std::sync::atomic::Ordering::SeqCst);
+        }));
         double.faults.push_back("signature_expired");
     }
-    let stood = client::fetch(
+    let started = std::time::Instant::now();
+    let clock = || {
+        started
+            + std::time::Duration::from_millis(elapsed.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let stood = client::fetch_with_clock(
         home.path(),
         &store,
         Utc::now(),
         std::time::Duration::from_secs(4),
+        &clock,
     )
     .expect("recorded");
     assert_eq!(stood.outcome, Outcome::Unreachable, "{stood:?}");

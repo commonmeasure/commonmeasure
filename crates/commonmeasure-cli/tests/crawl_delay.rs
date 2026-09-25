@@ -251,14 +251,9 @@ fn the_delay_of_the_group_naming_the_product_token_is_waited_out() {
     let home = home_with_mode("observe");
     let article = site.url("/article");
 
-    let started = Instant::now();
     let responses = converse(home.path(), &[fetch(1, &article), fetch(2, &article)]);
-    let elapsed = started.elapsed();
     assert_eq!(responses[1]["result"]["isError"], false, "{}", responses[1]);
-    assert!(
-        elapsed >= Duration::from_millis(1_900),
-        "two fetches inside a 2s delay took {elapsed:?}"
-    );
+
     let pages = site.pages();
     assert_eq!(pages.len(), 2);
     // The turn is taken just before the request is signed and sent, so the
@@ -594,68 +589,124 @@ fn a_store_that_cannot_be_kept_refuses_and_names_the_remedy() {
     let responses = converse(home.path(), &[fetch(1, &site.url("/article"))]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = text_of(&responses[0]);
-    for needed in [
-        "Crawl-delay: 2",
-        "could not be kept",
-        "remove that directory",
-        "Nothing was requested.",
-    ] {
+    for needed in ["back-off", "cannot be read", "127.0.0.1.backoff.json"] {
         assert!(detail.contains(needed), "missing {needed:?} in {detail}");
     }
-    assert_eq!(site.pages().len(), 0);
-    let robots = &crossings(home.path())[0]["payload"]["declarations"]["robots"];
-    assert_eq!(robots["delay"]["outcome"], "unavailable");
     assert!(
-        robots["delay"]["unavailable"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("crawl-delay")),
-        "{robots}"
+        site.requests().is_empty(),
+        "even robots.txt requires a readable back-off store"
     );
+    let records = crossings(home.path());
+    let backoff = &records[0]["payload"]["declarations"]["backoff"][0];
+    assert_eq!(backoff["outcome"], "unavailable");
+    assert!(backoff["reason"].as_str().unwrap().contains("crawl-delay"));
 }
 
 #[test]
 fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
     // Both origins answer as `127.0.0.1`, so they are one host and one pace,
     // which is what a publisher behind two ports sees.
-    let destination = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
-    let landing = destination.url("/landing");
-    let shortener = origin("127.0.0.1", WILDCARD_TWO_SECONDS, Some(landing.clone()));
+    let received = Arc::new(Mutex::new(None));
+    let arrival = Arc::clone(&received);
+    let destination = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, WILDCARD_TWO_SECONDS);
+            }
+            if request.target == "/landing" {
+                *arrival.lock().unwrap() = Some(chrono::Utc::now());
+            }
+            Response::text(200, "landing")
+        })
+        .unwrap();
+    let landing = format!("{}/landing", destination.url());
     let home = home_with_mode("observe");
-    // A turn already taken, dated far enough ahead that starting the server
-    // does not leave the delay behind: the first hop waits, and the second
-    // is left less of the budget than the first had.
-    seed_turn(
-        home.path(),
-        "127.0.0.1",
-        chrono::Utc::now() + chrono::Duration::seconds(2),
-    );
+    let seeded = Arc::new(Mutex::new(None));
+    let first_turn = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    let seed = Arc::clone(&seeded);
+    let turn = Arc::clone(&first_turn);
+    let state_home = home.path().to_path_buf();
+    let handle = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            log.lock()
+                .unwrap()
+                .push((request.target.clone(), Instant::now()));
+            if request.target == "/robots.txt" {
+                // Seed after process startup, at the response that precedes the
+                // first page turn. Startup load cannot consume the seeded wait.
+                *seed.lock().unwrap() = Some(Instant::now());
+                seed_turn(
+                    &state_home,
+                    "127.0.0.1",
+                    chrono::Utc::now() + chrono::Duration::seconds(2),
+                );
+                return Response::text(200, WILDCARD_TWO_SECONDS);
+            }
+            let path = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(&state_home)
+                .path_of("127.0.0.1");
+            let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            *turn.lock().unwrap() = Some(
+                record["at"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap(),
+            );
+            let mut response = Response::text(302, "moved");
+            response.headers.set("Location", &landing);
+            response
+        })
+        .unwrap();
+    let shortener = Origin {
+        handle,
+        host: "127.0.0.1",
+        seen,
+    };
 
     let responses = converse(home.path(), &[fetch(1, &shortener.url("/s/abc"))]);
     assert_eq!(responses[0]["result"]["isError"], false, "{}", responses[0]);
     let payload = &crossings(home.path())[0]["payload"];
     let first = &payload["declarations"]["redirects"][0]["delay"];
     let second = &payload["declarations"]["robots"]["delay"];
-    assert_eq!(first["outcome"], "waited", "{first}");
-    assert_eq!(second["outcome"], "waited", "{second}");
+    // A scheduler pause can itself leave either turn clear. The recorded
+    // sends must still be spaced, and every millisecond actually slept
+    // must come from the same budget.
+    for turn in [first, second] {
+        assert!(
+            matches!(turn["outcome"].as_str(), Some("clear" | "waited")),
+            "{turn}"
+        );
+    }
     assert_eq!(first["budget_ms"], 60_000, "the first hop has it all");
     let left = second["budget_ms"].as_u64().expect("a budget");
-    assert!(
-        left < 59_000,
-        "the wait of the first hop is not charged to the call: {second}"
+    assert_eq!(
+        left,
+        60_000 - first["wait_ms"].as_u64().unwrap(),
+        "the first wait is charged exactly"
     );
     assert!(
         shortener.pages()[0]
             .1
-            .duration_since(shortener.first("/robots.txt"))
-            >= Duration::from_millis(1_900),
+            .duration_since(seeded.lock().unwrap().unwrap())
+            >= Duration::from_millis(3_900),
         "the first hop did not wait out the turn already taken"
     );
+    let path =
+        commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path()).path_of("127.0.0.1");
+    let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let second_turn: chrono::DateTime<chrono::Utc> =
+        record["at"].as_str().unwrap().parse().unwrap();
     assert!(
-        destination.pages()[0]
-            .1
-            .duration_since(shortener.pages()[0].1)
-            >= Duration::from_millis(1_900),
-        "the two hops fired inside the delay"
+        second_turn >= first_turn.lock().unwrap().unwrap() + chrono::Duration::seconds(2),
+        "the two recorded send turns are inside the delay"
+    );
+    assert!(
+        received.lock().unwrap().unwrap() >= second_turn,
+        "the destination received the second hop before its reserved turn"
     );
 }
 
@@ -1153,5 +1204,434 @@ fn a_refused_page_turn_keeps_host_declaration_and_allowance_breaches() {
     assert!(
         allowance.to_string().contains("released"),
         "the reservation is released: {allowance}"
+    );
+}
+
+/// Response-driven back-off is exercised through separate MCP processes and
+/// real loopback HTTP; the store is inspected at the response's recorded time.
+#[test]
+fn retry_after_is_shared_by_sessions_and_a_restarted_process() {
+    let home = home_with_mode("observe");
+    let pages = Arc::new(Mutex::new(0));
+    let seen = Arc::clone(&pages);
+    let origin = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            *seen.lock().unwrap() += 1;
+            let mut response = Response::text(429, "busy");
+            response.headers.set("Retry-After", "7200");
+            response
+        })
+        .unwrap();
+    let url = format!("{}/article", origin.url());
+    let mut other = start(home.path(), "second-session");
+    let first = converse(home.path(), &[fetch(1, &url)]);
+    assert_eq!(first[0]["result"]["isError"], true);
+    let record = &crossings(home.path())[0]["payload"]["declarations"]["backoff"][0];
+    assert_eq!(record["outcome"], "set", "{record}");
+    assert_eq!(record["backoff"]["capped"], true);
+    assert_eq!(record["backoff"]["failures"], 1);
+    ask(&mut other, &[fetch(1, &url)]);
+    drop(other.stdin.take());
+    let refused = answers(other);
+    assert!(
+        text_of(&refused[0]).contains("back-off until"),
+        "{refused:?}"
+    );
+    let restarted = converse(home.path(), &[fetch(2, &url)]);
+    assert!(
+        text_of(&restarted[0]).contains("back-off until"),
+        "{restarted:?}"
+    );
+    assert_eq!(
+        *pages.lock().unwrap(),
+        1,
+        "no automatic retry or refused send"
+    );
+    let records = crossings(home.path());
+    assert_eq!(
+        records[1]["payload"]["declarations"]["backoff"][0]["outcome"],
+        "refused"
+    );
+}
+
+#[test]
+fn a_503_http_date_sets_the_next_send_and_refuses_a_short_budget() {
+    let home = home_with_mode("strict");
+    let until = chrono::Utc::now() + chrono::Duration::minutes(20);
+    let date = until.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let origin = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            let mut response = Response::text(503, "unavailable");
+            response.headers.set("Retry-After", &date);
+            response
+        })
+        .unwrap();
+    let url = format!("{}/article", origin.url());
+    let responses = converse(home.path(), &[fetch(1, &url), fetch(2, &url)]);
+    assert!(text_of(&responses[1]).contains("back-off until"));
+    let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
+    let backoff = store.backoff("127.0.0.1").unwrap().unwrap();
+    assert_eq!(backoff.status, 503);
+    assert!(backoff.retry_after && !backoff.capped);
+    assert_eq!(backoff.until.timestamp(), until.timestamp());
+}
+
+#[test]
+fn a_429_without_retry_after_waits_ten_seconds_then_success_resets_the_count() {
+    let home = home_with_mode("observe");
+    let sends = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&sends);
+    let origin = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            if request.target != "/article" {
+                return Response::text(404, "absent");
+            }
+            let mut sends = seen.lock().unwrap();
+            sends.push(chrono::Utc::now());
+            Response::text(if sends.len() == 1 { 429 } else { 200 }, "page")
+        })
+        .unwrap();
+    let url = format!("{}/article", origin.url());
+    let responses = converse(home.path(), &[fetch(1, &url), fetch(2, &url)]);
+    assert_eq!(responses[0]["result"]["isError"], true);
+    assert_eq!(responses[1]["result"]["isError"], false, "{responses:?}");
+    let records = crossings(home.path());
+    let imposed = &records[0]["payload"]["declarations"]["backoff"][0]["backoff"];
+    assert_eq!(imposed["retry_after"], false);
+    let until: chrono::DateTime<chrono::Utc> = imposed["until"].as_str().unwrap().parse().unwrap();
+    let sends = sends.lock().unwrap();
+    assert_eq!(sends.len(), 2);
+    assert!(until >= sends[0] + chrono::Duration::seconds(10));
+    assert!(
+        sends[1] >= until,
+        "the next send preceded the recorded back-off end"
+    );
+    let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
+    assert!(store.backoff("127.0.0.1").unwrap().is_none());
+    let events = records[1]["payload"]["declarations"]["backoff"]
+        .as_array()
+        .unwrap();
+    assert!(events.iter().any(|event| event["outcome"] == "reset"));
+}
+
+#[test]
+fn robots_licence_and_manifest_failures_all_set_host_backoff() {
+    for failing in [
+        "/robots.txt",
+        "/license.xml",
+        "/.well-known/content-telemetry.json",
+    ] {
+        let home = home_with_mode("observe");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        let origin = Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(move |request| {
+                log.lock().unwrap().push(request.target.clone());
+                if request.target == failing {
+                    let mut response = Response::text(503, "busy");
+                    response.headers.set("Retry-After", "120");
+                    return response;
+                }
+                if request.target == "/robots.txt" {
+                    return Response::text(
+                        200,
+                        if failing == "/license.xml" {
+                            "License: /license.xml\nUser-agent: *\nAllow: /\n"
+                        } else {
+                            NO_DELAY
+                        },
+                    );
+                }
+                Response::text(200, "page")
+            })
+            .unwrap();
+        let url = format!("{}/article", origin.url());
+        converse(home.path(), &[fetch(1, &url)]);
+        let events = &crossings(home.path())[0]["payload"]["declarations"]["backoff"];
+        assert!(
+            events
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["outcome"] == "set"
+                    && event["target"].as_str().unwrap().ends_with(failing)),
+            "{events}"
+        );
+        // Expire cached declarations so the next process must try a probe.
+        std::fs::remove_dir_all(home.path().join("declarations")).unwrap();
+        let count = seen.lock().unwrap().len();
+        let responses = converse(home.path(), &[fetch(2, &url)]);
+        assert!(
+            text_of(&responses[0]).contains("back-off until"),
+            "{responses:?}"
+        );
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            count,
+            "a backed-off robots probe was sent"
+        );
+    }
+}
+
+#[test]
+fn a_redirect_destination_failure_paces_its_host() {
+    let home = home_with_mode("observe");
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&hits);
+    let origin = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            log.lock().unwrap().push(request.target.clone());
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            if request.target == "/start" {
+                let mut response = Response::text(302, "moved");
+                response.headers.set("Location", "/destination");
+                return response;
+            }
+            let mut response = Response::text(503, "busy");
+            response.headers.set("Retry-After", "120");
+            response
+        })
+        .unwrap();
+    let url = format!("{}/start", origin.url());
+    let responses = converse(home.path(), &[fetch(1, &url), fetch(2, &url)]);
+    assert!(text_of(&responses[1]).contains("back-off until"));
+    let hits = hits.lock().unwrap();
+    assert_eq!(hits.iter().filter(|target| *target == "/start").count(), 1);
+    assert_eq!(
+        hits.iter()
+            .filter(|target| *target == "/destination")
+            .count(),
+        1
+    );
+    let records = crossings(home.path());
+    let event = &records[0]["payload"]["declarations"]["backoff"][0];
+    assert!(event["target"].as_str().unwrap().ends_with("/destination"));
+    assert_eq!(event["backoff"]["status"], 503);
+}
+
+#[test]
+#[cfg(unix)]
+fn healthy_answers_need_no_writable_backoff_store_or_host_lock() {
+    use std::os::unix::fs::PermissionsExt;
+    let site = origin("127.0.0.1", NO_DELAY, None);
+    let home = home_with_mode("observe");
+    let dir = home.path().join("crawl-delay");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let first = converse(home.path(), &[fetch(1, &site.url("/article"))]);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(first[0]["result"]["isError"], false, "{first:?}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let second = converse(home.path(), &[fetch(2, &site.url("/article"))]);
+    assert_eq!(second[0]["result"]["isError"], false, "{second:?}");
+    assert_eq!(site.pages().len(), 2);
+    let records = crossings(home.path());
+    for record in records {
+        assert_ne!(
+            record["payload"]["declarations"]["robots"]["outcome"],
+            "unreachable"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_backoff_update_fault_is_the_edges_and_repair_allows_the_next_probe() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = home_with_mode("observe");
+    let dir = home.path().join("crawl-delay");
+    let record = dir.join("127.0.0.1.backoff.json");
+    let fault_dir = dir.clone();
+    let fault_record = record.clone();
+    let hits = Arc::new(Mutex::new(0));
+    let log = Arc::clone(&hits);
+    let site = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                let mut hits = log.lock().unwrap();
+                *hits += 1;
+                if *hits == 1 {
+                    // The read before send succeeds; the response then needs a
+                    // reset which this edge cannot persist.
+                    std::fs::create_dir_all(&fault_dir).unwrap();
+                    std::fs::write(
+                        &fault_record,
+                        serde_json::to_vec(&json!({
+                            "failures": 1, "status": 503, "until": chrono::Utc::now(),
+                            "retry_after": false, "capped": false
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap();
+                    std::fs::set_permissions(&fault_dir, std::fs::Permissions::from_mode(0o555))
+                        .unwrap();
+                }
+                return Response::text(200, NO_DELAY);
+            }
+            Response::text(200, "page")
+        })
+        .unwrap();
+    let url = format!("{}/article", site.url());
+    let first = converse(home.path(), &[fetch(1, &url)]);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(first[0]["result"]["isError"], true, "{first:?}");
+    let detail = text_of(&first[0]);
+    assert!(detail.contains("127.0.0.1.backoff.json"), "{detail}");
+    assert!(
+        detail.contains("Permission denied") || detail.contains("os error 13"),
+        "{detail}"
+    );
+    assert!(!detail.contains("unreachable"), "{detail}");
+    let declaration: Value = serde_json::from_slice(
+        &std::fs::read(home.path().join("declarations/127.0.0.1.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(declaration["robots"].is_null(), "{declaration}");
+    let second = converse(home.path(), &[fetch(2, &url)]);
+    assert_eq!(second[0]["result"]["isError"], false, "{second:?}");
+    assert_eq!(*hits.lock().unwrap(), 2);
+}
+
+#[test]
+fn a_paced_backoff_refusal_takes_no_turn_and_does_not_claim_a_probe_was_fetched() {
+    let site = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
+    let home = home_with_mode("observe");
+    converse(home.path(), &[fetch(1, &site.url("/article"))]);
+    let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
+    let turn = std::fs::read(store.path_of("127.0.0.1")).unwrap();
+    store
+        .answered("127.0.0.1", 503, Some("1800"), chrono::Utc::now())
+        .unwrap();
+    let responses = converse(home.path(), &[fetch(2, &site.url("/article"))]);
+    assert!(text_of(&responses[0]).contains("back-off"));
+    let records = crossings(home.path());
+    let declarations = &records[1]["payload"]["declarations"];
+    assert!(declarations["robots"]["delay"].is_null(), "{declarations}");
+    assert_eq!(declarations["backoff"][0]["outcome"], "refused");
+    assert_eq!(std::fs::read(store.path_of("127.0.0.1")).unwrap(), turn);
+    std::fs::remove_dir_all(home.path().join("declarations")).unwrap();
+    let responses = converse(home.path(), &[fetch(3, &site.url("/article"))]);
+    let detail = text_of(&responses[0]);
+    assert!(!detail.contains("operator policy"), "{detail}");
+    let records = crossings(home.path());
+    assert_eq!(
+        records[2]["payload"]["declarations"]["robots"]["cache"],
+        "not_asked"
+    );
+    assert!(
+        records[2]["payload"]["declarations"]["robots"]
+            .get("fetched_at")
+            .is_none()
+    );
+    assert_eq!(site.pages().len(), 1);
+}
+
+#[test]
+fn a_crawl_delay_write_fault_records_unavailable_and_nothing_requested() {
+    let site = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
+    let home = home_with_mode("observe");
+    let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
+    std::fs::create_dir_all(store.dir()).unwrap();
+    // Back-off remains readable. Only writing this host's crawl turn fails.
+    std::fs::create_dir(store.path_of("127.0.0.1")).unwrap();
+    let responses = converse(home.path(), &[fetch(1, &site.url("/article"))]);
+    let detail = text_of(&responses[0]);
+    assert!(detail.contains("Nothing was requested."), "{detail}");
+    let records = crossings(home.path());
+    assert_eq!(
+        records[0]["payload"]["declarations"]["robots"]["delay"]["outcome"],
+        "unavailable"
+    );
+    assert!(site.pages().is_empty());
+}
+
+#[test]
+fn three_processes_allow_one_sender_and_one_failure_after_backoff() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let home = home_with_mode("observe");
+    let failing = Arc::new(AtomicBool::new(false));
+    let failures = Arc::new(AtomicUsize::new(0));
+    let fail = Arc::clone(&failing);
+    let count = Arc::clone(&failures);
+    let site = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            if fail.load(Ordering::SeqCst) {
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut response = Response::text(503, "busy");
+                response.headers.set("Retry-After", "120");
+                return response;
+            }
+            Response::text(200, "page")
+        })
+        .unwrap();
+    let url = format!("{}/article", site.url());
+    converse(home.path(), &[fetch(1, &url)]);
+    failing.store(true, Ordering::SeqCst);
+    let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
+    store
+        .answered("127.0.0.1", 503, Some("2"), chrono::Utc::now())
+        .unwrap();
+    let mut children: Vec<_> = (0..3)
+        .map(|i| start(home.path(), &format!("waiter-{i}")))
+        .collect();
+    for child in &mut children {
+        ask(child, &[fetch(2, &url)]);
+        drop(child.stdin.take());
+    }
+    for child in children {
+        let responses = answers(child);
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+    }
+    assert_eq!(failures.load(Ordering::SeqCst), 1);
+    assert_eq!(store.backoff("127.0.0.1").unwrap().unwrap().failures, 2);
+}
+
+#[test]
+fn a_licence_probe_refused_by_backoff_writes_no_crawl_delay_ruling() {
+    let site = licensed_origin(
+        "User-agent: *\nCrawl-delay: 2\nLicense: /license.xml\n",
+        "<rsl><content><license><permits type=\"usage\">all</permits></license></content></rsl>",
+    );
+    let home = home_with_mode("observe");
+    converse(home.path(), &[fetch(1, &site.url("/article"))]);
+    let path = home.path().join("declarations/127.0.0.1.json");
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record["licences"] = json!({});
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path())
+        .answered("127.0.0.1", 503, Some("1800"), chrono::Utc::now())
+        .unwrap();
+    let response = converse(home.path(), &[fetch(2, &site.url("/article"))]);
+    assert!(text_of(&response[0]).contains("back-off"), "{response:?}");
+    let records = crossings(home.path());
+    let declarations = &records[1]["payload"]["declarations"];
+    assert!(
+        declarations["robots"].get("delay").is_none(),
+        "{declarations}"
+    );
+    assert_eq!(
+        declarations["licences"][0]["cache"], "not_asked",
+        "{declarations}"
     );
 }

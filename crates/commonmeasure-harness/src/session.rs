@@ -100,8 +100,10 @@ pub struct Crossing {
     /// capture time. Evidence, not configuration: egress consults this
     /// recorded fact, so editing or removing a prefix later cannot make a
     /// crossing that was classified operator-record-only leave the machine.
-    /// Serialised only when true; records from before the field existed read
-    /// as false and still cross the address floor and current prefix list.
+    /// Serialised only when true, so its absence is false. The relay also
+    /// checks the address floor and the current prefix list, which covers
+    /// session logs recorded before the field existed: those stay evidence a
+    /// sealed run may cite (`docs/contracts/session-evidence.md`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub internal: bool,
     /// Present when the bytes entered the model's context and this runtime saw

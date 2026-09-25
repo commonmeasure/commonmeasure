@@ -192,6 +192,8 @@ pub enum ProbeFailure {
     /// This edge did not send the request: policy refused the probe's host,
     /// or it is an address this edge does not mediate or the hub's origin.
     NotSent(String),
+    /// Response-driven pacing refused the request before it was sent.
+    Backoff(String),
     /// The request was sent and answered with a redirect this edge declined
     /// to follow: to an address it does not mediate, to the hub's origin, or
     /// to a host the operator's policy refuses. The document was not read.
@@ -216,6 +218,7 @@ impl ProbeFailure {
         match self {
             Self::Unreachable(reason)
             | Self::NotSent(reason)
+            | Self::Backoff(reason)
             | Self::RedirectDeclined { reason, .. }
             | Self::CutShort(reason) => reason,
         }
@@ -303,6 +306,7 @@ fn cached_probe(
         Some((pacing, reserve)) => match pacing.probe_reserving(url, now, reserve) {
             Ok(sent_at) => sent_at,
             Err(reason) => {
+                pacing.end_probe();
                 let unasked = Probe {
                     url: url.to_owned(),
                     fetched_at: now,
@@ -322,7 +326,11 @@ fn cached_probe(
         },
         None => now,
     };
-    let fresh = match probe(url) {
+    let answer = probe(url);
+    if let Some((pacing, _)) = pacing {
+        pacing.end_probe();
+    }
+    let fresh = match answer {
         // A licence that is gone: no body and no error, so the reader tells
         // it from a failure by its status. Redirects were followed, so the
         // final status decides.
@@ -415,7 +423,10 @@ fn cached_probe(
             }
         }
         Err(failure) => {
-            let cut_short = matches!(failure, ProbeFailure::CutShort(_));
+            let cut_short = matches!(
+                failure,
+                ProbeFailure::CutShort(_) | ProbeFailure::Backoff(_)
+            );
             Probe {
                 url: url.to_owned(),
                 fetched_at: now,
@@ -431,7 +442,7 @@ fn cached_probe(
                 status: None,
                 body: None,
                 truncated: None,
-                not_sent: matches!(failure, ProbeFailure::NotSent(_)),
+                not_sent: matches!(failure, ProbeFailure::NotSent(_) | ProbeFailure::Backoff(_)),
                 declined_redirect: match &failure {
                     ProbeFailure::RedirectDeclined { target, .. } => Some(target.clone()),
                     _ => None,
@@ -441,8 +452,17 @@ fn cached_probe(
             }
         }
     };
-    *slot = Some(fresh.clone());
-    (fresh, CacheDecision::Fetched)
+    if fresh.cut_short {
+        *slot = None;
+    } else {
+        *slot = Some(fresh.clone());
+    }
+    let decision = if fresh.not_sent {
+        CacheDecision::NotAsked
+    } else {
+        CacheDecision::Fetched
+    };
+    (fresh, decision)
 }
 
 /// What a probed document is, which decides how a 404 or 410 is kept.
@@ -498,8 +518,10 @@ pub struct RobotsOutcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declined_redirect: Option<String>,
     pub cache: CacheDecision,
-    pub fetched_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
     /// Why the file could not be read. A 4xx other than 429 is not an
@@ -673,6 +695,15 @@ impl RobotsOutcome {
             return true;
         }
         let host = crate::grounding::host_of(&self.requested_url);
+        let before = pacing.spendable_now();
+        if pacing.before_turn(&host, before).is_err() {
+            return false;
+        }
+        let now = if pacing.spendable_now() == before {
+            now
+        } else {
+            Utc::now()
+        };
         let ruling = pacing.turn(&host, Duration::from_millis(honoured), now);
         let sends = ruling.sends();
         self.delay = Some(ruling);
@@ -914,6 +945,9 @@ pub enum Governing {
 /// where, and what it adds up to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Declarations {
+    /// Response-driven pacing for all requests of this crossing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backoff: Vec<crate::crawl_delay::BackoffEvent>,
     /// The `robots.txt` evaluation of the URL this crossing names: the URL
     /// that answered, or the hop that was refused.
     pub robots: RobotsOutcome,
@@ -1097,6 +1131,10 @@ pub fn take_page_turn(
     pacing: &Pacing,
     now: DateTime<Utc>,
 ) -> bool {
+    pacing.end_probe();
+    if !declarations.backoff.is_empty() {
+        return false;
+    }
     if declarations.robots.delay.is_some() {
         return declarations.robots.sends();
     }
@@ -1280,8 +1318,8 @@ pub fn read_robots(
         final_url: robots_probe.final_url.clone(),
         declined_redirect: robots_probe.declined_redirect.clone(),
         cache: cache_decision,
-        fetched_at: robots_probe.fetched_at,
-        expires_at: robots_probe.expires_at,
+        fetched_at: (cache_decision != CacheDecision::NotAsked).then_some(robots_probe.fetched_at),
+        expires_at: (cache_decision != CacheDecision::NotAsked).then_some(robots_probe.expires_at),
         status: robots_probe.status,
         unavailable,
         unreachable: robots_probe.unreachable(),
@@ -1390,6 +1428,7 @@ pub fn read_declared(
         _ => None,
     };
     let mut licences = Vec::new();
+    let mut backoff_refused = false;
     let mut now = now;
     if let Some(ruling) = refusal {
         robots.delay = Some(ruling);
@@ -1417,6 +1456,7 @@ pub fn read_declared(
                 (Some(pacing), Some(delay)) => pacing.pending_wait(&host, now) + delay * same_after,
                 _ => Duration::ZERO,
             };
+            let events_before = pacing.map_or(0, |pacing| pacing.backoff_events().len());
             let paced = pacing.map(|pacing| (pacing, reserve));
             let (cache, sent_at) = if *from_robots {
                 let (outcome, sent_at) = read_licence(
@@ -1445,6 +1485,15 @@ pub fn read_declared(
             };
             match cache {
                 (CacheDecision::NotAsked, reason) => {
+                    backoff_refused = pacing.is_some_and(|pacing| {
+                        pacing
+                            .backoff_events()
+                            .iter()
+                            .skip(events_before)
+                            .any(|event| {
+                                matches!(event.outcome.as_str(), "refused" | "unavailable")
+                            })
+                    });
                     unsent = Some(format!(
                         "{url} was not asked for: {}",
                         reason.unwrap_or_else(|| "no reason recorded".to_owned())
@@ -1459,7 +1508,9 @@ pub fn read_declared(
         // turn is not taken and the crossing is refused naming the licence.
         // On a host with no delay the unread licence refuses the crossing
         // when the declarations are ruled on.
-        if let (Some(reason), Some(delay)) = (&unsent, page_delay) {
+        if let (Some(reason), Some(delay)) = (&unsent, page_delay)
+            && !backoff_refused
+        {
             robots.delay = Some(DelayRuling {
                 host: host.clone(),
                 delay_ms: millis(delay),
@@ -1509,6 +1560,11 @@ pub fn read_declared(
     cache.save(&host, &record);
     let assessment_decision = terms.map(|terms| AssessmentDecision::for_fetch(terms, page_url));
     let mut declarations = Declarations {
+        backoff: if backoff_refused {
+            pacing.map_or_else(Vec::new, Pacing::backoff_events)
+        } else {
+            Vec::new()
+        },
         robots,
         redirects: Vec::new(),
         licences,
@@ -1782,8 +1838,8 @@ mod tests {
                 final_url: None,
                 declined_redirect: None,
                 cache: CacheDecision::Fetched,
-                fetched_at: Utc::now(),
-                expires_at: Utc::now(),
+                fetched_at: Some(Utc::now()),
+                expires_at: Some(Utc::now()),
                 status: Some(200),
                 unavailable: None,
                 unreachable: false,
@@ -1918,7 +1974,7 @@ mod tests {
         );
         assert_eq!(first.robots.status, Some(503));
         assert!(first.robots.unavailable.as_deref().unwrap().contains("503"));
-        assert_eq!(first.robots.expires_at, start + FAILURE_CACHE_AGE);
+        assert_eq!(first.robots.expires_at, Some(start + FAILURE_CACHE_AGE));
         assert!(first.robots.unreachable);
         assert_eq!(first.robots.outcome, Some(RobotsRuling::Unreachable));
         assert!(first.robots.refuses());
@@ -2467,6 +2523,7 @@ pub fn resolve_manifest(
             match taken {
                 Ok(sent_at) => now = sent_at,
                 Err(reason) => {
+                    pacing.end_probe();
                     probes.push(ManifestProbe { url, status: None });
                     outcome = ManifestOutcome::Unavailable { reason };
                     age = pacing
@@ -2478,7 +2535,11 @@ pub fn resolve_manifest(
                 }
             }
         }
-        match probe(&url) {
+        let answer = probe(&url);
+        if let Some(pacing) = pacing {
+            pacing.end_probe();
+        }
+        match answer {
             Ok((final_url, response)) => {
                 probes.push(ManifestProbe {
                     url: url.clone(),
@@ -2517,8 +2578,13 @@ pub fn resolve_manifest(
                     reason: failure.reason().to_owned(),
                 };
                 // A probe this edge cut short says nothing about the host.
+                if matches!(failure, ProbeFailure::Backoff(_) | ProbeFailure::NotSent(_)) {
+                    asked = false;
+                }
                 age = match failure {
-                    ProbeFailure::CutShort(_) => chrono::Duration::zero(),
+                    ProbeFailure::CutShort(_) | ProbeFailure::Backoff(_) => {
+                        chrono::Duration::zero()
+                    }
                     _ => FAILURE_CACHE_AGE,
                 };
                 break;

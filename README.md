@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: operator
+---
+
 # Common Measure
 
 Secure, safe, legal and transparent AI agent content usage.
@@ -63,7 +68,7 @@ commonmeasure session      # what the most recent session recorded
 commonmeasure serve        # the local console, on 127.0.0.1
 ```
 
-A session that fetched one page reads:
+A session that fetched one page prints, among other lines:
 
 ```text
 records    3
@@ -78,26 +83,8 @@ commonmeasure policy check ~/.commonmeasure/policy.json
 ```
 
 [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) walks through
-registration, policy, the console, importing earlier sessions and sending
-records to a receiver.
-
-## Build and test
-
-Rust 1.97 or later. Node.js 22.19 or later for the browser extension's
-tests; [`just`](https://github.com/casey/just) is optional.
-
-```sh
-cargo build --locked --workspace
-cargo test --locked --workspace
-cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-node --test browser/test/
-```
-
-The tests use local fixtures and loopback sockets; none needs a network
-service or a credential. Tests marked ignored need recorded provider
-fixtures that are not in this repository, or a live service named in the
-test.
+registration, policy, the console, importing earlier sessions, sending
+records to a receiver and enrolling a project.
 
 ## Documentation
 
@@ -108,15 +95,17 @@ test.
 - [docs/contracts/](docs/contracts/): the record formats and interfaces.
 - [docs/FAIL-POLICY.md](docs/FAIL-POLICY.md): what happens when a dependency
   is missing or a measurement is unknown.
-- [docs/HUB.md](docs/HUB.md): Common Measure Hub, and what leaves a machine
-  that joins one.
+- [docs/CONSOLE.md](docs/CONSOLE.md): the operator console.
+- [Common Measure Hub guides](https://commonmeasure.ai/docs/hub/start-here/):
+  joining an organisation's hub, and what leaves a machine that does.
 - [plugin/README.md](plugin/README.md): the Claude Code plugin and each
   host's registration.
 - [CHANGELOG.md](CHANGELOG.md): what each release changed.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Report security problems as
+Build, test and pull-request rules are in [CONTRIBUTING.md](CONTRIBUTING.md)
+and [AGENTS.md](AGENTS.md). Report security problems as
 [SECURITY.md](SECURITY.md) describes, not in a public issue.
 
 ## Licence

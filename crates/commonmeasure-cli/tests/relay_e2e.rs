@@ -3,11 +3,10 @@
 //! status block read back over real HTTP.
 //!
 //! The offline tests here use a real loopback receiver (`commonmeasure_http::Server`)
-//! to observe the bytes the binary actually posts. The one test against the
-//! real oa-server implementation is ignored by default so the offline gates
-//! stay green; see `a_live_oa_server_accepts_the_projection` for how to run
-//! it. It was verified live against a locally run oa-server on 2 August
-//! 2026.
+//! to observe the bytes the binary actually posts. The one test against a
+//! conforming receiver is ignored by default so the offline gates stay
+//! green; see `a_live_receiver_accepts_the_projection_and_isolates_owners`
+//! for how to run it.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -468,13 +467,12 @@ fn the_relay_report_names_the_governing_engagement_that_cleared_what_it_delivere
 }
 
 /// The one test in this workspace that requires another process: a conforming
-/// Content Telemetry receiver (oa-server) on a local socket. Ignored by
-/// default so the offline gates stay green. To run it:
+/// Content Telemetry receiver on a local socket. Ignored by default so the
+/// offline gates stay green. To run it:
 ///
-/// 1. Start a local oa-server with a provisioned demo database
-///    (`~/ops/code/infrastructure`, `scripts/provision-local-demo.sh`,
-///    `DEV_MODE=true`), which prints a platform write key and two publisher
-///    read keys.
+/// 1. Start a conforming receiver locally, provisioned with a platform write
+///    key and a read key for each of two publishers that returns only that
+///    publisher's events.
 /// 2. Export `COMMONMEASURE_RELAY_TEST_KEY` (the `oat_pk_` write key),
 ///    `COMMONMEASURE_RELAY_TEST_READER_GUARDIAN` and
 ///    `COMMONMEASURE_RELAY_TEST_READER_TELEGRAPH` (the `oat_pub_` read keys), and
@@ -482,8 +480,8 @@ fn the_relay_report_names_the_governing_engagement_that_cleared_what_it_delivere
 ///    `http://localhost:8080`).
 /// 3. `cargo test -p commonmeasure-cli --test relay_e2e -- --ignored`
 #[test]
-#[ignore = "requires a local oa-server (see the doc comment for how to run it)"]
-fn a_live_oa_server_accepts_the_projection_and_isolates_owners() {
+#[ignore = "requires a local conforming receiver (see the doc comment for how to run it)"]
+fn a_live_receiver_accepts_the_projection_and_isolates_owners() {
     let receiver = std::env::var("COMMONMEASURE_RELAY_TEST_RECEIVER")
         .unwrap_or_else(|_| "http://localhost:8080".to_owned());
     let write_key = std::env::var("COMMONMEASURE_RELAY_TEST_KEY")
@@ -497,7 +495,7 @@ fn a_live_oa_server_accepts_the_projection_and_isolates_owners() {
     let home = tempfile::tempdir().unwrap();
     clear_personal_egress(home.path());
     let marker = format!(
-        "wp07-{}-{}",
+        "relay-live-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -879,7 +877,7 @@ fn dry_run_matches_delivery_and_leaves_the_whole_home_unchanged() {
             "hosts that would leave:\n",
             "  www.example.com\n",
             "forecast policy: {}, as it stands on disk\n",
-            "a real run syncs managed policy and directory grants first, which can change what is cleared and what leaves\n"
+            "a real run syncs managed policy and reporting approvals first, which can change what is cleared and what leaves\n"
         ),
         url,
         home.path().join("policy.json").display()
@@ -966,7 +964,7 @@ fn dry_run_of_a_draft_clears_more_events_without_writing() {
     // says what a real run would refresh before projecting.
     assert!(
         forecast.ends_with(&format!(
-            "forecast policy: the draft {}\na real run syncs managed policy and directory grants \
+            "forecast policy: the draft {}\na real run syncs managed policy and reporting approvals \
              first, which can change what is cleared and what leaves\n",
             draft.display()
         )),
@@ -1180,7 +1178,7 @@ fn dry_run_of_an_empty_home_prints_zero_and_creates_no_relay_state() {
                 "projected 0 of 0 sessions and 0 runs; 0 events would be newly spooled\n",
                 "hosts that would leave: none\n",
                 "forecast policy: {}, as it stands on disk\n",
-                "a real run syncs managed policy and directory grants first, which can change what is cleared and what leaves\n"
+                "a real run syncs managed policy and reporting approvals first, which can change what is cleared and what leaves\n"
             ),
             url,
             home.path().join("policy.json").display()
@@ -1464,4 +1462,78 @@ fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
         sent.iter().all(|url| url.ends_with("/whole")),
         "nothing of the damaged log left: {sent:?}"
     );
+}
+
+/// A queue line 0.3.4 or earlier wrote, with or without
+/// `directory_selection` and with or without its final newline, is refused
+/// by every command that reads the spool. No byte in the home changes: the
+/// line is not taken for an enqueue cut short and truncated, and no
+/// `delivery.lock` is created. `sessions/` exists beforehand, as in a home
+/// that has recorded a session, because `doctor` creates it.
+#[test]
+fn every_command_refuses_a_spool_line_written_before_indices_and_changes_nothing() {
+    let receiver = "http://127.0.0.1:1";
+    let commands: [&[&str]; 5] = [
+        &["status"],
+        &["doctor"],
+        &["relay", "--receiver", receiver],
+        &["relay", "--dry-run", "--receiver", receiver],
+        &["relay", "requeue"],
+    ];
+    for directory_selection in [true, false] {
+        for newline in [true, false] {
+            for args in commands {
+                let home = tempfile::tempdir().unwrap();
+                let spool = home.path().join("relay/spool");
+                std::fs::create_dir_all(&spool).unwrap();
+                std::fs::create_dir_all(home.path().join("sessions")).unwrap();
+                let mut line = json!({
+                    "origin": "earlier relay",
+                    "document": {"events": [{"id": "6f1c1c52-5d9e-4a5e-9d7e-2b0f3f1d7a10"}]},
+                });
+                if directory_selection {
+                    line["directory_selection"] = json!(true);
+                }
+                let queue = format!("{line}{}", if newline { "\n" } else { "" });
+                std::fs::write(spool.join("outbound.ndjson"), queue).unwrap();
+                let before = home_snapshot(home.path());
+
+                let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                    .args(args)
+                    .env("COMMONMEASURE_HOME", home.path())
+                    .output()
+                    .expect("the binary should run");
+                let case = format!(
+                    "{args:?}, directory_selection {directory_selection}, newline {newline}"
+                );
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(
+                    text.contains(
+                        "spool line 0 (counted from zero) was written by commonmeasure 0.3.4 or \
+                         earlier"
+                    ) && text.contains("(CHANGELOG.md, 0.4.1, Upgrading)"),
+                    "{case}: {text}"
+                );
+                let reads_only = matches!(args[0], "status" | "doctor");
+                assert_eq!(output.status.success(), reads_only, "{case}: {text}");
+                if reads_only {
+                    assert!(
+                        text.contains(
+                            "refused spool: 0 batches are queued or dead in lines with an \
+                             index; 1 line without an index is not read"
+                        ),
+                        "{case}: {text}"
+                    );
+                }
+                assert!(
+                    home_snapshot(home.path()) == before,
+                    "{case}: the home is left as found"
+                );
+            }
+        }
+    }
 }

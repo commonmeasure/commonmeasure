@@ -1,7 +1,13 @@
+---
+domain: edge
+audience: operator
+---
+
 # Browser extension
 
-A Chrome extension that records the sources three browser AI answers show:
-ChatGPT on the web, Google AI Overviews and Bing Copilot Search. The
+A Chrome extension that records the sources browser AI answers show. It
+reads ChatGPT on the web, Google AI Overviews and Bing Copilot Search; on
+the live Google results page it finds no source (see the table below). The
 model's own web search on those surfaces crosses no tool Common Measure can
 offer, so nothing there can be refused; the extension observes the answer
 and the binary records each source as an observed
@@ -46,7 +52,7 @@ directory in the same way.
 | Surface | Read from | Session |
 |---|---|---|
 | ChatGPT on the web | the conversation's event stream, copied in the page and parsed by `browser/parse.js`: search-result links and citation links | the conversation id |
-| Google AI Overviews | the external links inside the rendered overview block | none; each answer is its own session |
+| Google AI Overviews | the external links inside the rendered overview block; on the live page these are opaque `/goto?url=` tokens that name no destination, so nothing is recorded | none; each answer is its own session |
 | Bing Copilot Search | the citation links inside the rendered Copilot answer block | none; each answer is its own session |
 
 - Every source is one observed crossing with no content hash: no surface
@@ -63,7 +69,9 @@ directory in the same way.
   page could add a source its model never saw.
 
 The message format, the mapping onto session evidence and each surface's
-verification state are `docs/contracts/host-integration.md` §2 and §6.
+verification state are `docs/contracts/host-integration.md` §2 and §6:
+ChatGPT and Bing are `fixture-tested`, Google is `planned`, and no ChatGPT
+turn has been recorded through the extension.
 
 ## Files
 

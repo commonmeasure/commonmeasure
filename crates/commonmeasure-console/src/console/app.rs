@@ -1977,7 +1977,7 @@ mod tests {
             ],
             "engagements": [
                 {"engagement": "ozone", "stances": [{"allow_telemetry_egress": true}]},
-                {"engagement": "spur", "stances": [{"allow_telemetry_egress": false}]}
+                {"engagement": "tessera", "stances": [{"allow_telemetry_egress": false}]}
             ]
         });
         let rules =

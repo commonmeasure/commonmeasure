@@ -1,6 +1,6 @@
 The standing Common Measure instruction is already in this session's context —
-the installed plugin's SessionStart hook delivers it, so it no longer needs
-pasting. It asks for the mediated tools for external web content; the pages
+the installed plugin's SessionStart hook delivers it. It asks for the mediated
+tools for external web content; the pages
 in this task are served from loopback, so to be explicit: fetch them with
 context_fetch, not WebFetch, so operator policy checks every crossing before
 it happens.

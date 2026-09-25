@@ -264,7 +264,7 @@ enum Command {
     },
     /// Deliver the Content Telemetry projection of the evidence logs to a
     /// configured receiver. It sends witnessed retrieval and grounding facts
-    /// only; nothing else leaves the machine (docs/contracts/session-evidence.md).
+    /// only; nothing else leaves the machine (docs/contracts/telemetry-projection.md).
     /// With no receiver configured this command refuses and sends nothing:
     /// there is no default egress. Due batches get up to ten attempts, starting
     /// at one minute and doubling to an hour. Dead batches stay undelivered
@@ -378,8 +378,9 @@ enum Command {
         /// Directory to write into; created if absent.
         out: PathBuf,
     },
-    /// Serve the operator console on loopback: Overview, Record, Policy,
-    /// Sources and Compare, rendered from the local evidence logs.
+    /// Serve the operator console on loopback: Overview, Record, Agents,
+    /// Policy, Sources, Compare and Budget, rendered from the local evidence
+    /// logs.
     Serve {
         /// Address to listen on. Loopback by default, because the console is
         /// the operator reading their own record. A non-loopback address is
@@ -1623,7 +1624,8 @@ fn import(since: Option<&str>, dry_run: bool) -> Result<(), String> {
 
 /// Deliver the projection and account for exactly what happened. The counts
 /// printed are the relay's durable ones: a second run over the same evidence
-/// logs reports "0 new at the receiver", because delivery is idempotent.
+/// logs reports "0 new at the receiver", because delivery is idempotent, or
+/// "new at the receiver: unknown" when the receiver states no count.
 ///
 /// The engagements named are governing engagements, composed by the relay
 /// itself from the clearance decisions it took. This command reads no
@@ -1720,11 +1722,11 @@ fn relay(
 /// What a forecast was taken against, printed under it.
 ///
 /// A dry run makes no network call and writes nothing, so it syncs neither
-/// the managed policy nor the directory grants: it reads the policy and the
-/// grants already on disk. A real run refreshes both before projecting, and
+/// the managed policy nor the reporting approvals: it reads the policy and the
+/// approvals already on disk. A real run refreshes both before projecting, and
 /// the clearances and internal prefixes it then reads can differ from these.
 /// Without this the forecast reads as the run, which it is not on a managed
-/// edge or one whose grants have moved.
+/// edge or one whose approvals have moved.
 fn dry_run_basis_text(home: &Path, draft: Option<&Path>) -> String {
     let mut out = String::new();
     if let Some(draft) = draft {
@@ -1748,7 +1750,7 @@ fn dry_run_basis_text(home: &Path, draft: Option<&Path>) -> String {
         );
     }
     out.push_str(
-        "a real run syncs managed policy and directory grants first, which can change what is \
+        "a real run syncs managed policy and reporting approvals first, which can change what is \
          cleared and what leaves\n",
     );
     out
@@ -1774,14 +1776,14 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
         ));
     } else {
         out.push_str(&format!(
-            "delivered {} events in {} batches to {} ({} new at the receiver)\n",
+            "delivered {} events in {} batches to {} ({})\n",
             report.events_delivered,
             report.batches_delivered,
             report.receiver,
-            report
-                .events_new_at_receiver
-                .map(|count| count.to_string())
-                .unwrap_or_else(|| "unknown".to_owned())
+            report.events_new_at_receiver.map_or_else(
+                || "new at the receiver: unknown".to_owned(),
+                |count| format!("{count} new at the receiver")
+            )
         ));
     }
     // What leaves, by event type, before anything about projection: the
@@ -2417,6 +2419,16 @@ fn show_status(json: bool) -> Result<(), String> {
         &commonmeasure_harness::managed::management(&home, now),
         now,
     );
+    if let Ok(Some(enrolment)) = commonmeasure_harness::EnrolmentRecord::load(&home) {
+        document["directory_listing"] = match enrolment.listing_at(&home, now) {
+            commonmeasure_harness::enrolment::Listing::ListedUntil(until) => {
+                serde_json::json!({"listed_until": commonmeasure_harness::enrolment::timestamp(until)})
+            }
+            commonmeasure_harness::enrolment::Listing::Unlisted(reason) => {
+                serde_json::json!({"unlisted": reason})
+            }
+        };
+    }
     document["egress"] = commonmeasure_relay::egress_report(&home);
     // Private local status extension, separate from the fleet policy contract.
     let host_observed = local_host_observations(&home);
@@ -2432,6 +2444,11 @@ fn show_status(json: bool) -> Result<(), String> {
     }
     let applied = &document["applied"];
     let mut out = commonmeasure_relay::state::egress_text(&document["egress"]);
+    if let Some(reason) = document["directory_listing"]["unlisted"].as_str() {
+        let _ = writeln!(out, "directory listing unlisted: {reason}");
+    } else if let Some(until) = document["directory_listing"]["listed_until"].as_str() {
+        let _ = writeln!(out, "directory listing listed until {until}");
+    }
     match host_observed {
         Ok(summary) => {
             let _ = writeln!(out, "{}", summary.display());

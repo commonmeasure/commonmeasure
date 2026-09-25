@@ -537,13 +537,13 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
     );
     write_session(
         &sessions,
-        "s-spur",
+        "s-tessera",
         &[crossing(
             "crossing_mediated",
             "mediated",
             "https://b.example/2",
             true,
-            r#","cwd":"/home/op/code/spur-coalition""#,
+            r#","cwd":"/home/op/code/tessera-site""#,
         )],
     );
     write_session(
@@ -561,7 +561,7 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
         home.path().join("attribution.json"),
         r#"{"rules":[
             {"match":"code/ozone","engagement":"ozone"},
-            {"match":"spur","engagement":"spur"}
+            {"match":"tessera","engagement":"tessera"}
         ]}"#,
     )
     .unwrap();
@@ -598,7 +598,7 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
     };
     let overview = store.sessions(&attribution, None).unwrap();
     assert_eq!(engagement_of(&overview, "s-ozone"), "ozone");
-    assert_eq!(engagement_of(&overview, "s-spur"), "spur");
+    assert_eq!(engagement_of(&overview, "s-tessera"), "tessera");
     assert_eq!(
         engagement_of(&overview, "s-elsewhere"),
         "unattributed",
@@ -608,11 +608,11 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
     // The filter is a projection over the one store.
     let filtered = store.sessions(&attribution, Some("ozone")).unwrap();
     assert_eq!(filtered.as_array().unwrap().len(), 1);
-    let content = store.content(10, &attribution, Some("spur")).unwrap();
+    let content = store.content(10, &attribution, Some("tessera")).unwrap();
     let rows = content.as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["url"], "https://b.example/2");
-    assert_eq!(rows[0]["engagements"][0], "spur");
+    assert_eq!(rows[0]["engagements"][0], "tessera");
     let status = store
         .status(
             commonmeasure_relay::egress_report(home.path()),
@@ -626,7 +626,7 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
         .iter()
         .map(|row| row["engagement"].as_str().unwrap())
         .collect();
-    assert_eq!(engagements, ["ozone", "spur", "unattributed"]);
+    assert_eq!(engagements, ["ozone", "tessera", "unattributed"]);
 
     // Editing a rule re-attributes history on the next read, and the evidence
     // logs are untouched: attribution is a projection, never a rewrite.
@@ -634,14 +634,14 @@ fn one_store_many_engagements_and_rules_reattribute_without_touching_evidence() 
         home.path().join("attribution.json"),
         r#"{"rules":[
             {"match":"code/ozone","engagement":"advance"},
-            {"match":"spur","engagement":"advance"}
+            {"match":"tessera","engagement":"advance"}
         ]}"#,
     )
     .unwrap();
     let edited = Attribution::load(home.path()).unwrap();
     let overview = store.sessions(&edited, None).unwrap();
     assert_eq!(engagement_of(&overview, "s-ozone"), "advance");
-    assert_eq!(engagement_of(&overview, "s-spur"), "advance");
+    assert_eq!(engagement_of(&overview, "s-tessera"), "advance");
     assert_eq!(
         snapshot_logs(),
         evidence_before,
@@ -669,20 +669,20 @@ fn a_filtered_status_keeps_whole_store_totals() {
     );
     write_session(
         &sessions,
-        "s-spur",
+        "s-tessera",
         &[crossing(
             "crossing_mediated",
             "mediated",
             "https://b.example/2",
             true,
-            r#","cwd":"/home/op/code/spur-coalition""#,
+            r#","cwd":"/home/op/code/tessera-site""#,
         )],
     );
     std::fs::write(
         home.path().join("attribution.json"),
         r#"{"rules":[
             {"match":"code/ozone","engagement":"ozone"},
-            {"match":"spur","engagement":"spur"}
+            {"match":"tessera","engagement":"tessera"}
         ]}"#,
     )
     .unwrap();

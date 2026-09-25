@@ -5,15 +5,14 @@
 //! in ways only a reader catches; a path either resolves or it does not, so
 //! this much is enforced mechanically.
 //!
-//! This repository is published whole. The product definition, roadmap,
-//! decision record, live briefs and recorded fixtures are kept elsewhere, so a
-//! document that names or links one of them fails these tests, because the
-//! file is absent.
+//! This repository is published whole. A document that names or links a file
+//! the repository does not carry fails these tests, because the file is
+//! absent.
 //!
 //! The pages under `docs/` also link each other with relative Markdown links,
 //! which is how the website is built from that directory alone
-//! (`docs/README.md` §Rules for the website build). Each such link must
-//! resolve to a file inside `docs/`.
+//! (`DOCUMENTATION.md`). Each such link must resolve to a file inside
+//! `docs/`.
 
 use std::path::{Path, PathBuf};
 
@@ -28,9 +27,9 @@ const SKIP_DIRS: &[&str] = &["target", ".git", ".claude", "node_modules"];
 /// Declared rather than read from the directory, so that deleting a directory
 /// outright cannot silently stop its references being checked. The test
 /// asserts that every entry at the root is declared, so a new one cannot go
-/// unchecked. A declared entry may be absent: `work/` and the top-level
-/// product documents are kept outside this repository, and stay declared so
-/// that a reference to one is reported as dangling rather than read as prose.
+/// unchecked. A declared entry may be absent: `work/` is not in this
+/// repository, and stays declared so that a reference into it is reported as
+/// dangling rather than read as prose.
 const ROOTS: &[&str] = &[
     "browser/",
     "crates/",
@@ -45,7 +44,7 @@ const ROOTS: &[&str] = &[
 ];
 
 /// The repository's top-level files, checked by exact name: a document naming
-/// `ROADMAP.md` after a rename is the drift most likely to go unnoticed,
+/// `ARCHITECTURE.md` after a rename is the drift most likely to go unnoticed,
 /// because such a reference carries no directory to give it away.
 const TOP_LEVEL_FILES: &[&str] = &[
     "AGENTS.md",
@@ -53,16 +52,13 @@ const TOP_LEVEL_FILES: &[&str] = &[
     "CHANGELOG.md",
     "CLAUDE.md",
     "CONTRIBUTING.md",
+    "DOCUMENTATION.md",
     "Cargo.lock",
     "Cargo.toml",
-    "DECISIONS.md",
     "LICENSE.md",
     "NOTICE",
-    "PRODUCT.md",
     "README.md",
-    "ROADMAP-COMPLETED.md",
-    "ROADMAP-DEFERRED.md",
-    "ROADMAP.md",
+    "RELEASING.md",
     "SECURITY.md",
     "install.sh",
     "justfile",

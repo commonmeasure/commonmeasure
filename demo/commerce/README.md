@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The commerce demonstration bundle
 
 A fictional retail bundle for the commerce demonstration. It follows the
@@ -35,16 +40,14 @@ subdirectory, served by the internal `query` adapter:
   licence**: nobody granted one, so the manifest deliberately declares
   none and its licence state is unknown.
 
-The corpus holds sixteen documents. The comparison runs sealed a
-nine-document subset by manifest hash;
-the routing experiment (`demo/jobs/commerce-routing/`, with its questions
-and pre-registered split) uses all sixteen. Re-running the
-`commerce-examples` recipe reads the full corpus and is a different
-experiment by hash, as a changed rubric would be. All sixteen follow the
-same shape: the retailer's data holds current prices, stock and cut-over
-dates (a July price cut, a discontinued milk wand and hub); brand pages were
-accurate for their dates and mislead at the current date; only editorial
-recommends.
+The recorded comparison runs sealed a nine-document subset of the corpus by
+manifest hash. The routing experiment (`demo/jobs/commerce-routing/`, with
+its questions and pre-registered split) uses all sixteen, and so does the
+`commerce-examples` recipe, so a regeneration is a different experiment by
+hash, as a changed rubric would be. All sixteen follow the same shape: the
+retailer's data holds current prices, stock and cut-over dates (a July price
+cut, a discontinued milk wand and hub); brand pages were accurate for their
+dates and mislead at the current date; only editorial recommends.
 
 Each class directory carries its own `corpus.json` so each class is a
 runnable corpus alone; the mixed root's `corpus.json` declares the same
@@ -52,12 +55,12 @@ dates and licences class-prefixed. The two layers cannot drift unnoticed:
 `crates/commonmeasure-supply/tests/internal_corpus.rs` pins their agreement, and a
 declaration for a document the scan will never read is a load error.
 
-Licences use the manifest's per-document `licences` map (this bundle is the
-reason it exists): product data under `fictive-retail/product-data-licence-v1`,
-brand pages under each brand's reference, syndicated editorial under each
-publication's reference, and the GadgetGrove capture under no licence, because
-an aggregated corpus that declared one licence corpus-wide would misdeclare
-either the licensed classes or the unlicensed capture.
+Licences use the manifest's per-document `licences` map: product data under
+`fictive-retail/product-data-licence-v1`, brand pages under each brand's
+reference, syndicated editorial under each publication's reference, and the
+GadgetGrove capture under no licence, because an aggregated corpus that
+declared one licence corpus-wide would misdeclare either the licensed
+classes or the unlicensed capture.
 
 The corpus is deliberately shaped so the source classes disagree in the
 ways real commerce content disagrees:
@@ -75,11 +78,10 @@ ways real commerce content disagrees:
   alone can say what is in stock and how wide it is; it cannot say which
   to choose.
 
-Nothing hostile is planted here. The injection screen runs at
-admission over every document in every committed run below, and each
-invocation records no matched rule. This is deliberate, and the runs' own
-evidence pins it. `demo/injection/` is the committed evidence for what the
-screen catches, and `demo/specialist/` for its stated blind spots.
+Nothing hostile is planted here. The injection screen runs at admission
+over every document in every run of these suites, and no document matches
+any of its rules. `demo/injection/` shows what the screen catches, and
+`demo/specialist/` its stated blind spots.
 
 ## The comparison suites — `demo/jobs/commerce/`
 
@@ -112,8 +114,11 @@ requirement.
 
 ## The comparison runs
 
-Produced with the gateway up (the recorded runs are not in the public
-repository, because their records carry the recording machine's paths):
+Produced with the gateway up. The recorded runs are not in the public
+repository, because their records carry the recording machine's paths; the
+recipe writes to `output/commerce/<suite>` under
+`COMMONMEASURE_PRIVATE_EVIDENCE` and refuses to run without it
+(`CONTRIBUTING.md`):
 
 ```sh
 just gateway-up
@@ -122,13 +127,12 @@ COMMONMEASURE_INFERENCE_ENDPOINT=http://127.0.0.1:3000/openai/v1/chat/completion
 ```
 
 Answers are not byte-stable across regenerations (the gateway requests
-temperature 0 but no byte-stability claim is made); the committed evidence
+temperature 0 but no byte-stability claim is made); the recorded evidence
 rests on the deterministic record: manifest hashes, admission decisions,
 window composition, evaluation records and the selection arithmetic. Source
 URLs are the internal adapter's `file://` URLs, absolute to the
 checkout that generated them; cross-machine comparison is by manifest hash
 and record structure, not by bytes.
-
 
 ## What is not here
 

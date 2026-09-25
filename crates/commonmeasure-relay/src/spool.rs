@@ -25,7 +25,7 @@
 //! (`RETAIN_DELIVERED_DAYS`, `RETAIN_DELIVERED_BATCHES`). Queued and dead
 //! batches are never pruned, and an index is never given to a second batch
 //! while the journal exists.
-//! `docs/contracts/session-evidence.md` §Delivery state is the contract.
+//! `docs/contracts/telemetry-projection.md` §Delivery state is the contract.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -43,15 +43,27 @@ use std::sync::{Mutex, MutexGuard};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpoolEntry {
     pub origin: String,
-    /// Unknown for batches written before delivery cadence was introduced.
-    #[serde(default)]
+    /// When the batch entered the spool. Every release from 0.3.5 records
+    /// it. `null` marks a batch queued by 0.3.4 or earlier whose line a later
+    /// prune rewrote, which may have filled in `directory_selection`; the
+    /// relay holds such a batch rather than send it ([`PRE_0_3_5_HOLD`]).
     pub queued_at: Option<DateTime<Utc>>,
     pub document: Value,
-    /// Local consent provenance, never sent to the receiver. Legacy batches
-    /// without this field retain their original behaviour in legacy homes.
-    #[serde(default)]
+    /// Whether a directory selection applied to the home when the batch was
+    /// queued: local consent provenance, never sent to the receiver. A line
+    /// without it is damage.
     pub directory_selection: bool,
 }
+
+/// The hold reason of an undelivered batch queued by 0.3.4 or earlier. Its
+/// consent provenance cannot be told from one a prune filled in, so it is
+/// not sent. Moving the spool aside is the only way to project its events
+/// again under current consent; the other batches are delivered first so
+/// that nothing else is left in the saved spool.
+pub const PRE_0_3_5_HOLD: &str = "Queued by 0.3.4 or earlier, and its consent provenance may \
+    have been filled in since; not sent. Once no other batch is queued or dead, stop every relay \
+    and move relay/spool aside, keeping it and relay/delivered.idx: the next run projects its \
+    events again under current consent where the session log remains.";
 
 /// Ten attempts allow transient outages to recover while bounding automatic work.
 pub const MAX_ATTEMPTS: u32 = 10;
@@ -82,14 +94,17 @@ pub struct DeliveryState {
     #[serde(default)]
     pub hold_reason: Option<String>,
     /// Whether the accepted attempt contained fewer events than the retained
-    /// batch. Unknown for deliveries recorded before this field existed.
+    /// batch. Absent until the batch is accepted. On an accepted batch,
+    /// absence means the accepting relay did not record it, and whether that
+    /// attempt sent a subset is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_subset: Option<bool>,
     /// How many `instance` members the accepted attempt withheld because the
     /// receiver was not their issuer. When above zero, the retained payload
     /// is the only spooled copy that still carries them, so the count rule
-    /// does not release the batch. Absent on deliveries recorded before
-    /// delivery withheld the member, when none could have been withheld.
+    /// does not release the batch. Absent until the batch is accepted. On an
+    /// accepted batch, absence means the attempt withheld no member: a relay
+    /// that withholds members records this count at acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_references_withheld: Option<u64>,
 }
@@ -167,6 +182,28 @@ pub struct SpoolSnapshot {
     /// failed is then unknown, so `close_error` is `None` and no failed fold
     /// is claimed.
     pub close_error_unreadable: Option<String>,
+}
+
+/// What a spool refused as one 0.3.4 or earlier wrote still owes, from the
+/// parts this release reads: lines that carry an index, and their states in
+/// the snapshot and journal. `outbound.ack` and lines without an index are
+/// not read, so their standing is not counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedSpool {
+    /// Indexed batches recorded as queued or dead, and, where there is no
+    /// `outbound.ack`, indexed batches with no recorded state.
+    pub outstanding: u64,
+    /// Indexed batches with no recorded state beside an `outbound.ack`,
+    /// which may record them as accepted.
+    pub unknown: u64,
+    /// Lines without an index.
+    pub unindexed: u64,
+    /// Why the counts are not a full account of the indexed batches, if
+    /// they are not: the recorded states name a batch no indexed line
+    /// carries, a line is damaged, or a file did not read. The counts then
+    /// cover only what was read, so each is a lower bound.
+    #[serde(default)]
+    pub incomplete: Option<String>,
 }
 
 /// A retained batch's position in `outbound.ndjson`.
@@ -276,6 +313,10 @@ impl Spool {
     /// Open the spool under `<home>/relay/spool`, creating it if absent. An
     /// interrupted enqueue, journal append or compaction is repaired here.
     pub fn open(home: &Path) -> Result<Spool> {
+        // Refused before the lock file is created, so a refusal leaves the
+        // directory as found. The locked load checks again for a relay of
+        // another release that wrote in between.
+        Self::read_only(home).refuse_pre_0_3_5()?;
         let dir = home.join("relay").join("spool");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let lock = OpenOptions::new()
@@ -361,8 +402,9 @@ impl Spool {
         Ok(self.snapshot()?.undelivered)
     }
 
-    /// Retained batches, including acknowledged ones, preserve the first
-    /// identity sent for a session before separate identity pins existed.
+    /// Every retained batch, delivered ones included, with its index. The
+    /// relay reads the agent id of a session whose batches are queued but
+    /// not yet pinned from here.
     pub fn entries(&self) -> Result<Vec<(u64, SpoolEntry)>> {
         self.read(|view, queue| {
             view.lines
@@ -372,10 +414,9 @@ impl Spool {
         })
     }
 
-    /// Per-batch standing, importing the legacy acknowledgement prefix without
-    /// rewriting payloads. Missing metadata means an unclaimed batch.
+    /// Per-batch standing. Missing metadata means an unclaimed batch.
     pub fn delivery_states(&self) -> Result<BTreeMap<u64, DeliveryState>> {
-        self.read(|view, queue| self.full_states(view, queue))
+        self.read(|view, _| Ok(self.full_states(view)))
     }
 
     /// States, undelivered payloads and the pruned count from one read. A
@@ -383,7 +424,7 @@ impl Spool {
     /// complete between them.
     pub fn snapshot(&self) -> Result<SpoolSnapshot> {
         self.read(|view, queue| {
-            let states = self.full_states(view, queue)?;
+            let states = self.full_states(view);
             let undelivered = view
                 .lines
                 .iter()
@@ -542,15 +583,6 @@ impl Spool {
         Ok(count)
     }
 
-    /// Legacy acknowledgement prefix, used only when importing old spools.
-    pub fn acked(&self) -> Result<u64> {
-        if !self.ack_path.exists() {
-            return Ok(0);
-        }
-        let text = std::fs::read_to_string(&self.ack_path).context("read ack file")?;
-        text.trim().parse().context("parse ack offset")
-    }
-
     fn writer(&self) -> Result<MutexGuard<'_, Option<Writer>>> {
         self.writer
             .lock()
@@ -580,6 +612,7 @@ impl Spool {
     /// read and reads again. Under the lock nothing else writes, so the same
     /// finding is damage and the writer reports it at once.
     fn load(&self) -> Result<Loaded> {
+        self.refuse_outbound_ack()?;
         let mut names_missing_batches = false;
         for _ in 0..LOAD_ATTEMPTS {
             let before = parse_journal(&read_or_empty(&self.journal_path)?)?.generation;
@@ -635,7 +668,6 @@ impl Spool {
             };
             let next_index = journal
                 .next_index
-                .max(queue_lines.physical_lines)
                 .max(queue_lines.lines.last().map_or(0, |line| line.index + 1));
             return Ok(Loaded {
                 view: View {
@@ -661,6 +693,159 @@ impl Spool {
         anyhow::bail!("the spool kept changing while it was read; retry")
     }
 
+    /// 0.3.4 and earlier acknowledged batches by an offset in
+    /// `outbound.ack`. It is not read: a batch below it may or may not have
+    /// been accepted, and `delivered.idx` alone says which events were.
+    fn refuse_outbound_ack(&self) -> Result<()> {
+        match self.ack_path.try_exists() {
+            Ok(false) => Ok(()),
+            Ok(true) => anyhow::bail!(
+                "{} was written by commonmeasure 0.3.4 or earlier, which this release does not \
+                 read; nothing is delivered. {PRE_0_3_5_REMEDY}",
+                self.ack_path.display()
+            ),
+            Err(error) => Err(error).with_context(|| format!("check {}", self.ack_path.display())),
+        }
+    }
+
+    /// `None` unless the spool is refused as one 0.3.4 or earlier wrote.
+    /// Otherwise what its indexed lines still owe, from the current formats
+    /// alone. The counts are marked incomplete, never presented as whole,
+    /// when the load's missing-batch check fails, when a line is neither
+    /// indexed nor written before indices, or when a file does not read.
+    /// The check also catches a read that an append overtook. An error
+    /// means only that whether the spool is refused could not be told.
+    pub fn refused(&self) -> Result<Option<RefusedSpool>> {
+        let acknowledged = self.ack_path.try_exists().unwrap_or(true);
+        let mut gaps: Vec<String> = Vec::new();
+        // Read in the load's order: the journal before and after the queue
+        // and the snapshot.
+        let before = read_or_empty(&self.journal_path).and_then(|bytes| parse_journal(&bytes));
+        let queue = match read_or_empty(&self.queue_path) {
+            Ok(queue) => queue,
+            Err(error) if acknowledged => {
+                gaps.push(format!("{error:#}"));
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        let snapshot: Result<BTreeMap<u64, DeliveryState>> =
+            match std::fs::read(&self.delivery_path) {
+                Ok(bytes) => serde_json::from_slice(&bytes).context("parse outbound.delivery.json"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+                Err(error) => Err(error).context("read outbound.delivery.json"),
+            };
+        let journal = read_or_empty(&self.journal_path).and_then(|bytes| parse_journal(&bytes));
+
+        let mut indexed: Vec<u64> = Vec::new();
+        let mut unindexed = 0u64;
+        let mut damaged = 0u64;
+        let mut lines = queue.split(|byte| *byte == b'\n').peekable();
+        while let Some(raw) = lines.next() {
+            // The load drops a tail cut short, and what follows a final
+            // newline is empty.
+            if lines.peek().is_none() && cut_short(raw) {
+                break;
+            }
+            if raw.trim_ascii().is_empty() {
+                continue;
+            }
+            if written_before_indices(raw) {
+                unindexed += 1;
+                continue;
+            }
+            match explicit_index(raw) {
+                Some(index)
+                    if indexed.last().is_none_or(|last| *last < index)
+                        && serde_json::from_slice::<WholeEntry>(raw).is_ok() =>
+                {
+                    indexed.push(index)
+                }
+                _ => damaged += 1,
+            }
+        }
+        if !(acknowledged || unindexed > 0) {
+            return Ok(None);
+        }
+        if damaged > 0 {
+            gaps.push(format!(
+                "{damaged} {} neither a whole entry with an index nor written before indices",
+                if damaged == 1 { "line is" } else { "lines are" }
+            ));
+        }
+
+        let mut refused = RefusedSpool {
+            outstanding: 0,
+            unknown: 0,
+            unindexed,
+            incomplete: None,
+        };
+        match (before, snapshot, journal) {
+            (Ok(before), Ok(mut states), Ok(journal))
+                if before.generation == journal.generation =>
+            {
+                states.extend(journal.states);
+                let pruned: BTreeSet<u64> = journal.prune.into_iter().collect();
+                states.retain(|index, _| !pruned.contains(index));
+                indexed.retain(|index| !pruned.contains(index));
+                // The load's check (`MISSING_BATCHES`). Positions that 0.3.4
+                // gave lines without an index are among the batches it can
+                // name; telling which would need the removed reader.
+                let missing = states
+                    .keys()
+                    .filter(|index| indexed.binary_search(index).is_err())
+                    .count();
+                if missing > 0 {
+                    gaps.push(format!(
+                        "the delivery metadata names {missing} {} no indexed line carries",
+                        if missing == 1 { "batch" } else { "batches" }
+                    ));
+                }
+                for index in &indexed {
+                    match states.get(index).map(|state| state.status) {
+                        Some(DeliveryStatus::Delivered) => {}
+                        Some(DeliveryStatus::Queued | DeliveryStatus::Dead) => {
+                            refused.outstanding += 1
+                        }
+                        None if acknowledged => refused.unknown += 1,
+                        None => refused.outstanding += 1,
+                    }
+                }
+            }
+            (Ok(_), Ok(_), Ok(_)) => gaps.push("the spool changed while it was read".into()),
+            (before, snapshot, journal) => {
+                let mut errors: Vec<String> = [before.err(), journal.err(), snapshot.err()]
+                    .into_iter()
+                    .flatten()
+                    .map(|error| format!("{error:#}"))
+                    .collect();
+                // The journal is read twice and usually fails the same way.
+                errors.dedup();
+                gaps.extend(errors);
+            }
+        }
+        if !gaps.is_empty() {
+            refused.incomplete = Some(gaps.join("; "));
+        }
+        Ok(Some(refused))
+    }
+
+    /// Refuse a spool 0.3.4 or earlier wrote, as the load would, without
+    /// taking the lock. Other damage is left to the locked load.
+    fn refuse_pre_0_3_5(&self) -> Result<()> {
+        self.refuse_outbound_ack()?;
+        let queue = read_or_empty(&self.queue_path)?;
+        // An unterminated tail is included: one that parses is whole, and a
+        // tail cut short never has the shape `written_before_indices` tests.
+        for (line_number, raw) in queue.split(|byte| *byte == b'\n').enumerate() {
+            anyhow::ensure!(
+                !written_before_indices(raw),
+                pre_0_3_5_line(line_number as u64)
+            );
+        }
+        Ok(())
+    }
+
     /// Whether a prune left its marker. A marker whose presence cannot be
     /// established counts as present, because zero would be a guess.
     fn pruning_recorded(&self) -> bool {
@@ -670,11 +855,12 @@ impl Spool {
     /// Drop what a crash left after the last complete line of the queue and
     /// the journal. Neither an enqueue nor a state change returned for those
     /// bytes, so nothing acted on them; appending after them would corrupt
-    /// the next record. One case is kept: an unterminated final queue line
-    /// that parses as a whole entry is given its newline, because a restored
-    /// or hand-edited file may end that way. If it was an interrupted
-    /// enqueue, the batch is delivered as queued and its event ids are read
-    /// as already spooled, so nothing is projected twice.
+    /// the next record. An unterminated final queue line that parses as JSON
+    /// was not cut short (`cut_short`); by the time this runs the load has
+    /// accepted it as a whole entry, so it is given its newline, because a
+    /// restored or hand-edited file may end that way. If it was an
+    /// interrupted enqueue, the batch is delivered as queued and its event
+    /// ids are read as already spooled, so nothing is projected twice.
     fn repair_tails(&self, loaded: &Loaded) -> Result<()> {
         if loaded.queue_lacks_newline {
             let mut file = OpenOptions::new().append(true).open(&self.queue_path)?;
@@ -694,55 +880,24 @@ impl Spool {
         Ok(())
     }
 
-    /// Every retained batch's state: recorded metadata, else the legacy
-    /// import, else queued and unclaimed.
-    fn full_states(&self, view: &View, queue: &[u8]) -> Result<BTreeMap<u64, DeliveryState>> {
-        let acked = self.acked()?;
-        let mut delivered = None;
+    /// Every retained batch's state: recorded metadata, else queued and
+    /// unclaimed.
+    fn full_states(&self, view: &View) -> BTreeMap<u64, DeliveryState> {
         let mut states = view.explicit.clone();
         for line in &view.lines {
-            if states.contains_key(&line.index) {
-                continue;
-            }
-            let mut state = DeliveryState::queued();
-            if line.index < acked {
-                let delivered = match &delivered {
-                    Some(delivered) => delivered,
-                    None => delivered.insert(self.relay_state.delivered()?),
-                };
-                // Old acknowledgements also covered consent-withheld batches.
-                // Only the delivered index proves receiver acceptance.
-                if parse_entry(line, queue)?.document["events"]
-                    .as_array()
-                    .is_some_and(|events| {
-                        !events.is_empty()
-                            && events.iter().all(|event| {
-                                event["id"]
-                                    .as_str()
-                                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                                    .is_some_and(|id| delivered.contains(&id))
-                            })
-                    })
-                {
-                    state.status = DeliveryStatus::Delivered;
-                }
-            }
-            states.insert(line.index, state);
+            states
+                .entry(line.index)
+                .or_insert_with(DeliveryState::queued);
         }
-        Ok(states)
+        states
     }
 
     fn state_of(&self, view: &View, index: u64) -> Result<DeliveryState> {
         if let Some(state) = view.explicit.get(&index) {
             return Ok(state.clone());
         }
-        if index >= self.acked()? {
-            anyhow::ensure!(view.line(index).is_some(), "no such spool batch");
-            return Ok(DeliveryState::queued());
-        }
-        self.full_states(view, &read_or_empty(&self.queue_path)?)?
-            .remove(&index)
-            .context("no such spool batch")
+        anyhow::ensure!(view.line(index).is_some(), "no such spool batch");
+        Ok(DeliveryState::queued())
     }
 
     fn read_entry(&self, view: &View, index: u64) -> Result<SpoolEntry> {
@@ -848,7 +1003,7 @@ impl Spool {
         };
         anyhow::ensure!(!writer.failed, FAILED_WRITER);
         let queue = read_or_empty(&self.queue_path)?;
-        let states = self.full_states(&writer.view, &queue)?;
+        let states = self.full_states(&writer.view);
         let prune = self.prunable(&writer.view, &states, &queue, now)?;
         if writer.view.journal_records == 0 && prune.is_empty() {
             return Ok(());
@@ -885,23 +1040,17 @@ impl Spool {
     /// other two files may lack. `queue` is the file as read before the
     /// view dropped the pruned lines; the view's offsets refer to it.
     fn fold(&self, writer: &mut Writer, queue: &[u8], pruning: bool) -> Result<()> {
-        // The snapshot has always carried every retained batch, so imported
-        // and unclaimed states are written with the recorded ones.
-        writer.view.explicit = self.full_states(&writer.view, queue)?;
+        // The snapshot carries every retained batch, so unclaimed states are
+        // written with the recorded ones.
+        writer.view.explicit = self.full_states(&writer.view);
         if pruning {
             self.record_pruning()?;
             let mut rewritten = Vec::new();
             for line in &mut writer.view.lines {
                 let raw = &queue[line.start as usize..line.start as usize + line.len];
                 let start = rewritten.len() as u64;
-                if explicit_index(raw).is_some() {
-                    rewritten.extend_from_slice(raw);
-                    rewritten.push(b'\n');
-                } else {
-                    // A line from before indices were stored took its index
-                    // from its position, which this rewrite changes.
-                    rewritten.extend(stored_line(line.index, &parse_entry(line, queue)?)?.bytes());
-                }
+                rewritten.extend_from_slice(raw);
+                rewritten.push(b'\n');
                 *line = Line {
                     index: line.index,
                     start,
@@ -974,9 +1123,10 @@ impl Spool {
         if released.is_empty() || released.len() * PRUNE_FRACTION < view.lines.len() {
             return Ok(Vec::new());
         }
-        // A delivered payload is the only record of the agent id first sent
-        // for a session delivered before identity pins existed. Keep it
-        // until the relay has pinned that session.
+        // The relay pins a session's agent id before its first delivery. A
+        // delivered batch whose session has no pin, because the pin file was
+        // lost or never written, is then the only record of the id first
+        // sent. Keep it until the relay has pinned that session.
         let pins = self.relay_state.session_agents()?;
         let mut prune = Vec::new();
         for index in released {
@@ -1078,9 +1228,20 @@ const CLOSE_ERROR_LIMIT: u64 = 4096;
 const READ_ONLY: &str = "read-only spool cannot be changed";
 const MISSING_BATCHES: &str = "delivery metadata names batches the spool queue lacks; nothing is \
     delivered until the lines are restored or, for a line removed as damaged, its metadata is \
-    removed (docs/contracts/session-evidence.md §Delivery state)";
+    removed (docs/contracts/telemetry-projection.md §Delivery state)";
 const STALE_OR_MISSING_BATCHES: &str = "delivery metadata names batches this read of the spool \
     queue lacks; retry, and if it persists with no relay running, the spool has lost lines";
+/// What an operator does with a spool 0.3.4 or earlier wrote. This release
+/// does not read it, so the spool is moved aside and its outstanding events
+/// are projected again. Projection rebuilds events only from the evidence
+/// still present, and `relay/delivered.idx` holds ids, not payloads, so an
+/// outstanding event whose session log or run input is gone stays in the
+/// saved spool. The changelog's procedure is the long form.
+const PRE_0_3_5_REMEDY: &str = "Stop every relay, run commonmeasure status for what the spool \
+    still owes, then move relay/spool aside, keeping it and relay/delivered.idx. The next relay \
+    run without --session projects outstanding events again from the session logs that remain; \
+    an event whose session log or run input is gone stays in the saved spool (CHANGELOG.md, \
+    0.4.1, Upgrading)";
 const FAILED_WRITER: &str = "a delivery journal append failed earlier in this process; \
     nothing further is written until the spool is reopened";
 
@@ -1141,6 +1302,29 @@ fn explicit_index(raw: &[u8]) -> Option<u64> {
     std::str::from_utf8(&digits[..end]).ok()?.parse().ok()
 }
 
+/// A line 0.3.4 or earlier wrote: those releases numbered a batch by its
+/// line and stored no index. Such a line is whole; a damaged line is not.
+fn written_before_indices(raw: &[u8]) -> bool {
+    explicit_index(raw).is_none()
+        && serde_json::from_slice::<Value>(raw)
+            .is_ok_and(|entry| entry.get("origin").is_some() && entry.get("document").is_some())
+}
+
+/// Whether an unterminated final queue line is an enqueue cut short. A
+/// line is one JSON object, and no strict prefix of an object parses as
+/// JSON, so a tail that parses was written whole: it is checked as every
+/// other line is, and refused or reported as damage, never truncated.
+fn cut_short(raw: &[u8]) -> bool {
+    serde_json::from_slice::<serde::de::IgnoredAny>(raw).is_err()
+}
+
+fn pre_0_3_5_line(line_number: u64) -> String {
+    format!(
+        "spool line {line_number} (counted from zero) was written by commonmeasure 0.3.4 or \
+         earlier, which this release does not read; nothing is delivered. {PRE_0_3_5_REMEDY}"
+    )
+}
+
 fn parse_entry(line: &Line, queue: &[u8]) -> Result<SpoolEntry> {
     let raw = queue
         .get(line.start as usize..line.start as usize + line.len)
@@ -1150,9 +1334,6 @@ fn parse_entry(line: &Line, queue: &[u8]) -> Result<SpoolEntry> {
 
 struct QueueLines {
     lines: Vec<Line>,
-    /// Lines of any kind: the index of the next batch in a spool written
-    /// before indices were stored, where a batch's index is its line number.
-    physical_lines: u64,
     len: u64,
     lacks_newline: bool,
     /// A stored index above the one that would follow the line before it.
@@ -1169,58 +1350,63 @@ struct QueueLines {
 struct WholeEntry {
     #[serde(rename = "origin")]
     _origin: String,
-    #[serde(default, rename = "queued_at")]
+    #[serde(rename = "queued_at")]
     _queued_at: Option<DateTime<Utc>>,
     #[serde(rename = "document")]
     _document: serde::de::IgnoredAny,
-    #[serde(default, rename = "directory_selection")]
+    #[serde(rename = "directory_selection")]
     _directory_selection: bool,
 }
 
 fn parse_queue(queue: &[u8]) -> Result<QueueLines> {
     let mut parsed = QueueLines {
         lines: Vec::new(),
-        physical_lines: 0,
         len: 0,
         lacks_newline: false,
         pruning_evident: false,
     };
     let mut start = 0;
+    // Counted from zero, for errors about a line that names no index.
+    let mut line_number = 0u64;
     while start < queue.len() {
         let (end, terminated) = match queue[start..].iter().position(|byte| *byte == b'\n') {
             Some(at) => (start + at, true),
             None => (queue.len(), false),
         };
         let raw = &queue[start..end];
-        // An unterminated tail is an interrupted enqueue unless it is a whole
-        // entry, as a hand-edited or restored file may end.
-        if !terminated && serde_json::from_slice::<WholeEntry>(raw).is_err() {
+        if !terminated && cut_short(raw) {
             break;
         }
         if !raw.trim_ascii().is_empty() {
-            let stored = explicit_index(raw);
-            let index = stored.unwrap_or(parsed.physical_lines);
+            let Some(index) = explicit_index(raw) else {
+                anyhow::ensure!(!written_before_indices(raw), pre_0_3_5_line(line_number));
+                anyhow::bail!(
+                    "spool line {line_number} (counted from zero) names no index; nothing is \
+                     delivered until the line is repaired \
+                     (docs/contracts/telemetry-projection.md §Delivery state)"
+                );
+            };
             anyhow::ensure!(
                 parsed.lines.last().is_none_or(|last| last.index < index),
-                "spool line {} is out of order; nothing is delivered until the line is repaired \
-                 (docs/contracts/session-evidence.md §Delivery state)",
-                parsed.physical_lines
+                "spool line {line_number} (counted from zero) is out of order; nothing is \
+                 delivered until the line is repaired \
+                 (docs/contracts/telemetry-projection.md §Delivery state)"
             );
             serde_json::from_slice::<WholeEntry>(raw).with_context(|| {
                 format!(
                     "parse spool line {index}; nothing is delivered until the line is repaired \
-                     (docs/contracts/session-evidence.md §Delivery state)"
+                     (docs/contracts/telemetry-projection.md §Delivery state)"
                 )
             })?;
             let follows = parsed.lines.last().map_or(0, |last| last.index + 1);
-            parsed.pruning_evident |= stored.is_some_and(|stored| stored > follows);
+            parsed.pruning_evident |= index > follows;
             parsed.lines.push(Line {
                 index,
                 start: start as u64,
                 len: raw.len(),
             });
         }
-        parsed.physical_lines += 1;
+        line_number += 1;
         parsed.lacks_newline = !terminated;
         start = end + 1;
         parsed.len = (end + usize::from(terminated)) as u64;
@@ -1328,105 +1514,368 @@ mod tests {
             .collect()
     }
 
-    /// The layout written before the journal: payload lines without an
-    /// index, every state in the snapshot, no journal file.
-    #[test]
-    fn an_existing_spool_directory_opens_without_loss() {
-        let home = tempfile::tempdir().unwrap();
-        let dir = home.path().join("relay/spool");
-        std::fs::create_dir_all(&dir).unwrap();
-        let ids: Vec<Uuid> = (0..4).map(|_| Uuid::new_v4()).collect();
-        let queue: String = ids
-            .iter()
-            .map(|id| {
-                format!(
-                    "{}\n",
-                    json!({"origin": "earlier relay", "queued_at": "2026-09-01T10:00:00Z",
-                        "document": {"agent_id": "commonmeasure", "events": [{"id": id}]},
-                        "directory_selection": true})
+    /// Every file under the spool directory with its bytes, sorted.
+    fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut names: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    std::fs::read(entry.path()).unwrap(),
                 )
             })
             .collect();
-        std::fs::write(dir.join("outbound.ndjson"), &queue).unwrap();
-        // Batch 3 has no metadata: enqueued by a process killed before its store.
-        let snapshot = json!({
-            "0": {"status": "delivered", "attempts": 1, "next_attempt_at": null,
-                "last_attempt_at": "2026-09-01T10:00:05Z", "last_error": null,
-                "hold_reason": null, "delivered_subset": true},
-            "1": {"status": "queued", "attempts": 3,
-                "next_attempt_at": "2026-09-01T10:07:00Z",
-                "last_attempt_at": "2026-09-01T10:03:00Z",
-                "last_error": "receiver answered 503",
-                "hold_reason": "Held by current directory consent or source policy; undelivered."},
-            "2": {"status": "dead", "attempts": 10, "next_attempt_at": null,
-                "last_attempt_at": "2026-09-01T14:03:00Z", "last_error": "receiver answered 503"},
-        });
+        names.sort();
+        names
+    }
+
+    /// A queue line as 0.3.4 or earlier wrote it: no `index` and no
+    /// `queued_at`, and, before `directory_selection` existed, not that.
+    fn line_before_indices(directory_selection: bool) -> String {
+        let mut line = json!({"origin": "earlier relay", "document": one_event().1});
+        if directory_selection {
+            line["directory_selection"] = json!(true);
+        }
+        line.to_string()
+    }
+
+    /// A spool 0.3.4 or earlier wrote: lines without an `index`, each
+    /// batch numbered by its line, or an `outbound.ack` offset. Neither is
+    /// read. Every read refuses the spool, naming the line or the file and
+    /// the remedy, and changes nothing on disk: a writer refuses before it
+    /// creates its lock file. A final line without its newline is refused
+    /// like any other, with or without `directory_selection`, and never
+    /// taken for an enqueue cut short.
+    #[test]
+    fn a_spool_written_by_0_3_4_or_earlier_is_refused_and_left_as_found() {
+        let current = stored_line(0, &entry(one_event().1)).unwrap();
+        // (lines without an index, queue, error); with none, `outbound.ack`.
+        let mut cases = vec![(
+            0,
+            current.clone(),
+            "outbound.ack was written by commonmeasure 0.3.4",
+        )];
+        for directory_selection in [true, false] {
+            let old = line_before_indices(directory_selection);
+            cases.push((
+                2,
+                format!("{old}\n{}\n", line_before_indices(directory_selection)),
+                "spool line 0 (counted from zero) was written by commonmeasure 0.3.4",
+            ));
+            // Alone, and after a current line, with no final newline.
+            cases.push((
+                1,
+                old.clone(),
+                "spool line 0 (counted from zero) was written by commonmeasure 0.3.4",
+            ));
+            cases.push((
+                1,
+                format!("{current}{old}"),
+                "spool line 1 (counted from zero) was written by commonmeasure 0.3.4",
+            ));
+        }
+        for (unindexed, queue, expected) in cases {
+            let home = tempfile::tempdir().unwrap();
+            let dir = home.path().join("relay/spool");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("outbound.ndjson"), &queue).unwrap();
+            if unindexed == 0 {
+                std::fs::write(dir.join("outbound.ack"), "1\n").unwrap();
+            }
+            let before = listing(&dir);
+            for error in [
+                Spool::read_only(home.path()).snapshot().err().unwrap(),
+                Spool::read_only(home.path()).entries().err().unwrap(),
+                Spool::open(home.path()).err().unwrap(),
+            ] {
+                let error = format!("{error:#}");
+                assert!(
+                    error.contains(expected)
+                        && error.contains("nothing is delivered")
+                        && error.contains("move relay/spool aside")
+                        && error.contains("keeping it and relay/delivered.idx")
+                        && error.contains("stays in the saved spool")
+                        && error.contains("(CHANGELOG.md, 0.4.1, Upgrading)")
+                        && !error.contains("0.4.0"),
+                    "{queue}: {error}"
+                );
+            }
+            let status = crate::state::egress_report(home.path());
+            assert!(
+                status["unavailable"]
+                    .as_str()
+                    .is_some_and(|error| error.contains(expected)),
+                "{status}"
+            );
+            assert_eq!(status["refused_spool"]["unindexed"], unindexed, "{status}");
+            assert_eq!(listing(&dir), before, "{queue}: nothing changes");
+            assert!(!dir.join("delivery.lock").exists());
+        }
+    }
+
+    /// An enqueue cut short is still removed, and a current entry that ends
+    /// without its newline is still given one. An unterminated final line
+    /// that parses but is not a whole entry is reported as damage and left
+    /// as found: only a line that does not parse can be a cut-short append.
+    #[test]
+    fn only_a_final_line_that_does_not_parse_is_taken_for_an_enqueue_cut_short() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("relay/spool");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = stored_line(0, &entry(one_event().1)).unwrap();
+        let second = stored_line(1, &entry(one_event().1)).unwrap();
+
+        // Cut short: removed back to the last whole line.
+        let cut = &second[..second.len() / 2];
+        std::fs::write(dir.join("outbound.ndjson"), format!("{first}{cut}")).unwrap();
+        let spool = Spool::open(home.path()).unwrap();
+        assert_eq!(spool.entries().unwrap().len(), 1);
+        drop(spool);
+        assert_eq!(file(home.path(), "outbound.ndjson"), first.as_bytes());
+
+        // Whole but unterminated: kept and given its newline.
         std::fs::write(
-            dir.join("outbound.delivery.json"),
-            serde_json::to_vec_pretty(&snapshot).unwrap(),
+            dir.join("outbound.ndjson"),
+            format!("{first}{}", second.trim_end()),
         )
         .unwrap();
-
-        let check = |spool: &Spool| {
-            let entries = spool.entries().unwrap();
-            assert_eq!(
-                entries.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
-                [0, 1, 2, 3]
-            );
-            for ((_, entry), id) in entries.iter().zip(&ids) {
-                assert_eq!(entry.origin, "earlier relay");
-                assert!(entry.directory_selection);
-                assert_eq!(entry.document["events"][0]["id"], json!(id));
-            }
-            let states = spool.delivery_states().unwrap();
-            for index in 0..3u64 {
-                let mut expected = snapshot[index.to_string()].clone();
-                let mut actual = serde_json::to_value(&states[&index]).unwrap();
-                for state in [&mut expected, &mut actual] {
-                    let members = state.as_object_mut().unwrap();
-                    members.entry("hold_reason").or_insert(Value::Null);
-                }
-                assert_eq!(actual, expected, "batch {index}");
-            }
-            assert_eq!(states[&3].status, DeliveryStatus::Queued);
-            assert_eq!(states[&3].attempts, 0);
-            assert_eq!(
-                spool
-                    .pending()
-                    .unwrap()
-                    .iter()
-                    .map(|(index, _)| *index)
-                    .collect::<Vec<_>>(),
-                [1, 2, 3]
-            );
-        };
-        check(&Spool::read_only(home.path()));
-        assert!(
-            !dir.join("outbound.delivery.journal").exists() && !dir.join("delivery.lock").exists(),
-            "a read-only view creates nothing"
-        );
-
         let spool = Spool::open(home.path()).unwrap();
-        check(&spool);
-        let (_, document) = one_event();
-        assert_eq!(spool.enqueue(&entry(document)).unwrap(), 4);
-        assert!(spool.claim(3, Utc::now()).unwrap());
-        assert_eq!(spool.requeue(Some(2), Utc::now()).unwrap(), 1);
+        assert_eq!(spool.entries().unwrap().len(), 2);
         drop(spool);
-
-        let reopened = Spool::read_only(home.path());
-        let states = reopened.delivery_states().unwrap();
-        assert_eq!(states.len(), 5);
-        assert_eq!(states[&0].delivered_subset, Some(true));
-        assert_eq!(states[&1].attempts, 3);
-        assert_eq!(states[&2].status, DeliveryStatus::Queued);
-        assert_eq!(states[&3].attempts, 1);
-        assert_eq!(states[&4].attempts, 0);
-        assert_eq!(reopened.snapshot().unwrap().pruned_delivered, Some(0));
-        assert!(
-            file(home.path(), "outbound.ndjson").starts_with(queue.as_bytes()),
-            "earlier payload lines are not rewritten"
+        assert_eq!(
+            file(home.path(), "outbound.ndjson"),
+            format!("{first}{second}").as_bytes()
         );
+
+        // Parses, carries an index, lacks `directory_selection`: damage.
+        std::fs::remove_file(dir.join("delivery.lock")).unwrap();
+        let mut damaged: Value = serde_json::from_str(&second).unwrap();
+        damaged
+            .as_object_mut()
+            .unwrap()
+            .remove("directory_selection");
+        std::fs::write(dir.join("outbound.ndjson"), format!("{first}{damaged}")).unwrap();
+        let before = listing(&dir);
+        let error = format!("{:#}", Spool::open(home.path()).err().unwrap());
+        assert!(error.contains("parse spool line 1"), "{error}");
+        std::fs::remove_file(dir.join("delivery.lock")).unwrap();
+        assert_eq!(listing(&dir), before, "the line is not truncated");
+    }
+
+    /// Status on a refused spool says what the lines this release reads
+    /// still owe, and does not read `outbound.ack` or a line without an
+    /// index to say it.
+    #[test]
+    fn a_refused_spool_says_what_its_indexed_lines_still_owe() {
+        let now = Utc::now();
+        let home = tempfile::tempdir().unwrap();
+        let spool = Spool::open(home.path()).unwrap();
+        for _ in 0..4 {
+            spool.enqueue(&entry(one_event().1)).unwrap();
+        }
+        // 0 accepted, 1 claimed and failed, 2 dead, 3 never attempted.
+        // The close records a state for every batch.
+        assert!(spool.claim(0, now).unwrap());
+        spool.record_acceptance(0, &[], 0).unwrap();
+        assert!(spool.claim(1, now).unwrap());
+        spool.record_failure(1, "503").unwrap();
+        let mut dead = DeliveryState::queued();
+        dead.status = DeliveryStatus::Dead;
+        dead.attempts = MAX_ATTEMPTS;
+        let mut guard = spool.writer().unwrap();
+        spool
+            .record(guard.as_mut().unwrap(), vec![(2, dead)])
+            .unwrap();
+        drop(guard);
+        drop(spool);
+        // 4: enqueued by a relay that stopped before its close, so no state
+        // is recorded for it.
+        let dir = home.path().join("relay/spool");
+        let mut queue = OpenOptions::new()
+            .append(true)
+            .open(dir.join("outbound.ndjson"))
+            .unwrap();
+        queue
+            .write_all(stored_line(4, &entry(one_event().1)).unwrap().as_bytes())
+            .unwrap();
+        drop(queue);
+        let reader = Spool::read_only(home.path());
+        assert_eq!(
+            reader.refused().unwrap(),
+            None,
+            "a current spool is not refused"
+        );
+
+        std::fs::write(dir.join("outbound.ack"), "4\n").unwrap();
+        assert_eq!(
+            reader.refused().unwrap(),
+            Some(RefusedSpool {
+                outstanding: 3,
+                unknown: 1,
+                unindexed: 0,
+                incomplete: None,
+            }),
+            "a batch with no recorded state may be one outbound.ack records"
+        );
+        let text = crate::state::egress_text(&crate::state::egress_report(home.path()));
+        assert!(
+            text.contains(
+                "refused spool: 3 batches are queued or dead in lines with an index; 1 more has \
+                 no recorded delivery state, and outbound.ack may record it as accepted; each is \
+                 projected again only if its session log remains"
+            ),
+            "{text}"
+        );
+        std::fs::remove_file(dir.join("outbound.ack")).unwrap();
+
+        // A line without an index before the indexed ones, as 0.3.5 left a
+        // 0.3.4 queue it had appended to.
+        let queue = std::fs::read(dir.join("outbound.ndjson")).unwrap();
+        let old = json!({"origin": "earlier relay", "queued_at": "2026-09-01T10:00:00Z",
+            "document": one_event().1});
+        std::fs::write(
+            dir.join("outbound.ndjson"),
+            [format!("{old}\n").into_bytes(), queue].concat(),
+        )
+        .unwrap();
+        assert_eq!(
+            reader.refused().unwrap(),
+            Some(RefusedSpool {
+                outstanding: 4,
+                unknown: 0,
+                unindexed: 1,
+                incomplete: None,
+            })
+        );
+        let status = crate::state::egress_report(home.path());
+        assert_eq!(
+            status["refused_spool"],
+            json!({"outstanding": 4, "unknown": 0, "unindexed": 1, "incomplete": null}),
+            "{status}"
+        );
+        let text = crate::state::egress_text(&status);
+        assert!(
+            text.contains(
+                "refused spool: 4 batches are queued or dead in lines with an index; 1 line \
+                 without an index is not read; each is projected again only if its session log \
+                 remains, or its run is passed again with --run"
+            ),
+            "{text}"
+        );
+    }
+
+    /// Counts that miss a batch are marked incomplete and never read as
+    /// nothing outstanding: the load's missing-batch check applies, to
+    /// queue lines lost for good and to states the snapshot or the journal
+    /// hold for a batch the queue lacks, as a read an append overtook sees.
+    /// A damaged line is also left uncounted and says so. Only a complete
+    /// count of zero says that no indexed batch is outstanding.
+    #[test]
+    fn a_refused_spool_count_that_misses_a_batch_is_incomplete() {
+        let now = Utc::now();
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("relay/spool");
+        let spool = Spool::open(home.path()).unwrap();
+        deliver(&spool, one_event().1, now);
+        drop(spool);
+        std::fs::write(dir.join("outbound.ack"), "1\n").unwrap();
+        let reader = Spool::read_only(home.path());
+        let text = || crate::state::egress_text(&crate::state::egress_report(home.path()));
+        assert_eq!(reader.refused().unwrap().unwrap().incomplete, None);
+        assert!(
+            text().contains("refused spool: 0 batches are queued or dead in lines with an index; no indexed batch is outstanding"),
+            "{}",
+            text()
+        );
+        let queue = file(home.path(), "outbound.ndjson");
+        let snapshot = file(home.path(), "outbound.delivery.json");
+        let journal = file(home.path(), "outbound.delivery.journal");
+        let mut queued: BTreeMap<u64, DeliveryState> = serde_json::from_slice(&snapshot).unwrap();
+        queued.insert(1, DeliveryState::queued());
+        let claimed = {
+            let mut state = DeliveryState::queued();
+            state.attempts = 1;
+            state
+        };
+        let journalled = [
+            journal.clone(),
+            serde_json::to_vec(&JournalRecord::State {
+                index: 1,
+                state: claimed,
+            })
+            .unwrap(),
+            b"\n".to_vec(),
+        ]
+        .concat();
+
+        let cases = [
+            // Every queue line lost, the snapshot still naming the batch.
+            (
+                "empty queue",
+                Vec::new(),
+                snapshot.clone(),
+                journal.clone(),
+                0,
+            ),
+            // The snapshot names a queued batch the queue lacks.
+            (
+                "snapshot",
+                queue.clone(),
+                serde_json::to_vec(&queued).unwrap(),
+                journal.clone(),
+                0,
+            ),
+            // The journal names a batch appended after the queue was read.
+            ("journal", queue.clone(), snapshot.clone(), journalled, 0),
+            // A damaged line beside a queued one.
+            (
+                "damaged line",
+                [
+                    queue.clone(),
+                    stored_line(1, &entry(one_event().1)).unwrap().into_bytes(),
+                    b"{\"index\":2,\"origin\":\"damaged\"}\n".to_vec(),
+                ]
+                .concat(),
+                serde_json::to_vec(&queued).unwrap(),
+                journal.clone(),
+                1,
+            ),
+        ];
+        for (case, queue, snapshot, journal, outstanding) in cases {
+            std::fs::write(dir.join("outbound.ndjson"), &queue).unwrap();
+            std::fs::write(dir.join("outbound.delivery.json"), &snapshot).unwrap();
+            std::fs::write(dir.join("outbound.delivery.journal"), &journal).unwrap();
+            let refused = reader.refused().unwrap().unwrap();
+            assert_eq!(refused.outstanding, outstanding, "{case}");
+            let reason = refused.incomplete.expect(case);
+            let text = text();
+            assert!(
+                text.contains(&format!(
+                    "refused spool: the count is incomplete ({reason})"
+                )),
+                "{case}: {text}"
+            );
+            assert!(
+                !text.contains("no indexed batch is outstanding"),
+                "{case}: {text}"
+            );
+            if outstanding == 0 {
+                assert!(
+                    reason.contains("names 1 batch no indexed line carries")
+                        && text.contains("so what the spool owes is unknown"),
+                    "{case}: {text}"
+                );
+            } else {
+                assert!(
+                    reason.contains("1 line is neither a whole entry with an index")
+                        && text.contains("at least 1 batch is queued or dead"),
+                    "{case}: {text}"
+                );
+            }
+            let status = crate::state::egress_report(home.path());
+            assert_eq!(status["refused_spool"]["incomplete"], reason, "{case}");
+        }
     }
 
     #[test]
@@ -1700,8 +2149,7 @@ mod tests {
         assert!(spool.delivery_states().unwrap().contains_key(&recent));
     }
 
-    /// Deliveries with no recorded time, as a legacy import leaves them, are
-    /// bounded by count.
+    /// Deliveries with no recorded time are bounded by count.
     #[test]
     fn retention_keeps_the_newest_delivered_batches_when_their_age_is_unknown() {
         let home = tempfile::tempdir().unwrap();
@@ -1711,8 +2159,7 @@ mod tests {
         let mut queue = String::new();
         let mut states = serde_json::Map::new();
         for index in 0..total {
-            queue.push_str(&json!({"origin": "legacy", "document": one_event().1}).to_string());
-            queue.push('\n');
+            queue.push_str(&stored_line(index, &entry(one_event().1)).unwrap());
             states.insert(
                 index.to_string(),
                 json!({"status": "delivered", "attempts": 1, "next_attempt_at": null,
@@ -1732,10 +2179,8 @@ mod tests {
             snapshot.states.keys().copied().collect::<Vec<_>>(),
             (200..total).collect::<Vec<_>>()
         );
-        // Rewritten legacy lines now carry the index their position gave them.
         let entries = Spool::read_only(home.path()).entries().unwrap();
         assert_eq!(entries[0].0, 200);
-        assert_eq!(entries[0].1.origin, "legacy");
         assert_eq!(
             Spool::open(home.path())
                 .unwrap()
@@ -2068,25 +2513,37 @@ mod tests {
         }
     }
 
-    /// In a pruned queue a line that has lost the start of its `index` member
-    /// takes its line number as its index and fails the order check before
-    /// it is parsed. That error names the contract's remedies as the parse
-    /// error does.
+    /// A line that has lost the start of its `index` member, and a line
+    /// whose index is below the one before it, are reported by their line
+    /// number counted from zero, with the contract's remedies, as the parse
+    /// error is.
     #[test]
-    fn a_damaged_line_reported_as_out_of_order_names_the_remedy() {
+    fn a_line_without_its_index_or_out_of_order_names_the_remedy() {
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join("relay/spool");
         std::fs::create_dir_all(&dir).unwrap();
-        let mut queue = stored_line(5, &entry(one_event().1)).unwrap();
+        let first = stored_line(5, &entry(one_event().1)).unwrap();
         let damaged = stored_line(6, &entry(one_event().1)).unwrap();
-        queue.push_str(&damaged[damaged.len() / 2..]);
-        std::fs::write(dir.join("outbound.ndjson"), queue).unwrap();
-        let error = format!("{:#}", Spool::open(home.path()).err().unwrap());
-        assert!(
-            error.contains("spool line 1 is out of order; nothing is delivered until the line")
-                && error.contains("§Delivery state"),
-            "{error}"
-        );
+        let cases = [
+            (
+                format!("{first}{}", &damaged[damaged.len() / 2..]),
+                "spool line 1 (counted from zero) names no index; nothing is delivered until \
+                 the line",
+            ),
+            (
+                format!("{first}{}", stored_line(4, &entry(one_event().1)).unwrap()),
+                "spool line 1 (counted from zero) is out of order; nothing is delivered until \
+                 the line",
+            ),
+        ];
+        for (queue, expected) in cases {
+            std::fs::write(dir.join("outbound.ndjson"), queue).unwrap();
+            let error = format!("{:#}", Spool::open(home.path()).err().unwrap());
+            assert!(
+                error.contains(expected) && error.contains("§Delivery state"),
+                "{error}"
+            );
+        }
     }
 
     /// A close that cannot fold the journal leaves the reason where status
@@ -2238,7 +2695,7 @@ mod tests {
             .map(|(at, line)| {
                 if at == delivered as usize {
                     json!({"index": delivered, "origin": "damaged line replaced",
-                        "document": {"events": []}})
+                        "directory_selection": false, "document": {"events": []}})
                     .to_string()
                 } else {
                     line.to_owned()
@@ -2319,8 +2776,7 @@ mod tests {
         let mut queue = String::new();
         let mut states = serde_json::Map::new();
         for index in 0..total {
-            queue.push_str(&json!({"origin": "fixture", "document": one_event().1}).to_string());
-            queue.push('\n');
+            queue.push_str(&stored_line(index, &entry(one_event().1)).unwrap());
             let mut state = json!({"status": "delivered", "attempts": 1, "next_attempt_at": null,
                 "last_attempt_at": now - Duration::hours(1), "last_error": null});
             if withheld.contains(&index) {
@@ -2483,29 +2939,13 @@ mod tests {
         );
     }
 
-    /// Rewrite the queue as every release to v0.3.3 wrote it: no `index`
-    /// member, so a batch's index is its line number.
-    fn make_positional(home: &Path) {
-        let queue = String::from_utf8(file(home, "outbound.ndjson")).unwrap();
-        let positional: String = queue
-            .lines()
-            .map(|line| {
-                let at = line.find(',').unwrap();
-                assert!(line.starts_with("{\"index\":"), "{line}");
-                format!("{{{}\n", &line[at + 1..])
-            })
-            .collect();
-        std::fs::write(home.join("relay/spool/outbound.ndjson"), positional).unwrap();
-    }
-
-    /// The contract's remedy for a damaged line of an undelivered batch, in
-    /// a positional queue left by a killed relay, so the journal still holds
-    /// the batch's records: the line is emptied with its newline kept, and
-    /// the batch's journal records are removed (the snapshot never had it).
-    /// Every later batch keeps its index and state. Deleting the line
-    /// instead is shown to move them.
+    /// The contract's remedy for a damaged line of an undelivered batch left
+    /// by a killed relay, so the journal still holds the batch's records:
+    /// the line is removed, or emptied, and the batch's journal records are
+    /// removed (the snapshot never had it). Every line names its index, so
+    /// either way every later batch keeps its index and state.
     #[test]
-    fn emptying_a_damaged_undelivered_line_keeps_every_later_batch_in_place() {
+    fn removing_a_damaged_undelivered_line_keeps_every_later_batch_in_place() {
         let home = tempfile::tempdir().unwrap();
         let now = Utc::now();
         let spool = Spool::open(home.path()).unwrap();
@@ -2515,14 +2955,13 @@ mod tests {
         spool
             .record_failure(damaged, "receiver answered 503")
             .unwrap();
-        let later_delivered = deliver(&spool, one_event().1, now);
+        deliver(&spool, one_event().1, now);
         let (claimed_id, claimed_document) = one_event();
         let claimed = spool.enqueue(&entry(claimed_document)).unwrap();
         assert!(spool.claim(claimed, now).unwrap());
         let (unclaimed_id, unclaimed_document) = one_event();
         let unclaimed = spool.enqueue(&entry(unclaimed_document)).unwrap();
         abandon(spool);
-        make_positional(home.path());
         let states = |home: &Path| {
             let mut states = Spool::read_only(home).delivery_states().unwrap();
             states.remove(&damaged);
@@ -2553,29 +2992,12 @@ mod tests {
         );
         std::fs::write(dir.join("outbound.delivery.journal"), &without_records).unwrap();
 
-        // What the contract forbids: with the line deleted, each later line
-        // reads under the index, and so the state, of the batch before it.
         let deleted: String = queue
             .lines()
             .enumerate()
             .filter(|(at, _)| *at != damaged as usize)
             .map(|(_, line)| format!("{line}\n"))
             .collect();
-        std::fs::write(dir.join("outbound.ndjson"), deleted).unwrap();
-        let reader = Spool::read_only(home.path());
-        let (shifted, _) = reader
-            .entries()
-            .unwrap()
-            .into_iter()
-            .find(|(_, entry)| entry.document["events"][0]["id"] == json!(claimed_id))
-            .unwrap();
-        assert_eq!(shifted, later_delivered);
-        assert_eq!(
-            reader.delivery_states().unwrap()[&shifted].status,
-            DeliveryStatus::Delivered,
-            "with the line deleted a queued batch reads as delivered, and nothing errors"
-        );
-
         let emptied: String = queue
             .lines()
             .enumerate()
@@ -2587,25 +3009,28 @@ mod tests {
                 }
             })
             .collect();
-        std::fs::write(dir.join("outbound.ndjson"), emptied).unwrap();
-        assert_eq!(states(home.path()), before);
-        let spool = Spool::open(home.path()).unwrap();
-        assert_eq!(
-            spool
+        for repaired in [deleted, emptied] {
+            std::fs::write(dir.join("outbound.ndjson"), &repaired).unwrap();
+            assert_eq!(states(home.path()), before);
+            let pending: Vec<(u64, Value)> = Spool::read_only(home.path())
                 .pending()
                 .unwrap()
                 .iter()
                 .map(|(index, entry)| (*index, entry.document["events"][0]["id"].clone()))
-                .collect::<Vec<_>>(),
-            [
-                (claimed, json!(claimed_id)),
-                (unclaimed, json!(unclaimed_id))
-            ]
-        );
+                .collect();
+            assert_eq!(
+                pending,
+                [
+                    (claimed, json!(claimed_id)),
+                    (unclaimed, json!(unclaimed_id))
+                ]
+            );
+        }
+        let spool = Spool::open(home.path()).unwrap();
         assert_eq!(
             spool.enqueue(&entry(one_event().1)).unwrap(),
             unclaimed + 1,
-            "the emptied line still counts towards the next index"
+            "the removed batch's index is not given to another"
         );
         drop(spool);
         let mut after = states(home.path());

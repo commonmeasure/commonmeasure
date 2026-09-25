@@ -144,7 +144,7 @@ jobs:
             --title "Common Measure ${GITHUB_REF_NAME#v}" \
             --notes-file body.md release/*
 
-  # The acceptance check for the release, the same check docs/RELEASE.md
+  # The acceptance check for the release, the same check RELEASING.md
   # records: a container with no toolchain and no credential installs the
   # binary through the installer downloaded from the public release with the
   # checksum verified, the installed binary reports the tag, the plugin

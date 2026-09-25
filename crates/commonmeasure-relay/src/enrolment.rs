@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 use commonmeasure_harness::enrolment::{
-    DirectoryListing, EnrolledIdentity, EnrolledOrganization, EnrolmentRecord, Listing, ProofNeed,
-    ProofStatement, timestamp,
+    DIRECTORY_PROOF_RETRY_SECS, DirectoryListing, EnrolledIdentity, EnrolledOrganization,
+    EnrolmentRecord, Listing, ProofNeed, ProofStatement, RELEASE, timestamp,
 };
 use commonmeasure_harness::identity::{EdgeKey, Identity};
 use commonmeasure_harness::managed::{Deployment, Signer, policy_url_accepted};
@@ -151,8 +151,21 @@ fn normalise_hub(hub: &str) -> Result<String> {
 fn detail_of(body: &[u8]) -> String {
     serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|parsed| parsed["detail"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(160).collect())
+        .and_then(|parsed| {
+            parsed["detail"]
+                .as_str()
+                .or_else(|| parsed["message"].as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| {
+            let text = String::from_utf8_lossy(body);
+            let end = text.floor_char_boundary(2 * 1024);
+            if end == text.len() {
+                text.into_owned()
+            } else {
+                format!("{}… (truncated, {} bytes)", &text[..end], body.len())
+            }
+        })
 }
 
 /// Enrol this edge with `hub` using an owner's token. Refuses when the edge
@@ -685,12 +698,35 @@ pub fn refresh_directory_proof(
             return conclude_proof(home, now, Some(stated), ProofAction::NotSent(reason));
         }
     };
-    match stated.need(&authority, now) {
+    let held = DirectoryListing::load(home, &record.key_id).ok().flatten();
+    let last_uploaded_release = held
+        .as_ref()
+        .and_then(|listing| listing.last_uploaded_release.as_deref());
+    match stated.need(&authority, now, last_uploaded_release) {
         ProofNeed::Current => return conclude_proof(home, now, Some(stated), ProofAction::Current),
         ProofNeed::Unsignable(reason) => {
             return conclude_proof(home, now, Some(stated), ProofAction::NotSent(reason));
         }
         ProofNeed::Due(_) => {}
+    }
+
+    // Supplying this release isolates the age/expiry decision without parsing
+    // a human-readable due reason. Status reads must not restart the delay.
+    if stated.need(&authority, now, Some(RELEASE)) == ProofNeed::Current
+        && let Some(mut held) = held
+        && held.failure.is_some()
+        && chrono::DateTime::parse_from_rfc3339(&held.checked_at).is_ok_and(|checked| {
+            (now - checked.with_timezone(&Utc)).num_seconds() < DIRECTORY_PROOF_RETRY_SECS
+        })
+    {
+        held.stated = Some(stated);
+        return store_proof(
+            home,
+            now,
+            &record,
+            held,
+            ProofAction::NotSent("waiting to retry the failed release upload".to_owned()),
+        );
     }
 
     let identity = match Identity::load(home) {
@@ -714,6 +750,7 @@ pub fn refresh_directory_proof(
     };
     let body = json!({
         "key_id": signer.key_id(),
+        "release": RELEASE,
         "signature_input": proof.signature_input,
         "signature": proof.signature,
     });
@@ -743,20 +780,49 @@ pub fn refresh_directory_proof(
             response.status,
             detail_of(&response.body)
         );
+        let mut stated = stated;
+        if matches!(response.status, 401 | 404 | 409) {
+            stated.listed = Some(false);
+            stated.unlisted_reason = Some(detail_of(&response.body));
+        }
         return conclude_proof(home, now, Some(stated), ProofAction::Failed(reason));
+    }
+    // A complete statement is authoritative, including a decision to withhold
+    // a key whose proof is still current.
+    let answer = match serde_json::from_slice::<Value>(&response.body) {
+        Ok(answer) => answer,
+        Err(error) if !response.body.is_empty() => {
+            return conclude_proof_with_failure(
+                home,
+                now,
+                Some(stated),
+                ProofAction::Uploaded,
+                Some(format!("the hub's upload answer is not readable: {error}")),
+            );
+        }
+        Err(_) => Value::Null,
+    };
+    if let Some(member) = answer.get("directory_proof") {
+        return match serde_json::from_value::<ProofStatement>(member.clone()) {
+            Ok(stated) => conclude_proof(home, now, Some(stated), ProofAction::Uploaded),
+            Err(error) => conclude_proof_with_failure(
+                home,
+                now,
+                Some(stated),
+                ProofAction::Uploaded,
+                Some(format!(
+                    "the hub's directory_proof statement is not readable: {error}"
+                )),
+            ),
+        };
     }
     // The hub keeps whichever proof expires later, so what it holds now
     // expires no earlier than this one. Where it states the expiry, that is
     // the fact recorded.
-    let answered = serde_json::from_slice::<Value>(&response.body)
-        .ok()
-        .and_then(|answer| {
-            answer
-                .pointer("/directory_proof/expires_at")
-                .or_else(|| answer.get("expires_at"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        });
+    let answered = answer
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let ours = chrono::DateTime::from_timestamp(proof.expires, 0).map(timestamp);
     let held = answered.or_else(|| {
         let earlier = stated
@@ -771,6 +837,8 @@ pub fn refresh_directory_proof(
     });
     let stated = ProofStatement {
         expires_at: held,
+        listed: None,
+        unlisted_reason: None,
         ..stated
     };
     conclude_proof(home, now, Some(stated), ProofAction::Uploaded)
@@ -791,6 +859,16 @@ fn conclude_proof(
         ProofAction::NotSent(reason) | ProofAction::Failed(reason) => Some(reason.clone()),
         ProofAction::NotStated | ProofAction::Current | ProofAction::Uploaded => None,
     };
+    conclude_proof_with_failure(home, now, stated, action, failure)
+}
+
+fn conclude_proof_with_failure(
+    home: &Path,
+    now: chrono::DateTime<Utc>,
+    stated: Option<ProofStatement>,
+    action: ProofAction,
+    failure: Option<String>,
+) -> ProofRefresh {
     let record = match EnrolmentRecord::load(home) {
         Ok(Some(record)) => record,
         Ok(None) => {
@@ -806,12 +884,31 @@ fn conclude_proof(
             };
         }
     };
+    let last_uploaded_release = if matches!(action, ProofAction::Uploaded) {
+        Some(RELEASE.to_owned())
+    } else {
+        DirectoryListing::load(home, &record.key_id)
+            .ok()
+            .flatten()
+            .and_then(|listing| listing.last_uploaded_release)
+    };
     let held = DirectoryListing {
         key_id: record.key_id.clone(),
+        last_uploaded_release,
         checked_at: timestamp(now),
         stated,
         failure,
     };
+    store_proof(home, now, &record, held, action)
+}
+
+fn store_proof(
+    home: &Path,
+    now: chrono::DateTime<Utc>,
+    record: &EnrolmentRecord,
+    held: DirectoryListing,
+    action: ProofAction,
+) -> ProofRefresh {
     let listing = record.listing(Some(&held), now);
     match held.store(home) {
         Ok(()) => ProofRefresh { action, listing },
@@ -1001,6 +1098,31 @@ pub fn disconnect(home: &Path) -> Result<DisconnectReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hub_error_text_is_preserved_in_full() {
+        let reason = "the hub's explanation; ".repeat(200);
+        for field in ["detail", "message"] {
+            let body = json!({field: reason});
+            assert_eq!(detail_of(&serde_json::to_vec(&body).unwrap()), reason);
+        }
+    }
+
+    #[test]
+    fn raw_error_text_is_bounded_at_a_character_boundary() {
+        for body in ["small error".to_owned(), "x".repeat(2048)] {
+            assert_eq!(detail_of(body.as_bytes()), body);
+        }
+        let body = format!("{}界tail", "x".repeat(2047));
+        assert_eq!(
+            detail_of(body.as_bytes()),
+            format!("{}… (truncated, {} bytes)", "x".repeat(2047), body.len())
+        );
+        let invalid_utf8 = vec![0xff; 3000];
+        let detail = detail_of(&invalid_utf8);
+        assert!(detail.len() < 2100);
+        assert!(detail.ends_with("… (truncated, 3000 bytes)"));
+    }
 
     #[test]
     fn a_hub_url_without_a_scheme_is_refused() {

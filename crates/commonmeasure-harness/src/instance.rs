@@ -18,9 +18,8 @@
 //! CLI both append to one record's `operations`.
 //!
 //! The first route validates online with no grace, because unavailability
-//! must never widen rights (owner decision, 17 September 2026, on
-//! `docs/contracts/instance-registration.md` §Owner choices before
-//! implementation). A binding whose
+//! must never widen rights (`docs/contracts/instance-registration.md` §Open
+//! choices, 3). A binding whose
 //! `online_validation_required` is set, or whose `next_check` has come, is
 //! checked with the hub before each crossing; when that check cannot be made
 //! the crossing is refused as unavailable. The cached source policy is ruled

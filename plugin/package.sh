@@ -33,7 +33,7 @@ if [ -z "$binaries" ]; then
 fi
 
 reported=$("$here/bin/commonmeasure-launch" --version) || {
-  echo "cannot read the version: plugin/bin holds no binary this platform can run, or the one it holds predates version reporting; run plugin/build.sh" >&2
+  echo "cannot read the version from a binary in plugin/bin on this platform; run plugin/build.sh" >&2
   exit 1
 }
 version=${reported#commonmeasure }

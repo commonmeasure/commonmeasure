@@ -1,5 +1,8 @@
 ---
 title: Processor contract
+domain: extensions
+audience: integrator
+section: reference
 ---
 
 # Processor contract
@@ -114,8 +117,15 @@ processors receive only fields permitted by egress policy.
 ## Status
 
 The in-process implementation exists: `crates/commonmeasure-runtime/src/processor.rs`
-and eight processors behind it, seven deterministic and one, the fidelity
-judge, a model exchange through the configured gateway. The two detectors
+and eight processors behind it, plus the SimpleQA benchmark's
+`simpleqa-correctness` ([`docs/contracts/simpleqa-benchmark.md`](simpleqa-benchmark.md)).
+Each declares its determinism in its manifest. Five declare `deterministic`:
+the two detectors, the governor, the optimiser and the fidelity verifier.
+Four declare `non_deterministic`: the HTML text extractor, because credential
+validation depends on the verification time; the output provenance labeller,
+because its signed bytes differ on each run; and the fidelity judge and
+`simpleqa-correctness`, each a model exchange through the configured
+gateway. None declares `seeded`. The two detectors
 run in every batch run and mediated session; the optimiser in every batch
 run; the HTML text extractor on every mediated fetch that received a body;
 the governor
@@ -302,7 +312,7 @@ status where received, the chosen document identifier, trust digest, validation
 and explicit unknown charge. It does not store request/response bodies or API
 keys in diagnostics. Successful text and raw credential bytes are published in
 the existing provenance artefact paths. This creates no Content Telemetry egress
-or Hub receipt permission. `demo/provenance/README.md` in the product repository
+or Hub receipt permission. `demo/provenance/README.md`
 contains configuration and the explicitly invoked synthetic live trial.
 
 Scores and findings are namespaced inside each invocation record, as above.

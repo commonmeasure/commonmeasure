@@ -1,10 +1,24 @@
+---
+domain: edge
+audience: contributor
+---
+
 # Vendored schema, pinned
 
-These are pinned, read-only copies of the **Content Telemetry v1.0** JSON
-Schemas. The standard is maintained outside Common Measure, in the
-`SPUR-Coalition/telemetry` repository served at contenttelemetry.org, and is
-consumed, not forked: nothing in this directory may be edited locally, and no
-Common Measure type may add or redefine a wire field the standard does not carry.
+The four files in the table below, and the fixtures under
+`manifest-tests/`, are pinned, read-only copies of the **Content Telemetry
+v1.0** JSON Schemas and their manifest fixtures. The standard is maintained
+outside Common Measure, in the `SPUR-Coalition/telemetry` repository served
+at contenttelemetry.org, and is consumed, not forked: none of these files
+may be edited locally, and no Common Measure type redefines a field the
+standard carries.
+
+Common Measure adds fields of its own where the pinned schemas leave an object
+open: members inside an event's `data`, which the standard provides for, and
+two members outside `data`, `refused` on the batch (`WireBatch.refused`) and
+`instance` on an event (`WireEvent.instance`). The projection contract lists
+each one and when it is sent
+(`docs/contracts/telemetry-projection.md` §Custom fields).
 
 | File | Upstream `$id` |
 |---|---|
@@ -12,6 +26,11 @@ Common Measure type may add or redefine a wire field the standard does not carry
 | `telemetry-event.v1.json` | `https://contenttelemetry.org/schema/v1/telemetry-event.json` |
 | `telemetry-event-batch.v1.json` | `https://contenttelemetry.org/schema/v1/telemetry-event-batch.json` |
 | `manifest.v1.json` | `https://contenttelemetry.org/schema/v1/manifest.json` |
+
+`artifact.v1.json` is not vendored: it is Common Measure's own structural
+schema for artifact records and bundles, owned by
+`docs/contracts/artifact-association.md` and edited with it. The rest of
+this page covers the vendored files.
 
 `manifest.v1.json` is the discovery manifest schema
 (`/.well-known/content-telemetry.json`, standard section 8). The standard's

@@ -1,0 +1,30 @@
+{
+  "about": "The digests of docs/contracts/extension-manifest.md, section Digest, fixed by value: the contract's example manifest and example approved configuration, each with its RFC 8785 canonical text and the sha256: digest of that text. Computed with crates/commonmeasure-types/src/canonical.rs and recomputed by crates/commonmeasure-types/tests/extension_manifest_vector.rs; the hub pins a copy.",
+  "manifest": {
+    "document": {
+      "id": "pii-redactor",
+      "name": "PII redactor",
+      "version": "1.2.0",
+      "summary": "Removes personal data from fetched text before admission.",
+      "kind": "processor",
+      "purposes": ["privacy"],
+      "provider": "Example Ltd",
+      "maintainer": "extensions@example.com",
+      "runtime_binding": "in-process processor, admission stage",
+      "permissions": ["read fetched text"],
+      "requirements": ["edge 0.4 or later"],
+      "documentation_url": "https://example.com/docs/pii-redactor"
+    },
+    "canonical": "{\"documentation_url\":\"https://example.com/docs/pii-redactor\",\"id\":\"pii-redactor\",\"kind\":\"processor\",\"maintainer\":\"extensions@example.com\",\"name\":\"PII redactor\",\"permissions\":[\"read fetched text\"],\"provider\":\"Example Ltd\",\"purposes\":[\"privacy\"],\"requirements\":[\"edge 0.4 or later\"],\"runtime_binding\":\"in-process processor, admission stage\",\"summary\":\"Removes personal data from fetched text before admission.\",\"version\":\"1.2.0\"}",
+    "digest": "sha256:a3b6c666234c1d9ab2fb4139d178ae911ed499e28be7fc03585ea6c693b16262"
+  },
+  "configuration": {
+    "document": {
+      "allowed_edge_ids": ["edge-example-1"],
+      "allowed_operations": ["redact fetched text"],
+      "data_scope": "fetched text of admitted sources"
+    },
+    "canonical": "{\"allowed_edge_ids\":[\"edge-example-1\"],\"allowed_operations\":[\"redact fetched text\"],\"data_scope\":\"fetched text of admitted sources\"}",
+    "digest": "sha256:8084fecb42519d6134321d064ff4ecf6de89c05e439dad52c48454c89d7d9c81"
+  }
+}

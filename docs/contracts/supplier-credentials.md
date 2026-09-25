@@ -1,28 +1,46 @@
 ---
 title: Supplier credential custody contract
+domain: network
+audience: integrator
+section: reference
 ---
 
 # Supplier credential custody contract
 
 This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 
-**Verification state:** the Edge and Hub custody implementations have fixture
-coverage. On 22 September 2026 the deployed hosted edge serving Word made an
-Exa search with a Hub-released key; names-only connection provenance and fresh
-Hub receipts were verified. Word reported USD 0.007, but the inspected
-acquisition records do not persist that charge. Complete case 1, live
-rotation/revocation and the value-based leakage sweep remain open. The
-operational evidence is kept privately. On the same day an Ozone Live key
-released the same way completed one native Word search, with Hub connection
-provenance, one admitted source and a fresh automatic Hub receipt; its charge
-and licence remain unknown.
-
 This contract covers credential custody on the **existing supplier API** path,
 for Exa, Ozone Live and Tavily: an organisation's supplier account key is held
 by the Hub and released to that organisation's hosted edges. It establishes
 credential custody, per-edge authorisation, release, reload, limits and audit.
 It claims no entitlement, licence, publisher admission, reporting mapping or
-connector. The owner's decisions are at the end.
+connector. The custody rules are at the end (§Custody rules).
+
+## Status
+
+- **Built on both sides.** Custody at the hub, authorisation of edges, the
+  release route with stored nonces and the signature components of
+  §Signature components of the release request, the audit rows, and the
+  impersonation refusals of rules 4, 5 and 7. On the edge: the released
+  store, the release client, the hosted service's fetch at start and on its
+  interval, the retry of a fault `401`, and the `hub` evidence member
+  (§Edge side).
+- **Planned.** §Validity of a release (rule 6) on both sides; the hub looking
+  up the key before it judges the signature window; the hub refusing an
+  authorisation for a local edge's key (rule 2).
+- **`fixture-tested`** on each side against a test double of the other. The
+  two sides have also been run together on loopback, with a real hub server
+  and database, by the ignored test in
+  `crates/commonmeasure-cli/tests/supplier_custody_e2e.rs` (§Edge side).
+- **`live-verified`** for one search each through Exa and Ozone Live, made
+  by a deployed hosted edge serving Word with a key the hub released. For
+  each, names-only connection provenance, an admitted source and a fresh hub
+  receipt were verified. Word reported a charge of USD 0.007 for the Exa
+  search, but the acquisition records do not keep it. The Ozone Live
+  charge and licence are unknown. The operational evidence is not published.
+- **Open.** No acceptance case is met in full (§Acceptance evidence): case 1
+  lacks the observed charge in the acquisition record, and live rotation,
+  live revocation and the value-based leakage sweep have not been run.
 
 An organisation connects a supplier account once, and a permanent supplier key
 stays with an authorised credential service rather than with each temporary
@@ -37,7 +55,7 @@ here.
 | Identity | Identifier and relationship |
 |---|---|
 | Organisation | Reuse Hub `organization.id`. Resolved from the enrolled key on release, from the session on administration; never from a request body. |
-| Supplier connection | New Hub row, one per connected supplier account: `id` (opaque), `organization_id`, `provider` (a name `required_variable` in `crates/commonmeasure-supply/src/lib.rs` maps), `label`, `ciphertext`, `created_by`, `created_at`, `rotated_at`, `revoked_at`, `revoked_by`. A connection belongs to one organisation. `provider` names a remote supplier, `exa` or `tavily` in this slice. The edge holds an entry only where `variable` equals its own `required_variable(provider)`, and refuses `internal` and `skill:` providers, whose variables are paths on the edge's machine. |
+| Supplier connection | New Hub row, one per connected supplier account: `id` (opaque), `organization_id`, `provider` (a name `required_variable` in `crates/commonmeasure-supply/src/lib.rs` maps), `label`, `ciphertext`, `created_by`, `created_at`, `rotated_at`, `revoked_at`, `revoked_by`. A connection belongs to one organisation. `provider` names a remote supplier: `exa`, `ozone` or `tavily`. The edge holds an entry only where `variable` equals its own `required_variable(provider)`, and refuses `internal` and `skill:` providers, whose variables are paths on the edge's machine. |
 | Enrolled edge | Reuse the hub's `edge_keys.key_id`, assigned at enrolment. An edge belongs to one organisation; the mapping from key id to organisation lives only in that table. |
 | Edge authorisation | New Hub row `(connection_id, key_id, authorised_by, authorised_at, withdrawn_at, withdrawn_by)`. Both sides must resolve to the same organisation, enforced by constraint and by test, not by the administration screen alone. |
 | Provider variable | The environment name `required_variable(provider)` returns. It is the only name the edge's `unavailable` message, credentials doctor and adapter construction share. The hub holds a copy for the providers it serves, because the release answer carries `variable`; the edge holds a released value only when that `variable` is the one `required_variable(provider)` returns. |
@@ -96,7 +114,7 @@ invariant and adds a second signed request rather than a field.
 |---|---|
 | Authentication | The edge's enrolled Ed25519 key, RFC 9421 under the Web Bot Auth profile, as the desired-policy request ([`policy-envelope.md`](policy-envelope.md)), and also covering `@method` and `@path` (§Signature components of the release request). The ingest key MUST NOT authenticate this route: it is a delivery credential. |
 | Replay | The desired-policy route does not store nonces because a replay buys only the organisation's own policy (`policy-envelope.md` §The hub side). This route serves a secret, so the hub MUST store nonces for the signature window and refuse a repeat. The hub MUST refuse a signature on this route whose `expires` is more than 360 seconds after `created`, and MUST keep each nonce past the last second it would accept the signature, judged by the clock that verified it. |
-| Response | `200` with `{organisation, key_id, served_at, valid_for_seconds, credentials: [{connection_id, provider, variable, value, rotated_at}]}`, one entry per current authorisation whose connection is not revoked. `valid_for_seconds` is the kept-release bound of §Validity of a release (owner decision 7). `value` is plaintext under TLS and nothing else in this slice (owner decision 3). The hub records `credentials_fetched_at` on the edge key row as it records `policy_fetched_at`. |
+| Response | `200` with `{organisation, key_id, served_at, valid_for_seconds, credentials: [{connection_id, provider, variable, value, rotated_at}]}`, one entry per current authorisation whose connection is not revoked. `valid_for_seconds` is the kept-release bound of §Validity of a release (rule 6, planned). `value` is plaintext under TLS and nothing else (rule 3). The hub records `credentials_fetched_at` on the edge key row as it records `policy_fetched_at`. |
 | Caching | `Cache-Control: no-store`, `Pragma: no-cache`, and the response MUST NOT pass through any cache the hub operates. The web layer's `/api` proxy forwards `Cache-Control` unchanged, as it does for the policy route; it does not yet forward `Pragma`. |
 | Empty | An edge with no authorisation receives `200` with an empty list and `valid_for_seconds`. That is a valid state, not a refusal: it is what a withdrawn edge sees. |
 | Refusals | `401` with a stable `code` (§Signature components of the release request): invalid or expired signature, unknown or revoked key id, wrong authority, missing components, missing or repeated nonce, window over 360 seconds. `400` `query_refused` for a query string. `404` with a stable detail when the hub has no public origin configured, for a request that passes the signature check. No refusal names another organisation's connections. |
@@ -104,8 +122,9 @@ invariant and adds a second signed request rather than a field.
 
 ### Validity of a release
 
-Owner decision 7. Planned on both sides; until both land, the edge
-keeps a set for three intervals and the hub sends no `valid_for_seconds`.
+Rule 6. Planned on both sides. The edge keeps a released set for three
+intervals after the last `accepted` or `unchanged` fetch, and the hub sends
+no `valid_for_seconds`.
 
 - Every `200` of the release route, an empty one included, MUST carry
   `valid_for_seconds`: an integer from 60 to 3600, 900 unless the hub's
@@ -139,15 +158,10 @@ keeps a set for three intervals and the hub sends no `valid_for_seconds`.
 
 ### Signature components of the release request
 
-**Status, 21 September 2026: built on both sides, landed together.** The
-two met once on loopback before landing: the ignored test in
-`crates/commonmeasure-cli/tests/supplier_custody_e2e.rs` passed against the
-hub's candidate revision, and six signed releases each answered `200`. A hosted hub before this landing refuses every
-release from an edge at or after it, so the hosted hub is deployed first.
-
-Today a release request differs from a desired-policy request by its stored
-nonce alone, so a signed request captured before the hub first sees it can be
-presented once at the release route.
+Built on both sides. Covering `@method` and `@path` binds a signature to the
+release route: without them a release request differs from a desired-policy
+request only by its stored nonce, and a desired-policy request captured
+before the hub saw it could be presented once at the release route.
 
 - The edge MUST cover `@method` and `@path` on the release request, in
   addition to `@authority` and `signature-agent`. `@path` is the path of the
@@ -190,7 +204,7 @@ presented once at the release route.
   `key_unknown`. The seven others are faults, on which an
   edge MAY keep its released set within the maximum age of §Edge side; the
   edge signs again once and keeps it on a second fault or on a fault with too little budget left for a retry. Any `401` code outside
-  those seven is a ruling at the edge (since 22 September 2026).
+  those seven is a ruling at the edge.
 - The hub checks the window before it looks up the key, so a revoked key
   whose edge's clock is outside the window is answered `signature_expired`,
   a fault, never `key_revoked`. Such an edge keeps its set to the kept-release
@@ -200,8 +214,8 @@ presented once at the release route.
 
 ## Edge side
 
-**Status, 19 September 2026: fixture-tested.** The requirements of this
-section are built: the store (`ReleasedStore`,
+The requirements of this section are built, except those that
+§Validity of a release adds: the store (`ReleasedStore`,
 `crates/commonmeasure-supply/src/credentials.rs`), the release client
 (`crates/commonmeasure-relay/src/supplier_credentials.rs`), the hosted
 service's fetch at start and on its interval
@@ -211,22 +225,18 @@ double of the release route, written from §Release
 (`crates/commonmeasure-relay/tests/supplier_credentials.rs` and the custody
 test in `crates/commonmeasure-cli/tests/hosted_service.rs`). Both doubles refuse a release
 signature that does not cover `@method` and `@path`, and a window over 360
-seconds. A hub has
-served releases to this code once, on loopback: the ignored test in
-`crates/commonmeasure-cli/tests/supplier_custody_e2e.rs` passed on
-19 September 2026 against the real hub server, at its revision of that day,
-and a PostgreSQL database made for the run (one run, no transcript kept). The
-hub accepted the service's signed release request, and authorisation, rotation
-(as `rotated_at`), withdrawal and revocation each changed the service's fetch
-record at its next fetch with no restart. At the run's interval of 2 s each
-change arrived between 1.9 s and 2.1 s after the owner's act; the test fails
-past one interval plus the request budget, 32 s. A connection is listed as
-held only when a non-empty value was served for it. The run does not compare
-that value with the owner's, shows no value reaching an adapter (the offline
-tests do, against the double), opens no hosted session and meets no
-acceptance case, so this section stays `fixture-tested`. No test calls a
-supplier. Five points of the build add detail to the
-requirements below:
+seconds. The ignored test in
+`crates/commonmeasure-cli/tests/supplier_custody_e2e.rs` runs the hosted
+service against a real hub server and a PostgreSQL database made for the run,
+on loopback: the hub accepts the service's signed release request, and
+authorisation, rotation (as `rotated_at`), withdrawal and revocation each
+change the service's fetch record at its next fetch with no restart. The test
+fails past one interval plus the request budget, 32 s. A connection is listed
+as held only when a non-empty value was served for it. The test does not
+compare that value with the owner's, shows no value reaching an adapter (the
+offline tests do, against the double), opens no hosted session and meets no
+acceptance case. No test calls a supplier. Five points of the build add
+detail to the requirements below:
 
 - The service fetches only where `hosted-service.json` sets
   `"supplier_custody": true`. It defaults to unset, and an unset service
@@ -244,9 +254,8 @@ requirements below:
 - A kept set is used for at most three intervals after the last `accepted`
   or `unchanged` fetch (900 s at the default), as the third bullet below
   requires. The fetch record, the journal and the `credentials_loaded`
-  record (`hub_expired`) name what is no longer used. The owner kept the
-  multiple on 22 September 2026 and added the hub's bound (owner decision 7,
-  §Validity of a release, not yet built).
+  record (`hub_expired`) name what is no longer used. Rule 6 adds the hub's
+  bound (§Validity of a release, planned).
 - The fetch runs at a fixed rate in a thread of its own, beside the loop
   that refreshes policy and keys and not inside it: each fetch starts one
   interval after the last one started. Inside that loop a fetch would wait
@@ -282,7 +291,7 @@ reuse `apply`.
   every `interval_seconds` (default 300, `hosted.rs`; `policy-envelope.md`
   §Cadence and staleness), on a schedule that does not wait for the policy
   refresh or the relay. A hosted service that does not set it MUST NOT call
-  the release route. A local edge does not fetch (owner decision 2).
+  the release route. A local edge does not fetch (rule 2).
 - A fetch outcome is one of `accepted`, `unchanged`, `unreachable`, `refused`.
   On `refused` (a `401` whose `code` is not one of the seven faults of
   §Signature components of the release request, or that carries no `code`)
@@ -354,13 +363,13 @@ reuse `apply`.
 
 Bounding is the edge's existing per-principal `allowances` (day or month,
 `docs/contracts/source-policy.md` §Scopes and principals) on the Word scope's
-policy revision; this slice adds no Hub-side limit.
+policy revision; the hub adds no limit of its own.
 
 - Per-edge allowance storage cannot enforce a cross-edge limit
   (`docs/contracts/instance-registration.md` §Accepted binding, shared
   limits). A connection authorised to two edges has two independent
-  allowances. A Hub-side shared reservation is deferred to registration's
-  owner choice 4.
+  allowances. A Hub-side shared reservation is an open choice of instance
+  registration (`docs/contracts/instance-registration.md` §Open choices, 4).
 - Exa receipts carry an observed charge; Tavily's search charge is quoted from
   the published price and its extract cost is unknown
   because its responses carry no cost field. An unpriced dispatch can exceed an
@@ -387,8 +396,7 @@ label, never a value or its digest.
 
 Release is an act of an edge, not a person. The hub's audit log carries an
 actor kind (`person`, `edge`, or `system` for the hub's own acts) and an
-`actor_key_id`, added by 19 September 2026 because this slice required them; the release row MUST NOT be written under a member's
-id.
+`actor_key_id`; the release row MUST NOT be written under a member's id.
 
 ## Security requirements
 
@@ -410,13 +418,13 @@ id.
 
 ## Acceptance evidence
 
-No acceptance case is met. As of 19 September 2026, hub cases 3 (hub
-side), 6 and the hub part of 8 are `fixture-tested`; 2 on the hub side only.
-An edge has fetched releases from a hub once, on loopback, in an ignored test
-that meets no case (§Edge side). The edge's fixture tests, against a
-test double of the release route, are under §Edge side. Every case stays
-**planned** as an end-to-end record. Each is recorded with the edge, key id,
-connection id, policy revision and window in force.
+No case is met in full as an end-to-end record. Case 1 is met except for
+the observed charge, which the acquisition record does not keep (§Status).
+Hub cases 3 (hub side), 6 and the hub part of 8 are `fixture-tested`, and
+case 2 on the hub side only. The loopback run of §Edge side meets no case.
+The edge's fixture tests, against a test double of the release route, are
+under §Edge side. Each case is recorded with the edge, key id, connection id,
+policy revision and window in force.
 
 1. A real `context_search` from native Word through the hosted edge using an
    Exa key released by the hub, with an acquisition record carrying an
@@ -441,9 +449,7 @@ Evidence labels: `fixture-tested` for the Hub and edge tests;
 `live-verified` only for case 1 through the deployed Word edge. Case 1
 establishes search on this path and nothing about licensed access.
 
-## Owner decisions
-
-Decided by the owner on 18 September 2026.
+## Custody rules
 
 1. **Refresh interval.** 300 seconds, the hosted service's default. The
    revocation bound is therefore 300 seconds plus the request budget, and
@@ -454,46 +460,38 @@ Decided by the owner on 18 September 2026.
    from a local one at authorisation; if it can, authorisation refuses a
    local edge's key.
 3. **In-flight protection.** TLS only. The value is not sealed to the edge's
-   key in this slice.
-
-Decided by the owner on 21 September 2026.
-
-5. **Impersonation.** The hub refuses to authorise an edge for a supplier
+   key.
+4. **Impersonation.** The hub refuses to authorise an edge for a supplier
    connection, and to mint an enrolment token, while a super admin acts as
    another person. The hub still cannot tell a hosted edge's key from a local
    one, so an owner, or a stolen owner session, can enrol a key, authorise it
-   and obtain the value through a release; decision 2 stays edge-side and the
-   audit record is the control for that path. Built in the hub on
-   21 September 2026. The hub also refuses to make or accept an invitation
-   under impersonation, for either role, so a super admin acting as an owner
-   cannot invite an address they hold and walk the owner path as that person.
-   The owner confirmed the refusal for the member role on 22 September 2026.
-
-Decided by the owner on 22 September 2026.
-
-6. **Create and rotate under impersonation.** Both refused, by the same check
+   and obtain the value through a release; rule 2 stays edge-side and the
+   audit record is the control for that path. The hub also refuses to make
+   or accept an invitation under impersonation, for either role, so a super
+   admin acting as an owner cannot invite an address they hold and walk the
+   owner path as that person. Built in the hub.
+5. **Create and rotate under impersonation.** Both refused, by the same check
    and answer as `authorise`, audited under the real operator. Each outlives
    the session: an operator's own supplier key, stored by rotation or in a
    new connection a real owner later authorises, would carry the
    organisation's supplier traffic on the operator's account. Withdrawal and
-   revocation stay allowed, so support can still stop a leaked key. Built in
-   the hub on 22 September 2026, with discovery and an import carrying a
-   destination refused as well.
-7. **Kept-release bound.** The release answer carries `valid_for_seconds`,
+   revocation stay allowed, so support can still stop a leaked key. Discovery
+   and an import carrying a destination are refused under impersonation as
+   well. Built in the hub.
+6. **Kept-release bound.** The release answer carries `valid_for_seconds`,
    900 by default, a duration the edge measures on its monotonic clock from
    receipt, so clock skew between the two cannot stretch or cut it. The edge
    keeps a released set for the earlier of that and three of its intervals
    after the last good fetch. A service with custody on refuses at start an
    `interval_seconds` above 300. Planned; the requirements are §Validity of
    a release.
-
-9. **Act-as is read-only apart from the stop actions.** Under `act` the hub
+7. **Act-as is read-only apart from the stop actions.** Under `act` the hub
    refuses every mutating request by default, in its middleware, with the
-   answer and audit row of decision 5, except an allowlist of actions that
+   answer and audit row of rule 4, except an allowlist of actions that
    stop what leaked: revoking an API key or an edge key, withdrawing an
    edge's authorisation, revoking a supplier connection, clearing an onward
-   destination, and ending the impersonation. A test over the router's route
-   table fails any mutating route that is neither refused nor allowlisted.
-   The per-route refusals of decisions 5 and 6 stay as a second layer.
-   Setup for an organisation is a super admin's own session, never
-   impersonation. Planned.
+   destination, suppressing a declared onward endpoint, and ending the
+   impersonation. A test over the router's route table fails any mutating
+   route that is neither refused nor allowlisted. The per-route refusals of
+   rules 4 and 5 stay as a second layer. Setup for an organisation is a super
+   admin's own session, never impersonation. Built in the hub.

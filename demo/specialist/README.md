@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The governed specialist bundle
 
 A synthetic vendor bundle for the governed specialist demonstration: the documentation
@@ -11,7 +16,7 @@ manifest, suite and corpus are defined in `docs/GLOSSARY.md`.
 
 ## The corpus — `corpus/`
 
-Seven markdown documents served by the existing internal `query` adapter
+Eight markdown documents served by the existing internal `query` adapter
 (point `COMMONMEASURE_INTERNAL_CORPUS` at `demo/specialist/corpus`). Beside
 them, `corpus.json` declares what only the corpus owner can declare: the
 licence, each document's **effective date** (the `dates` map, measured by the
@@ -50,6 +55,8 @@ something real to disagree about:
 - `orchestrator-overview.md` deliberately has **no entry in the `documents`
   map**: under a governed suite, a document with no declared governance
   metadata is refused, naming the absence: unknown is not supported.
+- `stream-gateway-tuning.md` is an ordinary supported 4.x Standard-tier
+  document with full governance metadata, which a governed run admits.
 
 ## The comparison suites — `demo/jobs/specialist/`
 
@@ -71,9 +78,11 @@ declares the same per-prompt `coverage_rubric` and `as_of`, so coverage and
 freshness are measured on the same terms and the conditions differ only in
 the governance layer.
 
-The runs are produced with the gateway up (the recorded runs are not in the
+The runs are produced with the gateway up. The recorded runs are not in the
 public repository, because their records carry the recording machine's
-paths):
+paths; the recipe writes to `output/specialist/<suite>` under
+`COMMONMEASURE_PRIVATE_EVIDENCE` and refuses to run without it
+(`CONTRIBUTING.md`):
 
 ```sh
 just gateway-up
@@ -82,11 +91,11 @@ COMMONMEASURE_INFERENCE_ENDPOINT=http://127.0.0.1:3000/openai/v1/chat/completion
 ```
 
 Answers are not byte-stable across regenerations (the gateway requests
-temperature 0 but no byte-stability claim is made); the committed evidence
+temperature 0 but no byte-stability claim is made); the recorded evidence
 rests on the deterministic record: manifest hashes, admission decisions,
 window composition and evaluation records.
 
-One further regeneration caveat: source URLs in the committed runs are the
+Source URLs in the recorded runs are the
 internal adapter's `file://` URLs, absolute to the checkout that
 generated them. Regenerating on another machine yields internally
 consistent runs whose URLs, sealed-response bytes and content hashes all

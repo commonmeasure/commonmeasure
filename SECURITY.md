@@ -1,3 +1,8 @@
+---
+domain: shared
+audience: operator
+---
+
 # Security
 
 Report a security problem in Common Measure to **hello@commonmeasure.ai**.
@@ -39,5 +44,5 @@ gateway, a telemetry receiver) have their own disclosure routes.
 
 ## Supported versions
 
-Fixes are released for the latest minor version. Older releases are not
-patched; update to the current release.
+Fixes are released for the latest minor version. Use the current release
+to receive security fixes.

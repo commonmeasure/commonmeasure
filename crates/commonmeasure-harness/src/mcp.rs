@@ -741,10 +741,11 @@ impl McpServer {
         // A crossing refused on its licence's turn (licence-then-page did not
         // fit, or the licence was not sent) is refused here, before any
         // allowance is consulted. The page's own turn is still to come.
-        if !declarations.robots.sends() {
+        if !declarations.robots.sends() || !declarations.backoff.is_empty() {
             let reason = declarations
                 .robots
                 .delay_refusal()
+                .or_else(|| pacing.backoff_refusal())
                 .unwrap_or_else(|| "the source's Crawl-delay could not be kept".to_owned());
             // The refusal keeps every breach known so far: the host's, and
             // what the declarations read so far carry (a `Content-Signal`
@@ -755,6 +756,7 @@ impl McpServer {
                 ruling.reason().map(str::to_owned),
                 breaches_of(&known).as_deref(),
             );
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             self.record(facts);
@@ -811,6 +813,7 @@ impl McpServer {
                 if ruling.is_refusal() {
                     let reason = ruling.reason().unwrap_or_default().to_owned();
                     let mut facts = FetchFacts::refused(url, reason.clone());
+                    declarations.backoff = pacing.backoff_events();
                     facts.declarations = Some(declarations);
                     facts.allowance = Some(decision.record);
                     facts.named_by = named_by;
@@ -836,11 +839,12 @@ impl McpServer {
                 breaches_of(&before).as_deref(),
             );
             facts.breach = merge_breaches(facts.breach, allowance_breach.as_deref());
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             facts.allowance =
                 self.release_authorisation(authorised, "the fetch was refused before the request");
-            let refused_by = self.refused_by(facts.declarations.as_ref(), url);
+            let refused_by = self.refused_by(facts.declarations.as_ref(), url, reason);
             self.record(facts);
             return Err(format!(
                 "refused before the crossing: {reason} ({refused_by}; the source's declarations \
@@ -858,6 +862,7 @@ impl McpServer {
             let reason = declarations
                 .robots
                 .delay_refusal()
+                .or_else(|| pacing.backoff_refusal())
                 .unwrap_or_else(|| "the source's Crawl-delay could not be kept".to_owned());
             let mut facts = FetchFacts::refused(url, reason.clone());
             facts.breach = merge_breaches(
@@ -865,6 +870,7 @@ impl McpServer {
                 breaches_of(&before).as_deref(),
             );
             facts.breach = merge_breaches(facts.breach, allowance_breach.as_deref());
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             facts.allowance = self.release_authorisation(
@@ -948,12 +954,16 @@ impl McpServer {
             let rulings = self.rule_on_declarations(&mut hop);
             let mut refusal = first_refusal(&rulings).cloned();
             if refusal.is_none() && !discovery::take_page_turn(&mut hop, &pacing, Utc::now()) {
-                refusal = hop.robots.delay_refusal().or_else(|| {
-                    Some(format!(
-                        "the {} `Crawl-delay` turn for this hop could not be kept",
-                        grounding::host_of(hop_url)
-                    ))
-                });
+                refusal = hop
+                    .robots
+                    .delay_refusal()
+                    .or_else(|| pacing.backoff_refusal())
+                    .or_else(|| {
+                        Some(format!(
+                            "the {} `Crawl-delay` turn for this hop could not be kept",
+                            grounding::host_of(hop_url)
+                        ))
+                    });
             }
             hops.borrow_mut().push((hop, rulings));
             refusal.map_or(Ok(()), Err)
@@ -973,6 +983,7 @@ impl McpServer {
             &allowed,
             &reaches,
             &on_hop,
+            &pacing,
         );
         // The record names the last hop that was evaluated and keeps every
         // earlier hop's evaluation beside it; a breach carried on any hop
@@ -984,10 +995,16 @@ impl McpServer {
             // A refused hop is enforcement, and enforcement is on the record:
             // the same `crossing_refused` a directly named URL earns, naming
             // the hop that was refused rather than the one asked for.
-            Err(FetchFailure::Refused {
-                url: refused,
-                reason,
-            }) => {
+            Err(
+                FetchFailure::Refused {
+                    url: refused,
+                    reason,
+                }
+                | FetchFailure::Backoff {
+                    url: refused,
+                    reason,
+                },
+            ) => {
                 let mut facts = FetchFacts::refused(&refused, reason.clone());
                 // Every hop evaluated keeps its carried breaches on the
                 // refusal: the asked-for URL's host breach (strict has
@@ -1000,13 +1017,14 @@ impl McpServer {
                 );
                 facts.breach = merge_breaches(facts.breach, breaches_of(&earlier).as_deref());
                 facts.breach = merge_breaches(facts.breach, breaches_of(&before).as_deref());
+                declarations.backoff = pacing.backoff_events();
                 facts.declarations = Some(declarations);
                 facts.named_by = named_by;
                 facts.content_telemetry_id = content_telemetry_id;
                 facts.identity = Some(presented.clone());
                 facts.allowance =
                     self.release_authorisation(authorised, "a redirect hop was refused");
-                let refused_by = self.refused_by(facts.declarations.as_ref(), &refused);
+                let refused_by = self.refused_by(facts.declarations.as_ref(), &refused, &reason);
                 self.record(facts);
                 let hop = if refused == url {
                     String::new()
@@ -1048,6 +1066,7 @@ impl McpServer {
                 facts.breach = merge_breaches(facts.breach, breaches_of(&before).as_deref());
                 facts.breach = merge_breaches(facts.breach, allowance_breach.as_deref());
                 facts.failure = Some(detail.clone());
+                declarations.backoff = pacing.backoff_events();
                 facts.declarations = Some(declarations);
                 facts.named_by = named_by;
                 facts.content_telemetry_id = content_telemetry_id;
@@ -1072,6 +1091,7 @@ impl McpServer {
             let mut facts = FetchFacts::carried(&final_url);
             facts.http_status = Some(response.status);
             facts.breach = merge_breaches(host_breach, breaches_of(&before).as_deref());
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
@@ -1149,6 +1169,7 @@ impl McpServer {
             facts.estimated_tokens = Some(tokens);
             facts.breach = merge_breaches(host_breach, breaches_of(&after).as_deref());
             facts.licence = licence;
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
@@ -1204,6 +1225,7 @@ impl McpServer {
             facts.estimated_tokens = Some(tokens);
             facts.breach = declared_breach;
             facts.licence = licence;
+            declarations.backoff = pacing.backoff_events();
             facts.declarations = Some(declarations);
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
@@ -1246,6 +1268,7 @@ impl McpServer {
         facts.breach = breach.clone();
         facts.licence = licence.clone();
         let summary = declarations_summary(&declarations);
+        declarations.backoff = pacing.backoff_events();
         facts.declarations = Some(declarations);
         facts.named_by = named_by;
         facts.content_telemetry_id = content_telemetry_id;
@@ -1412,8 +1435,14 @@ impl McpServer {
             &allowed,
             &reaches,
             &|_| Ok(()),
+            pacing,
         )
         .map_err(|failure| match failure {
+            FetchFailure::Backoff {
+                url: target,
+                reason,
+            } if target == url => discovery::ProbeFailure::Backoff(reason),
+            FetchFailure::Backoff { reason, .. } => CutShort(reason),
             FetchFailure::Refused {
                 url: target,
                 reason,
@@ -1452,7 +1481,26 @@ impl McpServer {
     /// host the operator's policy refuses, or to a private address the
     /// policy could admit, is the policy's to change, so that refusal names
     /// the policy file. A file this edge cut short is nobody's rule.
-    fn refused_by(&self, declarations: Option<&Declarations>, refused_url: &str) -> String {
+    fn refused_by(
+        &self,
+        declarations: Option<&Declarations>,
+        refused_url: &str,
+        reason: &str,
+    ) -> String {
+        if let Some(event) = declarations.and_then(|d| {
+            d.backoff.iter().rev().find(|event| {
+                matches!(event.outcome.as_str(), "refused" | "unavailable")
+                    && event
+                        .reason
+                        .as_deref()
+                        .is_some_and(|backoff| reason.contains(backoff))
+            })
+        }) {
+            return event
+                .reason
+                .clone()
+                .unwrap_or_else(|| "host back-off".to_owned());
+        }
         let policy = format!("operator policy in {}", self.policy.source().display());
         match declarations.map(|declarations| &declarations.robots) {
             Some(robots) if robots.refuses() && robots.requested_url == refused_url => {
@@ -2950,6 +2998,8 @@ impl HubAuthority {
 enum FetchFailure {
     /// Policy refused this hop before it happened.
     Refused { url: String, reason: String },
+    /// Response-driven pacing refused this hop.
+    Backoff { url: String, reason: String },
     /// Nothing usable answered.
     Failed { url: String, detail: String },
     /// This edge did not send the hop for a reason of its own: the request
@@ -3021,6 +3071,7 @@ type AddressCheck<'a> = &'a dyn Fn(&str, &[SocketAddr]) -> Result<(), String>;
 /// carries, and a redirect changes both: one signature reused across hops
 /// would attest to the host that redirected and would be refused by the host
 /// that answered. An edge with no key to sign with sends every hop unsigned.
+#[allow(clippy::too_many_arguments)]
 fn follow(
     url: &str,
     request: Request,
@@ -3029,6 +3080,7 @@ fn follow(
     allowed: UrlCheck<'_>,
     reaches: AddressCheck<'_>,
     on_hop: UrlCheck<'_>,
+    pacing: &crate::crawl_delay::Pacing,
 ) -> Result<(String, Response), FetchFailure> {
     let mut current = url.to_owned();
     let first_host = grounding::host_of(url);
@@ -3040,23 +3092,6 @@ fn follow(
         // telemetry participant, and the id was minted for the first.
         if grounding::host_of(&current) != first_host {
             hop.headers.remove(CONTENT_TELEMETRY_ID);
-        }
-        if let Some(identity) = identity
-            && let Err(reason) = identity.sign_request(
-                &current,
-                &mut hop,
-                &[CONTENT_TELEMETRY_ID],
-                Utc::now().timestamp(),
-            )
-        {
-            // The identity is the point of the request. Sending it unsigned
-            // instead would present the product token as though it were the
-            // network identity, which is the claim this package exists to
-            // stop being false.
-            return Err(FetchFailure::NotSent {
-                detail: format!("the request could not be signed: {reason}"),
-                url: current,
-            });
         }
         let addresses = match commonmeasure_http::resolve(&current) {
             Ok(addresses) => addresses,
@@ -3082,6 +3117,34 @@ fn follow(
                 });
             }
         };
+        pacing
+            .before_send(&current, timeout)
+            .map_err(|reason| FetchFailure::Backoff {
+                url: current.clone(),
+                reason,
+            })?;
+        // Waiting may have reduced the whole-call time left for transport.
+        let timeout = budget().map_err(|detail| FetchFailure::NotSent {
+            url: current.clone(),
+            detail,
+        })?;
+        if let Some(identity) = identity
+            && let Err(reason) = identity.sign_request(
+                &current,
+                &mut hop,
+                &[CONTENT_TELEMETRY_ID],
+                Utc::now().timestamp(),
+            )
+        {
+            // The identity is the point of the request. Sending it unsigned
+            // instead would present the product token as though it were the
+            // network identity, which is the claim this package exists to
+            // stop being false.
+            return Err(FetchFailure::NotSent {
+                detail: format!("the request could not be signed: {reason}"),
+                url: current,
+            });
+        }
         let response = match commonmeasure_http::send_to(&current, &addresses, hop, timeout) {
             Ok(response) => response,
             Err(error) => {
@@ -3091,6 +3154,12 @@ fn follow(
                 });
             }
         };
+        pacing
+            .answered(&current, &response)
+            .map_err(|detail| FetchFailure::NotSent {
+                url: current.clone(),
+                detail,
+            })?;
         if !matches!(response.status, 301 | 302 | 307 | 308) {
             return Ok((current, response));
         }
@@ -3361,6 +3430,31 @@ mod tests {
     /// record. Probed live against the real binary: the refusal was correctly
     /// returned to the agent and the session log was never created, while the
     /// identical refusal on a directly named URL was recorded.
+    #[test]
+    fn a_hosted_backoff_refusal_withholds_other_tenants_response_details() {
+        let site = bind_local()
+            .spawn(|_| panic!("back-off must stop every send"))
+            .unwrap();
+        let (home, mut server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+        server.pace = crate::crawl_delay::Pace::Hosted;
+        crate::crawl_delay::CrawlDelayStore::open(home.path())
+            .answered("127.0.0.1", 503, Some("1800"), Utc::now())
+            .unwrap();
+        let error = server
+            .tool_fetch(&json!({"url": format!("{}/page", site.url())}))
+            .unwrap_err();
+        assert!(error.contains("127.0.0.1 is in back-off"), "{error}");
+        for withheld in ["until", "HTTP 503", "operator policy"] {
+            assert!(!error.contains(withheld), "{error}");
+        }
+        let records = crossings(home.path());
+        let declarations = &records[0]["payload"]["declarations"];
+        assert_eq!(declarations["backoff"][0]["backoff"], json!({}));
+        assert!(declarations["backoff"][0].get("wait_ms").is_none());
+        assert_eq!(declarations["robots"]["cache"], "not_asked");
+        assert!(declarations["robots"].get("fetched_at").is_none());
+    }
+
     #[test]
     fn a_refused_redirect_hop_records_the_refusal_it_enforced() {
         // `robots.txt` answers 404, no rules: a `robots.txt` redirected to the
@@ -3762,13 +3856,12 @@ mod tests {
         assert_eq!(robots["outcome"], "cut_short", "{robots}");
         assert_eq!(robots["cut_short"], true, "{robots}");
         assert!(robots["unreachable"].is_null(), "{robots}");
-        let kept = discovery::DeclarationCache::open(home.path())
-            .load("localhost")
-            .robots
-            .expect("the probe is recorded");
         assert!(
-            kept.cut_short && kept.expires_at == kept.fetched_at,
-            "{kept:?}"
+            discovery::DeclarationCache::open(home.path())
+                .load("localhost")
+                .robots
+                .is_none(),
+            "an edge failure is not cached"
         );
         assert_eq!(*seen.lock().expect("lock"), ["/robots.txt"]);
 

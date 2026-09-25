@@ -1,8 +1,13 @@
 ---
 title: Comparison results export
+domain: edge
+audience: integrator
+section: reference
 ---
 
 # Comparison results export
+
+This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 
 The Edge console's **Export results** action reads a retained retrieval
 comparison and downloads a ZIP. It makes no supplier or model call, requires

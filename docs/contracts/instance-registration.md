@@ -1,22 +1,37 @@
 ---
 title: Instance registration contract
+domain: network
+audience: integrator
+section: reference
 ---
 
 # Instance registration contract
 
 This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 
-**Verification state: planned, except where a section says otherwise.** This
-is the authoritative design for network instance registration. The hub's first
-increment and the edge client and session reference
-([session evidence §Instance registration](session-evidence.md#instance-registration),
-`fixture-tested`) implement part of it; reporting duties are bound by the
-hub's second increment and named by the edge client (`fixture-tested`), and no
-run has shown one delivered; no entitlement,
-shared limit, hosted-principal route or CM Attestation assertion below is
-implemented or verified by this document. Existing edge enrolment, hosted authentication and
-source-policy distribution are prerequisites with their own evidence; they do
-not establish instance registration.
+**Verification state.** Both sides implement the route for an enrolled,
+managed edge, `fixture-tested` and run against a real hub on loopback
+([session evidence §Instance registration](session-evidence.md#instance-registration)):
+
+- the hub serves the four lifecycle routes (§Registration, renewal and
+  closure), verifies the edge's registration signature, binds reporting
+  duties named `owner:<content owner id>`, signs the accepted binding and
+  answers `503 entitlement_authority` to any registration that names an
+  entitlement;
+- the edge implements the client, `commonmeasure instance`
+  (`crates/commonmeasure-relay/src/instance_registration.rs`): register,
+  renew, close and read, the retained record of each operation, verification
+  of the accepted binding's integrity, the `instance` reference on session
+  records (§Session evidence reference), and refusal of mediated acquisition
+  once the instance's authority has ended.
+
+A duty has been shown delivered only to a test-double receiver on loopback.
+Planned: entitlements (§Entitlement binding), shared limits, the
+hosted-principal route, a trusted registration signer pinned by the edge, a
+native host registering without CM code, and CM Attestation. Existing edge
+enrolment, hosted authentication and source-policy distribution are
+prerequisites with their own evidence; they do not establish instance
+registration.
 
 The network's working participant is an agent instance. Registration binds it
 to an accountable operator and the authority under which it acts; it does not
@@ -25,8 +40,8 @@ bounded delegated authority with their own attribution. Expiry, revocation and
 unexpected termination leave outstanding duties and retained provenance with an
 accountable durable service after the process has gone. An organisation
 connects its licences and supplier accounts once, and permanent supplier keys
-are not distributed to temporary instances. Open owner choices are listed
-below; recommendations are not adopted decisions.
+are not distributed to temporary instances. Open choices are listed below;
+their recommendations are not adopted decisions.
 
 ## Identities and relationships
 
@@ -66,22 +81,24 @@ creation/expiry times and nonce. Verify the active enrolled key and organisation
 retain used nonces for the accepted signature window, and bind the idempotency
 key to the authenticated caller and body digest. A retry signs a fresh nonce
 while retaining its idempotency key. The read-only desired-policy
-signature's replay tolerance is insufficient for these operations. Signature
-canonicalisation and shared vectors must be fixed before server/client coding.
+signature's replay tolerance is insufficient for these operations. The
+registration signature profile and its shared vector
+(`crates/commonmeasure-relay/tests/fixtures/registration-request.json`, a copy
+of the hub's) fix the canonicalisation.
 
 A hosted principal authenticates with a token from a trusted issuer, valid for
 the registration resource and lifecycle scope. Verify signature, issuer, audience,
 subject, organisation, expiry, scope and current grant/member standing on each
 mutation. Current MCP access tokens have the MCP endpoint as audience; they must
-not simply be accepted at a new Hub registration endpoint. The owner must select
-the token path below. An OAuth client registration identifies client software;
+not simply be accepted at a new Hub registration endpoint. The token path is
+an open choice (§Open choices). An OAuth client registration identifies client software;
 it grants no operator authority.
 
 An edge may register for a hosted principal only with verifiable delegation that
 binds that principal, hosted resource, edge and permitted work. A request cannot
 choose an arbitrary `sub`. An edge token's `token:<label>` is edge-local and does
 not resolve to a Hub member: it needs an explicit sponsor delegation or receives
-`unavailable`, naming the missing operator authority. Legacy enrolled keys with
+`unavailable`, naming the missing operator authority. Enrolled keys with
 no member likewise require an explicit operator/sponsor binding.
 
 A native host running no CM code sends the same lifecycle fields, work references
@@ -93,9 +110,10 @@ authentication. No plugin installation or CM-private library is required.
 
 ## Registration, renewal and closure
 
-The routes and field names in this section are **planned API design**, not
-available endpoints or a final serialisation specification. CM Attestation has
-no wire format here. All requests carry a unique idempotency key; mutations of
+Both sides implement the four routes below for an enrolled edge
+authenticating with its key signature; the hosted-principal authentication is
+planned. The request body is `version: 1`. CM Attestation has no wire format
+here. All requests carry a unique idempotency key; mutations of
 an existing instance also carry its expected revision. Responses include a
 request reference and server time. Unknown fields, unsupported versions and
 unrecognised authority are refused explicitly.
@@ -120,8 +138,9 @@ Commit the registration revision, delegation, limit references, accepted duty
 handoff and audit record atomically, or leave the request unsuccessful. A remote
 handoff needs a durable, verifiable receipt before activation; a failed handoff
 cannot leave an active instance. Serialise renewal/closure with revocation and
-limit changes. Owner-authorised revocation records actor, reason, effective time
-and affected revisions; the owner management route remains to be specified.
+limit changes. Revocation by an organisation owner records actor, reason,
+effective time and affected revisions; the management route for it is not
+specified.
 
 ### Accepted binding
 
@@ -219,8 +238,7 @@ grant's `id`, `revision` and `digest`, its `basis.kind`, the collection id,
 `validity` with its offline bound, the duty reference bound for it or `null`,
 and the limit account and reservation bound for it or `null`. The binding
 already embeds the retained registration, and the edge reads
-`requires_entitlements` from there. At hub `77875ed` the binding's `operator`
-is a member id. It keeps that type, and a new member `operator_identifiers`
+`requires_entitlements` from there. The binding's `operator` is a member id. It keeps that type, and a new member `operator_identifiers`
 carries the operator's identifiers as `{scheme, value}` pairs, so the edge can
 compare principals offline. The binding is signed as every binding is. It
 copies no price, terms reference or issuer field; those stay in the grant
@@ -244,10 +262,10 @@ persists for a registration, with no second duty model:
   aggregate batches. It is never an onward destination: onward delivery sends
   event-level Content Telemetry, and pointing it at the issuer's interface
   would send the issuer records it did not ask for. The duty maps to a content
-  owner with no onward destination. Under the hub's duty states at `77875ed`
-  it answers `outstanding` with reason `owner_has_no_destination` from
-  registration, and `held` from its first attributed event, because each
-  event is `unrouted`. From hub `f84767c` each duty also carries `reasons`,
+  owner with no onward destination. Under the hub's duty states it answers
+  `outstanding` with reason `owner_has_no_destination` from registration,
+  and `held` from its first attributed event, because each event is
+  `unrouted`. Each duty also carries `reasons`,
   every cause that holds, the most specific first; `reason` is its first
   entry, or `null` when none holds. This duty's `reasons` read
   `["owner_has_no_destination"]` from registration and
@@ -324,7 +342,7 @@ Online checks are required unless the relevant issuer explicitly permits bounded
 offline use. A cached response cannot conceal a known revocation; an unavailable
 required check returns `unavailable` and refuses affected work. Clock uncertainty
 that prevents establishing validity also makes authority unavailable. The maximum
-revocation delay and any clock tolerance need the owner choices below; clients
+revocation delay and any clock tolerance depend on the open choices below; clients
 cannot inherit the more permissive hosted-token leeway as an authority extension.
 
 A stale cached source policy remains enforced under the
@@ -378,8 +396,8 @@ and cannot be retroactively described as registered. Unknown validity remains
 unknown. This reference proves neither compliance nor fulfilment. The relay
 sends it only to the operator's own hub, where that hub issued it, as an
 event-level member the hub removes before onward delivery
-([session evidence §Instance reference](session-evidence.md#instance-reference)).
-It adds no Content Telemetry or SPUR field to what a publisher receives and
+([telemetry projection §Instance reference](telemetry-projection.md#instance-reference)).
+It adds no Content Telemetry field to what a publisher receives and
 does not replace the existing edge agent id or telemetry session id. A reader that resolves the reference to the retained
 binding and verifies it is planned.
 
@@ -400,11 +418,11 @@ issuer. No token layout, programme recognition or commercial guarantee is specif
 | Surviving evidence custody | Durable service accepted by the operator and applicable terms; subject is the evidence/duties it accepted for the instance. | Agreed custody/retention period, including after exit; verify authenticated custody receipts and authorised successor chain. Retrieval, digest checks and delivery receipts establish later performance separately. |
 
 No assertion certifies future behaviour, truthful reporting, factual accuracy,
-payment completion, SPUR accreditation or complete observation of the host.
+payment completion, accreditation by any programme or complete observation of the host.
 An unsupported assertion is unavailable; it is never filled from registration
 success or an installed processor list.
 
-## Owner choices before implementation
+## Open choices
 
 1. **Hosted token path.** Options: a registration-resource token issued through
    explicit OAuth consent/exchange, or an authenticated hosted-edge facade that
@@ -413,8 +431,9 @@ success or an installed processor list.
    signature canonicalisation and shared vectors once this boundary is selected.
 2. **Operator sponsorship.** Options: require a current named Hub member, or permit
    an organisation-approved durable sponsor for service/native/consumer instances.
-   Recommend both with explicit delegation records; legacy memberless keys and
-   local token labels get no inferred authority. Owner approval mechanics remain open.
+   Recommend both with explicit delegation records; memberless keys and
+   local token labels get no inferred authority. How an organisation owner
+   approves a sponsor is not specified.
 3. **Authority windows and offline use.** Options: online validation for affected
    work, or issuer-agreed bounded caching. Recommend online validation for the
    first route and no implicit grace; select numerical lifetime, renewal lead time,
@@ -431,8 +450,8 @@ success or an installed processor list.
 6. **Recognised assertions and recourse.** Options: supplier-specific acceptance
    first, or a broader programme. Recommend one scoped supplier agreement first.
    Recognised issuers, payment commitments, evidence access, deadlines, remedies,
-   independent dispute decisions and appeal are owner/counterparty matters, recorded
-   outside this product repository. No liability or accreditation rule is adopted here.
+   independent dispute decisions and appeal are matters for the operator and
+   the counterparty. No liability or accreditation rule is adopted here.
 
 ## Verification required
 
@@ -450,13 +469,17 @@ Every item is **planned** unless it says otherwise; documentation checks establi
 - Real Hub handlers/database and the production edge/native transport through
   loopback: registration, policy activation, scoped work, renewal and closure.
   Focused doubles establish failure handling only; they do not verify integration.
+  Run for the enrolled-edge route by the ignored tests in
+  `crates/commonmeasure-cli/tests/instance_e2e.rs`, which need a running hub;
+  no native implementation has been run.
 - Kill the instance after durable custody with reporting outstanding, restart the
   responsible service, recover receiver-accepted delivery, and verify retained
   output provenance after exit. Also lose the final append and expose the gap.
-  Run on loopback for the first route on 18 September 2026, and repeated on
-  21 September 2026, with the hub as the durable service and a test double as
-  the onward receiver; the lost final append was
-  shown and stays open, since nothing repairs the cut-short record.
+  Run on loopback for the enrolled-edge route
+  (`crates/commonmeasure-cli/tests/instance_recovery_e2e.rs`, ignored by
+  default), with the hub as the durable service and a test double as the
+  onward receiver; the lost final append is shown and stays open, since
+  nothing repairs the cut-short record.
 - Verify directory consent and private-record isolation through projection and
   delivery; demonstrate an independent native implementation using the interface.
 - Verify each accepted attestation assertion separately from reporting/payment

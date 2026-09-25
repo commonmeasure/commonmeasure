@@ -575,11 +575,14 @@ pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Di
     published.publish(&public, &proof.signature_input, &proof.signature);
     DirectoryListing {
         key_id: key_id.clone(),
+        last_uploaded_release: Some(commonmeasure_harness::enrolment::RELEASE.to_owned()),
         checked_at: timestamp(chrono::Utc::now()),
         stated: Some(ProofStatement {
             authority,
             lifetime_secs: LIFETIME_SECS,
             expires_at: chrono::DateTime::from_timestamp(proof.expires, 0).map(timestamp),
+            listed: None,
+            unlisted_reason: None,
         }),
         failure: None,
     }

@@ -622,7 +622,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "commonmeasure-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64",
  "c2pa",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-console"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-harness"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64",
  "c2pa",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-http"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-inference"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-relay"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-runtime"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "c2pa",
  "c2pa-text",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-supply"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-types"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "chrono-tz",

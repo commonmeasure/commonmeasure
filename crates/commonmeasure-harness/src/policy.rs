@@ -651,6 +651,16 @@ impl PolicyDocument {
         Ok(document)
     }
 
+    /// Re-read the directory registry and reporting approvals under the same
+    /// declaration. The relay refreshes approvals from the hub after it has
+    /// read the policy and taken the spool lock; a document read before that
+    /// refresh would decide egress against the approvals it replaced (EGR-49).
+    /// Only for a document read from `home` with [`Self::read`].
+    pub fn reread_selection(&mut self, home: &Path) -> Result<(), String> {
+        self.selection = crate::directory::Selection::read(home)?;
+        Ok(())
+    }
+
     /// Read a named policy through the ordinary loader. An explicitly named
     /// file must exist; absence is an error rather than the default policy.
     pub fn read_file(source: &Path) -> Result<Self, String> {
@@ -2207,9 +2217,9 @@ mod tests {
         );
     }
 
-    /// The loader's form of a binding carries only the key it names, so a
-    /// policy written before the token keys existed reads back, digests and
-    /// compares with the hub exactly as it did.
+    /// The loader's form of a binding carries only the key it names. Signed
+    /// policy envelopes name revisions by digest, so a policy without token
+    /// keys must keep the digest the hub published it under.
     #[test]
     fn a_binding_serialises_only_the_key_it_names() {
         let file = parse(
@@ -2785,7 +2795,7 @@ mod tests {
         "scopes": [
             {"match": "code/ozone", "engagement": "ozone",
              "allow_telemetry_egress": true, "policy_mode": "prefer"},
-            {"match": "code/spur"}
+            {"match": "code/tessera"}
         ]}"#;
 
     /// A mode edit changes the mode and nothing else. Everything an operator
@@ -2823,7 +2833,11 @@ mod tests {
             .iter()
             .map(|scope| scope.matcher.as_str())
             .collect();
-        assert_eq!(matchers, ["code/ozone", "code/spur"], "order is precedence");
+        assert_eq!(
+            matchers,
+            ["code/ozone", "code/tessera"],
+            "order is precedence"
+        );
 
         // And the untouched scope still inherits, rather than being pinned to
         // whatever the top level said at the moment of the save.
@@ -2846,7 +2860,7 @@ mod tests {
             "a scope that declared its own mode keeps it"
         );
         assert_eq!(
-            reread.resolve(Some("/home/op/code/spur")).mode(),
+            reread.resolve(Some("/home/op/code/tessera")).mode(),
             PolicyMode::Strict,
             "a scope that inherited follows the new top level"
         );
@@ -3419,9 +3433,9 @@ mod tests {
         assert!(governed.admit_host("https://api.example.com/").is_refusal());
     }
 
-    /// References and assessments are part of policy identity, including
-    /// legacy references whose applicability is now unresolved. Host spelling
-    /// does not change the terms entry selected.
+    /// References and assessments are part of policy identity, including a
+    /// reference with no assessment, whose applicability is unresolved. Host
+    /// spelling does not change the terms entry selected.
     #[test]
     fn terms_move_the_identity_and_a_respelt_host_does_not() {
         let without = policy(r#"{"policy_mode":"strict"}"#);
@@ -3446,19 +3460,22 @@ mod tests {
         assert_ne!(with.identity(), other_reference.identity());
     }
 
+    /// A terms entry without an assessment keeps the canonical form and
+    /// digest it had before assessments existed, because published policy
+    /// revisions and the envelopes that sign them are named by that digest.
     #[test]
     fn absent_assessment_preserves_identity_and_every_assessment_field_is_bound() {
-        let legacy = json!({"policy_mode":"strict","terms":[{
+        let unassessed = json!({"policy_mode":"strict","terms":[{
             "host":"pub.example","reference":"agreement-7","requires_reporting":true}]});
-        let before = policy(&legacy.to_string());
-        let mut explicit_null = legacy.clone();
+        let before = policy(&unassessed.to_string());
+        let mut explicit_null = unassessed.clone();
         explicit_null["terms"][0]["assessment"] = Value::Null;
         let omitted = policy(&explicit_null.to_string());
         assert_eq!(before.identity(), omitted.identity());
         assert_eq!(before.canonical(), omitted.canonical());
-        assert_eq!(before.canonical()["terms"], legacy["terms"]);
+        assert_eq!(before.canonical()["terms"], unassessed["terms"]);
 
-        let mut scoped = legacy.clone();
+        let mut scoped = unassessed.clone();
         scoped["terms"][0]["assessment"] = json!({
             "basis":"agreement", "applicability":"applicable", "version":"1",
             "claimed_issuer":"Publisher", "authority_evidence":["agreement-7:reuse"],
@@ -3497,7 +3514,7 @@ mod tests {
 
         let candidate = document
             .with_access_rule(
-                Some("code/spur"),
+                Some("code/tessera"),
                 commonmeasure_types::HostPattern::parse("*.example.com").unwrap(),
                 commonmeasure_types::AccessAction::Refuse,
             )
@@ -3508,7 +3525,7 @@ mod tests {
             before,
             "the candidate names the bytes it was built from"
         );
-        let governed = draft.resolve(Some("/home/op/code/spur"));
+        let governed = draft.resolve(Some("/home/op/code/tessera"));
         assert!(
             governed
                 .admit_host("https://api.example.com/")
@@ -3525,7 +3542,7 @@ mod tests {
         );
         assert!(
             document
-                .resolve(Some("/home/op/code/spur"))
+                .resolve(Some("/home/op/code/tessera"))
                 .admit_host("https://api.example.com/")
                 .gap()
                 .is_none(),

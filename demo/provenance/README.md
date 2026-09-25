@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The demonstration signing identity
 
 Output provenance labels (`docs/contracts/processor.md`, `output-provenance`)
@@ -29,9 +34,11 @@ sh demo/provenance/generate.sh
 ```
 
 The `provenance-example` recipe in the `justfile` produces a labelled run
-under this identity from the replay recordings. It needs an inference
-gateway, because a plan without an answer has nothing to label, and the run
-it produces is not committed.
+under this identity from the replay recordings, writes it to
+`target/demo/provenance` and reads one label back. The recordings are not in
+the public repository: the recipe needs `COMMONMEASURE_PRIVATE_EVIDENCE`
+(`CONTRIBUTING.md`). It also needs an inference gateway, because a plan
+without an answer has nothing to label. The run is not committed.
 
 ## Verify an exported output
 

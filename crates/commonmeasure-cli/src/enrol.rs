@@ -18,7 +18,7 @@ pub struct Enrol {
     /// Remove local reporting permission, preserving evidence and edge keys.
     #[arg(long, conflicts_with_all = ["name", "reporting", "include_history"])]
     remove: bool,
-    /// Refresh the existing managed source policy and signed directory grants.
+    /// Refresh the existing managed source policy and signed reporting approvals.
     #[arg(long)]
     sync: bool,
 }

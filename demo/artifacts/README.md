@@ -1,8 +1,13 @@
+---
+domain: edge
+audience: contributor
+---
+
 # Portable artifact example
 
-Synthetic saved-file example emitted by `commonmeasure artifact` on 22 September
-2026. It has two explicit session declarations (drafting and review), one copied
-synthetic NDJSON prefix and no signature. It makes no claim of real source use,
+A synthetic saved file and the bundle `commonmeasure artifact` emitted for it.
+The bundle has two explicit session declarations (drafting and review), one
+copied synthetic NDJSON prefix and no signature. It makes no claim of real source use,
 authorship or authenticated identities.
 
 From the repository root, run:
@@ -14,13 +19,13 @@ cargo run --locked --offline -p commonmeasure-cli -- artifact verify \
 ```
 
 The result is `valid: true`, `signature: "absent"`, `trust: "not_evaluated"`.
-The original store and log were deleted before this example was verified. Copy
-both files elsewhere and supply their new paths to run the same check. Changing
-the answer or evidence causes failure. The separately retained digest above
+The check reads only these two files, not the store or log that produced them,
+so it passes with both copied elsewhere and their new paths supplied. Changing
+the answer or the evidence makes it fail. The separately retained digest above
 also detects replacement of the whole unsigned bundle; it authenticates nobody.
 
 The bundle uses canonical compact JSON. Use a JSON viewer to inspect its
-`associations`, `snapshot` and retained `evidence` objects. The saved file and
+`associations`, `snapshot` and retained `evidence` entries. The saved file and
 bundle contain no machine-local paths or private source records.
 
 See [the contract](../../docs/contracts/artifact-association.md) for creation

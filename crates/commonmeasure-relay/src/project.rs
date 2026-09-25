@@ -14,7 +14,7 @@
 //! crossings are the same shape of decision: `record_internal_prefixes` is
 //! consent to *record*, never consent to *send*, so the projection re-applies
 //! the privacy floor with no exceptions — an internal corpus is
-//! operator-record only, as `docs/contracts/session-evidence.md` promises.
+//! operator-record only, as `docs/contracts/telemetry-projection.md` promises.
 //!
 //! Event identity is derived deterministically from the evidence record each
 //! event projects (session and log position, or run, plan and rank), so a
@@ -23,14 +23,16 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use commonmeasure_harness::declarations::MAX_CRAWL_DELAY;
 use commonmeasure_types::canonical::canonical_json;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::wire::{TurnPrivacy, WireBatch, WireEvent, WireEventKind, WireInstance, WireTurn};
 
-/// Receivers cap batches (oa-server refuses more than 500 events); staying
-/// under the cap here keeps a large evidence log deliverable without negotiation.
+/// Receivers cap batches (a conforming receiver may refuse more than 500
+/// events); staying under the cap here keeps a large evidence log deliverable
+/// without negotiation.
 pub const MAX_EVENTS_PER_BATCH: usize = 500;
 
 /// The agent identifier where no enrolled key signed the requests the events
@@ -67,11 +69,22 @@ pub const HOST_TOOL_FIELD: &str = "contextops-host-tool";
 /// published nothing (`wire_supplier`).
 pub const SUPPLIER_FIELD: &str = "commonmeasure-supplier";
 
+/// The extension field carrying the `Crawl-delay` a retrieval was sent
+/// under: `{"delay_ms": n}`, the delay this edge kept for the host, on the
+/// `content_retrieved` event of a crossing sent under a delay above zero, and
+/// on nothing else ([`crawl_delay`]).
+///
+/// The hub reads it to measure the pace of every edge in a fleet against the
+/// delay each edge kept, and forwards `data` onward, so the content owner sees
+/// its own host's delay on its own retrievals.
+pub const CRAWL_DELAY_FIELD: &str = "commonmeasure-crawl-delay";
+
 /// Informational declaration on each event: batch envelopes have no standard
-/// coverage field. The selection rule is defined in the session-evidence
+/// coverage field. The selection rule is defined in the telemetry projection
 /// contract under this opaque, versioned reference.
 pub const PROJECTION_FIELD: &str = "commonmeasure-projection";
-/// Opaque reference for the exclusion rule in the session-evidence contract.
+/// Opaque reference for the exclusion rule in the telemetry projection
+/// contract.
 pub const SELECTION_TERMS: &str = "commonmeasure:telemetry-selection:v1";
 
 fn projection_data() -> Map<String, Value> {
@@ -96,6 +109,41 @@ fn ingestion(data: &mut Map<String, Value>, count: &Value, basis: &Value) {
         data.insert("tokens_ingested".to_owned(), json!(tokens));
         data.insert("token_basis".to_owned(), json!(basis));
     }
+}
+
+/// The `Crawl-delay` a mediated crossing was sent under, as
+/// [`CRAWL_DELAY_FIELD`] carries it, read from the delay ruling on the
+/// crossing's `robots` evaluation (`docs/contracts/session-evidence.md`
+/// §Source declarations).
+///
+/// Present only on a `crossing_mediated` record, the one request this edge
+/// sent and paced, and only where it was sent (`clear` or `waited`) under a
+/// kept delay above zero, for the host the crossing names. An observed
+/// crossing was made by the host, so a ruling on it is not a pace this edge
+/// kept. The `robots` evaluation is the last hop's, which is the host that
+/// answered, so a ruling naming another host is not this retrieval's delay.
+/// A ruling that does not read, or that states a delay beyond the bound this
+/// edge keeps, projects nothing: absence claims no delay, where a guessed
+/// value would report a pace the edge did not keep.
+///
+/// The ruling is read member by member rather than as the harness's
+/// `DelayRuling`: records outlive the build that wrote them, and a member
+/// the harness later requires, or an outcome it adds, must not drop the
+/// field from records that already hold these three. The sending outcomes
+/// are named here for the same reason. No other member of the ruling is
+/// read, so its value, malformed or absent, does not affect the field.
+fn crawl_delay(record: &Value, url: &str) -> Option<Value> {
+    if record["event"] != "crossing_mediated" {
+        return None;
+    }
+    let ruling = &record["payload"]["declarations"]["robots"]["delay"];
+    let delay_ms = ruling["delay_ms"].as_u64()?;
+    let host = ruling["host"].as_str()?;
+    (matches!(ruling["outcome"].as_str(), Some("clear" | "waited"))
+        && delay_ms > 0
+        && u128::from(delay_ms) <= MAX_CRAWL_DELAY.as_millis()
+        && host == commonmeasure_harness::grounding::host_of(url))
+    .then(|| json!({"delay_ms": delay_ms}))
 }
 
 /// Namespace for every id this relay derives. Fixed by derivation from a name
@@ -515,8 +563,9 @@ pub fn project_session(
         // A mediated fetch the origin answered outside 2xx, or that no
         // origin answered, retrieved nothing: the request left the machine
         // and is on the private record, and it is never reported to an
-        // owner as a retrieval. A record without a status is a search result
-        // or an older record, and projects as before.
+        // owner as a retrieval. A search result carries no status, and nor
+        // does a fetch recorded before the field existed; session logs are
+        // read as recorded, so both project.
         if payload["failure"].is_string()
             || payload["http_status"]
                 .as_u64()
@@ -547,7 +596,13 @@ pub fn project_session(
             turn: None,
             license_ref: license_ref(payload),
             instance: wire_instance(payload, receiver.as_ref()),
-            data: with_supplier(host_tool_data(host_tool.as_deref()), supplier),
+            data: {
+                let mut data = with_supplier(host_tool_data(host_tool.as_deref()), supplier);
+                if let Some(delay) = crawl_delay(record, url) {
+                    data.insert(CRAWL_DELAY_FIELD.to_owned(), delay);
+                }
+                data
+            },
         });
 
         if payload["context_observation"] == "host_required" {
@@ -1638,5 +1693,218 @@ mod tests {
             2
         );
         assert!(!document.to_string().contains("instance"));
+    }
+
+    /// A mediated fetch of `https://publisher.example/page` the origin
+    /// answered 200 and that grounded, with `robots` as its evaluation.
+    fn paced(robots: Value) -> Value {
+        let mut record = crossing("crossing_mediated", "https://publisher.example/page", true);
+        record["payload"]["mode"] = json!("mediated");
+        record["payload"]["http_status"] = json!(200);
+        record["payload"]["content_hash"] = json!(format!("sha256:{}", "a".repeat(64)));
+        record["payload"]["declarations"] = json!({"robots": robots});
+        record
+    }
+
+    /// The `robots` evaluation of a request under the reading `crawl_delay`,
+    /// with what the delay did to it where it took a turn.
+    fn robots(crawl_delay: Value, delay: Option<Value>) -> Value {
+        let mut robots = json!({
+            "requested_url": "https://publisher.example/page",
+            "url": "https://publisher.example/robots.txt",
+            "reading": {"group": "*", "group_is_wildcard": true, "crawlable": true,
+                        "crawl_delay": crawl_delay},
+            "mode": "observe", "outcome": "allowed",
+        });
+        if let Some(delay) = delay {
+            robots["delay"] = delay;
+        }
+        robots
+    }
+
+    fn ruling(outcome: &str, delay_ms: u64) -> Value {
+        json!({"host": "publisher.example", "delay_ms": delay_ms, "outcome": outcome,
+               "wait_ms": if outcome == "waited" { 1732 } else { 0 }, "budget_ms": 60000})
+    }
+
+    /// The field on each projected event of a one-crossing session, in
+    /// projection order: the retrieval, then the grounding.
+    fn delays_projected(record: Value) -> Vec<Option<Value>> {
+        let projected = project_session(None, "s", &[record], &[], &|_| true);
+        projected.batches[0]
+            .events
+            .iter()
+            .map(|event| event.data.get(CRAWL_DELAY_FIELD).cloned())
+            .collect()
+    }
+
+    #[test]
+    fn a_retrieval_sent_under_a_kept_delay_carries_it_and_its_grounding_does_not() {
+        let two = json!({"value": "2", "delay_ms": 2000, "honoured_ms": 2000, "capped": false});
+        for outcome in ["waited", "clear"] {
+            assert_eq!(
+                delays_projected(paced(robots(two.clone(), Some(ruling(outcome, 2000))))),
+                [Some(json!({"delay_ms": 2000})), None],
+                "{outcome}"
+            );
+        }
+        // A delay over the bound is carried as the bound the edge kept, never
+        // as the value the file stated.
+        let capped =
+            json!({"value": "3600", "delay_ms": 3_600_000, "honoured_ms": 60000, "capped": true});
+        assert_eq!(
+            delays_projected(paced(robots(capped, Some(ruling("waited", 60000))))),
+            [Some(json!({"delay_ms": 60000})), None]
+        );
+    }
+
+    // Catches: an observed crossing emitting the delay because the helper
+    // trusted any ruling it found, when only a mediated fetch is one this
+    // edge paced.
+    #[test]
+    fn an_observed_retrieval_with_a_valid_ruling_projects_without_the_delay() {
+        let two = json!({"value": "2", "delay_ms": 2000, "honoured_ms": 2000, "capped": false});
+        for outcome in ["waited", "clear"] {
+            let mut observed = paced(robots(two.clone(), Some(ruling(outcome, 2000))));
+            observed["event"] = json!("crossing_observed");
+            observed["payload"]["mode"] = json!("observed");
+            let projected = project_session(None, "s", &[observed], &[], &|_| true);
+            let events = &projected.batches[0].events;
+            assert_eq!(events[0].kind, WireEventKind::ContentRetrieved, "{outcome}");
+            assert_eq!(
+                events[0].content_url, "https://publisher.example/page",
+                "{outcome}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !event.data.contains_key(CRAWL_DELAY_FIELD)),
+                "{outcome}"
+            );
+        }
+    }
+
+    // Catches: the reader following the harness's full ruling type, so that
+    // a member the harness adds or later requires drops the field from
+    // records that already hold host, delay and outcome.
+    #[test]
+    fn a_ruling_read_for_its_host_delay_and_outcome_alone() {
+        let two = json!({"value": "2", "delay_ms": 2000, "honoured_ms": 2000, "capped": false});
+        let mut extended = ruling("waited", 2000);
+        extended["back_off_ms"] = json!(4000);
+        extended["sent_at"] = json!("2026-08-02T10:00:01.732Z");
+        let bare = json!({"host": "publisher.example", "delay_ms": 2000, "outcome": "clear"});
+        for delay in [extended, bare] {
+            assert_eq!(
+                delays_projected(paced(robots(two.clone(), Some(delay.clone())))),
+                [Some(json!({"delay_ms": 2000})), None],
+                "{delay}"
+            );
+        }
+    }
+
+    // Catches: the reader validating ruling members it neither emits nor
+    // relies on, which would couple the field to the harness's scheduling
+    // members again, so that a change to them drops it.
+    #[test]
+    fn a_ruling_projects_whatever_its_members_beyond_host_delay_and_outcome() {
+        let two = json!({"value": "2", "delay_ms": 2000, "honoured_ms": 2000, "capped": false});
+        let mut rulings = Vec::new();
+        for (member, value) in [
+            ("budget_ms", json!("bad")),
+            ("wait_ms", json!(-1)),
+            ("next_at", json!("bad")),
+        ] {
+            let mut malformed = ruling("waited", 2000);
+            malformed[member] = value;
+            rulings.push(malformed);
+        }
+        let mut unbudgeted = ruling("waited", 2000);
+        unbudgeted.as_object_mut().unwrap().remove("budget_ms");
+        rulings.push(unbudgeted);
+        for delay in rulings {
+            assert_eq!(
+                delays_projected(paced(robots(two.clone(), Some(delay.clone())))),
+                [Some(json!({"delay_ms": 2000})), None],
+                "{delay}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_retrieval_under_no_kept_delay_carries_no_delay() {
+        // No `Crawl-delay` in the group, `Crawl-delay: 0` and an unreadable
+        // value: the request took no turn, so the evaluation holds no ruling.
+        let none = paced(json!({
+            "requested_url": "https://publisher.example/page",
+            "reading": {"group": "*", "crawlable": true}, "outcome": "allowed",
+        }));
+        let zero = paced(robots(
+            json!({"value": "0", "delay_ms": 0, "honoured_ms": 0, "capped": false}),
+            None,
+        ));
+        let unreadable = paced(robots(
+            json!({"unreadable": ["soon"], "capped": false}),
+            None,
+        ));
+        // A crossing recorded before declarations were read, and an observed
+        // crossing, which the edge did not make.
+        let undeclared = crossing("crossing_mediated", "https://publisher.example/page", true);
+        let observed = crossing("crossing_observed", "https://publisher.example/page", true);
+        for record in [none, zero, unreadable, undeclared, observed] {
+            assert_eq!(delays_projected(record.clone()), [None, None], "{record}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_ruling_projects_no_delay() {
+        let two = json!({"value": "2", "delay_ms": 2000, "honoured_ms": 2000, "capped": false});
+        let mut unparsed = ruling("waited", 2000);
+        unparsed["delay_ms"] = json!("2000");
+        let mut unnamed = ruling("waited", 2000);
+        unnamed.as_object_mut().unwrap().remove("host");
+        let mut elsewhere = ruling("waited", 2000);
+        elsewhere["host"] = json!("short.example");
+        for delay in [
+            unparsed,
+            unnamed,
+            elsewhere,
+            // A delay of zero, and one beyond the bound this edge keeps.
+            ruling("clear", 0),
+            ruling("waited", 60001),
+            // Outcomes that send nothing, on a record claiming a response.
+            ruling("refused", 2000),
+            ruling("unavailable", 2000),
+            json!({"host": "publisher.example", "delay_ms": 2000, "outcome": "slept",
+                   "budget_ms": 60000}),
+            json!(null),
+            json!("2000"),
+        ] {
+            assert_eq!(
+                delays_projected(paced(robots(two.clone(), Some(delay.clone())))),
+                [None, None],
+                "{delay}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_carries_no_delay() {
+        let summary = json!({
+            "run": {"id": "6e0f9b3a-4c1d-4f2e-8a5b-9d7c2e1f0a3b",
+                    "started_at": "2026-08-20T10:00:00Z"},
+            "plans": [{"id": "p", "sources": [{
+                "admitted": true, "url": "https://publisher.example/page", "retrieval_rank": 1,
+                "content_hash": format!("sha256:{}", "a".repeat(64)),
+                "declarations": {"robots": {"delay": ruling("waited", 2000)}}}]}],
+        });
+        let batches = project_run(&summary, &[]).expect("project run");
+        assert_eq!(batches[0].events.len(), 2);
+        assert!(
+            batches[0]
+                .events
+                .iter()
+                .all(|event| !event.data.contains_key(CRAWL_DELAY_FIELD))
+        );
     }
 }

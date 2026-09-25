@@ -1,6 +1,8 @@
 ---
 title: Four fetches, two refused
 description: One AI agent, four web fetches, read from the record they left. Two pages were admitted, two were refused, and every decision has a reason a person can check.
+domain: edge
+audience: reader
 ---
 
 # Four fetches, two refused
@@ -47,7 +49,7 @@ A few terms recur, and each is defined in one line in the
 - The **edge** is the part of Common Measure that runs on the operator's
   machine. A **hub** is the organisation service an edge can enrol with;
   Common Measure runs one for organisations that want it
-  ([the hub page](../HUB.md)). The edge in this account is not enrolled,
+  ([Start here](https://commonmeasure.ai/docs/hub/start-here/)). The edge in this account is not enrolled,
   which matters for one of the fetches.
 
 ## The setting

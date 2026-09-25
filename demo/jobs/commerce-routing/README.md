@@ -1,3 +1,8 @@
+---
+domain: edge
+audience: contributor
+---
+
 # The routing experiment's questions and pre-registered split
 
 This directory is the routing experiment's job population: the
@@ -32,9 +37,19 @@ prompt, same objective (coverage 1.0, freshness 0.5), same rubric, same
 as-of (2026-08-13, 180-day horizon), same citation requirement, same
 token budget. The supply condition is the only variable.
 
-The three questions the commerce comparison ran and committed
-(`demo/jobs/commerce/`) are not in this population: their results are
-published, so fitting on them would contaminate the split.
+The three questions of the commerce comparison (`demo/jobs/commerce/`) are
+not in this population: their results are published, so fitting on them
+would contaminate the split.
+
+`crates/commonmeasure-runtime/tests/routing_suites.rs` loads every suite
+here through the real loader and checks that every rubric item is coverable
+from the mixed corpus, in the offline gate.
+
+`just routing-fitting-runs` runs the fitting set and `just
+routing-holdout-runs` the holdout set; the second refuses to start until
+`rule.json` exists. Both write to `output/commerce-routing/` under
+`COMMONMEASURE_PRIVATE_EVIDENCE` and refuse to run without it
+(`CONTRIBUTING.md`).
 
 ## The pre-registered split
 
@@ -69,14 +84,16 @@ that class's fitting questions; a tie would have left the class unrouted,
 and none occurred. `rule.json` carries the full derivation: every fitting
 run cited by manifest hash with its measured coverage and freshness
 fractions, so a reader can redo the arithmetic from this directory alone.
-`crates/commonmeasure-runtime/tests/routing_rule.rs` re-derives the rule from those
-committed records in the offline gate, so an edited route or a reworded
-rule text fails a test. No holdout
-record contributed to the rule.
+`crates/commonmeasure-runtime/tests/routing_rule.rs` re-hashes the rule
+text and re-derives the rule from the fitting runs' records, so an edited
+route, a changed figure or a reworded rule text fails the test. The runs
+are not in the public repository, so the test reports as ignored unless
+`COMMONMEASURE_PRIVATE_EVIDENCE` is set. No holdout record contributed to
+the rule.
 
 ## The outcome
 
-The holdout runs are committed and the rule lost: mean objective
+The holdout runs are recorded, and the rule lost: mean objective
 1.364 against the fixed default's 1.408, with per-run measured selection
 best at 1.458. The result is published under the anti-tuning clause
 above. The recorded runs are not in the public repository, because their
@@ -84,6 +101,6 @@ records carry the recording machine's paths.
 
 ## What is deliberately out
 
-As in the holdout experiment: no LLM judge (quality keeps its abstention), no
-exchange rate between fractions and cost or latency, no live spend, and
-no claim beyond this rubric family on this holdout.
+No LLM judge (quality keeps its abstention), no exchange rate between
+fractions and cost or latency, no live spend, and no claim beyond this
+rubric family on this holdout.

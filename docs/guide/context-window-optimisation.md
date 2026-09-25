@@ -1,5 +1,7 @@
 ---
 title: "Context window optimisation: a working guide"
+domain: shared
+audience: reader
 ---
 
 # Context window optimisation: a working guide

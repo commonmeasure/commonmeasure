@@ -1,5 +1,8 @@
 ---
 title: Provider capability contract
+domain: extensions
+audience: integrator
+section: reference
 ---
 
 # Provider capability contract
@@ -226,3 +229,43 @@ evidence.
   ([`docs/contracts/run-output.md`](run-output.md));
 - `production-observed` — sustained operator traffic confirms behaviour and
   failure modes.
+
+## State of each adapter
+
+Each state below rests on a test in this repository or on the host
+integration evidence, and is given per capability because a state earned by
+one operation is not inherited by another. `live-verified` here means a test
+serves the recorded response of a dated authenticated call to the real
+supplier, or a hosted edge made the call
+([`docs/contracts/supplier-credentials.md`](supplier-credentials.md) §Status). The
+recorded responses are not published; the tests that read them run where
+`COMMONMEASURE_PRIVATE_EVIDENCE` is set (`CONTRIBUTING.md`). Where no test
+reads a live call, the state is `fixture-tested`: the adapter's parser and
+request construction are exercised over the supplier's documented shapes
+through the real transport and a loopback origin. No adapter is
+`production-observed`.
+
+| Adapter | Capability | State | Evidence |
+|---|---|---|---|
+| Exa | `search` | `live-verified`, `replay-tested` | `crates/commonmeasure-supply/tests/recorded_replay.rs` serves the recorded call; `crates/commonmeasure-cli/tests/replay_contract.rs` replays it through a run of `demo/jobs/eu-ai-act-replay.json`; a hosted edge searched with a key the hub released. The charge is observed. |
+| Exa | `fetch` | `live-verified`; `fixture-tested` against the recording | `recorded_replay.rs` serves the recorded `/contents` call; no run replays it |
+| Firecrawl | `search` | `live-verified`, `replay-tested` | `recorded_replay.rs`; `replay_contract.rs` over `demo/jobs/eu-ai-act-replay.json` |
+| Firecrawl | `fetch` | `live-verified`; `fixture-tested` against the recording | `recorded_replay.rs` serves the recorded scrape; no run replays it |
+| Tavily | `search` | `live-verified`, `replay-tested` | `recorded_replay.rs`; `replay_contract.rs` over `demo/jobs/eu-ai-act-replay.json`. The charge is quoted from the published price and never observed. |
+| Tavily | `fetch` | `live-verified`, `replay-tested` | `replay_contract.rs` replays the recorded call through a run of `demo/jobs/recon-w3c-prov-fetch.json`; `recorded_replay.rs` covers the documented `/extract` shape |
+| TollBit | `search` | `live-verified`, `replay-tested` | `recorded_replay.rs`; `replay_contract.rs` over `demo/jobs/eu-ai-act-replay.json` |
+| Parallel | `search` | `live-verified`, `replay-tested` | `crates/commonmeasure-cli/tests/replay_contract.rs` replays the recorded call through a run of `demo/jobs/recon-w3c-prov-search.json`; `recorded_replay.rs` covers the documented shapes |
+| Parallel | `fetch` | `live-verified`, `replay-tested` | `replay_contract.rs` replays the recorded call through a run of `demo/jobs/recon-w3c-prov-fetch.json` |
+| Linkup | `search` | `live-verified`, `replay-tested` | `replay_contract.rs` over `demo/jobs/recon-w3c-prov-search.json`; `crates/commonmeasure-supply/tests/linkup_spec.rs` covers the documented shapes |
+| Linkup | `fetch` | `live-verified`, `replay-tested` | `replay_contract.rs` replays the recorded call through a run of `demo/jobs/recon-w3c-prov-fetch.json` |
+| Search1API | `search`, `fetch` | `fixture-tested` | `crates/commonmeasure-supply/tests/search1api_spec.rs` |
+| Keenable | `search` | `live-verified`, `replay-tested` | `replay_contract.rs` over `demo/jobs/recon-w3c-prov-search.json`; `crates/commonmeasure-supply/tests/keenable_spec.rs` covers the documented shapes |
+| Nimble | `search` | `live-verified`, `replay-tested` | `replay_contract.rs` over `demo/jobs/recon-w3c-prov-search.json`; `crates/commonmeasure-supply/tests/nimble_spec.rs` covers the documented shapes |
+| SERPdive | `search` | `fixture-tested` | `crates/commonmeasure-supply/tests/serpdive_spec.rs` |
+| TinyFish | `search` | `fixture-tested` | `crates/commonmeasure-supply/tests/tinyfish_spec.rs` |
+| You.com | `search` | `live-verified`, `replay-tested` | `replay_contract.rs` over `demo/jobs/recon-w3c-prov-search.json`; `crates/commonmeasure-supply/tests/you_spec.rs` covers the documented shapes |
+| Ozone Live | `search` | `live-verified` | a hosted edge searched with a key the hub released; `crates/commonmeasure-supply/tests/ozone_spec.rs` covers the documented shapes. The charge is unknown. |
+| Ozone Live | `fetch` | `fixture-tested` | `ozone_spec.rs` |
+| Redpine | `quote`, and `search` behind it | `live-verified` | `crates/commonmeasure-supply/tests/redpine_quote_replay.rs` serves the five recorded legs of a purchase covered by a trial: `initialize`, balance, inspect, `preview`, `confirm`. No charge in currency has been observed. |
+| `internal` | `query` | `fixture-tested` | `crates/commonmeasure-supply/tests/internal_corpus.rs` over `demo/corpus/` |
+| `skill:*` | `invoke` | `live-verified` | two third-party bundles were executed and the run sealed; `crates/commonmeasure-cli/tests/inspect_dossier.rs` reads it. `crates/commonmeasure-supply/tests/skill_invocation.rs` covers containment, limits and the record with probe bundles. |
