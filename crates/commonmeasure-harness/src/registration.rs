@@ -412,25 +412,19 @@ fn read_json(path: &Path) -> Result<Value, String> {
     }
 }
 
-/// Write the whole file through a temporary neighbour and a rename, so a
-/// host reading the file mid-write sees the old bytes or the new ones.
+/// Write the whole file through a uniquely named temporary neighbour and a
+/// rename, so a host reading the file mid-write sees the old bytes or the
+/// new ones, and two installers never share a temporary. The file keeps the
+/// mode it has, and an absent one is created owner-only
+/// ([`crate::declaration::replace_keeping_mode`]): a host file the operator
+/// made owner-only can hold another MCP server's key.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
-    let temporary = path.with_extension(format!(
-        "{}.commonmeasure-tmp",
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("")
-    ));
-    std::fs::write(&temporary, bytes)
-        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, path).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        format!("cannot replace {}: {error}", path.display())
-    })
+    crate::declaration::replace_keeping_mode(path, bytes)
+        .map_err(|error| format!("cannot replace {}: {error}", path.display()))
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<(), String> {
@@ -2341,6 +2335,131 @@ mod tests {
                     always: false,
                 },
             ],
+        }
+    }
+
+    /// EGR-149 (private-replace review N1). Catches: a host file staged
+    /// through a temporary created under the umask, which turns a 0600 file
+    /// holding another MCP server's key into 0644; an absent host file
+    /// created under the umask; a 0644 host file narrowed. Every surface
+    /// family's install and uninstall writes are checked.
+    #[cfg(unix)]
+    #[test]
+    fn install_and_uninstall_keep_each_host_files_mode() {
+        crate::test_umask::under_umask_022(
+            "registration::tests::install_and_uninstall_keep_each_host_files_mode",
+            install_and_uninstall_keep_each_host_files_mode_body,
+        );
+    }
+
+    #[cfg(unix)]
+    fn install_and_uninstall_keep_each_host_files_mode_body() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const PLANTED: &str =
+            r#"{"mcpServers":{"other":{"command":"other","env":{"API_KEY":"planted"}}}}"#;
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        // `None` is an absent file, created owner-only because the host may
+        // later put keys in it.
+        for before in [Some(0o600), None, Some(0o644)] {
+            let directory = tempfile::tempdir().unwrap();
+            let paths = paths_in(directory.path());
+            let binary = directory.path().join("commonmeasure");
+            std::fs::write(&binary, b"").unwrap();
+            let skill_policy = paths
+                .codex_skill
+                .parent()
+                .unwrap()
+                .join("agents/openai.yaml");
+            let families: [(HostSurface, Vec<(PathBuf, String)>); 8] = [
+                (
+                    HostSurface::ClaudeCode,
+                    vec![
+                        (paths.claude_state.clone(), PLANTED.to_owned()),
+                        (paths.claude_settings.clone(), PLANTED.to_owned()),
+                    ],
+                ),
+                (
+                    HostSurface::Cursor,
+                    vec![
+                        (paths.cursor_mcp.clone(), PLANTED.to_owned()),
+                        (paths.cursor_hooks.clone(), PLANTED.to_owned()),
+                    ],
+                ),
+                (
+                    HostSurface::ClaudeDesktop,
+                    vec![(paths.claude_desktop_config.clone(), PLANTED.to_owned())],
+                ),
+                (
+                    HostSurface::CopilotCli,
+                    vec![
+                        (paths.copilot_mcp.clone(), PLANTED.to_owned()),
+                        (paths.copilot_hooks.clone(), PLANTED.to_owned()),
+                    ],
+                ),
+                (
+                    HostSurface::VsCode,
+                    vec![(paths.vscode_mcp.clone(), PLANTED.to_owned())],
+                ),
+                (
+                    HostSurface::Pi,
+                    vec![(paths.pi_extension.clone(), "// planted\n".to_owned())],
+                ),
+                (
+                    HostSurface::Chrome,
+                    vec![(paths.native_messaging[0].manifest(), PLANTED.to_owned())],
+                ),
+                (
+                    HostSurface::Codex,
+                    vec![
+                        (
+                            paths.codex_config.clone(),
+                            "[mcp_servers.other]\ncommand = \"other\"\nenv = { API_KEY = \"planted\" }\n"
+                                .to_owned(),
+                        ),
+                        (paths.codex_skill.clone(), ENROL_MARKER.to_owned()),
+                        (skill_policy, ENROL_POLICY.to_owned()),
+                    ],
+                ),
+            ];
+            for (surface, files) in &families {
+                if let Some(mode) = before {
+                    for (path, text) in files {
+                        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                        std::fs::write(path, text).unwrap();
+                        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                            .unwrap();
+                    }
+                }
+                let expected = before.unwrap_or(0o600);
+                install(*surface, &binary, &paths).unwrap();
+                for (path, _) in files {
+                    assert_eq!(
+                        mode_of(path),
+                        expected,
+                        "{surface:?} install, {} was {before:?}",
+                        path.display()
+                    );
+                }
+                // The manifest is ours whole; every other host file keeps
+                // the planted key beside our entry.
+                if before.is_some() && *surface != HostSurface::Chrome {
+                    for (path, _) in files.iter().filter(|(_, text)| text == PLANTED) {
+                        let now = std::fs::read_to_string(path).unwrap();
+                        assert!(now.contains("planted"), "{}: {now}", path.display());
+                    }
+                }
+                uninstall(*surface, &paths).unwrap();
+                for (path, _) in files {
+                    if path.exists() {
+                        assert_eq!(
+                            mode_of(path),
+                            expected,
+                            "{surface:?} uninstall, {} was {before:?}",
+                            path.display()
+                        );
+                    }
+                }
+            }
         }
     }
 

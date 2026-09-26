@@ -2438,3 +2438,305 @@ fn the_hosted_edge_refuses_to_start_for_a_stored_hub_url_with_credentials() {
     assert!(!output.contains("ak_PLANTED"), "{output}");
     assert_eq!(issuer.jwks_reads.load(Ordering::SeqCst), 0);
 }
+
+/// A loopback origin serving `bytes` as `application/pdf` at `/` and 404
+/// elsewhere, `robots.txt` included.
+fn pdf_origin(bytes: Vec<u8>) -> ServerHandle {
+    Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(move |request| {
+            if request.target != "/" {
+                return Response::text(404, "not here");
+            }
+            let mut response = Response::new(200, bytes.clone());
+            response.headers.set("Content-Type", "application/pdf");
+            response
+        })
+        .expect("spawn")
+}
+
+/// Fetch `bytes` served as a PDF through a hosted edge whose home is `home`,
+/// under `observe`, answering the edge's response and the URL asked.
+fn fetch_pdf_hosted(home: &Path, bytes: Vec<u8>) -> (Response, String) {
+    fetch_pdf_hosted_under(
+        home,
+        bytes,
+        r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+    )
+}
+
+/// As `fetch_pdf_hosted`, under `policy`; the caller is subject `user-1`.
+fn fetch_pdf_hosted_under(home: &Path, bytes: Vec<u8>, policy: &str) -> (Response, String) {
+    fetch_pdf_hosted_with(home, bytes, policy, json!({}))
+}
+
+/// As `fetch_pdf_hosted_under`, with `arguments` added to the URL.
+fn fetch_pdf_hosted_with(
+    home: &Path,
+    bytes: Vec<u8>,
+    policy: &str,
+    arguments: Value,
+) -> (Response, String) {
+    let issuer = Issuer::start();
+    let origin = pdf_origin(bytes);
+    enrol(home, &issuer);
+    write_policy(home, policy);
+    let edge = Edge::start(home);
+    let authorization = issuer.bearer("user-1", "claude-connector");
+    let session = edge.open_session("claude-connector", &authorization, None);
+    let url = origin.url();
+    let mut arguments = arguments;
+    arguments["url"] = json!(url);
+    let fetched = edge.in_session(
+        "claude-connector",
+        &authorization,
+        &session,
+        &call(1, "context_fetch", arguments),
+    );
+    (fetched, url)
+}
+
+/// The resource block's blob, decoded.
+fn blob_of(response: &Response) -> Vec<u8> {
+    let body = body(response);
+    let resource = &body["result"]["content"][1];
+    assert_eq!(resource["type"], "resource", "{body}");
+    base64::engine::general_purpose::STANDARD
+        .decode(resource["resource"]["blob"].as_str().expect("a blob"))
+        .expect("the blob is base64")
+}
+
+/// A hosted edge shares no file system with the harness, so a PDF comes
+/// back as an MCP embedded resource: `uri` the asked URL, `mimeType`
+/// `application/pdf`, the blob the fixture's bytes. The payload is the text
+/// block and `structuredContent`, with no path, and one crossing records
+/// the delivery. Nothing is saved under the home.
+#[test]
+fn a_hosted_pdf_is_an_embedded_resource_whose_blob_is_the_fixture_bytes() {
+    let bytes = b"%PDF-1.7\n\x00\x80\xff binary body\n%%EOF\n".to_vec();
+    let home = tempfile::tempdir().expect("tempdir");
+    let (fetched, url) = fetch_pdf_hosted(home.path(), bytes.clone());
+    assert_eq!(fetched.status, 200, "{}", text(&fetched));
+    let answer = body(&fetched);
+    assert_eq!(answer["result"]["isError"], false, "{answer}");
+    assert_names_no_home(home.path(), &fetched);
+
+    let resource = &answer["result"]["content"][1]["resource"];
+    assert_eq!(resource["uri"], url.as_str());
+    assert_eq!(resource["mimeType"], "application/pdf");
+    assert_eq!(blob_of(&fetched), bytes);
+
+    let result = payload(&fetched);
+    assert_eq!(answer["result"]["structuredContent"], result);
+    assert_eq!(result["bytes"], bytes.len());
+    assert_eq!(
+        result["content_hash"],
+        commonmeasure_types::canonical::sha256_digest(&bytes)
+    );
+    assert_eq!(result["content_type"], "application/pdf");
+    assert!(result.get("path").is_none(), "{result}");
+    assert!(result.get("content").is_none(), "{result}");
+
+    let files = session_files(home.path());
+    assert_eq!(files.len(), 1, "one log and no file directory: {files:?}");
+    let session = files[0].file_stem().unwrap().to_str().unwrap().to_owned();
+    let recorded = records(home.path(), &session);
+    let crossing = crossings(&recorded)[0];
+    assert_eq!(crossing["event"], "crossing_mediated");
+    assert_eq!(
+        crossing["payload"]["delivered_file"],
+        json!({"via": "embedded_resource", "bytes": bytes.len(),
+               "statement": "delivered as a file, not read by the edge; the PII detector \
+                             and the injection screen did not run over it"})
+    );
+    assert_eq!(crossing["payload"]["content_hash"], result["content_hash"]);
+}
+
+/// A hosted edge refuses a PDF under `strict` as a local one does: the
+/// screens `strict` enforces cannot read it (`docs/FAIL-POLICY.md` §6). The
+/// answer is an error with no resource block, the crossing is refused with
+/// the type, and nothing is saved. The mode is the one in force for the
+/// caller, so a principal binding can set `strict` under an `observe` policy
+/// and `observe` under a `strict` one.
+#[test]
+fn a_hosted_edge_refuses_a_pdf_under_strict_with_no_resource_and_nothing_saved() {
+    let bytes = b"%PDF-1.7\n\x00\x80\xff binary body\n%%EOF\n".to_vec();
+    for (policy, refused) in [
+        (
+            r#"{"policy_mode":"strict","allow_private_hosts":true}"#,
+            true,
+        ),
+        (
+            r#"{"policy_mode":"observe","allow_private_hosts":true,
+                "principals":[{"principal":"lead","subject":"user-1","policy_mode":"strict"}]}"#,
+            true,
+        ),
+        (
+            r#"{"policy_mode":"strict","allow_private_hosts":true,
+                "principals":[{"principal":"lead","subject":"user-1","policy_mode":"observe"}]}"#,
+            false,
+        ),
+    ] {
+        let home = tempfile::tempdir().expect("tempdir");
+        let (fetched, _) = fetch_pdf_hosted_under(home.path(), bytes.clone(), policy);
+        assert_eq!(fetched.status, 200, "{}", text(&fetched));
+        let answer = body(&fetched);
+        let content = answer["result"]["content"].as_array().expect("content");
+        let files = session_files(home.path());
+        assert_eq!(files.len(), 1, "one log and no file directory: {files:?}");
+        let session = files[0].file_stem().unwrap().to_str().unwrap().to_owned();
+        let recorded = records(home.path(), &session);
+        let crossing = crossings(&recorded)[0];
+        assert_eq!(crossing["payload"]["content_type"], "application/pdf");
+        if refused {
+            assert_eq!(answer["result"]["isError"], true, "{policy}: {answer}");
+            assert_eq!(content.len(), 1, "{policy}: {answer}");
+            assert!(
+                content.iter().all(|block| block["type"] != "resource"),
+                "{policy}: {answer}"
+            );
+            let error = payload(&fetched);
+            let detail = error["error"].as_str().expect("an error");
+            assert!(
+                detail.starts_with("unavailable:") && detail.contains(r#"policy_mode "strict""#),
+                "{policy}: {detail}"
+            );
+            assert_eq!(crossing["event"], "crossing_refused", "{policy}");
+            assert!(
+                crossing["payload"].get("delivered_file").is_none(),
+                "{policy}: {crossing}"
+            );
+        } else {
+            assert_eq!(answer["result"]["isError"], false, "{policy}: {answer}");
+            assert_eq!(blob_of(&fetched), bytes, "{policy}");
+            assert_eq!(crossing["event"], "crossing_mediated", "{policy}");
+            assert!(
+                crossing["payload"]["breach"]
+                    .as_str()
+                    .is_some_and(|breach| breach.contains("The PII detector did not rule")),
+                "{policy}: {crossing}"
+            );
+        }
+    }
+}
+
+/// A hosted edge refuses an `offset` on a PDF under `observe` as a local one
+/// does. Nothing was handed over, so the refused crossing carries no
+/// screen's sentence in `breach`.
+#[test]
+fn a_hosted_edge_refuses_an_offset_on_a_pdf_with_no_screen_breach() {
+    let bytes = b"%PDF-1.7\n\x00\x80\xff binary body\n%%EOF\n".to_vec();
+    let home = tempfile::tempdir().expect("tempdir");
+    let (fetched, _) = fetch_pdf_hosted_with(
+        home.path(),
+        bytes,
+        r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+        json!({"offset": 10}),
+    );
+    assert_eq!(fetched.status, 200, "{}", text(&fetched));
+    let answer = body(&fetched);
+    assert_eq!(answer["result"]["isError"], true, "{answer}");
+    let detail = payload(&fetched)["error"]
+        .as_str()
+        .expect("an error")
+        .to_owned();
+    assert!(detail.contains("delivered whole in one call"), "{detail}");
+    let files = session_files(home.path());
+    let session = files[0].file_stem().unwrap().to_str().unwrap().to_owned();
+    let recorded = records(home.path(), &session);
+    let crossing = crossings(&recorded)[0];
+    assert_eq!(crossing["event"], "crossing_refused", "{crossing}");
+    assert_eq!(crossing["payload"]["content_type"], "application/pdf");
+    assert!(crossing["payload"].get("breach").is_none(), "{crossing}");
+}
+
+/// A hosted edge's delivered PDF keeps a host breach ahead of the screens'
+/// sentences, as a local one does: under `observe` a host the job denies is
+/// carried, and the denial must still be recorded (`docs/FAIL-POLICY.md`
+/// §6).
+#[test]
+fn a_hosted_edge_records_a_denied_host_ahead_of_the_screens_on_a_delivered_pdf() {
+    let bytes = b"%PDF-1.7\n\x00\x80\xff binary body\n%%EOF\n".to_vec();
+    let home = tempfile::tempdir().expect("tempdir");
+    let (fetched, _) = fetch_pdf_hosted_under(
+        home.path(),
+        bytes.clone(),
+        r#"{"policy_mode":"observe","allow_private_hosts":true,
+            "constraints":[{"kind":"denied_source_host","host":"127.0.0.1"}]}"#,
+    );
+    assert_eq!(fetched.status, 200, "{}", text(&fetched));
+    assert_eq!(
+        body(&fetched)["result"]["isError"],
+        false,
+        "{}",
+        text(&fetched)
+    );
+    assert_eq!(blob_of(&fetched), bytes);
+    let files = session_files(home.path());
+    let session = files[0].file_stem().unwrap().to_str().unwrap().to_owned();
+    let recorded = records(home.path(), &session);
+    let crossing = crossings(&recorded)[0];
+    assert_eq!(crossing["event"], "crossing_mediated", "{crossing}");
+    for breach in [&payload(&fetched)["breach"], &crossing["payload"]["breach"]] {
+        assert!(
+            breach.as_str().is_some_and(|breach| {
+                breach.starts_with("The job denies host 127.0.0.1. ")
+                    && breach.contains("The PII detector did not rule")
+                    && breach.contains("The injection screen did not rule")
+            }),
+            "{breach}"
+        );
+    }
+}
+
+/// Base64 includes `/`, so a blob can spell the operator home by chance. A
+/// fixture whose base64 holds the home between two `+`, which the boundary
+/// rewrite would otherwise shorten to `.`, is served unchanged and still
+/// hashes to the recorded `content_hash`. The home is made of base64
+/// characters only, under `/tmp`, so the chance can be arranged.
+#[cfg(unix)]
+#[test]
+fn a_blob_whose_base64_contains_the_home_is_served_unchanged_and_still_hashes() {
+    use base64::engine::general_purpose::STANDARD;
+    let home = tempfile::Builder::new()
+        .prefix("cm")
+        .tempdir_in("/tmp")
+        .expect("a home under /tmp");
+    let given = home.path().display().to_string();
+    assert!(
+        given.chars().all(|c| c.is_ascii_alphanumeric() || c == '/'),
+        "{given}"
+    );
+    // `%PDF-1.7\n` is nine bytes, twelve base64 characters, so what follows
+    // is encoded on its own: a run of base64 text holding the home, padded
+    // to whole groups of four, decodes to bytes that encode back to it.
+    let mut spelled = format!("+{given}+");
+    while spelled.len() % 4 != 0 {
+        spelled.push('A');
+    }
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    bytes.extend(STANDARD.decode(&spelled).expect("a whole base64 run"));
+    bytes.extend(b"\n%%EOF\n");
+    assert!(STANDARD.encode(&bytes).contains(&spelled));
+
+    let (fetched, _) = fetch_pdf_hosted(home.path(), bytes.clone());
+    assert_eq!(
+        body(&fetched)["result"]["isError"],
+        false,
+        "{}",
+        text(&fetched)
+    );
+    let served = body(&fetched)["result"]["content"][1]["resource"]["blob"]
+        .as_str()
+        .expect("a blob")
+        .to_owned();
+    assert!(
+        served.contains(&spelled),
+        "the blob was rewritten: {served}"
+    );
+    assert_eq!(blob_of(&fetched), bytes);
+    assert_eq!(
+        payload(&fetched)["content_hash"],
+        commonmeasure_types::canonical::sha256_digest(&bytes)
+    );
+}

@@ -55,8 +55,8 @@ Top level:
 | `constraints` | array of constraints | `[]` | The rules admission applies (§Constraints). |
 | `scopes` | array of scopes | `[]` | Overlays selected by working directory (§Scopes and principals). |
 | `principals` | array of principal bindings | `[]` | Overlays selected by authenticated identity (§Scopes and principals). |
-| `allow_private_hosts` | boolean | `false` | Whether the mediated tools may reach loopback and private-network addresses. |
-| `refuse_on_pii` | boolean | `false` | Whether `strict` refuses a crossing for a personal-data finding on every source, not only on internal and private ones. |
+| `allow_private_hosts` | boolean | `false` | Whether the mediated tools may reach private addresses (§Recording). |
+| `refuse_on_pii` | boolean | `false` | Whether `strict` refuses a crossing for a personal-data finding on every source, not only on internal and private ones. A PDF, which the detector does not read, is refused under `strict` whatever this says ([a fetched file](host-integration.md#a-fetched-file)). |
 | `record_internal_prefixes` | array of URL prefixes | `[]` | Internal prefixes whose crossings may be recorded (§Recording). |
 | `terms` | array of terms | `[]` | Operator references and scoped assessments of the basis for use (§Terms). |
 
@@ -216,20 +216,64 @@ the record. Nothing is ever left unrecorded because of the mode.
 
 ## Recording
 
-- `allow_private_hosts` lets the mediated tools reach loopback and private
-  addresses. It does not affect observed capture, which never records
-  localhost, private networks or `file://` whatever this says.
+- A **private address** is a `file://` URL, a URL with no host, `localhost`
+  or a name ending `.localhost`, `.local` or `.internal`, or an IP address
+  the IANA IPv4 and IPv6 Special-Purpose Address Registries mark not globally
+  reachable. An IPv6 address that embeds an IPv4 address (IPv4-mapped,
+  IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) is judged as that
+  IPv4 address. Multicast and deprecated IPv6 site-local addresses are
+  private as well. A name is judged as written (`10.example.com`
+  is public), and the mediated tools judge the addresses it resolves to by
+  the same rule before connecting. The one classifier is
+  `crates/commonmeasure-types/src/address.rs`, whose doc comment lists where
+  it departs from the registry and why: an embedded IPv4 address is judged
+  as that address, stricter or looser as it is, and every other departure is
+  stricter.
+- Two ranges hold names on purpose, and a fetch by name is refused there:
+  - `100.64.0.0/10`, shared address space, where Tailscale's MagicDNS puts
+    tailnet names. To reach one tailnet host, name its prefix in
+    `record_internal_prefixes`, which also keeps its crossings from being
+    projected.
+  - `198.18.0.0/15`, which a fake-IP proxy (Clash, Surge, sing-box and
+    similar) answers every name with. Common Measure cannot check where a
+    name leads through such a proxy. Set the proxy to return real addresses
+    to the machine running the edge. `commonmeasure doctor --resolve <name>`
+    shows the addresses a name resolves to and what the floor makes of them.
+
+  `allow_private_hosts` admits both, and every other private address with
+  them. A hosted edge in service mode refuses both whatever the policy says.
+- `allow_private_hosts` lets the mediated tools reach private addresses. It
+  does not affect observed capture, which never records a private address
+  whatever this says.
 - `record_internal_prefixes` names internal prefixes, each an absolute URL
-  ending in `/`, whose crossings are recorded, observed and mediated alike,
-  and marked `internal` so no projection sends them. Observed capture records
-  no internal or private address the list does not match; the mediated tools
-  reach and record one only under `allow_private_hosts`.
+  ending in `/` without a query or a fragment, whose crossings are recorded, observed and mediated alike,
+  and marked `internal` so no projection sends them. Every spelling of a URL
+  under a prefix is under it, apart from the spellings that
+  [`session-evidence.md`](session-evidence.md) §Source declarations names.
+  Host case, a trailing dot, a default port, credentials, a percent-encoded
+  unreserved character (`/%70rivate/` is `/private/`), lower-case hex and a
+  fragment do not change the answer, on the URL's side or the prefix's. The
+  prefix is read as written: its slashes are never merged, its `%2F` and
+  `%3B` are never decoded and its `;` is never stripped. The URL is read as
+  requested and as every path that decoding `%2F` and `%5C` as `/` and
+  `%3B` as `;`, merging runs of `/`, resolving dot segments and stripping
+  `;` path parameters reach from it, in any order and including only some
+  of them, and it is under the prefix when any reading is, so
+  `//private/a`, `/private%2Fa`, `/x/..%2Fprivate/a`, `/x//..%2Fprivate/a`,
+  `/private;x=1/a`, `/x/..;/private/a`, `/private%3Bx/a` and
+  `/private%5Ca` are under `/private/`. Readings are capped at 64, and a
+  crafted URL can reach the cap; a URL past it is under every prefix on its
+  origin. The form and the readings are the ones `robots.txt` and licence
+  scopes are matched in. Observed capture records no internal or private
+  address the list does not match; the mediated tools reach and record one
+  only under `allow_private_hosts`.
 - `refuse_on_pii`: the personal-data detector's finding is recorded on every
   mediated crossing. `strict` refuses one on an internal or private source;
   on a public source it admits the crossing with the finding recorded, because
   a public page's published contact details are not the personal data the
   detector exists to keep out of a model. With `refuse_on_pii` it refuses one
-  on every source.
+  on every source. The detector does not read a PDF the edge hands over as a
+  file, so `strict` refuses every PDF with or without `refuse_on_pii`.
 - A witnessed public crossing leaves the machine only where its scope names
   an `engagement` and sets `allow_telemetry_egress: true`; an absent policy,
   an unmatched directory or a scope without both keeps it local. What leaves
@@ -324,6 +368,7 @@ it and `<list>` is `the top-level policy`, `scope "<match>"` or
 | Check | Refused when | Refusal |
 |---|---|---|
 | `internal_prefix_not_absolute` | a recordable prefix is not an absolute URL | `<file>: record_internal_prefixes entry "<prefix>" is not an absolute URL prefix and would never match anything` |
+| `internal_prefix_query_or_fragment` | a recordable prefix has a query or a fragment | `<file>: record_internal_prefixes entry "<prefix>" has a query or a fragment; a prefix names a path, so write it without them` |
 | `internal_prefix_unterminated` | a recordable prefix does not end in `/` | `<file>: record_internal_prefixes entry "<prefix>" must end with "/" — without it the prefix also matches hosts and paths it merely starts, which would record more than the operator named` |
 | `scope_match_empty` | a scope's `match` is empty | `<file> has a scope with an empty "match", which would govern everything` |
 | `scope_match_duplicate` | two scopes have one `match` | `<file> declares two scopes matching "<match>"; only the first would govern or take an edit, so the second must be merged into it or renamed` |

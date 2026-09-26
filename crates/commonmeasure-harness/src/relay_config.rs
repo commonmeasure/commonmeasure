@@ -93,6 +93,18 @@ impl RelayConfig {
         Ok(())
     }
 
+    /// The supplier scope as the operator is told it: `suppliers (a, b)`,
+    /// `an empty supplier list`, or `None` for a receiver not scoped.
+    pub fn scope(&self) -> Option<String> {
+        self.suppliers.as_ref().map(|suppliers| {
+            if suppliers.is_empty() {
+                "an empty supplier list".to_owned()
+            } else {
+                format!("suppliers ({})", suppliers.join(", "))
+            }
+        })
+    }
+
     /// Write `<home>/relay.json` atomically, readable by the owner only:
     /// it carries the ingest key. The temporary file is this writer's own,
     /// so two `connect` runs cannot rename each other's file away. Written by

@@ -1022,6 +1022,13 @@ impl RobotsOutcome {
                 cut.read, cut.size
             ));
         }
+        if let Some(too_many) = &reading.too_many_readings {
+            return format!(
+                "{} is not compared with {}: {too_many}{about_copy}",
+                self.file(),
+                self.requested_url
+            );
+        }
         let Some(group) = &reading.group else {
             return format!(
                 "{} publishes no group for {PRODUCT_TOKEN} or `*`, so no access rule applies to \
@@ -2295,6 +2302,52 @@ mod tests {
             assert!(attribution.contains("`Disallow: /`"), "{attribution}");
             assert_eq!(outcome.outcome, Some(RobotsRuling::Refused), "{mode:?}");
             assert_eq!(outcome.mode, Some(mode));
+        }
+    }
+
+    /// A page past the readings cap is refused in every mode, and the
+    /// attribution names the cap, not a rule.
+    #[test]
+    fn a_page_past_the_readings_cap_is_refused_under_every_mode() {
+        let too_many = commonmeasure_types::TooManyReadings { cap: 64 };
+        for mode in [PolicyMode::Strict, PolicyMode::Observe, PolicyMode::Prefer] {
+            let mut outcome = RobotsOutcome {
+                requested_url: "https://publisher.example/article".to_owned(),
+                url: "https://publisher.example/robots.txt".to_owned(),
+                final_url: None,
+                declined_redirect: None,
+                cache: CacheDecision::Fetched,
+                fetched_at: Some(Utc::now()),
+                expires_at: Some(Utc::now()),
+                status: Some(200),
+                unavailable: None,
+                unreachable: false,
+                cut_short: false,
+                held_copy: None,
+                truncated: None,
+                reading: Some(declarations::RobotsReading {
+                    group: None,
+                    group_is_wildcard: false,
+                    crawlable: Some(false),
+                    access_rule: Some(too_many.to_string()),
+                    access_rule_wildcard: None,
+                    statements: Vec::new(),
+                    licences: Vec::new(),
+                    crawl_delay: None,
+                    too_many_readings: Some(too_many),
+                }),
+                mode: None,
+                outcome: None,
+                delay: None,
+            };
+            let attribution = outcome.rule(mode).expect("refused");
+            assert!(
+                attribution.contains("is not compared with https://publisher.example/article")
+                    && attribution.contains("more than 64 readings")
+                    && !attribution.contains("no access rule applies"),
+                "{attribution}"
+            );
+            assert_eq!(outcome.outcome, Some(RobotsRuling::Refused), "{mode:?}");
         }
     }
 

@@ -294,7 +294,10 @@ fn malformed_manifest_is_invalid_and_keeps_its_reference() {
 #[test]
 fn unsupported_media_type_never_acquires_a_trusted_result() {
     let (body, _) = signed(TEXT, false);
-    let fetched = fetch(body.as_bytes(), "application/octet-stream", false, false);
+    // A type outside `text/*` that is still decoded as text; the files
+    // `context_fetch` hands over or refuses (`application/octet-stream`
+    // among them) never reach the extractor.
+    let fetched = fetch(body.as_bytes(), "application/json", false, false);
     assert_eq!(
         fetched.transform["detail"]["embedded_credential"]["state"],
         "unavailable"

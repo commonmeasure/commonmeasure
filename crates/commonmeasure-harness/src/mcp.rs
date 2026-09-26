@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::io::{BufRead, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -29,10 +29,11 @@ use serde_json::{Value, json};
 use crate::crawl_delay::CrawlDelayStore;
 use crate::declarations::{Effective, TELEMETRY_PROFILE};
 use crate::discovery::{self, DeclarationCache, Declarations, Governing, ManifestCache};
+use crate::fetched_file::{self, BodyKind};
 use crate::grounding;
 use crate::identity::{Identity, PresentedIdentity, SigningIdentity};
 use crate::policy::SessionPolicy;
-use crate::session::{Crossing, CrossingMode, Delivered, SessionLog};
+use crate::session::{Crossing, CrossingMode, Delivered, DeliveredFile, FileDelivery, SessionLog};
 
 /// The protocol revisions this server serves, oldest first. A tools-only
 /// stdio server behaves the same under each, with two exceptions this file
@@ -243,12 +244,6 @@ pub struct McpServer {
     /// the page changed between parts. Hashes only: no body is kept between
     /// calls.
     delivered_hashes: std::collections::HashMap<String, String>,
-    /// `<home>/relay.json` as it stood when the server started, read by the
-    /// relay's own parser: none when absent, the load error when the relay
-    /// would refuse it. A reporting demand is met only where reports can
-    /// leave, so a file the relay refuses, or a receiver scoped to suppliers
-    /// (a fetched page names none), leaves the demand unmet.
-    relay: Result<Option<crate::relay_config::RelayConfig>, String>,
     /// The transport runs an interval relay over this home (the hosted
     /// service), so reports leave without a person whatever the host word
     /// ([`crate::delivery::SessionDelivery`]).
@@ -339,7 +334,6 @@ impl McpServer {
             pace: crate::crawl_delay::Pace::Own,
             prompts: crate::session::PromptCursor::default(),
             delivered_hashes: std::collections::HashMap::new(),
-            relay: crate::relay_config::RelayConfig::load(&home),
             interval_relay: false,
             identity,
             hub_authorities,
@@ -739,18 +733,35 @@ impl McpServer {
         };
         let result = match name.as_str() {
             tool if !self.served.tools.contains(&tool) => unknown(),
-            "context_fetch" => self.tool_fetch(&arguments),
-            "context_search" => self.tool_search(&arguments),
-            "context_status" => Ok(self.tool_status()),
-            "context_enrol" => self.tool_enrol(&arguments),
+            "context_fetch" => self.fetch_answer(&arguments),
+            "context_search" => self.tool_search(&arguments).map(|value| (value, None)),
+            "context_status" => Ok((self.tool_status(), None)),
+            "context_enrol" => self.tool_enrol(&arguments).map(|value| (value, None)),
             _ => unknown(),
         };
         // A tool failure is a tool result, not a protocol error: the host's
         // model needs to read it and decide what to do.
         match result {
-            Ok(value) => tool_result(id, &value, false),
+            Ok((value, None)) => tool_result(id, &value, false),
+            Ok((value, Some(resource))) => {
+                file_result(id, &value, resource, self.structured_content())
+            }
             Err(detail) => tool_result(id, &json!({"error": detail}), true),
         }
+    }
+
+    /// Whether the negotiated revision carries `structuredContent` on a tool
+    /// result, which 2025-06-18 introduced.
+    fn structured_content(&self) -> bool {
+        self.negotiated_protocol
+            .is_some_and(|revision| revision >= "2025-06-18")
+    }
+
+    /// [`Self::fetch_answer`]'s payload alone, for the tests that read the
+    /// result's JSON and not a file's embedded resource.
+    #[cfg(test)]
+    fn tool_fetch(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.fetch_answer(arguments).map(|(payload, _)| payload)
     }
 
     /// Fetch one URL under the operator's standing policy, record it, and hand
@@ -762,7 +773,11 @@ impl McpServer {
     /// names are read for the host and ruled on; after it, the response's own
     /// `Content-Usage` and `Link` headers are read and ruled on again, so a
     /// statement the page carries can still keep its bytes out of context.
-    fn tool_fetch(&mut self, arguments: &Value) -> Result<Value, String> {
+    ///
+    /// A PDF is handed over as a file and never decoded as text
+    /// ([`crate::fetched_file`]): the second value is its MCP embedded
+    /// resource block on a hosted edge, and `None` for every other answer.
+    fn fetch_answer(&mut self, arguments: &Value) -> Result<(Value, Option<Value>), String> {
         self.record_session_start()?;
         let url = arguments
             .get("url")
@@ -1269,6 +1284,235 @@ impl McpServer {
         let after = self.rule_on_declarations(&mut declarations);
         let licence = licence_of(&declarations);
 
+        // A PDF, or another file, is never decoded as text. Its crossing
+        // is ruled by the same declarations, and then it is handed over
+        // whole or refused whole.
+        let kind = fetched_file::classify(response.headers.get("Content-Type"), &response.body);
+        if kind != BodyKind::Text {
+            let retrieved_hash = commonmeasure_types::canonical::sha256_digest(
+                response
+                    .coded
+                    .as_ref()
+                    .map_or(response.body.as_slice(), |coded| coded.bytes.as_slice()),
+            );
+            let content_hash = commonmeasure_types::canonical::sha256_digest(&response.body);
+            let content_type = match &kind {
+                BodyKind::Unsupported(media) => media.clone(),
+                BodyKind::Pdf | BodyKind::Text => fetched_file::PDF.to_owned(),
+            };
+            let breach = merge_breaches(host_breach, breaches_of(&after).as_deref());
+            // The PII detector and the injection screen rule on text, and the
+            // edge does not read a file, so their verdict on a PDF the
+            // declarations admit is unknown. Each records that it did not
+            // rule, and the unknown verdict is a breach: `strict` refuses on
+            // it, and the other modes carry the crossing with the breach and
+            // the gap recorded (`docs/FAIL-POLICY.md` §6 and §7). The
+            // screens' sentences join `breach` only on a file handed over; a
+            // refused file carries `breach` as the declarations left it, as
+            // a text part past the end does, since nothing was carried.
+            let (delivered_breach, unscreened) = match (&kind, first_refusal(&after)) {
+                (BodyKind::Pdf, None) => {
+                    let (pii_invocation, pii) = commonmeasure_runtime::processor::pii::not_read(
+                        self.policy.mode(),
+                        &final_url,
+                        "a PDF",
+                        Some(&content_hash),
+                    );
+                    let _ = self.session.record_processor(pii_invocation.to_value());
+                    let (injection_invocation, injection) =
+                        commonmeasure_runtime::processor::injection::not_read(
+                            self.policy.mode(),
+                            &final_url,
+                            "a PDF",
+                            Some(&content_hash),
+                        );
+                    let _ = self
+                        .session
+                        .record_processor(injection_invocation.to_value());
+                    if pii.is_refusal() || injection.is_refusal() {
+                        (breach.clone(), true)
+                    } else {
+                        let screened = merge_breaches(breach.clone(), pii.reason());
+                        (merge_breaches(screened, injection.reason()), false)
+                    }
+                }
+                _ => (breach.clone(), false),
+            };
+            // Why the file is not handed over, in the record's words and the
+            // agent's; `None` where it is.
+            let refused: Option<(String, String)> = if let Some(reason) = first_refusal(&after) {
+                Some((
+                    reason.clone(),
+                    format!(
+                        "withheld from context: {reason} The bytes were fetched and are not \
+                         returned; the statement and its source are recorded in {}.",
+                        self.record_named()
+                    ),
+                ))
+            } else if let BodyKind::Unsupported(media) = &kind {
+                Some((
+                    format!(
+                        "unavailable: {media} is a file this edge does not deliver; it hands \
+                         over PDFs as files and decodes text, and kept nothing of this body"
+                    ),
+                    format!(
+                        "unavailable: {final_url} is {media}, a file this edge does not \
+                         deliver. Only PDFs are handed over as files; nothing of this body was \
+                         kept. The fetch is recorded in {}.",
+                        self.record_named()
+                    ),
+                ))
+            } else if unscreened {
+                Some((
+                    "unavailable: the edge does not read files, so the PII and injection \
+                     screens that policy_mode \"strict\" enforces cannot rule on this PDF; \
+                     nothing of it was kept"
+                        .to_owned(),
+                    format!(
+                        "unavailable: {final_url} is a PDF. This edge does not read files, so \
+                         the PII and injection screens that policy_mode \"strict\" enforces \
+                         cannot rule on it. Nothing of it was kept; the fetch is recorded in {}.",
+                        self.record_named()
+                    ),
+                ))
+            } else if window.names_a_part() {
+                Some((
+                    "a PDF is delivered whole in one call; offset and max_chars do not apply"
+                        .to_owned(),
+                    format!(
+                        "refused: {final_url} is a PDF, which is delivered whole in one call. \
+                         Call context_fetch with the url alone, without offset or max_chars. \
+                         The page was fetched and nothing was kept; the fetch is recorded in {}.",
+                        self.record_named()
+                    ),
+                ))
+            } else {
+                None
+            };
+            let hosted = !self.pace.names_the_edge();
+            // A local edge saves the bytes before the crossing is recorded, so
+            // the record says whether the file exists.
+            let saved = match (&refused, hosted) {
+                (None, false) => Some(fetched_file::save(
+                    &fetched_file::directory_for(self.session.path()),
+                    &response.body,
+                )),
+                _ => None,
+            };
+            let refused = match (refused, &saved) {
+                (None, Some(Err(error))) => Some((
+                    format!(
+                        "unavailable: the file could not be saved under the session's \
+                         directory: {error}"
+                    ),
+                    format!(
+                        "unavailable: the PDF at {final_url} was fetched and could not be \
+                         saved under this session's directory ({error}), so it is not handed \
+                         over. The fetch is recorded in {}.",
+                        self.record_named()
+                    ),
+                )),
+                (refused, _) => refused,
+            };
+            if let Some((reason, said)) = refused {
+                let mut facts = FetchFacts::refused(&final_url, reason);
+                facts.http_status = Some(response.status);
+                facts.content_hash = Some(content_hash);
+                facts.retrieved_hash = Some(retrieved_hash);
+                facts.content_type = Some(content_type);
+                facts.breach = breach;
+                facts.licence = licence;
+                declarations.backoff = pacing.backoff_events();
+                facts.declarations = Some(declarations);
+                facts.named_by = named_by;
+                facts.content_telemetry_id = content_telemetry_id;
+                facts.identity = Some(presented.clone());
+                facts.requested_at = requested_at.get();
+                facts.allowance = allowance_record.clone();
+                self.record(facts);
+                return Err(said);
+            }
+            let manifest_record = match &early_manifest {
+                Some(record) if grounding::host_of(&final_url) == grounding::host_of(url) => {
+                    Some(*record)
+                }
+                _ => self.resolve_manifest(&final_url, &pacing, discovery::ManifestTurn::Paced),
+            };
+            let bytes = response.body.len() as u64;
+            let mut facts = FetchFacts::carried(&final_url);
+            facts.manifest_record = manifest_record;
+            facts.http_status = Some(response.status);
+            facts.content_hash = Some(content_hash.clone());
+            facts.retrieved_hash = Some(retrieved_hash.clone());
+            facts.content_type = Some(content_type.clone());
+            facts.delivered_file = Some(DeliveredFile {
+                via: if hosted {
+                    FileDelivery::EmbeddedResource
+                } else {
+                    FileDelivery::LocalFile
+                },
+                bytes,
+                statement: fetched_file::NOT_READ.to_owned(),
+            });
+            let breach = delivered_breach;
+            facts.breach = breach.clone();
+            facts.licence = licence.clone();
+            let summary = declarations_summary(&declarations);
+            declarations.backoff = pacing.backoff_events();
+            facts.declarations = Some(declarations);
+            facts.named_by = named_by;
+            facts.content_telemetry_id = content_telemetry_id;
+            facts.identity = Some(presented.clone());
+            facts.requested_at = requested_at.get();
+            facts.allowance = allowance_record.clone();
+            self.record(facts);
+            let acquisition_id = self.session.acquisition_handle()?;
+
+            let mut result = json!({
+                "url": final_url,
+                "content_type": content_type,
+                "bytes": bytes,
+                "sha256": fetched_file::sha256_hex(&response.body),
+                "content_hash": content_hash,
+                "retrieved_hash": retrieved_hash,
+                "http_status": response.status,
+                "licence": licence,
+                "declarations": summary,
+                "policy": ruling.reason().unwrap_or("Admitted; no constraint excluded it."),
+                "breach": breach,
+                "named_by": named_by,
+                "content_telemetry_id": content_telemetry_id,
+                "allowance": allowance_record,
+                "recorded_in": self.record_named(),
+            });
+            if let Some(handle) = acquisition_id {
+                result["acquisition_id"] = json!(handle);
+            }
+            if let Some(Ok(path)) = saved {
+                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                result["path"] = json!(path.display().to_string());
+                result["read"] = json!(
+                    "Common Measure saved this PDF without reading it: read the file at path \
+                     with your own file tools."
+                );
+                return Ok((result, None));
+            }
+            result["read"] = json!(
+                "Common Measure did not read this PDF: it is in this result as an embedded \
+                 resource, which your own tools read."
+            );
+            use base64::Engine as _;
+            let resource = json!({
+                "type": "resource",
+                "resource": {
+                    "uri": url,
+                    "mimeType": fetched_file::PDF,
+                    "blob": base64::engine::general_purpose::STANDARD.encode(&response.body),
+                },
+            });
+            return Ok((result, Some(resource)));
+        }
+
         // Embedded credentials are verified against the received body before
         // transformation removes them. The resulting text is what the screens
         // rule on and the agent reads. The extraction record
@@ -1515,7 +1759,7 @@ impl McpServer {
         if let Some(handle) = acquisition_id {
             result["acquisition_id"] = json!(handle);
         }
-        Ok(result)
+        Ok((result, None))
     }
 
     /// Settle a fetch's pre-authorisation against its receipt. No rail paid
@@ -2116,12 +2360,6 @@ impl McpServer {
         ruling
     }
 
-    /// The receiver `relay.json` names, where the relay would accept the file.
-    fn receiver(&self) -> Option<String> {
-        let config = self.relay.as_ref().ok()?.as_ref()?;
-        Some(config.receiver.clone())
-    }
-
     /// The session's half of any reporting ruling: whether the scope clears
     /// telemetry egress, a receiver is configured and delivery happens
     /// without a person, with the receiver named in the record.
@@ -2130,19 +2368,59 @@ impl McpServer {
     /// is met only where the events will actually leave, so an operator who
     /// switched automatic delivery off has an unmet demand until they switch
     /// it back on, and the reason names the marker that caused it.
+    ///
+    /// `<home>/relay.json` is read here, by the relay's own parser, at each
+    /// ruling: a server can outlive many changes to it (Claude Desktop keeps
+    /// one for the life of the app), and a demand ruled on a receiver since
+    /// removed or scoped to suppliers would be admitted with nothing to
+    /// report it. A file the relay refuses, no receiver, or a receiver scoped
+    /// to suppliers (a fetched page names none) leaves the demand unmet.
+    ///
+    /// Egress clearance is likewise the session's AND that of the source
+    /// policy as it stands now, read and resolved against this session's
+    /// working directory as the relay resolves each crossing's: the relay
+    /// reads the current policy and the reporting approvals at each run, so
+    /// a clearance withdrawn since the server started, or an approval
+    /// snapshot that has since expired, would admit a crossing whose events
+    /// the relay then withholds. A grant made after the server started does
+    /// not widen the session, whose crossings keep the policy they started
+    /// under. A policy that does not load now leaves the demand unmet, as the
+    /// relay refuses to run on it.
     fn reporting_ruling_for(
         &self,
         profile: Option<String>,
         conformance_level: Option<String>,
     ) -> crate::discovery::ReportingRuling {
-        let cleared = self.policy.allows_telemetry_egress();
-        let reason = if !cleared {
+        let relay = crate::relay_config::RelayConfig::load(self.home());
+        let receiver = relay
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|config| config.receiver.clone());
+        let current = SessionPolicy::load(self.home(), self.cwd.as_deref());
+        let cleared = self.policy.allows_telemetry_egress()
+            && current
+                .as_ref()
+                .is_ok_and(SessionPolicy::allows_telemetry_egress);
+        let policy = self.policy.source();
+        let reason = if !self.policy.allows_telemetry_egress() {
             Some(
                 "this session's policy scope clears no telemetry egress, so nothing would be \
                  reported"
                     .to_owned(),
             )
-        } else if let Err(error) = &self.relay {
+        } else if let Err(error) = &current {
+            Some(format!(
+                "{}, so nothing would be reported",
+                error.replace(&policy.display().to_string(), &self.path_named(policy))
+            ))
+        } else if !cleared {
+            Some(format!(
+                "{} as it stands now clears no telemetry egress for this session's scope, so \
+                 nothing would be reported",
+                self.path_named(policy)
+            ))
+        } else if let Err(error) = &relay {
             // The relay refuses the whole file, so nothing leaves for the
             // receiver it names either. The load error names the file in
             // full; the caller is told it as the arms below tell it.
@@ -2151,25 +2429,19 @@ impl McpServer {
                 "{}, so nothing would be reported",
                 error.replace(&relay.display().to_string(), &self.path_named(&relay))
             ))
-        } else if self.receiver().is_none() {
+        } else if receiver.is_none() {
             Some(format!(
                 "no telemetry receiver is configured in {}, so nothing would be reported",
                 self.path_named(&self.policy.source().with_file_name("relay.json"))
             ))
-        } else if let Some(suppliers) = self
-            .relay
+        } else if let Some(scope) = relay
             .as_ref()
             .ok()
             .and_then(Option::as_ref)
-            .and_then(|config| config.suppliers.as_ref())
+            .and_then(crate::relay_config::RelayConfig::scope)
         {
             // Every caller rules on a fetched page, and a fetch names no
             // supplier, so a scoped receiver is never sent its events.
-            let scope = if suppliers.is_empty() {
-                "an empty supplier list".to_owned()
-            } else {
-                format!("suppliers ({})", suppliers.join(", "))
-            };
             Some(format!(
                 "the receiver in {} is scoped to {scope} and a fetched page is served by none of \
                  them, so nothing would be reported",
@@ -2192,7 +2464,7 @@ impl McpServer {
         crate::discovery::ReportingRuling {
             profile,
             conformance_level,
-            receiver: self.receiver(),
+            receiver,
             telemetry_egress_cleared: cleared,
             met: reason.is_none(),
             reason,
@@ -2877,6 +3149,8 @@ impl McpServer {
             retrieved_hash: facts.retrieved_hash,
             estimated_tokens: facts.estimated_tokens,
             delivered: facts.delivered,
+            content_type: facts.content_type,
+            delivered_file: facts.delivered_file,
             grounded: facts.grounded,
             licence: facts.licence,
             refusal: facts.refusal,
@@ -2919,6 +3193,8 @@ struct FetchFacts {
     retrieved_hash: Option<String>,
     estimated_tokens: Option<u64>,
     delivered: Option<Delivered>,
+    content_type: Option<String>,
+    delivered_file: Option<DeliveredFile>,
     grounded: bool,
     licence: LicenceState,
     refusal: Option<String>,
@@ -2944,6 +3220,8 @@ impl FetchFacts {
             retrieved_hash: None,
             estimated_tokens: None,
             delivered: None,
+            content_type: None,
+            delivered_file: None,
             grounded: false,
             licence: LicenceState::Unknown,
             refusal: None,
@@ -3000,6 +3278,8 @@ impl FetchFacts {
 struct FetchWindow {
     offset: u64,
     max_chars: u64,
+    /// The caller named `max_chars`, which a file, delivered whole, refuses.
+    max_chars_named: bool,
 }
 
 impl FetchWindow {
@@ -3016,7 +3296,8 @@ impl FetchWindow {
                 .ok_or_else(|| format!("{name} must be a non-negative integer, got {value}")),
         };
         let offset = read("offset")?.unwrap_or(0);
-        let max_chars = match read("max_chars")? {
+        let named = read("max_chars")?;
+        let max_chars = match named {
             None => FETCH_DEFAULT_CHARS,
             Some(0) => {
                 return Err(
@@ -3027,7 +3308,17 @@ impl FetchWindow {
             }
             Some(asked) => asked.min(FETCH_MAX_CHARS),
         };
-        Ok(Self { offset, max_chars })
+        Ok(Self {
+            offset,
+            max_chars,
+            max_chars_named: named.is_some(),
+        })
+    }
+
+    /// Whether the call asked for a part rather than the whole: an offset
+    /// above 0, or any `max_chars`.
+    fn names_a_part(&self) -> bool {
+        self.offset > 0 || self.max_chars_named
     }
 
     /// The characters of `text` this window covers. An offset at or past the
@@ -3481,8 +3772,8 @@ enum FetchFailure {
 /// Whether the addresses a hop resolved to are ones this policy may reach.
 ///
 /// The privacy floor classifies a URL's spelling; DNS decides where the
-/// connection goes. A public name whose record points at loopback or into an
-/// RFC 1918 range would otherwise be mediated straight into a service on the
+/// connection goes. A public name whose record points at loopback or into a
+/// private range would otherwise be mediated straight into a service on the
 /// operator's own machine — and recorded under the public name it was spelled
 /// with, which is also what clears the relay's egress floor. So the resolved
 /// address is put to the same floor, spelled as the address it is: one
@@ -3504,16 +3795,46 @@ fn reaches_allowed_addresses(
     }
     for address in addresses {
         if !policy.mediates_address(&format!("http://{address}/")) {
-            // The address itself stays out of the refusal, and so out of the
-            // record: which service an operator runs on their own network is
-            // exactly what the floor keeps to them.
-            return Err(format!(
-                "{} resolves to a local or private address, which Common Measure does not mediate.",
-                grounding::host_of(url)
-            ));
+            return Err(resolved_into_private(policy, url, address.ip()));
         }
     }
     Ok(())
+}
+
+/// Why a name that resolved into private space is refused. The address
+/// itself stays out of the refusal, and so out of the record: which service
+/// an operator runs on their own network is exactly what the floor keeps to
+/// them. Two ranges are named, because common tools put public-looking names
+/// there on purpose and the remedy differs: a fake-IP proxy answers every
+/// name from `198.18.0.0/15`, and Tailscale's MagicDNS answers tailnet names
+/// from `100.64.0.0/10`.
+fn resolved_into_private(policy: &SessionPolicy, url: &str, address: IpAddr) -> String {
+    let host = grounding::host_of(url);
+    if commonmeasure_types::address::is_fake_ip_range(address) {
+        return format!(
+            "{host} resolves to a local or private address in 198.18.0.0/15, the range fake-IP \
+             proxies (Clash, Surge, sing-box and similar) answer every name with. Common Measure \
+             cannot check where a name leads through such a proxy, so it refuses it. Set the \
+             proxy to return real addresses to this machine (Surge always-real-ip, Clash \
+             fake-ip-filter, a sing-box DNS rule); `commonmeasure doctor --resolve {host}` \
+             shows what a name resolves to."
+        );
+    }
+    if commonmeasure_types::address::is_shared_range(address) {
+        let consequence = if policy.holds_private_floor() {
+            ". This edge holds the private-address floor in service mode: no policy setting lifts \
+             it here."
+        } else {
+            ", which Common Measure does not mediate by default. To allow this host alone, name \
+             its prefix in \"record_internal_prefixes\" in the source policy; \
+             \"allow_private_hosts\": true opens every private address."
+        };
+        return format!(
+            "{host} resolves to a local or private address in 100.64.0.0/10, shared address \
+             space used by Tailscale and carrier-grade NAT{consequence}"
+        );
+    }
+    format!("{host} resolves to a local or private address, which Common Measure does not mediate.")
 }
 
 /// Whether a hop's URL may be reached, judged before its name is looked up.
@@ -3666,8 +3987,22 @@ fn follow_resolving(
         let response = match commonmeasure_http::send_to(&current, &addresses, hop, timeout) {
             Ok(response) => response,
             Err(error) => {
+                // A body over the bound is a known size, or known to be
+                // larger than it, and the transfer stopped there; the
+                // result says so as an unavailable one rather than as a
+                // transport fault.
+                let over = error
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<commonmeasure_http::BodyOverCeiling>());
+                let detail = match over {
+                    Some(over) => format!(
+                        "unavailable: {current} answered with a body larger than one fetch \
+                         reads: {over}. Nothing of it was kept."
+                    ),
+                    None => format!("{error:#}"),
+                };
                 return Err(FetchFailure::Failed {
-                    detail: format!("{error:#}"),
+                    detail,
                     url: current,
                 });
             }
@@ -3763,7 +4098,7 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "context_fetch",
-            "description": "Fetch a URL through Common Measure. An HTML page is delivered as its readable text, not its markup; any other body is delivered as received. One result carries at most max_chars characters of that text (default 60000, at most 200000) from offset (default 0); content_range and truncated say which part arrived, and a truncated result names the url and offset of the next part. Each part is a new request to the site, checked and recorded as the first was. The crossing is checked against operator source policy before it happens and recorded either way, with the hash of the whole text, the hash of the part delivered and the hash of the bytes the origin served. Prefer this over WebFetch when the operator wants an evidence trail.",
+            "description": "Fetch a URL through Common Measure. An HTML page is delivered as its readable text, not its markup; any other text is delivered as received. A PDF is not read as text: it is delivered whole, in one call with no offset or max_chars, as a file saved under this session's directory whose path the result names (read it with your own file tools), or on a hosted edge as an embedded resource. Images, archives and other files are unavailable. One result carries at most max_chars characters of that text (default 60000, at most 200000) from offset (default 0); content_range and truncated say which part arrived, and a truncated result names the url and offset of the next part. Each part is a new request to the site, checked and recorded as the first was. The crossing is checked against operator source policy before it happens and recorded either way, with the hash of the whole text, the hash of the part delivered and the hash of the bytes the origin served. Prefer this over WebFetch when the operator wants an evidence trail.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3836,6 +4171,35 @@ pub const SUPPLIER_FIELDS: &[&str] = &[
     "/results/*/text",
     "/refusals/*/url",
 ];
+
+/// A fetched file's result: the payload as text, as every tool result
+/// carries it, then the file as an embedded resource block, and the same
+/// payload as `structuredContent` where the revision has it.
+fn file_result(id: Value, value: &Value, resource: Value, structured: bool) -> Value {
+    let mut result = json!({
+        "content": [{"type": "text", "text": value.to_string()}, resource],
+        "isError": false,
+    });
+    if structured {
+        result["structuredContent"] = value.clone();
+    }
+    ok_response(id, result)
+}
+
+/// The fields of a successful tool answer, outside its payload text, that
+/// carry what a supplier sent, as JSON pointers into the JSON-RPC answer: a
+/// fetched file's bytes as base64 and the URL it was asked at
+/// ([`file_result`]). Base64 includes `/`, so a blob can spell a path under
+/// the operator home by chance; a hosted edge serves these as received, so
+/// the bytes still hash to the recorded `content_hash`. The payload's copy
+/// in `structuredContent` keeps [`SUPPLIER_FIELDS`] below that key.
+pub const SUPPLIER_BLOCK_FIELDS: &[&str] = &[
+    "/result/content/*/resource/blob",
+    "/result/content/*/resource/uri",
+];
+
+/// Where a tool answer carries its payload as JSON rather than as text.
+pub const STRUCTURED_PAYLOAD: &str = "/result/structuredContent";
 
 fn tool_result(id: Value, value: &Value, is_error: bool) -> Value {
     ok_response(
@@ -4250,8 +4614,14 @@ mod tests {
                     .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
                 loaded: None,
             };
-            let mut server =
-                McpServer::new(log, loaded, "claude-connector", None, credentials).interval_relay();
+            let mut server = McpServer::new(
+                log,
+                loaded,
+                "claude-connector",
+                work.to_str().map(str::to_owned),
+                credentials,
+            )
+            .interval_relay();
             server.pace = pace;
             let reason = server
                 .reporting_ruling_for(None, None)
@@ -5255,7 +5625,13 @@ mod tests {
                     .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
                 loaded: None,
             };
-            let server = McpServer::new(log, loaded, "claude-connector", None, credentials);
+            let server = McpServer::new(
+                log,
+                loaded,
+                "claude-connector",
+                work.to_str().map(str::to_owned),
+                credentials,
+            );
             if interval_relay {
                 server.interval_relay()
             } else {
@@ -5312,9 +5688,15 @@ mod tests {
                     .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
                 loaded: None,
             };
-            McpServer::new(log, loaded, "claude-connector", None, credentials)
-                .interval_relay()
-                .reporting_ruling_for(None, None)
+            McpServer::new(
+                log,
+                loaded,
+                "claude-connector",
+                work.to_str().map(str::to_owned),
+                credentials,
+            )
+            .interval_relay()
+            .reporting_ruling_for(None, None)
         };
 
         for (suppliers, expected) in crate::relay_config::SUPPLIER_TABLE {
@@ -5377,9 +5759,15 @@ mod tests {
                     .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
                 loaded: None,
             };
-            let ruling = McpServer::new(log, loaded, "claude-connector", None, credentials)
-                .interval_relay()
-                .reporting_ruling_for(None, None);
+            let ruling = McpServer::new(
+                log,
+                loaded,
+                "claude-connector",
+                work.to_str().map(str::to_owned),
+                credentials,
+            )
+            .interval_relay()
+            .reporting_ruling_for(None, None);
             assert!(!ruling.met, "{planted}");
             assert_eq!(ruling.receiver, None, "{planted}");
             let reason = ruling.reason.expect("a reason");
@@ -5840,6 +6228,147 @@ mod tests {
             unnamed_connections.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "no second lookup is made for a different answer to land in"
+        );
+    }
+
+    /// A resolver that answers every name with `address` and counts its
+    /// calls.
+    fn answering(address: SocketAddr) -> (Resolve, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&lookups);
+        let resolve: Resolve = Box::new(move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![address])
+        });
+        (resolve, lookups)
+    }
+
+    /// Alibaba Cloud's metadata service sits in `100.64.0.0/10`. A hosted
+    /// edge refuses it by its spelling, before a name is looked up or a
+    /// socket opened, even under a policy that sets `allow_private_hosts`.
+    /// The resolver answers a loopback listener, so a floor that let the URL
+    /// through would be seen connecting there rather than reach the network.
+    #[test]
+    fn a_hosted_edge_refuses_the_shared_space_metadata_address_before_any_lookup() {
+        let url = "http://100.100.100.200/latest/meta-data/";
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+        )
+        .expect("policy");
+        hold_robots(home.path(), url);
+        let policy = SessionPolicy::load(home.path(), None)
+            .expect("the policy loads")
+            .hold_private_floor();
+        assert!(
+            !policy.mediates_address(url),
+            "the held floor refuses {url}"
+        );
+        let log = SessionLog::open(home.path(), "test-session").expect("session log");
+        let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+            path: home
+                .path()
+                .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+            loaded: None,
+        };
+        let mut server = McpServer::new(log, policy, "claude-code", None, credentials);
+        let (listener, connections) = counting_listener();
+        let (resolve, lookups) = answering(listener);
+        server.resolve = resolve;
+
+        let error = server
+            .tool_fetch(&json!({"url": url}))
+            .expect_err("the metadata address is not mediated");
+        assert!(
+            error.contains("holds that floor in service mode"),
+            "{error}"
+        );
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A tailnet name resolves into `100.64.0.0/10` through MagicDNS. A
+    /// local edge without `allow_private_hosts` refuses it after the lookup
+    /// and before a connection, and says how to allow one host. The floor is
+    /// asked about the address first, so a classifier that called the range
+    /// public fails there and never connects to it.
+    #[test]
+    fn a_name_resolving_into_shared_space_is_refused_with_how_to_allow_one_host() {
+        let url = "https://nas.tailnet.example/admin";
+        let answer: SocketAddr = "100.64.0.1:443".parse().expect("an address");
+        let (home, mut server) = server(r#"{"policy_mode":"observe"}"#);
+        hold_robots(home.path(), url);
+        assert!(
+            reaches_allowed_addresses(&server.policy, url, &[answer]).is_err(),
+            "100.64.0.0/10 is private to the floor"
+        );
+        let (resolve, lookups) = answering(answer);
+        server.resolve = resolve;
+
+        let error = server
+            .tool_fetch(&json!({"url": url}))
+            .expect_err("a name resolving into shared space is not mediated");
+        assert!(
+            error.contains(
+                "nas.tailnet.example resolves to a local or private address in 100.64.0.0/10"
+            ),
+            "{error}"
+        );
+        assert!(error.contains("To allow this host alone"), "{error}");
+        assert!(error.contains("record_internal_prefixes"), "{error}");
+        assert!(
+            !error.contains("100.64.0.1"),
+            "the address stays out: {error}"
+        );
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1, "the enforcement is on the record");
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert!(
+            !records(home.path())
+                .iter()
+                .any(|record| record.to_string().contains("100.64.0.1")),
+            "the address stays out of the record"
+        );
+
+        // The remedy the refusal names admits this host, and only this one.
+        let named_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            named_home.path().join("policy.json"),
+            r#"{"policy_mode":"observe","record_internal_prefixes":["https://nas.tailnet.example/"]}"#,
+        )
+        .expect("policy");
+        let named = server_at(named_home.path());
+        assert!(named.policy.mediates_address(url));
+        assert!(reaches_allowed_addresses(&named.policy, url, &[answer]).is_ok());
+        let other = "https://printer.tailnet.example/";
+        assert!(reaches_allowed_addresses(&named.policy, other, &[answer]).is_err());
+    }
+
+    /// Behind a fake-IP proxy every name resolves into `198.18.0.0/15`. The
+    /// refusal names the range, the reason and the proxy-side remedy.
+    #[test]
+    fn a_name_resolving_into_fake_ip_space_is_refused_naming_the_proxy_range() {
+        let url = "https://www.gov.uk/guidance";
+        let answer: SocketAddr = "198.18.0.7:443".parse().expect("an address");
+        let (home, mut server) = server(r#"{"policy_mode":"observe"}"#);
+        hold_robots(home.path(), url);
+        assert!(
+            reaches_allowed_addresses(&server.policy, url, &[answer]).is_err(),
+            "198.18.0.0/15 is private to the floor"
+        );
+        let (resolve, _) = answering(answer);
+        server.resolve = resolve;
+
+        let error = server
+            .tool_fetch(&json!({"url": url}))
+            .expect_err("a fake-IP answer is not mediated");
+        assert!(error.contains("in 198.18.0.0/15"), "{error}");
+        assert!(error.contains("fake-IP"), "{error}");
+        assert!(
+            error.contains("commonmeasure doctor --resolve www.gov.uk"),
+            "{error}"
         );
     }
 
@@ -6647,6 +7176,7 @@ mod tests {
         let window = FetchWindow {
             offset: 1,
             max_chars: 3,
+            max_chars_named: true,
         };
         let part = window.slice(text);
         assert_eq!(part.text, "𝄞b€");
@@ -6660,6 +7190,7 @@ mod tests {
         let part = FetchWindow {
             offset: 10,
             max_chars: 5,
+            max_chars_named: true,
         }
         .slice("short");
         assert_eq!(part.text, "");
@@ -6672,11 +7203,13 @@ mod tests {
         let at_end = FetchWindow {
             offset: 5,
             max_chars: 5,
+            max_chars_named: true,
         };
         assert!(at_end.slice("short").past_end().is_some());
         let empty = FetchWindow {
             offset: 0,
             max_chars: 5,
+            max_chars_named: true,
         };
         assert_eq!(empty.slice("").past_end(), None, "an empty text is whole");
         assert!(at_end.slice("").past_end().is_some());
@@ -6688,14 +7221,16 @@ mod tests {
             FetchWindow::from_arguments(&json!({"url": "https://a.example/"})),
             Ok(FetchWindow {
                 offset: 0,
-                max_chars: FETCH_DEFAULT_CHARS
+                max_chars: FETCH_DEFAULT_CHARS,
+                max_chars_named: false,
             })
         );
         assert_eq!(
             FetchWindow::from_arguments(&json!({"offset": 7, "max_chars": u64::MAX})),
             Ok(FetchWindow {
                 offset: 7,
-                max_chars: FETCH_MAX_CHARS
+                max_chars: FETCH_MAX_CHARS,
+                max_chars_named: true,
             })
         );
         for refused in [

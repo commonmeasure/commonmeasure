@@ -9,10 +9,12 @@
 //! digest, so the same bytes yield the same text on any build carrying the
 //! same digest.
 //!
-//! Every mediated fetch that produced a body passes through here, HTML or
-//! not, so the record can tie the bytes the origin served to the text
+//! Every mediated fetch that produced a text body passes through here, HTML
+//! or not, so the record can tie the bytes the origin served to the text
 //! extracted from them in every case, whether a fetch result carried that
-//! text whole or in part, or withheld it. A body whose content
+//! text whole or in part, or withheld it. A PDF, or another file the edge
+//! does not decode, never reaches it (`commonmeasure_harness::fetched_file`).
+//! A body whose content
 //! type is not HTML is decoded and delivered with any supported Annex A.8
 //! credential wrapper removed after verification. The input and output hashes
 //! are equal when content decoding and wrapper removal leave the bytes
@@ -281,8 +283,9 @@ pub fn is_html(content_type: &str) -> bool {
 }
 
 /// Decode and, where the content type names HTML, extract one body, and
-/// record the invocation. Every mediated fetch with a body passes through
-/// here so the record ties `retrieved_hash` to `content_hash` in every case.
+/// record the invocation. Every mediated fetch with a text body passes
+/// through here so the record ties `retrieved_hash` to `content_hash` in
+/// every such case; a file the fetch hands over whole does not.
 ///
 /// `body` is the body with any content coding removed; `coded` is the
 /// coding and the bytes as served where the transport removed one, which is

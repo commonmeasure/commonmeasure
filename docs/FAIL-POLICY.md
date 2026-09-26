@@ -125,6 +125,15 @@ are not the personal data the detector exists to keep out of a model, unless
 the policy sets `refuse_on_pii`. The finding is recorded the same way
 whichever way it is ruled.
 
+A PDF the edge hands over as a file is not read, so neither screen rules on
+it: each records a `capability_unavailable` gap, and the unknown verdict is
+a breach through the same `Ruling`. `strict` refuses the crossing on it
+whatever the source, and `observe` and `prefer` deliver the file with the
+breach and the gap recorded (§5, §7)
+(`strict_refuses_a_pdf_the_screens_cannot_read_and_keeps_nothing`,
+`a_pdf_is_saved_under_the_session_and_its_path_hash_and_size_returned`,
+`crates/commonmeasure-cli/tests/fetch_file_e2e.rs`).
+
 - `strict_source_policy_refuses_a_disallowed_host_before_inference`,
   `observe_mode_carries_the_same_breach_it_does_not_lose_it`,
   `a_strict_pii_finding_on_a_public_source_is_recorded_and_the_source_carried`,
@@ -332,8 +341,9 @@ retains its cause and names what to repair: that host's back-off file where
 the record cannot be read, and the back-off directory where it cannot be
 created, locked, written or removed. A lock another process held for the
 whole wait is named as held, and a lock file that exists and cannot be
-opened is named, to be made readable and writable by this user or removed
-while no process holds it. The next crossing asks again after repair.
+opened is named, with its owner's uid, to be made readable and writable by
+this user, or removed once any `commonmeasure` process run as another user,
+such as under `sudo`, has been stopped. The next crossing asks again after repair.
 
 A store whose directory cannot be written keeps no back-off, so a failing
 host's 429 or 5xx paces nothing: a host that states no `Crawl-delay` is asked

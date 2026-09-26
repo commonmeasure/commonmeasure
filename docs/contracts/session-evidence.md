@@ -217,9 +217,10 @@ applying the rules the record's configuration digest pins
 ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md) §12). `estimated_tokens` counts the delivered text: on
 a mediated fetch, the part `delivered` names, or on a refusal the part the
 result would have carried.
-The relay projects `content_hash` and never `retrieved_hash`: what a
-receiver learns is the hash of the whole extracted text, which is more than
-entered context where the result carried a part of it.
+The relay never projects `retrieved_hash`. A grounding carries the hash of
+the part the result carried, `delivered.hash`, or `content_hash` on a
+crossing that records no part
+([telemetry projection](telemetry-projection.md#what-is-projected)).
 
 `delivered` is the part of the extracted text the tool result carried, on a
 mediated fetch that returned text and on no other record. One
@@ -254,6 +255,59 @@ what the host then does with the result: whether it placed the part in the
 model's context whole, stored it to a file, or let the model read excerpts
 of it. No record describes that, and `delivered.hash` is not evidence of
 what the model read.
+
+A mediated fetch of a PDF hands the file over and extracts no text
+([host integration](host-integration.md#a-fetched-file)). Its crossing
+carries:
+
+```json
+{
+  "mode": "mediated", "url": "https://example.org/paper.pdf", "requested_at": "…",
+  "http_status": 200, "content_type": "application/pdf",
+  "content_hash": "sha256:…", "retrieved_hash": "sha256:…",
+  "delivered_file": {"via": "local_file", "bytes": 482113,
+                     "statement": "delivered as a file, not read by the edge; the PII detector and the injection screen did not run over it"},
+  "breach": "The PII detector did not rule: the body is a PDF, which the edge does not read. The injection screen did not rule: the body is a PDF, which the edge does not read.",
+  "grounded": false, "licence": {"state": "unknown"}
+}
+```
+
+- `content_type` is `application/pdf` for a PDF, whatever the origin
+  labelled it. On a crossing refused because the body is another file
+  (`image/png`, an archive) it is the type as served, and `refusal` names
+  it. It is absent on a body delivered as text.
+- `content_hash` is SHA-256 over exactly the bytes handed over, after any
+  gzip coding is removed; `retrieved_hash` is over the bytes as served, and
+  the two are equal where the origin served no coding. No extractor
+  invocation is recorded, since no text was extracted.
+- `delivered_file.via` is `local_file` (saved under the session's
+  directory, its path in the result) or `embedded_resource` (a hosted
+  edge's resource block). `bytes` is the size handed over. `statement` is
+  always `delivered as a file, not read by the edge; the PII detector and
+  the injection screen did not run over it`.
+- There is no `delivered`, no `estimated_tokens` and no `token_basis`: the
+  edge counted nothing, so the crossing is one of the console's
+  `crossings_without_estimate`. `grounded` is false. The record claims
+  nothing about what the model read, and the relay projects a retrieval,
+  carrying `data.commonmeasure-delivered-file`, and no grounding of its own
+  (a host observation may ground it:
+  [telemetry projection](telemetry-projection.md#grounding-from-host-observations)).
+- The admit-stage screens (PII, injection) rule on text and do not run
+  over a file. Each records a `processor_invoked` record for a PDF the
+  declarations admit, with `decision` `abstain` (`refuse` under `strict`,
+  which refuses the crossing), no findings and a `capability_unavailable`
+  gap. The unknown verdict is a breach (`docs/FAIL-POLICY.md` §6): a
+  delivered file's `breach` names both screens after any other breach, so
+  a delivered file never carries `breach: null`. `delivered_file` is what
+  marks the crossing as a file.
+- A refused file (under `strict`, or an `offset` or `max_chars` on a PDF,
+  or a file that could not be saved) never carries the screens' sentences:
+  its `crossing_refused` has the reason in `refusal`, and `breach` only
+  where a host, allowance or declaration breach applies, as for a refused
+  text page.
+- `requested_at`, `declarations`, `identity` and `allowance` are recorded
+  as for any fetch, and `robots.txt`, a licence or a `Content-Usage`
+  statement refuses a PDF before any of it is kept.
 
 `identity` is the network identity the request presented, and it appears on
 every mediated crossing whose request left the machine and on no other: a
@@ -421,9 +475,10 @@ Explicit observations cover `context_fetch` only. `context_search` deliveries
 return no acquisition handle and retain their existing crossing semantics; they
 are not stamped `host_required` and cannot receive a context-entry observation.
 
-In this mode each admitted text fetch carries an `acquisition_id` (UUID) and a
-separate `crossing_id` (UUID) on its `crossing_mediated` record. `observer` is
-`cm`, `grade` is `mediated`, and `context_observation` is `host_required`. The
+In this mode each admitted text fetch, and each delivered file, carries an
+`acquisition_id` (UUID) and a separate `crossing_id` (UUID) on its
+`crossing_mediated` record. `observer` is `cm`, `grade` is `mediated`, and
+`context_observation` is `host_required`. The
 fetch response returns the acquisition handle only after its record has been
 fsynced. Failure to record it makes the fetch unavailable. Refusals and failed
 fetches yield no handle. A fetch whose answer this edge could not record
@@ -450,7 +505,14 @@ CM appends `context_entered` with `observer: host`, `grade: observed`, and the
 host identity of the MCP process. It checks that the handle belongs to an
 admitted acquisition in this session. The representation hash identifies the
 bytes the host observed in its serialised model request, including any host
-transformation; the acquisition's hash remains unchanged. No text is accepted.
+transformation; the acquisition's hash remains unchanged. For an acquisition
+that handed a file over, `representation_hash` is the SHA-256 of the file's
+bytes as delivered, the crossing's `content_hash`, whatever encoding the
+request used; the edge refuses any other with `-32602`, and records nothing.
+Equality ties the host's claim to the delivered bytes. The fetch result gives
+the host that hash, so equality does not show the file entered the request
+or which of its pages the model read; the observation remains the host's
+claim. No text is accepted.
 The observation establishes the host's request boundary, not provider-internal context or
 model execution. Transport failure can leave an attempted request without a
 context-entry observation. History reuse records a new generation against the
@@ -899,7 +961,9 @@ redirected; `reading.group` is the group selected, with
 `group_is_wildcard` true where the `*` group was used because no group
 names `CommonMeasureBot`; `reading.access_rule` is the Allow or Disallow
 line that decided, as written, with `access_rule_wildcard` true where its
-pattern uses `*` and so matched by wildcard rather than as a literal prefix;
+pattern uses `*` and so matched by wildcard rather than as a literal prefix
+(for a path past the readings cap, below, it names the cap and
+`access_rule_wildcard` is absent);
 `mode` is the policy mode the session was in and `outcome` what the rule
 did: `allowed`, `refused` (a `Disallow`, before the request), `unreachable`
 (the file could not be reached and no answer was held, so every path is
@@ -1019,6 +1083,115 @@ outcome `carried`, still read, and a reader treats `carried` as a `Disallow`
 that was not obeyed. Preferences read from `robots.txt`
 (`Content-Usage`, `Content-Signal`) are not the access rule and still follow
 the session's mode (below).
+
+A `robots.txt` `Allow`, `Disallow` or `Content-Usage` path, and an RSL
+`<content>` `url`, relative or absolute, is compared with the page's URL
+with both sides in one form (RFC 3986 §6.2.2):
+
+- the host in lower case, IDNA-encoded, without trailing dots, a default
+  port or credentials (absolute scopes only);
+- a percent-encoded unreserved character (`A`–`Z`, `a`–`z`, `0`–`9`, `-`,
+  `.`, `_`, `~`) decoded, so `/%6Eews/1` is `/news/1`;
+- every other percent-encoding kept, with upper-case hex, so `%2f` is
+  `%2F`; an encoded `*` or `$` is never a wildcard or an anchor;
+- a literal `*` or `$` in the URL encoded as `%2A` or `%24`, the spelling
+  in which a rule names one (RFC 9309 §2.2.3), so `/file-*.html` is under
+  `/file-%2A.html`; a `$` that is not the last character of a rule is a
+  literal and is encoded too;
+- a character outside the URI character set percent-encoded, so a rule
+  written `/café/` covers `/caf%C3%A9/`;
+- in a URL, dot segments resolved as a URL parser resolves them
+  (`/a/%2E%2E/b` is `/b`, the path the edge requests) and the fragment
+  dropped. A dot segment written in a `robots.txt` pattern is compared as
+  written.
+
+A rule is read as written: its slashes are never merged, its `%2F` and
+`%3B` are never decoded and its `;` is never stripped, so `Disallow: //`
+covers only a page whose path, or a reading of it, starts with a doubled
+slash, and `/a%2Fb` does not cover `/a/b`. The page's path is read as
+requested and as every path four operations reach from it, in any order,
+any number of times, and including only some of them, because servers
+differ in which they apply and in what order:
+
+- decode: `%2F` or `%5C` (either case) read as `/`, and `%3B` (either
+  case) read as `;`, as a proxy that decodes the path before a Java server
+  does, and then stripped;
+- merge: each run of `/` read as one;
+- resolve: dot segments resolved as the URL parser resolves them;
+- strip: in each segment, everything from the first raw `;` to the end of
+  the segment removed.
+
+Each reading is in the form above, and the query is the same in every
+reading. nginx merges before it resolves and serves `/x//..%2Fnews/1` as
+`/news/1`; the URL parser resolves first and reaches `/x/news/1`; both are
+readings, and so is `/x//../news/1`, decoded and not resolved. Tomcat,
+Jetty and Undertow strip path parameters, so `/news;x=1/1` reads as
+`/news/1`, and `/x/..;/news/1` reads as `/x/../news/1` and then `/news/1`.
+nginx, when `proxy_pass` names a URI, decodes `%3B` before a Tomcat behind
+it strips the `;`, so `/news%3Bx/1` reads as `/news;x/1` and then
+`/news/1`. IIS is documented to read `%5C` as `/`; nginx and Apache serve
+`/news%5C1` as a file named `news\1`, so there a `%5C` reading refuses more
+than the server serves under the rule. A `;` or `%3B` reading refuses more
+in the same way on a server that strips no parameters, where `/news;x/1`
+and `/news%3Bx/1` name a directory `news;x`.
+
+Each operation leaves the path unchanged or shorter, so the readings are
+finite. Readings are capped at 64, and a crafted path can reach the cap:
+`/x//..;/.../;/..;/a/%2Fb/;//%2F..%2F..%2F;%5Cc` has 65. Every path of a
+`/` followed by up to six of `/`, `%2F`, `%5C`, `..`, `.`, `a`, `;` and
+`%3B` has at most 28 readings, and at most 24 as the URL parser leaves it.
+A page past the cap is refused without comparing its readings, as if a
+`Disallow` covered it: `reading.crawlable` is false, `reading.access_rule`
+names the cap and no group is recorded. Such a URL is internal under any
+internal prefix on its origin. How the readings combine:
+
+- access rules: a page is refused when any reading's longest matching rule
+  is a `Disallow`, and `reading.access_rule` names that rule. An `Allow`
+  reached by one reading does not lift a `Disallow` reached by another, so
+  `/a//b` is refused under `Disallow: /a/` and `Allow: /a/b`, and `//news/1`
+  under `Disallow: /` and `Allow: /news/`;
+- `Content-Usage`: the rules each reading selects all apply and combine
+  most-restrictive-wins, as tied rules do;
+- `<content>` entries: the entry the page as requested selects governs;
+  where it selects none, the entry the first other reading selects, in
+  breadth-first order: the readings one operation away, then two, each
+  step trying decode, merge, resolve and strip in that order. `//news/1`
+  falls to a `/news/` entry only when no entry covers `//news/1` as
+  requested, and `/x//..%2Fnews/1` falls to a `/x/news/` entry (two
+  operations) before a `/news/` entry (three). An entry covers the
+  spellings above only where no other entry of the licence covers the URL
+  as requested, so the requested spelling can select a less restrictive
+  entry. Beside a catch-all `/` entry, `//premium/x` and `/premium%2Fx`
+  are governed by `/`, not by a narrower `/premium/` entry. Under a
+  permissive `/news/free/` entry, `/news/free/..%2Fpaid/x` is governed by
+  `/news/free/`, not by `/news/`, although a server that decodes and
+  resolves serves it as `/news/paid/x`.
+
+So `//news/1`, `/news%2F1`, `/x/..%2Fnews/1`, `/x//..%2Fnews/1`,
+`/news;x=1/1`, `/x/..;/news/1`, `/news%3Bx/1`, `/x/..%3B/news/1` and
+`/news%5C1` are refused under `Disallow: /news/`, and `/news%2F1` is not
+under `Disallow: /news/1/`. `/news%2F..%2Fsports/1` is refused under
+`Disallow: /news/` as well, through `/news/../sports/1`, the path a proxy
+that decodes `%2F` without resolving routes under `/news/`.
+
+Some spellings are not matched. A raw reserved character in a rule's query
+is compared with the URL's encoded one as distinct, so
+`Disallow: /go?u=https://x` does not cover `/go?u=https%3A%2F%2Fx` (the
+second example of RFC 9309 §2.2.2's table). An empty query is kept, so
+`/news?` is not under `Disallow: /news$`. A change of letter case is not
+read: `/NEWS/1`, which a server on a case-insensitive file system or IIS
+serves as `/news/1`, is not under `Disallow: /news/`. A double encoding is not
+read: `/x/..%252Fnews/1`, which a server that decodes the path twice serves
+as `/news/1`, is not under `Disallow: /news/`.
+
+An anchored rule's last part must end the path: `Disallow: /*.pdf$` covers
+`/a.pdf/b.pdf`. A rule ranks by the length of its form, so spelling a rule
+longer does not make it more specific. Two spellings of one path tie, and
+the tie is settled as for two identical rules: `Allow` wins an access-rule
+tie, tied `Content-Usage` rules all apply, and between two relative
+`<content>` entries the later one governs. The URL requested and the URLs
+recorded (`url`, `requested_url`, `reading.access_rule`, the licence's
+`content`) are as written.
 
 `reading.crawl_delay` is the selected group's `Crawl-delay`, and `delay` is
 what it did to this request. The delay binds in every policy mode, signed
@@ -1313,7 +1486,11 @@ served as received: a fetch's `content`, `url` and `next` and its
 `declarations.robots.requested_url`, `declarations.robots.robots_url` and
 `declarations.robots.final_url`, and a search's `results[].url`,
 `results[].title`, `results[].text` and `refusals[].url`
-(`SUPPLIER_FIELDS` in `crates/commonmeasure-harness/src/mcp.rs`).
+(`SUPPLIER_FIELDS` in `crates/commonmeasure-harness/src/mcp.rs`). The same
+pointers under a fetched file's `structuredContent`, and its embedded
+resource's `blob` and `uri` in the answer (`SUPPLIER_BLOCK_FIELDS`), are
+served as received too: base64 can spell a path by chance, and the served
+bytes must still hash to the recorded `content_hash`.
 `declarations.robots.explanation` quotes the asked URL in prose and is
 rewritten. A page that quotes the operator home reaches the tenant as the publisher sent it,
 so its text still matches `content_hash`, and a URL still names the page it
@@ -1392,16 +1569,28 @@ the fetcher from the report its owner asks for.
 A licence's telemetry reporting demand is met when its profile is the Content
 Telemetry binding this runtime speaks, its conformance level is one this
 runtime emits (`retrieval` or `grounding`), and the session can deliver:
-the policy scope clears telemetry egress, `$COMMONMEASURE_HOME/relay.json`
+the policy scope clears telemetry egress both in the policy the session
+started under and in `policy.json` as it stands at the ruling,
+`$COMMONMEASURE_HOME/relay.json`
 is one the relay loads and names a receiver that is not scoped to suppliers
 ([telemetry projection §Supplier scope](telemetry-projection.md#supplier-scope):
 a fetched page names no supplier, so a scoped receiver never carries it, and
 an empty list is a scope), and automatic delivery is in force. A `relay.json`
 the relay refuses, a malformed `suppliers` list among its faults, leaves the
 demand unmet with the load error as the reason, because the relay sends
-nothing under it. Automatic delivery
+nothing under it. `relay.json` is read at each ruling, not once when the MCP
+server starts, so a receiver removed or scoped to suppliers during a
+long-lived session (Claude Desktop keeps its server for the life of the app)
+leaves the next demand unmet. Egress clearance is read the same way,
+because the relay resolves it from the current policy and reporting
+approvals at each run: a scope's `allow_telemetry_egress` withdrawn, or a
+directory's reporting approval that has expired, leaves the next demand
+unmet, and a `policy.json` that does not load at the ruling leaves it unmet with the
+load error as the reason. A clearance granted after the server started
+does not widen that session; it applies from the next one. Automatic delivery
 means the events leave without anyone typing a command — the session-end
-relay ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)) or the hosted service's interval. The marker
+relay ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)), or the hosted service's or the background
+relay's interval ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval)). The marker
 file `$COMMONMEASURE_HOME/relay/manual` switches it off, and a demand is
 then unmet however the rest is configured; the reason names the marker, so
 the operator reads what to remove. A profile this runtime does not recognise
@@ -1414,13 +1603,23 @@ the home's own state, never from host files under `$HOME`:
   whatever its host word or client, stdio sessions included, because the
   service's interval relay reads every session log in the home. "Running"
   means a process holds the home's lock `hosted-service.lock` now
-  (`delivery::service_running`, the probe `doctor` uses); a service that is
+  (`delivery::service_state`, the probe `doctor` and `status` use); a service that is
   configured but stopped holds nothing and does not count. A lock file the
   probe cannot open does not count either: whether a service holds it is
   unknown, `doctor` and `status` say so, and the session is treated as
   having no automatic delivery. The interval
   relay skips its run while `relay/manual` is present and says so in the
   journal.
+- A running background relay on the home (`commonmeasure relay --every
+  <seconds>`): automatic for every session in it, whatever its host word or
+  client, for the same reason: each of its runs reads every session log in
+  the home. "Running" means a process holds `relay-loop.lock` in the home
+  now (`delivery::relay_loop_running`, read by the same probe as the
+  service's lock); a lock nobody holds does not count, and a lock file the
+  probe cannot open does not count either and reads as "cannot be read" in
+  `doctor` and `status`. It skips its runs while `relay/manual` is present,
+  as the service does. This is how a Claude Desktop session meets the
+  demand.
 - A hosted session under `hosted service`: automatic for the same reason.
   `hosted serve` runs no interval relay and takes no lock, so its sessions
   are not automatic.
@@ -1432,7 +1631,8 @@ the home's own state, never from host files under `$HOME`:
   `crates/commonmeasure-harness/src/delivery.rs` is held to those tables by a
   test.
 - Every other `--host` word: unmet, with the reason "no automatic delivery;
-  this host (`<host>`) sends no session-end event".
+  this host (`<host>`) sends no session-end event and no background relay
+  (`commonmeasure relay --every`) holds this home".
 - Under `--host claude-code`, any client name but `claude-code`: unmet, and
   the reason names the client. `--host` defaults to `claude-code`, so the
   host word alone does not identify Claude Code: Goose has no `install` and
@@ -1456,16 +1656,19 @@ ruling would make the outcome depend on the machine's host files. An
 operator on Codex, Cursor or another host without a session-end event can
 connect through a hosted endpoint where the host supports one (the service
 serves `claude-connector`, `chatgpt`, `m365-copilot` and
-`copilot-cloud-agent`, behind OAuth), or run `commonmeasure hosted service`
-on the same home the stdio server uses, which needs that home enrolled and
-under managed policy; while the service holds the home's lock, that home's
-stdio sessions count. Otherwise a source whose licence demands usage
-reporting is refused on that host. Tested in
+`copilot-cloud-agent`, behind OAuth), run the background relay on the home
+the stdio server uses (`commonmeasure service install relay` on macOS, or
+`commonmeasure relay --every <seconds>` under another service manager), or
+run `commonmeasure hosted service` on that home, which needs it enrolled and
+under managed policy. While either holds its lock, that home's stdio
+sessions count. Otherwise a source whose licence demands usage reporting is
+refused on that host. Tested in
 `crates/commonmeasure-cli/tests/mediated_e2e.rs`
 `reporting_demand::a_host_that_sends_no_session_end_event_leaves_a_telemetry_demand_unmet`,
 `a_known_other_client_under_the_default_host_word_leaves_the_demand_unmet`,
-`an_unknown_client_under_the_default_host_word_leaves_the_demand_unmet` and
-`a_stdio_session_on_a_home_a_running_service_holds_meets_the_demand`,
+`an_unknown_client_under_the_default_host_word_leaves_the_demand_unmet`,
+`a_stdio_session_on_a_home_a_running_service_holds_meets_the_demand` and
+`a_claude_desktop_session_is_admitted_and_delivered_only_while_the_background_relay_runs`,
 and in `crates/commonmeasure-harness/src/mcp.rs`
 `a_hosted_session_meets_a_reporting_demand_only_under_the_interval_relay`.
 
@@ -2537,8 +2740,10 @@ quoted the URL whole, and the console withholds a reason that can hold one
 - **Prompts, responses and conversation text.** Records carry identifiers and
   hashes. The transcript path is noted on a turn boundary; its contents are not
   copied.
-- **Local and private addresses** from observed capture: loopback, RFC 1918,
-  `.local`, `.internal` and `file://`. Passive capture sees everything and
+- **Local and private addresses** from observed capture: every private
+  address as [source policy §Recording](source-policy.md#recording) defines
+  it, among them loopback, private networks, shared address space, `.local`,
+  `.internal` and `file://`. Passive capture sees everything and
   never asks, so it holds a floor the operator cannot lower **except by named
   prefix, and never by omission**: `record_internal_prefixes` in `policy.json`
   lists internal prefixes (`"https://rag.example.internal/"`,
@@ -2546,18 +2751,26 @@ quoted the URL whole, and the console withholds a reason that can hold one
   hashes and token estimates as public traffic. Each prefix must end with
   `/`, because the slash is the consent boundary: a prefix without it would
   also match hosts and paths that start with the same characters, so the
-  loader refuses it. The operator owns that corpus, and a named prefix is
-  written consent. Anything the list does not match stays out (naming one
-  corpus is not consent for localhost as a whole), and an absent or empty
-  list means the floor holds everywhere. The named prefixes appear in
-  `context_status`, so the console can say what is being recorded and on
-  whose authority. The mediated tools honour the same prefixes, and
+  loader refuses it. It refuses a prefix with a query or a fragment too. A
+  URL is under a prefix when it starts with the prefix with both in the form
+  path rules are matched in (§Source declarations), so
+  the readings that section gives a page apply, any one of them under the
+  prefix is enough, and the prefix is read as written:
+  `https://rag.example.internal/%6Eotes/a`,
+  `https://rag.example.internal//notes/a` and
+  `https://rag.example.internal/notes%2Fa` are under
+  `https://rag.example.internal/notes/`. The operator owns that corpus, and
+  a named prefix is written consent. Anything the list does not match stays
+  out (naming one corpus is not consent for localhost as a whole), and an
+  absent or empty list means the floor holds everywhere. The named prefixes
+  appear in `context_status`, so the console can say what is being recorded
+  and on whose authority. The mediated tools honour the same prefixes, and
   `allow_private_hosts` is the broader grant, because there the agent named
   one URL deliberately. Reconstructed import keeps the unconditional floor: a
   prefix names consent from the moment it is written, and it does not
   retroactively cover transcripts nothing was watching at the time. Internal
-  crossings are operator-record only; any egress
-  projection must treat internal URLs as private by default. The
+  crossings are operator-record only; any egress projection must treat
+  internal URLs as private by default. The
   classification is stamped on the record at capture (`"internal": true`) and
   egress honours the stamp, so a prefix later edited or removed cannot make a
   crossing recorded as internal leave the machine. The content view

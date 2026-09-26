@@ -1,10 +1,18 @@
-//! `commonmeasure service`: the operator console as a login service.
+//! `commonmeasure service`: the operator console and the background relay as
+//! login services.
 //!
-//! On macOS the console runs as a LaunchAgent, `ai.commonmeasure.console`,
-//! loaded into the user's GUI domain with `launchctl bootstrap` and removed
-//! with `launchctl bootout`. Other platforms get an explicit refusal naming
-//! the command to run the console under their own service manager: only the
-//! LaunchAgent has been exercised against a real service manager.
+//! On macOS each runs as a LaunchAgent, `ai.commonmeasure.console` and
+//! `ai.commonmeasure.relay`, loaded into the user's GUI domain with
+//! `launchctl bootstrap` and removed with `launchctl bootout`, through the
+//! same plist writer. Other platforms get an explicit refusal naming the
+//! command to run under their own service manager: only the LaunchAgent has
+//! been exercised against a real service manager.
+//!
+//! The background relay (`commonmeasure relay --every`) is how a host that
+//! sends no session-end event, such as Claude Desktop, gets automatic
+//! delivery. Installing it is the operator's act, because it sends to the
+//! receiver in `relay.json` with nobody running a command; nothing installs
+//! it on the operator's behalf.
 //!
 //! A console started by hand and forgotten is the failure this exists for,
 //! so `status` reports what holds the port whether or not it is the service,
@@ -20,6 +28,9 @@ use std::time::{Duration, Instant, SystemTime};
 /// The launchd label, the plist's file stem and the service's name in
 /// `launchctl print`.
 pub const LABEL: &str = "ai.commonmeasure.console";
+
+/// The background relay's launchd label.
+pub const RELAY_LABEL: &str = "ai.commonmeasure.relay";
 
 /// Where `serve` listens unless told otherwise.
 const DEFAULT_LISTEN: &str = "127.0.0.1:4173";
@@ -38,25 +49,45 @@ pub enum ServiceCommand {
     /// Installing again rewrites the plist from this shell and restarts the
     /// console. Refuses a non-loopback --listen, and refuses when another
     /// process already listens on the address.
+    ///
+    /// `install relay` installs the background relay the same way: a
+    /// LaunchAgent at ~/Library/LaunchAgents/ai.commonmeasure.relay.plist
+    /// that runs `relay --every <seconds>` at login, restarts it if it
+    /// crashes (at most once in five minutes), and logs to logs/relay.log. A loop refused at start (no
+    /// receiver, relay.json unreadable) exits 0 and stays stopped until
+    /// installed again. It sends to the receiver in
+    /// relay.json with nobody running a command, which is what lets a host
+    /// with no session-end event (Claude Desktop) use a source whose licence
+    /// demands usage reporting, where relay.json names a receiver not scoped
+    /// to suppliers and the policy scope clears telemetry egress. Refuses without a receiver in relay.json, and
+    /// while a background relay started by hand holds the home.
     Install {
         service: ServiceName,
-        /// Address the console listens on. Loopback only.
-        #[arg(long, default_value = DEFAULT_LISTEN)]
-        listen: String,
+        /// Address the console listens on. Loopback only; the console only.
+        #[arg(long)]
+        listen: Option<String>,
+        /// Seconds between the background relay's runs, 1 to 86400; the
+        /// relay only. Default 300.
+        #[arg(long, value_name = "SECONDS")]
+        every: Option<u64>,
     },
-    /// Whether the console service is installed, loaded and listening; the
-    /// binary, version, Edge home and log it runs with; the port; and
-    /// whether the binary on PATH differs from the one running. Also names a
-    /// console on the port that the service did not start.
-    Status,
-    /// Stop the console service and remove its plist. The log is kept.
+    /// Whether each service is installed, loaded and running, and what it
+    /// runs with. For the console: the binary, version, Edge home and log;
+    /// the port; whether the binary on PATH differs from the one running;
+    /// and a console on the port that the service did not start. For the
+    /// background relay: the binary, Edge home, interval and log, and
+    /// whether a background relay holds the home. Both unless one is named.
+    Status { service: Option<ServiceName> },
+    /// Stop the service and remove its plist. The log is kept.
     Uninstall { service: ServiceName },
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ServiceName {
     /// The operator console, `commonmeasure serve`.
     Console,
+    /// The background relay, `commonmeasure relay --every <seconds>`.
+    Relay,
 }
 
 /// What a command printed and how it exited.
@@ -97,6 +128,9 @@ impl Commands for System {
 pub struct Context {
     /// The user's home directory: the plist goes under its `Library`.
     pub user_home: PathBuf,
+    /// The Edge home the service runs with: where the background relay's
+    /// lock and `relay.json` are read.
+    pub edge_home: PathBuf,
     /// Set when `COMMONMEASURE_HOME` chose the Edge home, so the service is
     /// started with the same home the installing shell had.
     pub home_override: Option<PathBuf>,
@@ -133,6 +167,10 @@ impl Context {
     fn installed(&self, installed: &Installed) -> Context {
         Context {
             user_home: self.user_home.clone(),
+            edge_home: installed
+                .home
+                .clone()
+                .unwrap_or_else(|| self.edge_home.clone()),
             home_override: installed.home.clone(),
             log: installed.log.clone(),
             working_directory: installed.working_directory.clone(),
@@ -154,14 +192,65 @@ pub fn plist_path(user_home: &Path, label: &str) -> PathBuf {
 }
 
 pub fn run(command: ServiceCommand) -> Result<(), String> {
+    // The flags are checked before the platform, so a wrong one is named on
+    // every platform.
+    if let ServiceCommand::Install {
+        service,
+        listen,
+        every,
+    } = &command
+    {
+        match service {
+            ServiceName::Console if every.is_some() => {
+                return Err("--every is the background relay's; the console takes --listen".into());
+            }
+            ServiceName::Relay if listen.is_some() => {
+                return Err("--listen is the console's; the background relay takes --every".into());
+            }
+            _ => {}
+        }
+    }
     if !cfg!(target_os = "macos") {
         return Err(unsupported(&command));
     }
-    let context = context()?;
     let text = match command {
-        ServiceCommand::Install { listen, .. } => install(&context, &System, &listen)?,
-        ServiceCommand::Status => status(&context, &System)?,
-        ServiceCommand::Uninstall { .. } => uninstall(&context, &System)?,
+        ServiceCommand::Install {
+            service: ServiceName::Console,
+            listen,
+            ..
+        } => install(
+            &context()?,
+            &System,
+            listen.as_deref().unwrap_or(DEFAULT_LISTEN),
+        )?,
+        ServiceCommand::Install {
+            service: ServiceName::Relay,
+            every,
+            ..
+        } => install_relay(
+            &relay_context()?,
+            &System,
+            every.unwrap_or(crate::relay_loop::DEFAULT_EVERY_SECS),
+        )?,
+        ServiceCommand::Status { service } => {
+            let mut text = String::new();
+            if service != Some(ServiceName::Relay) {
+                text.push_str(&status(&context()?, &System)?);
+            }
+            if service.is_none() {
+                text.push('\n');
+            }
+            if service != Some(ServiceName::Console) {
+                text.push_str(&relay_status(&relay_context()?, &System)?);
+            }
+            text
+        }
+        ServiceCommand::Uninstall {
+            service: ServiceName::Console,
+        } => uninstall(&context()?, &System)?,
+        ServiceCommand::Uninstall {
+            service: ServiceName::Relay,
+        } => uninstall_relay(&relay_context()?, &System)?,
     };
     print!("{text}");
     Ok(())
@@ -173,14 +262,34 @@ fn unsupported(command: &ServiceCommand) -> String {
     let exe = std::env::current_exe()
         .map(|exe| exe.display().to_string())
         .unwrap_or_else(|_| "commonmeasure".to_string());
-    let listen = match command {
-        ServiceCommand::Install { listen, .. } => listen.as_str(),
-        _ => DEFAULT_LISTEN,
+    let (listen, every, service) = match command {
+        ServiceCommand::Install {
+            service,
+            listen,
+            every,
+        } => (listen.as_deref(), *every, Some(*service)),
+        ServiceCommand::Status { service } => (None, None, *service),
+        ServiceCommand::Uninstall { service } => (None, None, Some(*service)),
     };
+    let console = format!(
+        "run the console as a user service yourself: systemd-run --user \
+         --unit=commonmeasure-console {exe} serve --listen {}",
+        listen.unwrap_or(DEFAULT_LISTEN)
+    );
+    let relay = format!(
+        "run the background relay as a user service yourself: systemd-run --user \
+         --unit=commonmeasure-relay {exe} relay --every {}",
+        every.unwrap_or(crate::relay_loop::DEFAULT_EVERY_SECS)
+    );
     format!(
-        "commonmeasure service is supported on macOS only. Under systemd, run the console as a \
-         user service yourself: systemd-run --user --unit=commonmeasure-console {exe} serve \
-         --listen {listen}"
+        "commonmeasure service is supported on macOS only. Under systemd, {}. A systemd-run unit \
+         is transient: it is not restarted if it exits and does not start at login; for that, \
+         write a unit under ~/.config/systemd/user with Restart=on-failure and enable it",
+        match service {
+            Some(ServiceName::Console) => console,
+            Some(ServiceName::Relay) => relay,
+            None => format!("{console}; {relay}"),
+        }
     )
 }
 
@@ -496,6 +605,7 @@ pub fn context() -> Result<Context, String> {
         log: home.join("logs").join("console.log"),
         working_directory: user_home.clone(),
         user_home,
+        edge_home: home,
         home_override,
         exe,
         on_path: on_path("commonmeasure"),
@@ -507,6 +617,21 @@ pub fn context() -> Result<Context, String> {
         settle: SETTLE,
         version_wait: crate::update::VERSION_WAIT,
     })
+}
+
+/// The background relay's context: the console's, with its own label and
+/// log. In a debug build a `COMMONMEASURE_SERVICE_LABEL` override moves the
+/// relay's label with it, to `<override>.relay`, so a test that redirects
+/// the console never reaches the owner's relay either.
+pub fn relay_context() -> Result<Context, String> {
+    let mut context = context()?;
+    context.label = if context.label == LABEL {
+        RELAY_LABEL.to_string()
+    } else {
+        format!("{}.relay", context.label)
+    };
+    context.log = context.edge_home.join("logs").join("relay.log");
+    Ok(context)
 }
 
 /// The launchd label. A debug build takes `COMMONMEASURE_SERVICE_LABEL`, so
@@ -575,17 +700,49 @@ pub fn loopback(listen: &str) -> Result<SocketAddr, String> {
     Ok(address)
 }
 
-/// The LaunchAgent for `exe serve --listen <listen>`.
+/// The LaunchAgent for `exe serve --listen <listen>`, restarted whenever it
+/// exits.
 pub fn plist(context: &Context, listen: &str) -> String {
+    agent(context, &["serve", "--listen", listen], "<true/>", None)
+}
+
+/// The fewest seconds between two starts of the background relay. Launchd
+/// otherwise starts a job again 10 s after the last start, and a loop that
+/// crashes at every start then runs a full relay (every session log read,
+/// managed policy synced, a hub request on a managed home) and writes about
+/// half a kilobyte of log every 10 s. At 300 s, the interval `install
+/// relay` writes by default, a loop crashing at start runs no more often
+/// than a healthy one. The throttle counts from the last start, so a loop
+/// that ran longer than this before it crashed is started again at once.
+pub const RELAY_THROTTLE_SECS: u64 = 300;
+
+/// The LaunchAgent for `exe relay --every <every>`. Launchd restarts it
+/// only after an unsuccessful exit: a crash, an exit status other than 0 or
+/// a signal that kills it. The loop exits 0 after SIGTERM and when its
+/// configuration refuses it at start (no receiver, a `relay.json` that does
+/// not load, another loop holding the home), and then stays stopped until
+/// it is installed again or the next login, rather than being started and
+/// refused every ten seconds. A crash is started again at most every
+/// [`RELAY_THROTTLE_SECS`].
+pub fn relay_plist(context: &Context, every: u64) -> String {
+    agent(
+        context,
+        &["relay", "--every", &every.to_string()],
+        "<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>",
+        Some(RELAY_THROTTLE_SECS),
+    )
+}
+
+/// The LaunchAgent that runs `exe` with `arguments` at login, kept alive as
+/// `keep_alive` says and started at most every `throttle` seconds where
+/// given (launchd's default is 10), logging both streams to the context's
+/// log.
+fn agent(context: &Context, arguments: &[&str], keep_alive: &str, throttle: Option<u64>) -> String {
     let label = escape(&context.label);
-    let mut arguments = String::new();
-    for argument in [
-        &context.exe.display().to_string(),
-        "serve",
-        "--listen",
-        listen,
-    ] {
-        arguments.push_str(&format!("\t\t<string>{}</string>\n", escape(argument)));
+    let exe = context.exe.display().to_string();
+    let mut program = String::new();
+    for argument in std::iter::once(exe.as_str()).chain(arguments.iter().copied()) {
+        program.push_str(&format!("\t\t<string>{}</string>\n", escape(argument)));
     }
     let environment = match &context.home_override {
         Some(home) => format!(
@@ -596,17 +753,21 @@ pub fn plist(context: &Context, listen: &str) -> String {
         None => String::new(),
     };
     let log = escape(&context.log.display().to_string());
+    let throttle = throttle
+        .map(|seconds| format!("\t<key>ThrottleInterval</key>\n\t<integer>{seconds}</integer>\n"))
+        .unwrap_or_default();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n\
          \t<key>Label</key>\n\t<string>{label}</string>\n\
-         \t<key>ProgramArguments</key>\n\t<array>\n{arguments}\t</array>\n\
+         \t<key>ProgramArguments</key>\n\t<array>\n{program}\t</array>\n\
          {environment}\
          \t<key>WorkingDirectory</key>\n\t<string>{}</string>\n\
          \t<key>RunAtLoad</key>\n\t<true/>\n\
-         \t<key>KeepAlive</key>\n\t<true/>\n\
+         \t<key>KeepAlive</key>\n\t{keep_alive}\n\
+         {throttle}\
          \t<key>StandardOutPath</key>\n\t<string>{log}</string>\n\
          \t<key>StandardErrorPath</key>\n\t<string>{log}</string>\n\
          </dict>\n</plist>\n",
@@ -634,6 +795,8 @@ fn unescape(text: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Installed {
     pub program: PathBuf,
+    /// The console's `--listen` address; for the background relay, its
+    /// `--every` interval as written.
     pub listen: String,
     /// `COMMONMEASURE_HOME` in the plist's environment; `None` when the
     /// service uses the default Edge home.
@@ -648,6 +811,20 @@ pub struct Installed {
 /// other than `COMMONMEASURE_HOME` or with separate output and error logs,
 /// reads as `None`, and status says so.
 pub fn read_plist(text: &str) -> Option<Installed> {
+    read_agent(text, "serve", "--listen")
+}
+
+/// Reads back a plist written by [`relay_plist`], as [`read_plist`] reads
+/// the console's; the interval is in `listen`'s place.
+pub fn read_relay_plist(text: &str) -> Option<(Installed, u64)> {
+    let installed = read_agent(text, "relay", "--every")?;
+    let every = installed.listen.parse().ok()?;
+    Some((installed, every))
+}
+
+/// A plist [`agent`] wrote for `<program> <subcommand> <flag> <value>`, with
+/// the value in [`Installed::listen`].
+fn read_agent(text: &str, subcommand: &str, option: &str) -> Option<Installed> {
     let (_, rest) = text.split_once("<key>ProgramArguments</key>")?;
     let (array, _) = rest.split_once("</array>")?;
     let arguments: Vec<String> = array
@@ -659,7 +836,7 @@ pub fn read_plist(text: &str) -> Option<Installed> {
     let [program, serve, flag, listen] = arguments.as_slice() else {
         return None;
     };
-    if serve != "serve" || flag != "--listen" {
+    if serve != subcommand || flag != option {
         return None;
     }
     let log = plist_string(text, "StandardOutPath")?;
@@ -1196,12 +1373,31 @@ fn bootout(context: &Context, commands: &dyn Commands) -> Result<(), String> {
 }
 
 pub fn uninstall(context: &Context, commands: &dyn Commands) -> Result<String, String> {
+    uninstall_agent(context, commands, read_plist)
+}
+
+/// [`uninstall`] for the background relay, whose plist [`read_plist`] does
+/// not read: the log it names is the one the installed agent writes.
+pub fn uninstall_relay(context: &Context, commands: &dyn Commands) -> Result<String, String> {
+    uninstall_agent(context, commands, |text| {
+        read_relay_plist(text).map(|(installed, _)| installed)
+    })
+}
+
+/// Boot out and remove the agent at `context`'s label, naming the log its
+/// plist, read back by `read`, says it kept, or the shell's where it does
+/// not read.
+fn uninstall_agent(
+    context: &Context,
+    commands: &dyn Commands,
+    read: impl Fn(&str) -> Option<Installed>,
+) -> Result<String, String> {
     let label = &context.label;
     let path = context.plist();
     let log = std::fs::read_to_string(&path)
         .ok()
         .as_deref()
-        .and_then(read_plist)
+        .and_then(read)
         .map_or_else(|| context.log.clone(), |installed| installed.log);
     let was_loaded = loaded(context, commands)?.is_some();
     if was_loaded {
@@ -1450,6 +1646,295 @@ pub fn status(context: &Context, commands: &dyn Commands) -> Result<String, Stri
     Ok(out)
 }
 
+/// Install the background relay and start it: refused without a receiver in
+/// `relay.json`, where it would send nothing, and while a background relay
+/// the service did not start holds the home, where launchd would restart the
+/// agent's loop every few seconds for it to be refused each time. Succeeds
+/// once the started loop holds the home's lock.
+pub fn install_relay(
+    context: &Context,
+    commands: &dyn Commands,
+    every: u64,
+) -> Result<String, String> {
+    use commonmeasure_harness::delivery::{LockState, relay_loop_state};
+    let label = &context.label;
+    let home = &context.edge_home;
+    crate::relay_loop::check_every(every)?;
+    let scope = match commonmeasure_relay::config::RelayConfig::load(home) {
+        Err(error) => return Err(error),
+        Ok(None) => {
+            return Err(format!(
+                "no telemetry receiver is configured in {}, so the background relay would send \
+                 nothing. Name one there, or enrol with commonmeasure connect, then install \
+                 again.",
+                home.join("relay.json").display()
+            ));
+        }
+        Ok(Some(config)) => crate::relay_loop::scope_consequence(&config),
+    };
+    let lock = crate::relay_loop::lock_path(home);
+    let loaded = loaded(context, commands)?;
+    match relay_loop_state(home) {
+        LockState::Running if loaded.as_ref().is_none_or(|loaded| loaded.pid.is_none()) => {
+            // The record is the last loop's; a holder that has not yet
+            // written its own leaves a pid the system may have reused.
+            let holder = crate::relay_loop::Holder::read(home)
+                .filter(|holder| crate::relay_loop::alive(holder.pid));
+            return Err(format!(
+                "a background relay the service did not start holds {}{}. Stop it first{}, then \
+                 install again.",
+                lock.display(),
+                holder
+                    .as_ref()
+                    .map(|holder| format!(" (pid {})", holder.pid))
+                    .unwrap_or_default(),
+                holder
+                    .map(|holder| format!(" (kill {})", holder.pid))
+                    .unwrap_or_default()
+            ));
+        }
+        LockState::Unknown(reason) => {
+            return Err(format!(
+                "whether a background relay holds this home cannot be read ({reason}); nothing \
+                 was installed"
+            ));
+        }
+        _ => {}
+    }
+
+    let log = &context.log;
+    std::fs::create_dir_all(log.parent().ok_or("the log path has no directory")?)
+        .map_err(|error| format!("create {}: {error}", log.display()))?;
+    let path = context.plist();
+    std::fs::create_dir_all(path.parent().expect("the plist has a parent"))
+        .map_err(|error| format!("create {}: {error}", path.display()))?;
+    // Under the umask, as the console's plist is written.
+    commonmeasure_runtime::declaration::replace(&path, relay_plist(context, every).as_bytes())?;
+
+    let running = || relay_loop_state(home) == LockState::Running;
+    if loaded.is_some() {
+        bootout(context, commands)?;
+        // The previous loop finishes the run in progress before it exits.
+        if !wait_until(context.settle, || !running()) {
+            return Err(format!(
+                "the previous background relay still holds {} {} s after it was stopped; the new \
+                 plist is written but not loaded. Run install again once it has exited.",
+                lock.display(),
+                context.settle.as_secs()
+            ));
+        }
+    }
+    let output = commands.run(
+        "launchctl",
+        &[
+            "bootstrap",
+            &format!("gui/{}", context.uid),
+            &path.display().to_string(),
+        ],
+    )?;
+    if !output.success {
+        return Err(format!(
+            "launchctl bootstrap gui/{} {} failed: {}",
+            context.uid,
+            path.display(),
+            output.stderr.trim()
+        ));
+    }
+    let output = commands.run("launchctl", &["kickstart", &context.target()])?;
+    if !output.success {
+        return Err(format!(
+            "{label} is loaded but launchctl kickstart {} failed: {}",
+            context.target(),
+            output.stderr.trim()
+        ));
+    }
+    let verb = if loaded.is_some() {
+        "reinstalled and restarted"
+    } else {
+        "installed"
+    };
+    if !wait_until(context.settle, running) {
+        return Err(format!(
+            "{label} {verb}, but no background relay holds {} after {} s. Launchd restarts \
+             it after a crash and leaves it stopped after a refusal at start; the reason is in \
+             {}",
+            lock.display(),
+            context.settle.as_secs(),
+            log.display()
+        ));
+    }
+    Ok(format!(
+        "{label} {verb}\nplist      {}\nrelaying   {}, every {every}s, to the receiver in {}\n\
+         {}log        {}\n",
+        path.display(),
+        home.display(),
+        home.join("relay.json").display(),
+        scope
+            .map(|scope| format!("scope      {scope}\n"))
+            .unwrap_or_default(),
+        log.display(),
+    ))
+}
+
+/// The background relay's LaunchAgent as its plist on disk says, where the
+/// plist exists.
+pub struct RelayAgent {
+    pub plist: PathBuf,
+    /// The log both its streams go to; `None` where the plist is not in the
+    /// form install writes.
+    pub log: Option<PathBuf>,
+    /// The Edge home the agent relays: its `COMMONMEASURE_HOME`, or the
+    /// default home under the user's home. `None` where the plist does not
+    /// read.
+    pub home: Option<PathBuf>,
+}
+
+impl RelayAgent {
+    /// Whether this agent may be the one for `home`: it relays `home`, or
+    /// its plist does not say which home it relays.
+    pub fn may_serve(&self, home: &Path) -> bool {
+        self.home
+            .as_deref()
+            .is_none_or(|relayed| same_path(relayed, home))
+    }
+}
+
+/// The background relay's LaunchAgent in `context`'s user home, where its
+/// plist exists.
+pub fn relay_agent(context: &Context) -> Option<RelayAgent> {
+    let plist = context.plist();
+    if !plist.exists() {
+        return None;
+    }
+    let installed = std::fs::read_to_string(&plist)
+        .ok()
+        .as_deref()
+        .and_then(read_relay_plist);
+    let home = installed.as_ref().map(|(installed, _)| {
+        installed
+            .home
+            .clone()
+            .unwrap_or_else(|| context.user_home.join(".commonmeasure"))
+    });
+    Some(RelayAgent {
+        plist,
+        log: installed.map(|(installed, _)| installed.log),
+        home,
+    })
+}
+
+/// What `disconnect` adds when the background relay's LaunchAgent for this
+/// home is installed: with `relay.json` gone its next start is refused and it
+/// stays stopped, so the operator is told how to remove it.
+pub fn after_disconnect(context: &Context) -> Option<String> {
+    let agent = relay_agent(context).filter(|agent| agent.may_serve(&context.edge_home))?;
+    Some(format!(
+        "the background relay is still installed ({}); with no receiver it does not start. \
+         Remove it with commonmeasure service uninstall relay\n",
+        agent.plist.display()
+    ))
+}
+
+/// The background relay's service: whether it is installed and loaded, what
+/// it runs with, and whether a background relay holds the home, whoever
+/// started it.
+pub fn relay_status(context: &Context, commands: &dyn Commands) -> Result<String, String> {
+    let label = &context.label;
+    let path = context.plist();
+    let text = std::fs::read_to_string(&path).ok();
+    let installed = text.as_deref().and_then(read_relay_plist);
+    let (loaded, inspection) = match loaded(context, commands) {
+        Ok(loaded) => (loaded, None),
+        Err(error) => (None, Some(error)),
+    };
+    let mut out = String::new();
+    let mut line = |name: &str, value: String| out.push_str(&format!("{name:<11}{value}\n"));
+    line(
+        "service",
+        match (path.exists(), &installed) {
+            (false, _) => format!("{label}: not installed"),
+            (true, Some((installed, every)))
+                if text.as_deref().is_some_and(|text| {
+                    relay_plist(&context.installed(installed), *every) != text
+                }) =>
+            {
+                format!(
+                    "{label}: installed at {}, edited since install wrote it",
+                    path.display()
+                )
+            }
+            (true, Some(_)) => format!("{label}: installed at {}", path.display()),
+            (true, None) => format!(
+                "{label}: {} exists but is not in the form install writes",
+                path.display()
+            ),
+        },
+    );
+    let home = match &installed {
+        Some((installed, every)) => {
+            line(
+                "binary",
+                format!(
+                    "{}{}",
+                    installed.program.display(),
+                    if installed.program.is_file() {
+                        ""
+                    } else {
+                        " (missing)"
+                    }
+                ),
+            );
+            line(
+                "home",
+                match &installed.home {
+                    Some(home) => home.display().to_string(),
+                    None => "the default Edge home (COMMONMEASURE_HOME is not set)".to_string(),
+                },
+            );
+            line("every", format!("{every}s"));
+            installed
+                .home
+                .clone()
+                .unwrap_or_else(|| context.edge_home.clone())
+        }
+        None => context.edge_home.clone(),
+    };
+    line(
+        "loaded",
+        match (&loaded, &inspection) {
+            (None, Some(error)) => format!("unknown: {error}"),
+            (None, None) => "no".to_string(),
+            (Some(loaded), _) => format!(
+                "yes, {}{}",
+                loaded.state.as_deref().unwrap_or("state not reported"),
+                loaded
+                    .pid
+                    .map(|pid| format!(", pid {pid}"))
+                    .unwrap_or_default()
+            ),
+        },
+    );
+    line(
+        "relaying",
+        crate::relay_loop::line_for(&home, relay_agent(context)),
+    );
+    line(
+        "log",
+        installed
+            .as_ref()
+            .map_or(&context.log, |(installed, _)| &installed.log)
+            .display()
+            .to_string(),
+    );
+    if installed.is_some() && loaded.is_none() && inspection.is_none() {
+        out.push_str(
+            "\nThe plist is installed but not loaded. Load it: commonmeasure service install \
+             relay\n",
+        );
+    }
+    Ok(out)
+}
+
 /// The command seam and a context under a temporary home, shared by the
 /// service and update tests.
 #[cfg(test)]
@@ -1467,6 +1952,8 @@ pub mod testing {
         answers: HashMap<String, (Option<i32>, String, String)>,
         calls: Arc<Mutex<Vec<String>>>,
         console: Option<(String, u16)>,
+        relay: Option<(String, PathBuf)>,
+        held: Mutex<Vec<std::fs::File>>,
     }
 
     impl Recorder {
@@ -1495,6 +1982,14 @@ pub mod testing {
             self
         }
 
+        /// When `command` runs, take the background relay's lock in the
+        /// Edge home `home` and hold it for as long as this recorder lives,
+        /// standing in for the loop launchd would start.
+        pub fn relay_on(mut self, command: &str, home: &Path) -> Self {
+            self.relay = Some((command.to_string(), home.to_path_buf()));
+            self
+        }
+
         pub fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
         }
@@ -1516,6 +2011,16 @@ pub mod testing {
                 && *trigger == command
             {
                 answer_version(*port);
+            }
+            if let Some((trigger, home)) = &self.relay
+                && *trigger == command
+            {
+                let file = commonmeasure_runtime::declaration::open_lock(
+                    &crate::relay_loop::lock_path(home),
+                )
+                .unwrap();
+                file.lock().unwrap();
+                self.held.lock().unwrap().push(file);
             }
             let (code, stdout, stderr) = match self.answers.get(&command) {
                 Some(answer) => answer.clone(),
@@ -1561,6 +2066,7 @@ pub mod testing {
         std::fs::write(&exe, "binary").unwrap();
         Context {
             user_home: home.to_path_buf(),
+            edge_home: home.join(".commonmeasure"),
             home_override: None,
             log: home.join(".commonmeasure/logs/console.log"),
             working_directory: home.to_path_buf(),
@@ -1575,9 +2081,18 @@ pub mod testing {
         }
     }
 
+    /// The background relay's context in the same shell.
+    pub fn relay_context(home: &Path) -> Context {
+        let mut context = context(home);
+        context.label = RELAY_LABEL.to_string();
+        context.log = home.join(".commonmeasure/logs/relay.log");
+        context
+    }
+
     /// The same shell with `COMMONMEASURE_HOME` set to `edge`.
     pub fn with_home(mut context: Context, edge: &Path) -> Context {
         context.home_override = Some(edge.to_path_buf());
+        context.edge_home = edge.to_path_buf();
         context.log = edge.join("logs/console.log");
         context
     }
@@ -2489,6 +3004,456 @@ mod tests {
             ..installed
         };
         assert!(reinstall_command(&default).starts_with("env -u COMMONMEASURE_HOME "));
+    }
+
+    fn with_receiver(context: &Context) {
+        std::fs::create_dir_all(&context.edge_home).unwrap();
+        std::fs::write(
+            context.edge_home.join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_relay_plist_runs_the_loop_at_login_and_keeps_it_alive() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        let text = relay_plist(&context, 300);
+        let exe = context.exe.display().to_string();
+        assert!(text.contains(&format!("<string>{RELAY_LABEL}</string>")));
+        assert!(text.contains(&format!(
+            "<array>\n\t\t<string>{exe}</string>\n\t\t<string>relay</string>\n\t\t\
+             <string>--every</string>\n\t\t<string>300</string>\n\t</array>"
+        )));
+        assert!(text.contains("<key>RunAtLoad</key>\n\t<true/>"));
+        // Restarted after a crash (exit non-zero or a signal), left stopped
+        // after exit 0: SIGTERM, or a refusal at start (`relay_loop::run`).
+        assert!(text.contains(
+            "<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>"
+        ));
+        assert!(!text.contains("<key>KeepAlive</key>\n\t<true/>"));
+        // Review P3-B: a crash is started again at most every five minutes.
+        assert!(text.contains(
+            "</dict>\n\t<key>ThrottleInterval</key>\n\t<integer>300</integer>\n\t\
+             <key>StandardOutPath</key>"
+        ));
+        let console = plist(&context, DEFAULT_LISTEN);
+        assert!(console.contains("<key>KeepAlive</key>\n\t<true/>"));
+        // The console's plist has no throttle, so `update`'s edited check
+        // matches every console plist `install` has written.
+        assert!(!console.contains("ThrottleInterval"));
+        assert!(console.contains("<key>KeepAlive</key>\n\t<true/>\n\t<key>StandardOutPath</key>"));
+        let log = home.path().join(".commonmeasure/logs/relay.log");
+        assert!(text.contains(&format!(
+            "<key>StandardOutPath</key>\n\t<string>{}</string>",
+            log.display()
+        )));
+        let (installed, every) = read_relay_plist(&text).expect("reads back");
+        assert_eq!(every, 300);
+        assert_eq!(installed.program, context.exe);
+        assert_eq!(installed.log, log);
+        // Neither reader takes the other's plist.
+        assert!(read_plist(&text).is_none());
+        assert!(read_relay_plist(&plist(&context, DEFAULT_LISTEN)).is_none());
+        let elsewhere = with_home(context, &home.path().join("edge"));
+        assert!(relay_plist(&elsewhere, 60).contains(&format!(
+            "<key>COMMONMEASURE_HOME</key>\n\t\t<string>{}</string>",
+            home.path().join("edge").display()
+        )));
+    }
+
+    #[test]
+    fn disconnect_names_the_uninstall_only_while_the_relay_agent_is_installed() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        assert_eq!(after_disconnect(&context), None);
+        std::fs::create_dir_all(context.plist().parent().unwrap()).unwrap();
+        std::fs::write(context.plist(), relay_plist(&context, 300)).unwrap();
+        let note = after_disconnect(&context).expect("the agent is installed");
+        assert!(
+            note.contains(&context.plist().display().to_string())
+                && note.contains("commonmeasure service uninstall relay"),
+            "{note}"
+        );
+        // An agent that relays another home is not this home's.
+        let elsewhere = with_home(
+            super::testing::relay_context(home.path()),
+            &home.path().join("edge"),
+        );
+        assert_eq!(after_disconnect(&elsewhere), None);
+    }
+
+    #[test]
+    fn install_relay_refuses_an_interval_past_a_day_and_writes_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        with_receiver(&context);
+        let commands = Recorder::default();
+        let error = install_relay(&context, &commands, 86_401).unwrap_err();
+        assert!(error.contains("--every"), "{error}");
+        assert!(commands.calls().is_empty());
+        assert!(!context.plist().exists());
+    }
+
+    #[test]
+    fn install_relay_refuses_without_a_receiver_and_writes_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        let commands = Recorder::default();
+        let error = install_relay(&context, &commands, 300).unwrap_err();
+        assert!(
+            error.contains("no telemetry receiver is configured") && error.contains("relay.json"),
+            "{error}"
+        );
+        assert!(commands.calls().is_empty());
+        assert!(!context.plist().exists());
+    }
+
+    #[test]
+    fn install_relay_refuses_while_a_loop_started_by_hand_holds_the_home() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        with_receiver(&context);
+        let lock = commonmeasure_runtime::declaration::open_lock(&crate::relay_loop::lock_path(
+            &context.edge_home,
+        ))
+        .unwrap();
+        lock.lock().unwrap();
+        // The record names a live process: this test's own.
+        let pid = std::process::id();
+        std::fs::write(
+            crate::relay_loop::lock_path(&context.edge_home),
+            format!(r#"{{"pid":{pid},"every_seconds":60}}"#),
+        )
+        .unwrap();
+        let commands = Recorder::default();
+        let error = install_relay(&context, &commands, 300).unwrap_err();
+        assert!(
+            error.contains("a background relay the service did not start holds")
+                && error.contains(&format!("kill {pid}")),
+            "{error}"
+        );
+        assert!(!context.plist().exists());
+        assert_eq!(
+            commands.calls(),
+            vec![format!("launchctl print gui/501/{RELAY_LABEL}")]
+        );
+    }
+
+    // Review P3-F: a record left by a loop that has exited names a pid the
+    // system may have reused, so the refusal does not tell the operator to
+    // kill it.
+    #[cfg(unix)]
+    #[test]
+    fn install_relay_names_a_hand_loop_s_pid_only_while_it_is_alive() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        with_receiver(&context);
+        let lock = commonmeasure_runtime::declaration::open_lock(&crate::relay_loop::lock_path(
+            &context.edge_home,
+        ))
+        .unwrap();
+        lock.lock().unwrap();
+        let mut exited = std::process::Command::new("true").spawn().unwrap();
+        exited.wait().unwrap();
+        std::fs::write(
+            crate::relay_loop::lock_path(&context.edge_home),
+            format!(r#"{{"pid":{},"every_seconds":60}}"#, exited.id()),
+        )
+        .unwrap();
+        let error = install_relay(&context, &Recorder::default(), 300).unwrap_err();
+        assert!(
+            error.contains("a background relay the service did not start holds")
+                && !error.contains("pid")
+                && !error.contains("kill"),
+            "{error}"
+        );
+        assert!(!context.plist().exists());
+    }
+
+    // Review P3-3: the agent is loaded but has no process (launchd between
+    // restarts) while a loop started by hand holds the home. Install refuses
+    // naming the hand loop, rather than booting the agent out and waiting
+    // for a lock the agent never held.
+    #[test]
+    fn install_relay_refuses_a_hand_loop_while_the_agent_is_loaded_without_a_pid() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        with_receiver(&context);
+        let lock = commonmeasure_runtime::declaration::open_lock(&crate::relay_loop::lock_path(
+            &context.edge_home,
+        ))
+        .unwrap();
+        lock.lock().unwrap();
+        // The record names a live process: this test's own.
+        let pid = std::process::id();
+        std::fs::write(
+            crate::relay_loop::lock_path(&context.edge_home),
+            format!(r#"{{"pid":{pid},"every_seconds":60}}"#),
+        )
+        .unwrap();
+        let commands = Recorder::default().answer(
+            &format!("launchctl print gui/501/{RELAY_LABEL}"),
+            true,
+            "\tstate = spawn scheduled\n\tlast exit code = 0\n",
+        );
+        let error = install_relay(&context, &commands, 300).unwrap_err();
+        assert!(
+            error.contains("a background relay the service did not start holds")
+                && error.contains(&format!("kill {pid}")),
+            "{error}"
+        );
+        assert!(!context.plist().exists());
+        assert_eq!(
+            commands.calls(),
+            vec![format!("launchctl print gui/501/{RELAY_LABEL}")]
+        );
+    }
+
+    #[test]
+    fn install_relay_bootstraps_the_agent_and_waits_for_the_loop_to_hold_the_home() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        with_receiver(&context);
+        let bootstrap = format!("launchctl bootstrap gui/501 {}", context.plist().display());
+        let kickstart = format!("launchctl kickstart gui/501/{RELAY_LABEL}");
+        // Nothing takes the lock: install says so and names the log.
+        let commands = Recorder::default()
+            .answer(&bootstrap, true, "")
+            .answer(&kickstart, true, "");
+        let error = install_relay(&context, &commands, 120).unwrap_err();
+        assert!(
+            error.contains("no background relay holds") && error.contains("relay.log"),
+            "{error}"
+        );
+        let commands = Recorder::default()
+            .answer(&bootstrap, true, "")
+            .answer(&kickstart, true, "")
+            .relay_on(&kickstart, &context.edge_home);
+        let text = install_relay(&context, &commands, 120).unwrap();
+        assert!(
+            text.starts_with(&format!("{RELAY_LABEL} installed\n"))
+                && text.contains("every 120s, to the receiver in"),
+            "{text}"
+        );
+        assert_eq!(
+            commands.calls(),
+            vec![
+                format!("launchctl print gui/501/{RELAY_LABEL}"),
+                bootstrap.clone(),
+                kickstart.clone(),
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(context.plist()).unwrap(),
+            relay_plist(&context, 120)
+        );
+        assert!(context.edge_home.join("logs").is_dir());
+
+        // Status reads the plist, launchd's answer and the lock.
+        let loaded = Recorder::default().answer(
+            &format!("launchctl print gui/501/{RELAY_LABEL}"),
+            true,
+            "\tstate = running\n\tpid = 77\n",
+        );
+        drop(commands);
+        let text = relay_status(&context, &loaded).unwrap();
+        assert!(
+            text.contains(&format!("service    {RELAY_LABEL}: installed at"))
+                && text.contains("every      120s")
+                && text.contains("loaded     yes, running, pid 77")
+                && text.contains("relaying   not running; "),
+            "{text}"
+        );
+    }
+
+    // Review P2-4: installing against a receiver scoped to suppliers says
+    // so, and what it means for reporting demands.
+    #[test]
+    fn install_relay_names_a_receiver_scoped_to_suppliers() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        std::fs::create_dir_all(&context.edge_home).unwrap();
+        std::fs::write(
+            context.edge_home.join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry","suppliers":["ozone"]}"#,
+        )
+        .unwrap();
+        let kickstart = format!("launchctl kickstart gui/501/{RELAY_LABEL}");
+        let commands = Recorder::default()
+            .answer(
+                &format!("launchctl bootstrap gui/501 {}", context.plist().display()),
+                true,
+                "",
+            )
+            .answer(&kickstart, true, "")
+            .relay_on(&kickstart, &context.edge_home);
+        let text = install_relay(&context, &commands, 300).unwrap();
+        assert!(
+            text.contains(
+                "scope      the receiver is scoped to suppliers (ozone), so only their events \
+                 leave and a source whose licence demands usage reporting is refused on this home\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn relay_status_without_a_service_says_so_and_reads_the_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let context = super::testing::relay_context(home.path());
+        std::fs::create_dir_all(&context.edge_home).unwrap();
+        let text = relay_status(&context, &Recorder::default()).unwrap();
+        assert!(
+            text.contains(&format!("service    {RELAY_LABEL}: not installed"))
+                && text.contains("loaded     no")
+                && text.contains("relaying   not running; start it with"),
+            "{text}"
+        );
+        let lock = commonmeasure_runtime::declaration::open_lock(&crate::relay_loop::lock_path(
+            &context.edge_home,
+        ))
+        .unwrap();
+        lock.lock().unwrap();
+        let text = relay_status(&context, &Recorder::default()).unwrap();
+        assert!(text.contains("relaying   running (lock held"), "{text}");
+    }
+
+    // Review P2-2: with the agent installed and no loop holding the home,
+    // the remedy is the agent's log, not "start it".
+    #[test]
+    fn an_installed_agent_not_holding_the_home_is_named_with_its_log() {
+        let home = tempfile::tempdir().unwrap();
+        let context = with_home(
+            super::testing::relay_context(home.path()),
+            &home.path().join("edge"),
+        );
+        let context = Context {
+            log: home.path().join("edge/logs/relay.log"),
+            ..context
+        };
+        std::fs::create_dir_all(context.plist().parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&context.edge_home).unwrap();
+        std::fs::write(context.plist(), relay_plist(&context, 300)).unwrap();
+        // Review P3-D: no log yet, so no reason is claimed to be in one.
+        let unwritten = crate::relay_loop::line_for(&context.edge_home, relay_agent(&context));
+        assert!(
+            unwritten.contains(&format!(
+                "it has not written its log {}",
+                context.log.display()
+            )) && !unwritten.contains("the reason is in"),
+            "{unwritten}"
+        );
+        std::fs::create_dir_all(context.log.parent().unwrap()).unwrap();
+        std::fs::write(
+            &context.log,
+            "commonmeasure: background relay not started: no telemetry receiver\n",
+        )
+        .unwrap();
+        let expected = format!(
+            "installed ({}) but not holding the home; the reason is in {}",
+            context.plist().display(),
+            context.log.display()
+        );
+        let text = relay_status(&context, &Recorder::default()).unwrap();
+        assert!(
+            text.contains(&format!("relaying   not running; {expected}")),
+            "{text}"
+        );
+        assert!(!text.contains("start it with"), "{text}");
+        assert!(
+            crate::relay_loop::line_for(&context.edge_home, relay_agent(&context))
+                .starts_with(&format!("not running; {expected}"))
+        );
+        // The agent relays another home: this one is told how to start one.
+        let other = home.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let said = crate::relay_loop::line_for(&other, relay_agent(&context));
+        assert!(
+            said.starts_with("not running; ")
+                && said.contains(&format!("relays {}", context.edge_home.display()))
+                && said.contains("commonmeasure service install relay"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn the_refusal_elsewhere_names_the_loop_to_run() {
+        let text = unsupported(&ServiceCommand::Install {
+            service: ServiceName::Relay,
+            listen: None,
+            every: Some(60),
+        });
+        assert!(
+            text.contains("macOS only")
+                && text.contains("--unit=commonmeasure-relay")
+                && text.contains("relay --every 60")
+                && text.contains("transient"),
+            "{text}"
+        );
+        let text = unsupported(&ServiceCommand::Status { service: None });
+        assert!(
+            text.contains("serve --listen 127.0.0.1:4173") && text.contains("relay --every 300"),
+            "{text}"
+        );
+    }
+
+    // Catches: the relay plist written owner-only or through a shared
+    // temporary; it is written as the console's is, under the umask.
+    #[cfg(unix)]
+    #[test]
+    fn install_relay_writes_the_plist_under_the_umask() {
+        under_umask_022(
+            "service::tests::install_relay_writes_the_plist_under_the_umask",
+            || {
+                use std::os::unix::fs::PermissionsExt as _;
+                let home = tempfile::tempdir().unwrap();
+                let context = super::testing::relay_context(home.path());
+                with_receiver(&context);
+                let directory = context.plist().parent().unwrap().to_path_buf();
+                std::fs::create_dir_all(&directory).unwrap();
+                let fresh = directory.join("fresh");
+                std::fs::write(&fresh, b"").unwrap();
+                let kickstart = format!("launchctl kickstart gui/501/{RELAY_LABEL}");
+                let commands = Recorder::default()
+                    .answer(
+                        &format!("launchctl bootstrap gui/501 {}", context.plist().display()),
+                        true,
+                        "",
+                    )
+                    .answer(&kickstart, true, "")
+                    .relay_on(&kickstart, &context.edge_home);
+                install_relay(&context, &commands, 300).unwrap();
+                let mode =
+                    |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode(&fresh), 0o644);
+                assert_eq!(mode(&context.plist()), 0o644);
+            },
+        );
+    }
+
+    // Review P3-8: the relay's plist is read with the relay's reader, so
+    // "log kept" names the log the agent wrote, not the shell's.
+    #[test]
+    fn uninstall_relay_names_the_installed_log_not_the_shell_s() {
+        let home = tempfile::tempdir().unwrap();
+        let installed = Context {
+            log: home.path().join("edge/logs/relay.log"),
+            ..with_home(
+                super::testing::relay_context(home.path()),
+                &home.path().join("edge"),
+            )
+        };
+        std::fs::create_dir_all(installed.plist().parent().unwrap()).unwrap();
+        std::fs::write(installed.plist(), relay_plist(&installed, 300)).unwrap();
+        let shell = super::testing::relay_context(home.path());
+        let text = uninstall_relay(&shell, &Recorder::default()).unwrap();
+        assert!(
+            text.contains(&format!("log kept   {}", installed.log.display())),
+            "{text}"
+        );
+        assert!(!installed.plist().exists());
     }
 
     #[test]

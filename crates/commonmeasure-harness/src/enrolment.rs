@@ -147,7 +147,7 @@ pub struct ProofStatement {
     /// `directory-listing.json`, as `edge_conclusion` inside `stated`: the
     /// hub's statement is read without it, so no member the hub sends can
     /// set it. While it is set, `listed` and `unlisted_reason` repeat it
-    /// for readers of 0.4.2 and earlier, which ignore the member. The next
+    /// for readers of 0.4.1 and earlier, which ignore the member. The next
     /// statement from the hub replaces it.
     #[serde(skip)]
     pub concluded: Option<RefusalConclusion>,
@@ -166,7 +166,7 @@ pub struct RefusalConclusion {
 }
 
 /// `stated` as `directory-listing.json` holds it: the hub's statement with
-/// the edge's conclusion beside it as `edge_conclusion`. A 0.4.2 reader
+/// the edge's conclusion beside it as `edge_conclusion`. A 0.4.1 reader
 /// parses the statement without the member, since `ProofStatement` ignores
 /// unknown members, and reads the repeated `listed: false`.
 mod held_statement {
@@ -1043,12 +1043,12 @@ mod tests {
         );
     }
 
-    /// A file 0.4.2 wrote after a 401, 404 or 409 holds the edge's
+    /// A file 0.4.1 wrote after a 401, 404 or 409 holds the edge's
     /// conclusion as though the hub had stated it, with nothing to tell the
-    /// two apart. It reads as 0.4.2 read it, until the next statement from
+    /// two apart. It reads as 0.4.1 read it, until the next statement from
     /// the hub replaces it.
     #[test]
-    fn a_listing_written_by_0_4_2_reads_as_it_did() {
+    fn a_listing_written_by_0_4_1_reads_as_it_did() {
         let home = tempfile::tempdir().unwrap();
         let written = serde_json::json!({
             "key_id": "key-1",
@@ -1076,30 +1076,30 @@ mod tests {
         );
     }
 
-    /// Downgrade: 0.4.2 reads this file with the structs below, copied from
-    /// `crates/commonmeasure-harness/src/enrolment.rs` at 4c89c34 (lines
+    /// Downgrade: 0.4.1 reads this file with the structs below, copied from
+    /// `crates/commonmeasure-harness/src/enrolment.rs` at 87095ce (lines
     /// 97-139). Its top level denies unknown members; its statement ignores
     /// them. It parses a concluded file without error and finds
-    /// `listed: false`, which its `listing` (line 695) turns into `Unlisted`
-    /// before the only `ListedUntil` it makes (line 731).
+    /// `listed: false`, which its `listing` (line 447) turns into `Unlisted`
+    /// before the only `ListedUntil` it makes (line 483).
     #[test]
-    fn a_0_4_2_reader_reads_a_concluded_listing_as_unlisted() {
+    fn a_0_4_1_reader_reads_a_concluded_listing_as_unlisted() {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         #[allow(dead_code)]
-        struct DirectoryListing042 {
+        struct DirectoryListing041 {
             key_id: String,
             checked_at: String,
             #[serde(default)]
             last_uploaded_release: Option<String>,
             #[serde(default)]
-            stated: Option<ProofStatement042>,
+            stated: Option<ProofStatement041>,
             #[serde(default)]
             failure: Option<String>,
         }
         #[derive(Deserialize)]
         #[allow(dead_code)]
-        struct ProofStatement042 {
+        struct ProofStatement041 {
             authority: String,
             lifetime_secs: i64,
             #[serde(default)]
@@ -1113,8 +1113,8 @@ mod tests {
             let home = tempfile::tempdir().unwrap();
             concluded(status).store(home.path()).unwrap();
             let encoded = std::fs::read(DirectoryListing::path(home.path())).unwrap();
-            let read: DirectoryListing042 =
-                serde_json::from_slice(&encoded).expect("0.4.2 parses a file this release writes");
+            let read: DirectoryListing041 =
+                serde_json::from_slice(&encoded).expect("0.4.1 parses a file this release writes");
             let stated = read.stated.expect("the statement is kept");
             assert_eq!(stated.listed, Some(false));
             assert_eq!(

@@ -38,7 +38,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use commonmeasure_harness::EnrolmentRecord;
-use commonmeasure_harness::mcp::{McpServer, SUPPLIER_FIELDS, Served};
+use commonmeasure_harness::mcp::{
+    McpServer, STRUCTURED_PAYLOAD, SUPPLIER_BLOCK_FIELDS, SUPPLIER_FIELDS, Served,
+};
 use commonmeasure_http::{Request, Response, Server};
 use commonmeasure_supply::credentials::{CredentialsStatus, ReleasedStore};
 use serde::{Deserialize, Serialize};
@@ -399,16 +401,16 @@ impl HomeLock {
 /// configured for it, for which origin and endpoints, and whether a service
 /// process holds the home now.
 pub(crate) fn service_line(home: &Path) -> String {
-    use commonmeasure_harness::delivery::ServiceState;
+    use commonmeasure_harness::delivery::LockState;
     match ServiceConfig::read(home) {
         Ok(None) => "hosted service: not configured (no hosted-service.json)".to_owned(),
         Err(reason) => format!("hosted service: {reason}"),
         Ok(Some(config)) => format!(
             "hosted service: {} at {}, endpoints {}, every {}s{}",
             match commonmeasure_harness::delivery::service_state(home) {
-                ServiceState::Running => "running (lock held)".to_owned(),
-                ServiceState::NotRunning => "configured, not running".to_owned(),
-                ServiceState::Unknown(reason) => {
+                LockState::Running => "running (lock held)".to_owned(),
+                LockState::NotRunning => "configured, not running".to_owned(),
+                LockState::Unknown(reason) => {
                     format!("configured, whether it is running cannot be read ({reason})")
                 }
             },
@@ -1181,7 +1183,9 @@ impl HomeNamed {
     /// A tool result's payload is JSON text inside a string. It is parsed
     /// and walked, so a path after an escaped newline is matched. In a
     /// result whose `isError` is `false` the fields in [`SUPPLIER_FIELDS`]
-    /// are left as the supplier sent them; a tool error is the edge's own
+    /// are left as the supplier sent them, in the payload text and in its
+    /// `structuredContent` copy, and so are a fetched file's resource block
+    /// fields ([`SUPPLIER_BLOCK_FIELDS`]); a tool error is the edge's own
     /// words and is rewritten whole.
     /// Its compact re-serialisation is the text `tool_result` wrote, so
     /// nothing else in it changes. Payload text that does not parse is
@@ -1198,12 +1202,21 @@ impl HomeNamed {
             let Some(mut body) = parsed else {
                 return error_response(500, "the answer could not be prepared");
             };
-            self.value(&mut body, &mut Vec::new(), &[TOOL_PAYLOAD]);
-            let kept = if body.pointer("/result/isError") == Some(&Value::Bool(false)) {
-                SUPPLIER_FIELDS
-            } else {
-                &[]
-            };
+            let succeeded = body.pointer("/result/isError") == Some(&Value::Bool(false));
+            let kept: &[&str] = if succeeded { SUPPLIER_FIELDS } else { &[] };
+            // Outside the payload text: the payload text itself, walked
+            // below, and on a success a file's resource block and the
+            // payload's structured copy with its supplier fields.
+            let structured: Vec<String> = kept
+                .iter()
+                .map(|pointer| format!("{STRUCTURED_PAYLOAD}{pointer}"))
+                .collect();
+            let mut outside = vec![TOOL_PAYLOAD];
+            if succeeded {
+                outside.extend(SUPPLIER_BLOCK_FIELDS);
+                outside.extend(structured.iter().map(String::as_str));
+            }
+            self.value(&mut body, &mut Vec::new(), &outside);
             if let Some(Value::Array(items)) = body.pointer_mut("/result/content") {
                 for item in items {
                     if let Some(Value::String(text)) = item.get_mut("text") {
@@ -1647,6 +1660,36 @@ mod tests {
         let answer = tool_answer(&payload);
         let sent = answer.body.clone();
         assert_eq!(named.response(answer).body, sent);
+    }
+
+    /// A successful result's `structuredContent` is the payload again, and
+    /// it is walked as the payload text is: a field the edge wrote that
+    /// names the home is rewritten, and a supplier field under it (`url`) is
+    /// served as the supplier sent it (review R5).
+    #[test]
+    fn structured_content_is_rewritten_except_its_supplier_fields() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let payload = json!({
+            "url": "https://publisher.test/view?file=/srv/cm/paper.pdf",
+            "recorded_in": "/srv/cm/sessions/s.ndjson",
+            "read": "saved under /srv/cm/sessions/s.files",
+        });
+        let answer = json_response(
+            200,
+            &json!({"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "structuredContent": payload,
+                "isError": false,
+            }}),
+        );
+        let body: Value = serde_json::from_slice(&named.response(answer).body).expect("JSON");
+        let structured = &body["result"]["structuredContent"];
+        assert_eq!(structured["recorded_in"], "sessions/s.ndjson");
+        assert_eq!(structured["read"], "saved under sessions/s.files");
+        assert_eq!(
+            structured["url"],
+            "https://publisher.test/view?file=/srv/cm/paper.pdf"
+        );
     }
 
     /// A payload that is not JSON is still checked, as text.

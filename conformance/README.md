@@ -62,6 +62,8 @@ others do not.
 | `session-supplied.json` | the supplier that served a mediated search result, in its namespaced `data` field |
 | `session-registered.json` | a session registered part-way through and renewed once, projected for the hub that issued the instance: content events carry the event-level `instance` member at each record's revision, and the crossing before the registration carries none (`docs/contracts/telemetry-projection.md` §Instance reference) |
 | `session-paced.json` | the `Crawl-delay` a retrieval was sent under, in its namespaced `data` field, on the retrieval of a page that waited its turn and not on its grounding; a host stating `Crawl-delay: 0` carries none (`docs/contracts/telemetry-projection.md` §Custom fields) |
+| `session-file.json` | a PDF handed over as a file: its retrieval names the file's `content_type` in a namespaced `data` field and it has no grounding; a PDF refused under `strict` is counted in `refused` and nothing else (`docs/contracts/telemetry-projection.md` §Custom fields) |
+| `session-parts.json` | a page fetched in two parts: each grounding carries in `data.content_hash` the hash of the part its fetch result delivered, the text its `tokens_ingested` counts, and not the hash of the whole text both crossings record (`docs/contracts/telemetry-projection.md` §What is projected) |
 | `run-licensed.json` | a run projection with the emitter id `commonmeasure` as `agent_id`, a declared licence, and ingestion counts with their recorded `token_basis` beside `tokens_ingested` |
 | `run-supplied.json` | a run whose plan acquired through a supplier, named in its namespaced `data` field |
 

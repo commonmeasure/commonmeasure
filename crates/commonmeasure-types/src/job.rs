@@ -248,6 +248,306 @@ pub fn canonical_url(url: &url::Url) -> url::Url {
     canonical
 }
 
+/// The form in which a URL is compared with a publisher's or an operator's
+/// rule: [`canonical_url`], its path and query in [`matching_target`]'s form,
+/// and no fragment, which the client never sends. `https://h/%6Eews/1#x` and
+/// `https://h/news/1` are one resource, so a rule covering either covers
+/// both. A rule written as a URL (an RSL absolute scope, an internal prefix)
+/// is compared in this form too. The URL requested and the URL recorded are
+/// not this form; only the comparison is.
+///
+/// This is a page's first reading; [`matching_url_readings`] gives all of
+/// them. Dot segments need nothing here: the parser has already resolved
+/// them, including `%2E` and `%2e` spellings (`/a/%2E%2E/b` parses as `/b`),
+/// and the path it serialises is the path the client requests.
+pub fn matching_url(url: &url::Url) -> String {
+    let (origin, target) = origin_and_target(url);
+    format!("{origin}{}", matching_target(&target))
+}
+
+/// Every reading of a page URL that a rule is compared with, in
+/// [`matching_url`]'s form: the origin with each of
+/// [`matching_target_readings`]. A rule covers the page if it covers a
+/// reading; how the readings combine is the caller's ruling.
+pub fn matching_url_readings(url: &url::Url) -> Result<Vec<String>, TooManyReadings> {
+    let (origin, target) = origin_and_target(url);
+    Ok(matching_target_readings(&target)?
+        .into_iter()
+        .map(|reading| format!("{origin}{reading}"))
+        .collect())
+}
+
+fn origin_and_target(url: &url::Url) -> (String, String) {
+    let mut canonical = canonical_url(url);
+    canonical.set_fragment(None);
+    (
+        canonical[..url::Position::BeforePath].to_owned(),
+        canonical[url::Position::BeforePath..].to_owned(),
+    )
+}
+
+/// The most paths [`matching_target_readings`] reaches before it gives up.
+/// Each operation leaves a path unchanged or shorter, so the closure ends,
+/// but stripping parameters can expose a dot segment after resolving has
+/// run, so the number of paths has no small proven bound. A crafted path
+/// can reach the cap; past it the page is refused. Every path of a `/`
+/// followed by up to six of `/`, `%2F`, `%5C`, `..`, `.`, `a`, `;` and `%3B`
+/// reaches at most 28 paths, and at most 24 as the URL parser leaves it.
+pub const MAX_PAGE_READINGS: usize = 64;
+
+/// A page path that reaches more than [`MAX_PAGE_READINGS`] paths. Its
+/// readings cannot all be compared, so a caller rules the page as if a
+/// refusing rule covered every one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooManyReadings {
+    /// The cap the path went past.
+    pub cap: usize,
+}
+
+impl std::fmt::Display for TooManyReadings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the page's path has more than {} readings (decoding `%2F`, `%5C` and `%3B`, \
+             merging `/`, resolving dot segments and stripping `;` parameters, in any order), so \
+             it is refused without comparing them",
+            self.cap
+        )
+    }
+}
+
+impl std::error::Error for TooManyReadings {}
+
+/// The readings of a page's request target, each in [`matching_target`]'s
+/// form, without repeats: the target as parsed, and every path reachable
+/// from it by these operations, in any order, any number of times, with
+/// the paths on the way included, since a server may apply only some of
+/// them:
+///
+/// - decode: `%2F` or `%5C` (either case) read as `/`, as a server that
+///   decodes the path before routing serves `/news%2F1`, and as IIS reads
+///   `%5C`; `%3B` (either case) read as `;`, as a proxy that decodes the
+///   path before a Java server does, and then stripped (nginx, when
+///   `proxy_pass` names a URI, in front of Tomcat serves `/news%3Bx/1` as
+///   `/news/1`);
+/// - merge: each run of `/` read as one `/`, as nginx (`merge_slashes`) and
+///   Python's `http.server` serve `//news/1`;
+/// - resolve: dot segments resolved as the URL parser resolves them, `%2E`
+///   spellings included;
+/// - strip: in each segment, everything from the first raw `;` removed, as
+///   Tomcat, Jetty and Undertow serve `/news;x=1/1` as `/news/1`.
+///
+/// So `/x//..%2Fnews/1` reads as `/news/1` (merged before resolving, as
+/// nginx does) and as `/x/news/1` (resolved first, as the URL parser does),
+/// and `/x/..;/news/1` reads as `/news/1` (stripped, then resolved).
+/// The order is breadth-first: the target as parsed, then the paths one
+/// operation away, then two, each step trying decode, merge, resolve and
+/// strip in that order. Only the path is read; the query is the same in
+/// every reading. Only a page is read these ways: a rule names the path its
+/// author wrote, so a rule's `//`, `%2F`, `%3B` or `;` is never merged,
+/// decoded or stripped.
+///
+/// A path that reaches more than [`MAX_PAGE_READINGS`] paths is an error,
+/// which callers rule closed.
+pub fn matching_target_readings(target: &str) -> Result<Vec<String>, TooManyReadings> {
+    readings_within(target, MAX_PAGE_READINGS)
+}
+
+fn readings_within(target: &str, cap: usize) -> Result<Vec<String>, TooManyReadings> {
+    let (path, query) = target.split_at(target.find('?').unwrap_or(target.len()));
+    let operations: [fn(&str) -> String; 4] = [
+        decoded_separators,
+        merged_slashes,
+        resolved_dot_segments,
+        stripped_parameters,
+    ];
+    let mut paths = vec![path.to_owned()];
+    let mut next = 0;
+    while let Some(current) = paths.get(next).cloned() {
+        next += 1;
+        for operation in operations {
+            let reached = operation(&current);
+            if !paths.contains(&reached) {
+                if paths.len() == cap {
+                    return Err(TooManyReadings { cap });
+                }
+                paths.push(reached);
+            }
+        }
+    }
+    let mut readings: Vec<String> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let reading = matching_target(&format!("{path}{query}"));
+        if !readings.contains(&reading) {
+            readings.push(reading);
+        }
+    }
+    Ok(readings)
+}
+
+fn merged_slashes(path: &str) -> String {
+    let mut merged = String::with_capacity(path.len());
+    for character in path.chars() {
+        if character != '/' || !merged.ends_with('/') {
+            merged.push(character);
+        }
+    }
+    merged
+}
+
+/// `path` with `%2F` and `%5C` read as `/` and `%3B` as `;`, either case.
+/// Nothing it writes is a `%`, so decoding a decoded path changes nothing.
+fn decoded_separators(path: &str) -> String {
+    let mut decoded = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(at) = rest.find('%') {
+        decoded.push_str(&rest[..at]);
+        let escape = rest.get(at..at + 3);
+        if let Some(delimiter) = escape.and_then(|escape| {
+            if escape.eq_ignore_ascii_case("%2F") || escape.eq_ignore_ascii_case("%5C") {
+                Some('/')
+            } else if escape.eq_ignore_ascii_case("%3B") {
+                Some(';')
+            } else {
+                None
+            }
+        }) {
+            decoded.push(delimiter);
+            rest = &rest[at + 3..];
+        } else {
+            decoded.push('%');
+            rest = &rest[at + 1..];
+        }
+    }
+    decoded.push_str(rest);
+    decoded
+}
+
+/// `path` with each segment's path parameters removed: from the first raw
+/// `;` to the end of the segment, as Tomcat, Jetty and Undertow read
+/// `/news;x=1/1` as `/news/1` before routing. They do not strip at an
+/// encoded `;` (`%3B`), but a proxy in front of them may decode it first, so
+/// decoding reads `%3B` as `;` and this then strips it.
+fn stripped_parameters(path: &str) -> String {
+    path.split('/')
+        .map(|segment| segment.split(';').next().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// `path` with its dot segments resolved by the URL parser, `%2E` spellings
+/// included, so the reading is the path a server that resolves them serves.
+fn resolved_dot_segments(path: &str) -> String {
+    let mut url = url::Url::parse("http://h/").expect("a literal URL parses");
+    url.set_path(path);
+    url.path().to_owned()
+}
+
+/// A request target (path and optional query) in the one spelling rules are
+/// matched in, following RFC 3986 section 6.2.2 and RFC 9309 section 2.2.2:
+///
+/// - a percent-encoded unreserved octet (`ALPHA DIGIT - . _ ~`) is decoded,
+///   so `/%6Eews` is `/news`;
+/// - every other percent-encoding keeps its encoding with upper-case hex, so
+///   `%2f` is `%2F`, and `%2F` and `%3F` never become the `/` and `?` that
+///   separate a path;
+/// - a literal `*` or `$` is `%2A` or `%24`, the only spelling in which a
+///   robots pattern can name one (RFC 9309 section 2.2.3), since a bare `*`
+///   or final `$` in a pattern is an operator;
+/// - an octet that is neither unreserved nor reserved, a non-ASCII byte
+///   among them, is percent-encoded, so `/café` in a pattern is the
+///   `/caf%C3%A9` a parsed URL carries;
+/// - a `%` that starts no encoding (`%zz`, `%+1`, a trailing `%`) is `%25`.
+///
+/// Slashes are kept as written: a doubled slash is a page reading
+/// ([`matching_target_readings`]), never a change to a rule.
+pub fn matching_target(target: &str) -> String {
+    let bytes = target.as_bytes();
+    let mut form = String::with_capacity(target.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let encoded = (byte == b'%')
+            .then(|| bytes.get(index + 1..index + 3))
+            .flatten()
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        if let Some(octet) = encoded {
+            if is_unreserved(octet) {
+                form.push(char::from(octet));
+            } else {
+                push_encoded(&mut form, octet);
+            }
+            index += 3;
+            continue;
+        }
+        match byte {
+            b'*' | b'$' | b'%' => push_encoded(&mut form, byte),
+            _ if is_unreserved(byte) || is_reserved(byte) => form.push(char::from(byte)),
+            _ => push_encoded(&mut form, byte),
+        }
+        index += 1;
+    }
+    form
+}
+
+/// An RFC 9309 path pattern (a robots `Allow`, `Disallow` or `Content-Usage`
+/// path, or an RSL relative scope) in [`matching_target`]'s form: each
+/// literal part between the `*` wildcards and before a final `$` anchor is
+/// normalised, and the wildcards and the anchor are kept. A `$` that is not
+/// final is a literal and is `%24`, as in a URL. A pattern is ranked by the
+/// length of this form, so a spelling cannot make a rule more specific than
+/// the path it names.
+pub fn matching_pattern(pattern: &str) -> String {
+    let (literal, anchored) = match pattern.strip_suffix('$') {
+        Some(stripped) => (stripped, true),
+        None => (pattern, false),
+    };
+    let mut form = literal
+        .split('*')
+        .map(matching_target)
+        .collect::<Vec<_>>()
+        .join("*");
+    if anchored {
+        form.push('$');
+    }
+    form
+}
+
+fn is_unreserved(octet: u8) -> bool {
+    octet.is_ascii_alphanumeric() || matches!(octet, b'-' | b'.' | b'_' | b'~')
+}
+
+fn is_reserved(octet: u8) -> bool {
+    matches!(
+        octet,
+        b':' | b'/'
+            | b'?'
+            | b'#'
+            | b'['
+            | b']'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+    )
+}
+
+fn push_encoded(form: &mut String, octet: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    form.push('%');
+    form.push(char::from(HEX[usize::from(octet >> 4)]));
+    form.push(char::from(HEX[usize::from(octet & 0x0F)]));
+}
+
 /// The host `entry` names, when it names one.
 fn parsed_host(entry: &str) -> Option<String> {
     let host = url::Url::parse(&format!("https://{}/", entry.trim()))
@@ -515,5 +815,158 @@ impl AccessAction {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The closure reaches nginx's order (merge before resolving:
+    /// `/news/1`), the URL parser's (`/x/news/1`), and each path on the
+    /// way, breadth-first.
+    #[test]
+    fn a_path_is_read_in_every_order_of_decoding_merging_and_resolving() {
+        for (target, readings) in [
+            (
+                "/x//..%2Fnews/1",
+                vec![
+                    "/x//..%2Fnews/1",
+                    "/x//../news/1",
+                    "/x/..%2Fnews/1",
+                    "/x/../news/1",
+                    "/x/news/1",
+                    "/news/1",
+                ],
+            ),
+            (
+                "/a/b//..%2F%2F..%2Fc//..%2Fnews//1?q=//%2F",
+                vec![
+                    "/a/b//..%2F%2F..%2Fc//..%2Fnews//1?q=//%2F",
+                    "/a/b//..//../c//../news//1?q=//%2F",
+                    "/a/b/..%2F%2F..%2Fc/..%2Fnews/1?q=//%2F",
+                    "/a/b/../../c/../news/1?q=//%2F",
+                    "/a/b/c/news//1?q=//%2F",
+                    "/a/b/..//../c/../news/1?q=//%2F",
+                    "/news/1?q=//%2F",
+                    "/a/b/c/news/1?q=//%2F",
+                    "/a/news/1?q=//%2F",
+                ],
+            ),
+        ] {
+            assert_eq!(
+                matching_target_readings(target),
+                Ok(readings.iter().map(|r| r.to_string()).collect()),
+                "{target}"
+            );
+        }
+    }
+
+    /// Stripping a `;` parameter can expose a dot segment that resolving
+    /// then removes, `%5C` decodes as `%2F` does, and `%3B` decodes to a
+    /// `;` that is then stripped.
+    #[test]
+    fn a_path_is_read_with_its_parameters_stripped_and_its_backslashes_decoded() {
+        for (target, readings) in [
+            (
+                "/x/..;/news/1",
+                vec!["/x/..;/news/1", "/x/../news/1", "/news/1"],
+            ),
+            (
+                "/a%5C..%2Fnews;p/1",
+                vec![
+                    "/a%5C..%2Fnews;p/1",
+                    "/a/../news;p/1",
+                    "/a%5C..%2Fnews/1",
+                    "/news;p/1",
+                    "/a/../news/1",
+                    "/news/1",
+                ],
+            ),
+            ("/news/1;x?q=;y", vec!["/news/1;x?q=;y", "/news/1?q=;y"]),
+            ("/news;a;b/1", vec!["/news;a;b/1", "/news/1"]),
+            ("/news%3Bx/1", vec!["/news%3Bx/1", "/news;x/1", "/news/1"]),
+            ("/news%3bx/1", vec!["/news%3Bx/1", "/news;x/1", "/news/1"]),
+            (
+                "/x/..%3B/news/1",
+                vec![
+                    "/x/..%3B/news/1",
+                    "/x/..;/news/1",
+                    "/x/../news/1",
+                    "/news/1",
+                ],
+            ),
+            ("/news%5c1", vec!["/news%5C1", "/news/1"]),
+        ] {
+            assert_eq!(
+                matching_target_readings(target),
+                Ok(readings.iter().map(|r| r.to_string()).collect()),
+                "{target}"
+            );
+        }
+    }
+
+    /// The operations have no small proven bound once stripping can expose
+    /// a dot segment, so this measures one: every path of a `/` followed by
+    /// up to six of these pieces, as written and as parsed, stays within the
+    /// cap. The most any reaches is 28 paths as written (`//%2F%3B;/.`) and
+    /// 24 as parsed (`//%2F./.;`).
+    #[test]
+    fn no_short_path_reaches_the_cap() {
+        const PIECES: [&str; 8] = ["/", "%2F", "%5C", "..", ".", "a", ";", "%3B"];
+        let mut paths = vec![String::from("/")];
+        let mut from = 0;
+        for _ in 0..6 {
+            let to = paths.len();
+            for index in from..to {
+                for piece in PIECES {
+                    paths.push(format!("{}{piece}", paths[index]));
+                }
+            }
+            from = to;
+        }
+        paths.push(String::from("/x/..;/..%2F..;%2Fa//..%5C..;/news/1"));
+        let mut most = (0, 0);
+        for path in &paths {
+            let written = readings_within(path, MAX_PAGE_READINGS);
+            let parsed = url::Url::parse(&format!("http://h{path}")).unwrap();
+            let parsed = readings_within(parsed.path(), MAX_PAGE_READINGS);
+            assert!(written.is_ok() && parsed.is_ok(), "{path}");
+            most.0 = most.0.max(written.unwrap().len());
+            most.1 = most.1.max(parsed.unwrap().len());
+        }
+        assert_eq!(most, (28, 24));
+    }
+
+    /// Stripping exposes dot segments that decoding and merging then move,
+    /// so a crafted path, as the client sends it, has more than 64 readings.
+    #[test]
+    fn a_crafted_path_reaches_the_cap() {
+        let path = "/x//..;/.../;/..;/a/%2Fb/;//%2F..%2F..%2F;%5Cc";
+        let parsed = url::Url::parse(&format!("http://h{path}")).unwrap();
+        assert_eq!(parsed.path(), path);
+        assert_eq!(readings_within(path, 1000).map(|r| r.len()), Ok(65));
+        assert_eq!(
+            matching_target_readings(path),
+            Err(TooManyReadings { cap: 64 })
+        );
+    }
+
+    /// Past the cap there are no readings to compare, only the cap.
+    #[test]
+    fn a_path_past_the_cap_has_no_readings() {
+        assert_eq!(
+            readings_within("/x//..%2Fnews/1", 6).map(|r| r.len()),
+            Ok(6)
+        );
+        assert_eq!(
+            readings_within("/x//..%2Fnews/1", 5),
+            Err(TooManyReadings { cap: 5 })
+        );
+        assert!(
+            TooManyReadings { cap: 64 }
+                .to_string()
+                .contains("more than 64 readings")
+        );
     }
 }

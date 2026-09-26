@@ -1593,3 +1593,407 @@ fn every_command_refuses_a_spool_line_written_before_indices_and_changes_nothing
         }
     }
 }
+
+/// `commonmeasure relay --every <seconds>` on `home`, its streams in files
+/// beside `journal`. Killed if the test ends first.
+struct BackgroundRelay {
+    child: Child,
+    journal: std::path::PathBuf,
+}
+
+impl BackgroundRelay {
+    fn spawn(home: &Path, journal: &Path, every: &str) -> Child {
+        Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["relay", "--every", every])
+            .env("COMMONMEASURE_HOME", home)
+            .stdin(Stdio::null())
+            .stdout(std::fs::File::create(journal).unwrap())
+            .stderr(std::fs::File::create(journal.with_extension("err")).unwrap())
+            .spawn()
+            .expect("the loop starts")
+    }
+
+    /// Started, and holding its lock.
+    fn start(home: &Path, journal: &Path, every: &str) -> Self {
+        let child = Self::spawn(home, journal, every);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !loop_lock_held(home) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the loop did not take its lock"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Self {
+            child,
+            journal: journal.to_path_buf(),
+        }
+    }
+
+    fn journal(&self) -> String {
+        format!(
+            "{}{}",
+            std::fs::read_to_string(&self.journal).unwrap_or_default(),
+            std::fs::read_to_string(self.journal.with_extension("err")).unwrap_or_default()
+        )
+    }
+
+    #[cfg(unix)]
+    fn terminate(mut self) -> (std::process::ExitStatus, String) {
+        // SAFETY: the pid is this test's own child, not yet waited for.
+        assert_eq!(
+            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) },
+            0
+        );
+        let status = self.child.wait().expect("the loop exits");
+        (status, self.journal())
+    }
+}
+
+impl Drop for BackgroundRelay {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn loop_lock_held(home: &Path) -> bool {
+    std::fs::File::open(home.join("relay-loop.lock"))
+        .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+}
+
+/// `doctor` for `home`, with a host home of its own so the operator's host
+/// files stay out.
+fn doctor_text(home: &Path, hosts: &Path) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .arg("doctor")
+        .env("COMMONMEASURE_HOME", home)
+        .env("HOME", hosts)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("COPILOT_HOME")
+        .output()
+        .expect("doctor runs");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn line_of<'a>(text: &'a str, prefix: &str) -> &'a str {
+    text.lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no {prefix:?} line in:\n{text}"))
+}
+
+/// EDGE-4. The background relay runs one per home: a second on the same
+/// home is refused naming the first's pid and interval, and SIGTERM stops
+/// the first after its tick and releases the lock, after which a new one
+/// starts. `doctor` and `status` read the lock in each state: not running,
+/// running (naming the pid and interval, and counting it as a carrier for
+/// every host), and a lock this user cannot open, which is "cannot be read"
+/// and is not counted.
+#[cfg(unix)]
+#[test]
+fn the_background_relay_runs_once_per_home_stops_on_sigterm_and_is_reported_in_each_state() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = tempfile::tempdir().unwrap();
+    let hosts = tempfile::tempdir().unwrap();
+    let bodies: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let receiver = capture_relay(bodies.clone());
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+
+    let printed = doctor_text(home.path(), hosts.path());
+    assert!(
+        line_of(&printed, "background relay: ").starts_with("background relay: not running; "),
+        "{printed}"
+    );
+    let automatic = line_of(&printed, "automatic relay: ");
+    assert!(
+        automatic
+            .starts_with("automatic relay: off, no Claude Code registration sends SessionEnd;")
+            && automatic.contains("commonmeasure relay --every 300"),
+        "{automatic}"
+    );
+
+    let journal = home.path().join("first.out");
+    let first = BackgroundRelay::start(home.path(), &journal, "1");
+    let second_journal = home.path().join("second.out");
+    let mut second = BackgroundRelay::spawn(home.path(), &second_journal, "5");
+    let status = second.wait().unwrap();
+    // A refusal at start exits 0, so the LaunchAgent leaves it stopped.
+    assert!(status.success(), "{status:?}");
+    let refused = std::fs::read_to_string(second_journal.with_extension("err")).unwrap();
+    assert!(
+        refused.contains("another background relay holds")
+            && refused.contains("relay-loop.lock")
+            && refused.contains(&format!("pid {}, every 1s", first.child.id())),
+        "{refused}"
+    );
+
+    let printed = doctor_text(home.path(), hosts.path());
+    assert_eq!(
+        line_of(&printed, "background relay: "),
+        format!(
+            "background relay: running (lock held, pid {}, every 1s)",
+            first.child.id()
+        )
+    );
+    assert_eq!(
+        line_of(&printed, "automatic relay: "),
+        "automatic relay: on the background relay's interval (every 1s), which relays every \
+         session in this home whatever its host"
+    );
+    let status = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .arg("status")
+        .env("COMMONMEASURE_HOME", home.path())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        text.contains(&format!(
+            "background relay  running (lock held, pid {}, every 1s)",
+            first.child.id()
+        )),
+        "{text}"
+    );
+
+    let (status, journal) = first.terminate();
+    assert!(status.success(), "{status:?}\n{journal}");
+    assert!(
+        journal.contains("commonmeasure: background relay for ")
+            && journal.contains("commonmeasure: relay run at ")
+            && journal.contains("background relay stopped by SIGTERM"),
+        "{journal}"
+    );
+    assert!(!loop_lock_held(home.path()), "SIGTERM released the lock");
+    let printed = doctor_text(home.path(), hosts.path());
+    assert!(
+        line_of(&printed, "background relay: ").starts_with("background relay: not running; "),
+        "{printed}"
+    );
+
+    // A lock this user cannot open: whether a loop runs cannot be told, and
+    // it is not counted as a carrier.
+    let lock = home.path().join("relay-loop.lock");
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable = std::fs::File::open(&lock).is_err();
+    let printed = doctor_text(home.path(), hosts.path());
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).unwrap();
+    if unreadable {
+        assert!(
+            line_of(&printed, "background relay: ").starts_with(
+                "background relay: whether one is running cannot be read (cannot open "
+            ),
+            "{printed}"
+        );
+        let automatic = line_of(&printed, "automatic relay: ");
+        assert!(
+            automatic.starts_with(
+                "automatic relay: unknown, no Claude Code registration sends SessionEnd and \
+                 whether a background relay holds this home cannot be read"
+            ) && automatic.contains("treated as having no automatic delivery"),
+            "{automatic}"
+        );
+    }
+
+    // Released, so the next one starts.
+    let again = BackgroundRelay::start(home.path(), &home.path().join("again.out"), "1");
+    let (status, _) = again.terminate();
+    assert!(status.success());
+}
+
+/// EDGE-4. A Claude Code session end and the background relay relaying the
+/// same home at once deliver each event once. Session ends start a relay run
+/// each while the loop ticks every second and crossings keep arriving; the
+/// spool lock lets one run at a time, a run that loses it leaves its work to
+/// the next, and `delivered.idx` and the spool keep an event from leaving
+/// twice. The receiver records every event id it is posted, duplicates kept.
+#[cfg(unix)]
+#[test]
+fn a_session_end_and_the_background_relay_at_once_deliver_each_event_once() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    let bodies: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let receiver = capture_relay(bodies.clone());
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+    let background = BackgroundRelay::start(home.path(), &home.path().join("loop.out"), "1");
+    let hook_end = |session: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["hook", "session-end"])
+            .env("COMMONMEASURE_HOME", home.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        writeln!(
+            child.stdin.as_mut().unwrap(),
+            "{}",
+            json!({"session_id": session, "hook_event_name": "SessionEnd",
+                   "cwd": "/work/personal", "reason": "exit"})
+        )
+        .unwrap();
+        assert!(child.wait().unwrap().success());
+    };
+    let mut expected = 0usize;
+    for round in 0..6 {
+        for session in ["s-a", "s-b"] {
+            record_crossing(
+                home.path(),
+                session,
+                &format!("https://www.example.com/{session}/{round}"),
+            );
+            // Each crossing projects a retrieved and a grounded event.
+            expected += 2;
+            hook_end(session);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    let posted = || -> Vec<String> {
+        bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .map(|event| event["id"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while posted()
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        < expected
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} of {expected} events delivered\n{}",
+            posted().len(),
+            background.journal()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // Two more ticks and any session-end runs still going.
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let (status, journal) = background.terminate();
+    assert!(status.success(), "{journal}");
+    let ids = posted();
+    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), expected, "{ids:?}");
+    assert_eq!(ids.len(), expected, "an event was posted twice: {ids:?}");
+    // Both carriers delivered (review P3-4): the loop's own runs report
+    // their batches in its journal, and the receiver took more than those,
+    // so session-end runs delivered the rest. Without this the test would
+    // pass with every session-end run losing the spool lock.
+    let loop_runs: Vec<usize> = journal
+        .lines()
+        .filter_map(|line| line.strip_prefix("delivered "))
+        .filter_map(|rest| {
+            rest.split(" in ")
+                .nth(1)?
+                .split(' ')
+                .next()?
+                .parse::<usize>()
+                .ok()
+        })
+        .collect();
+    assert!(!loop_runs.is_empty(), "no loop run reported\n{journal}");
+    let by_loop: usize = loop_runs.iter().sum();
+    let received = bodies.lock().unwrap().len();
+    assert!(
+        by_loop < received,
+        "the loop delivered {by_loop} of {received} batches, so no session-end run delivered\n\
+         {journal}"
+    );
+}
+
+/// EDGE-4. The background relay honours `relay/manual` as the session-end
+/// relay and the hosted service do: while the marker is there each run is
+/// skipped with a journal line naming it and nothing is posted; removing it
+/// restores delivery on the next run.
+#[cfg(unix)]
+#[test]
+fn the_background_relay_skips_its_runs_while_the_manual_marker_is_present() {
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "s-held", "https://www.example.com/held");
+    let bodies: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let receiver = capture_relay(bodies.clone());
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.path().join("relay")).unwrap();
+    std::fs::write(home.path().join("relay/manual"), b"").unwrap();
+    let background = BackgroundRelay::start(home.path(), &home.path().join("loop.out"), "1");
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(
+        bodies.lock().unwrap().is_empty(),
+        "{}",
+        background.journal()
+    );
+    let journal = background.journal();
+    assert!(
+        journal.contains("commonmeasure: relay skipped: the marker file")
+            && journal.contains("relay/manual"),
+        "{journal}"
+    );
+    std::fs::remove_file(home.path().join("relay/manual")).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while bodies.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{}",
+            background.journal()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (status, _) = background.terminate();
+    assert!(status.success());
+}
+
+/// EDGE-4, review P2-1. A background relay refused at start by its
+/// configuration (no receiver, a `relay.json` that does not load) says why
+/// and exits 0, so the LaunchAgent (`KeepAlive` restarts only an
+/// unsuccessful exit) leaves it stopped instead of starting it again every
+/// ten seconds. An argument it cannot run with fails as any command does.
+#[test]
+fn a_background_relay_refused_at_start_exits_0_and_takes_no_lock() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |every: &str| {
+        Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["relay", "--every", every])
+            .env("COMMONMEASURE_HOME", home.path())
+            .stdin(Stdio::null())
+            .output()
+            .expect("the loop runs")
+    };
+    let output = run("60");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}\n{stderr}", output.status);
+    assert!(
+        stderr.contains("background relay not started: no telemetry receiver is configured")
+            && stderr.contains("stays stopped"),
+        "{stderr}"
+    );
+    std::fs::write(home.path().join("relay.json"), b"{\"receiver\":").unwrap();
+    let output = run("60");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}\n{stderr}", output.status);
+    assert!(
+        stderr.contains("background relay not started: ")
+            && stderr.contains("is not a valid relay config"),
+        "{stderr}"
+    );
+    assert!(!home.path().join("relay-loop.lock").exists());
+    let output = run("0");
+    assert!(!output.status.success());
+}

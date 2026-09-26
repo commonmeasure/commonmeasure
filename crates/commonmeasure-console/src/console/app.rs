@@ -813,12 +813,17 @@ fn crossing_card(record: &Value, records: &[Value]) -> Markup {
 /// saw a body, so neither is labelled as extracted. A search result is
 /// mediated but names its `supplier`: its hash is the supplier's, of text the
 /// edge received without fetching a page. The label follows the recorded
-/// `mode`, which a refused crossing carries as well as its event.
+/// `mode`, which a refused crossing carries as well as its event. A fetch
+/// that handed a file over (`delivered_file`) extracted no text: its
+/// `content_hash` is the bytes delivered, and the card says what the record
+/// says of the file and nothing about its text.
 fn record_fields(payload: &Value) -> Markup {
     let retrieved = payload.get("retrieved_hash").and_then(Value::as_str);
     let content = payload.get("content_hash").and_then(Value::as_str);
     let supplied = payload.get("supplier").is_some_and(Value::is_string);
+    let file = delivered_file(payload);
     let content_label = match payload.get("mode").and_then(Value::as_str) {
+        _ if file.is_some() => "bytes delivered",
         _ if supplied => "text supplied",
         Some("mediated") => "text extracted",
         Some("observed") => "text in context",
@@ -837,6 +842,9 @@ fn record_fields(payload: &Value) -> Markup {
                 @if let Some(hash) = content {
                     div { dt { (content_label) } dd class="mono" { (hash) } }
                 }
+                @if let Some(file) = &file {
+                    div { dt { "file" } dd { (file) } }
+                }
                 @if let Some((hash, start, end, total)) = &delivered {
                     div { dt { "part delivered" } dd {
                         span class="mono" { (hash) } " " (start) "–" (end) " of " (total) " characters"
@@ -851,6 +859,18 @@ fn record_fields(payload: &Value) -> Markup {
             }
         }
     }
+}
+
+/// A delivered file as the record states it: its media type, its size and
+/// the record's own statement, where the record carries `delivered_file`.
+fn delivered_file(payload: &Value) -> Option<String> {
+    let file = payload.get("delivered_file")?;
+    let bytes = file["bytes"].as_u64()?;
+    let statement = file["statement"].as_str()?;
+    Some(match payload.get("content_type").and_then(Value::as_str) {
+        Some(media) => format!("{media}, {bytes} bytes, {statement}"),
+        None => format!("{bytes} bytes, {statement}"),
+    })
 }
 
 /// The `delivered` part's hash and its range in characters, where the record
@@ -2625,6 +2645,29 @@ mod tests {
             detail.contains("<dt>text extracted</dt><dd class=\"mono\">sha256:9999</dd>"),
             "{detail}"
         );
+        // A PDF handed over as a file: no text was extracted, so the hash
+        // is labelled as the bytes delivered and no part is shown.
+        let file = json!([{"event": "crossing_mediated", "payload": {
+            "mode": "mediated", "url": "http://127.0.0.1:9/paper.pdf", "host_name": "127.0.0.1",
+            "grounded": false, "licence": {"state": "unknown"}, "http_status": 200,
+            "retrieved_hash": "sha256:1111", "content_hash": "sha256:1111",
+            "content_type": "application/pdf",
+            "delivered_file": {"via": "local_file", "bytes": 2048,
+                               "statement": "delivered as a file, not read by the edge"}}}]);
+        let detail = session_detail("local-3", &file);
+        assert!(
+            detail.contains("<dt>bytes delivered</dt><dd class=\"mono\">sha256:1111</dd>"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains(
+                "<dt>file</dt><dd>application/pdf, 2048 bytes, delivered as a file, not read \
+                 by the edge</dd>"
+            ),
+            "{detail}"
+        );
+        assert!(!detail.contains("text extracted"), "{detail}");
+        assert!(!detail.contains("part delivered"), "{detail}");
     }
 
     /// The reconstructed figure is its own labelled row beside the witnessed

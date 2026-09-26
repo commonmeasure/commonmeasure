@@ -144,6 +144,7 @@ fn every_validation_vector_is_ruled_by_the_binary_as_the_contract_states() {
         "structure",
         "internal_prefix_not_absolute",
         "internal_prefix_unterminated",
+        "internal_prefix_query_or_fragment",
         "scope_match_empty",
         "scope_match_duplicate",
         "principal_name_empty",

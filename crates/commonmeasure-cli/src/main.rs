@@ -14,11 +14,13 @@ mod inspect;
 mod instance;
 mod mcp_session;
 mod processes;
+mod relay_loop;
 mod service;
 mod update;
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -230,6 +232,11 @@ enum Command {
         /// One host (`claude`, `codex`, `pi`, `claude-desktop`, `cursor`,
         /// `copilot`, `vscode` or `chrome`); every host when omitted.
         host: Option<String>,
+        /// Also look up this name (or a URL's host) and say whether the
+        /// privacy floor treats the addresses it resolves to as private,
+        /// naming a fake-IP proxy or a tailnet where one is answering.
+        #[arg(long, value_name = "NAME")]
+        resolve: Option<String>,
     },
     /// Reconstruct crossings from host transcripts for work done before
     /// Common Measure was installed.
@@ -311,6 +318,22 @@ enum Command {
         /// omitted.
         #[arg(long)]
         session: Vec<String>,
+        /// Run as the background relay: relay now and then every SECONDS
+        /// (1 to 86400) until stopped (SIGTERM or SIGINT), to the receiver in relay.json
+        /// only. While it runs it holds relay-loop.lock in the home, so a
+        /// session on a host that sends no session-end event (Claude Desktop,
+        /// Codex, Cursor) has automatic delivery, and a source whose licence
+        /// demands usage reporting is admitted there where the policy scope
+        /// clears telemetry egress and relay.json names a receiver not scoped
+        /// to suppliers. A second one on the
+        /// same home is refused. Skips a run while relay/manual is present.
+        /// `commonmeasure service install relay` runs it at login on macOS.
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            conflicts_with_all = ["dry_run", "policy", "receiver", "api_key", "run", "session"]
+        )]
+        every: Option<u64>,
     },
     /// Enrol this edge with a Common Measure Hub in one command. Exchanges
     /// the owner's short-lived token for an org-scoped ingest key, mints
@@ -399,9 +422,10 @@ enum Command {
         #[arg(long)]
         allow_remote: bool,
     },
-    /// Run the operator console as a login service, see whether it is
-    /// running and which binary it runs, and remove it. macOS only: a
-    /// LaunchAgent in ~/Library/LaunchAgents.
+    /// Run the operator console or the background relay as a login
+    /// service, see whether each is running and what it runs, and remove
+    /// it. macOS only: a LaunchAgent in ~/Library/LaunchAgents; elsewhere
+    /// it names the command to run under the platform's service manager.
     Service {
         #[command(subcommand)]
         command: service::ServiceCommand,
@@ -457,9 +481,9 @@ enum HostedCommand {
     /// interval from ~/.commonmeasure/hosted-service.json. Refuses to start
     /// unenrolled, under local policy, or while another process holds the
     /// home. Runs the relay, the policy refresh, the issuer key refresh and
-    /// the idle-session sweep on the interval, and refuses every loopback,
-    /// private, link-local and .internal address whatever the policy says,
-    /// so the machine's metadata service is never reached. Prints
+    /// the idle-session sweep on the interval, and refuses every local or
+    /// private address whatever the policy says, so the machine's metadata
+    /// service is never reached. Prints
     /// `listening on <url>` once bound.
     Service {
         /// Address to listen on, overriding the configuration's `listen`.
@@ -533,7 +557,7 @@ fn main() -> ExitCode {
         Command::Credentials => credentials_report(),
         Command::Install { host, binary } => install_host(&host, binary.as_deref()),
         Command::Uninstall { host } => uninstall_host(&host),
-        Command::Doctor { host } => doctor(host.as_deref()),
+        Command::Doctor { host, resolve } => doctor(host.as_deref(), resolve.as_deref()),
         Command::Import { since, dry_run } => import(since.as_deref(), dry_run),
         Command::Session { session } => show_session(session.as_deref()),
         Command::Status { json } => show_status(json),
@@ -551,9 +575,11 @@ fn main() -> ExitCode {
             api_key,
             run,
             session,
+            every,
         } => match action {
             Some(RelayAction::Requeue { batch }) => (|| {
-                if dry_run
+                if every.is_some()
+                    || dry_run
                     || policy.is_some()
                     || receiver.is_some()
                     || api_key.is_some()
@@ -570,7 +596,12 @@ fn main() -> ExitCode {
                     "requeued {count} dead batches; still undelivered until the receiver accepts them\n"
                 ))
             })(),
-            None => relay(receiver, api_key, run, session, dry_run, policy),
+            None => match every {
+                Some(every) => home_dir()
+                    .map_err(|error| error.to_string())
+                    .and_then(|home| relay_loop::run(&home, every)),
+                None => relay(receiver, api_key, run, session, dry_run, policy),
+            },
         },
         Command::Connect {
             hub,
@@ -1318,7 +1349,28 @@ fn install_host(host: &str, binary: Option<&Path>) -> Result<(), String> {
     let surface = host_named(host)?;
     let paths = registration::HostPaths::from_environment()?;
     let binary = registration::resolve_binary(binary)?;
-    let lines = registration::install(surface, &binary, &paths)?;
+    let mut lines = registration::install(surface, &binary, &paths)?;
+    // Claude Desktop sends no session-end event, so without a background
+    // relay a source whose licence demands usage reporting is refused there.
+    // Starting one is left to the operator: it sends to the receiver in
+    // relay.json with nobody running a command.
+    if surface == HostSurface::ClaudeDesktop {
+        let running =
+            home_dir().is_ok_and(|home| commonmeasure_harness::delivery::relay_loop_running(&home));
+        lines.push(if running {
+            "claude-desktop: a background relay holds this home, so a source whose licence \
+             demands usage reporting can be admitted in its sessions where the policy scope \
+             clears telemetry egress and relay.json names a receiver not scoped to suppliers"
+                .to_owned()
+        } else {
+            format!(
+                "claude-desktop: a source whose licence demands usage reporting is refused in its \
+                 sessions until a background relay runs; install it with `commonmeasure service \
+                 install relay` (macOS) or run `commonmeasure relay --every {}`",
+                relay_loop::DEFAULT_EVERY_SECS
+            )
+        });
+    }
     write_stdout(&format!("{}\n", lines.join("\n")))
 }
 
@@ -1332,7 +1384,7 @@ fn uninstall_host(host: &str) -> Result<(), String> {
 
 /// Each host's registration checked against the machine. Exits zero
 /// whatever it finds: the report is the result.
-fn doctor(host: Option<&str>) -> Result<(), String> {
+fn doctor(host: Option<&str>, resolve: Option<&str>) -> Result<(), String> {
     use commonmeasure_harness::registration;
     let paths = registration::HostPaths::from_environment()?;
     let home = home_dir().map_err(|error| error.to_string())?;
@@ -1361,6 +1413,7 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
         let _ = writeln!(out, "{line}");
     }
     let _ = writeln!(out, "{}", hosted::service_line(&home));
+    let _ = writeln!(out, "background relay: {}", relay_loop::line(&home));
     out.push_str(&commonmeasure_relay::state::egress_text(
         &commonmeasure_relay::egress_report(&home),
     ));
@@ -1377,6 +1430,14 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
             commonmeasure_harness::registration::session_end_registered(&paths)
         )
     );
+    if let Some(name) = resolve {
+        let _ = writeln!(
+            out,
+            "{}",
+            resolution_line(name, &|url| commonmeasure_http::resolve(url)
+                .map_err(|error| format!("{error:#}")))
+        );
+    }
     for surface in surfaces {
         let report = registration::doctor(surface, &paths, &home);
         let _ = writeln!(
@@ -1396,78 +1457,168 @@ fn doctor(host: Option<&str>) -> Result<(), String> {
     write_stdout(&out)
 }
 
+/// What `doctor --resolve` says about one name: the addresses the system
+/// resolver gives it, and what the privacy floor makes of them. The lookup is
+/// made only when asked for, so `doctor` alone stays off the network. Two
+/// ranges are named with their remedy: `198.18.0.0/15`, which a fake-IP
+/// proxy answers every name with, and `100.64.0.0/10`, where Tailscale's
+/// MagicDNS puts tailnet names.
+fn resolution_line(
+    name: &str,
+    resolve: &dyn Fn(&str) -> Result<Vec<SocketAddr>, String>,
+) -> String {
+    use commonmeasure_types::address;
+    let url = if name.contains("://") {
+        name.to_owned()
+    } else {
+        format!("https://{name}/")
+    };
+    let host = commonmeasure_harness::grounding::host_of(&url);
+    let addresses = match resolve(&url) {
+        Ok(addresses) => addresses,
+        Err(error) => return format!("resolution: {host} did not resolve: {error}"),
+    };
+    let listed = addresses
+        .iter()
+        .map(|address| address.ip().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ips = || addresses.iter().map(SocketAddr::ip);
+    let finding = if ips().any(address::is_fake_ip_range) {
+        "in 198.18.0.0/15, the range fake-IP proxies (Clash, Surge, sing-box and similar) \
+         answer names with: while one does, a fetch by name is refused unless \
+         \"allow_private_hosts\" is set or its prefix is named in \"record_internal_prefixes\", \
+         and always on a hosted edge. Set the proxy to return real addresses to this machine \
+         (Surge always-real-ip, Clash fake-ip-filter, a sing-box DNS rule)"
+    } else if ips().any(address::is_shared_range) {
+        "in 100.64.0.0/10, shared address space used by Tailscale and carrier-grade NAT: a \
+         fetch is refused unless its prefix is named in \"record_internal_prefixes\" or \
+         \"allow_private_hosts\" is set, and always on a hosted edge"
+    } else if ips().any(address::is_private_ip) {
+        "a local or private address: a fetch is refused unless its prefix is named in \
+         \"record_internal_prefixes\" or \"allow_private_hosts\" is set, and always on a \
+         hosted edge"
+    } else {
+        "public"
+    };
+    format!("resolution: {host} resolves to {listed}, {finding}")
+}
+
 /// What `doctor` says about relaying without a person. Three things stop it,
 /// and each stops it on its own: no receiver in `relay.json`, the
 /// `relay/manual` marker the operator writes to review each run, and no
-/// carrier. Two carriers relay by themselves: the `SessionEnd` hook of a
+/// carrier. Three carriers relay by themselves: the `SessionEnd` hook of a
 /// Claude Code registration (`session_end`), and a running hosted service's
-/// interval relay, which relays every session in the home whatever its host.
-/// The service counts only while it holds the home's lock, so a configured
-/// but stopped service reads as off. The line names the first stop that
-/// applies, or every carrier in force, and where the marker applies it names
-/// what else the marker does, because a licence demanding usage reporting is
-/// refused while automatic delivery is off (owner decision, 22 September
-/// 2026).
+/// or background relay's interval, each of which relays every session in the
+/// home whatever its host. The two intervals count only while their process
+/// holds its lock on the home, so a configured but stopped one reads as off.
+/// The line names the first stop that applies, or every carrier in force,
+/// and where the marker applies it names what else the marker does, because
+/// a licence demanding usage reporting is refused while automatic delivery is
+/// off (owner decision, 22 September 2026).
 fn automatic_relay_line(home: &Path, session_end: bool) -> String {
-    match commonmeasure_relay::config::RelayConfig::load(home) {
+    let scope = match commonmeasure_relay::config::RelayConfig::load(home) {
         Err(error) => return format!("automatic relay: off, {error}"),
         Ok(None) => return "automatic relay: off, no receiver is configured".to_owned(),
-        Ok(Some(_)) => {}
+        Ok(Some(config)) => relay_loop::scope_consequence(&config),
+    };
+    let line = carriers_line(home, session_end, scope.is_some());
+    match scope {
+        Some(consequence) => format!("{line}; {consequence}"),
+        None => line,
     }
+}
+
+/// [`automatic_relay_line`] after the receiver: the stops and carriers.
+/// Under a receiver scoped to suppliers an interval relays whatever the host
+/// but not every session's events, so it is not said to.
+fn carriers_line(home: &Path, session_end: bool, scoped: bool) -> String {
+    use commonmeasure_harness::delivery::LockState;
     if let Some(reason) = commonmeasure_harness::delivery::withheld_reason(home) {
         return format!(
             "automatic relay: off, {reason}; a source whose licence demands usage reporting is \
              refused while the marker is there"
         );
     }
-    use commonmeasure_harness::delivery::ServiceState;
     let service = hosted::ServiceConfig::read(home).ok().flatten();
-    let state = service
+    let service_state = service
         .as_ref()
         .map(|_| commonmeasure_harness::delivery::service_state(home));
-    let running = service
-        .as_ref()
-        .filter(|_| state == Some(ServiceState::Running))
-        .map(|config| {
-            format!(
-                "on the hosted service's interval (every {}s), which relays every session in \
-                 this home whatever its host",
-                config.interval_seconds
-            )
-        });
-    // A lock this user cannot open says nothing either way, so the line
-    // does not call the service stopped; sessions still treat it as not
-    // running (`SessionDelivery::withheld_reason`).
-    let unknown = match &state {
-        Some(ServiceState::Unknown(reason)) => Some(reason),
-        _ => None,
-    };
-    match (session_end, running, unknown) {
-        (true, Some(service), _) => format!(
-            "automatic relay: at each Claude Code session end (its SessionEnd hook), and {service}"
+    let loop_state = commonmeasure_harness::delivery::relay_loop_state(home);
+    let mut intervals = Vec::new();
+    // A lock this user cannot open says nothing either way, so the line does
+    // not call that carrier stopped; sessions still treat it as not running
+    // (`SessionDelivery::withheld_reason`).
+    let mut unknown = Vec::new();
+    match (&service, &service_state) {
+        (Some(config), Some(LockState::Running)) => intervals.push(format!(
+            "on the hosted service's interval (every {}s)",
+            config.interval_seconds
+        )),
+        (_, Some(LockState::Unknown(reason))) => unknown.push(format!(
+            "whether the hosted service relays this home cannot be read ({reason})"
+        )),
+        _ => {}
+    }
+    match &loop_state {
+        LockState::Running => intervals.push(format!(
+            "on the background relay's interval{}",
+            relay_loop::Holder::read(home)
+                .map(|holder| format!(" (every {}s)", holder.every_seconds))
+                .unwrap_or_default()
+        )),
+        LockState::Unknown(reason) => unknown.push(format!(
+            "whether a background relay holds this home cannot be read ({reason})"
+        )),
+        LockState::NotRunning => {}
+    }
+    let hook = "at each Claude Code session end (its SessionEnd hook)";
+    let start = format!(
+        "start the background relay (`commonmeasure relay --every {}`; `commonmeasure service \
+         install relay` on macOS)",
+        relay_loop::DEFAULT_EVERY_SECS
+    );
+    if !intervals.is_empty() {
+        let carriers = session_end
+            .then(|| hook.to_owned())
+            .into_iter()
+            .chain(intervals.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(", and ");
+        return format!(
+            "automatic relay: {carriers}, {} {}",
+            if intervals.len() == 1 {
+                "which relays"
+            } else {
+                "each of which relays"
+            },
+            if scoped {
+                "whatever the host"
+            } else {
+                "every session in this home whatever its host"
+            }
+        );
+    }
+    match (session_end, unknown.is_empty()) {
+        (true, true) => format!(
+            "automatic relay: {hook}; no other local host sends the event, so with them {start} \
+             or run `commonmeasure relay`, and a source whose licence demands usage reporting \
+             is refused there"
         ),
-        (false, Some(service), _) => format!("automatic relay: {service}"),
-        (true, None, Some(reason)) => format!(
-            "automatic relay: at each Claude Code session end (its SessionEnd hook); whether the \
-             hosted service relays this home cannot be read ({reason}), so with other local \
-             hosts run `commonmeasure relay`, and a source whose licence demands usage \
-             reporting is refused there"
+        (true, false) => format!(
+            "automatic relay: {hook}; {}, so with other local hosts {start} or run \
+             `commonmeasure relay`, and a source whose licence demands usage reporting is \
+             refused there",
+            unknown.join("; ")
         ),
-        (true, None, None) => {
-            "automatic relay: at each Claude Code session end (its SessionEnd hook); \
-                         no other local host sends the event, so with them run `commonmeasure \
-                         relay`, and a source whose licence demands usage reporting is refused \
-                         there"
-                .to_owned()
-        }
-        (false, None, Some(reason)) => format!(
-            "automatic relay: unknown, no Claude Code registration sends SessionEnd and whether \
-             the hosted service relays this home cannot be read ({reason}); sessions here are \
-             treated as having no automatic delivery, so run `commonmeasure relay`, or \
-             `commonmeasure install claude`"
+        (false, false) => format!(
+            "automatic relay: unknown, no Claude Code registration sends SessionEnd and {}; \
+             sessions here are treated as having no automatic delivery, so {start}, run \
+             `commonmeasure relay`, or `commonmeasure install claude`",
+            unknown.join(" and ")
         ),
-        (false, None, None) => format!(
-            "automatic relay: off, no Claude Code registration sends SessionEnd{}; run \
+        (false, true) => format!(
+            "automatic relay: off, no Claude Code registration sends SessionEnd{}; {start}, run \
              `commonmeasure relay`, or `commonmeasure install claude`",
             if service.is_some() {
                 " and the hosted service is configured but not running"
@@ -2097,6 +2248,12 @@ fn disconnect() -> Result<(), String> {
              search\n"
         )),
     }
+    if let Some(note) = service::relay_context()
+        .ok()
+        .and_then(|context| service::after_disconnect(&context))
+    {
+        out.push_str(&note);
+    }
     write_stdout(&out)
 }
 
@@ -2237,12 +2394,20 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
     );
     let _ = writeln!(
         out,
-        "grounded   {} put page text into the model's context{}{}",
+        "grounded   {} put page text into the model's context{}{}{}",
         summary.grounded_witnessed,
         if summary.named_not_read() > 0 {
             format!(
                 "; {} named a URL whose page was never read",
                 summary.named_not_read()
+            )
+        } else {
+            String::new()
+        },
+        if summary.delivered_files > 0 {
+            format!(
+                "; {} handed over as files, which the edge did not read",
+                summary.delivered_files
             )
         } else {
             String::new()
@@ -2548,6 +2713,7 @@ fn show_status(json: bool) -> Result<(), String> {
         "service mode      {}",
         hosted::service_line(&home).trim_start_matches("hosted service: ")
     );
+    let _ = writeln!(out, "background relay  {}", relay_loop::line(&home));
     let desired = &document["desired"];
     let _ = writeln!(
         out,
@@ -3076,6 +3242,47 @@ mod tests {
 
     use super::crossing_outcome;
 
+    fn resolved_line(name: &str, answer: &str) -> String {
+        let answer: std::net::SocketAddr = answer.parse().expect("an address");
+        super::resolution_line(name, &move |_| Ok(vec![answer]))
+    }
+
+    /// `doctor --resolve` names the fake-IP range and the proxy-side remedy,
+    /// the tailnet range and how to allow one host, and says public for a
+    /// public answer. The resolver is injected: the line is about what the
+    /// floor makes of an answer, and a test makes no lookup.
+    #[test]
+    fn doctor_resolve_names_fake_ip_and_shared_space_answers() {
+        let fake = resolved_line("www.gov.uk", "198.18.0.7:443");
+        assert!(
+            fake.starts_with("resolution: www.gov.uk resolves to 198.18.0.7, in 198.18.0.0/15"),
+            "{fake}"
+        );
+        assert!(fake.contains("fake-IP proxies"), "{fake}");
+        assert!(fake.contains("fake-ip-filter"), "{fake}");
+        assert!(fake.contains("\"allow_private_hosts\" is set"), "{fake}");
+        assert!(fake.contains("\"record_internal_prefixes\""), "{fake}");
+        assert!(fake.contains("always on a hosted edge"), "{fake}");
+        let tailnet = resolved_line("https://nas.tailnet.example/admin", "100.101.1.2:443");
+        assert!(
+            tailnet.contains("nas.tailnet.example resolves to 100.101.1.2, in 100.64.0.0/10"),
+            "{tailnet}"
+        );
+        assert!(tailnet.contains("record_internal_prefixes"), "{tailnet}");
+        let nat64 = resolved_line("v6.example", "[64:ff9b::a00:5]:443");
+        assert!(nat64.contains("a local or private address"), "{nat64}");
+        let public = resolved_line("www.gov.uk", "151.101.0.144:443");
+        assert!(
+            public.ends_with("resolves to 151.101.0.144, public"),
+            "{public}"
+        );
+        let failed = super::resolution_line("nowhere.example", &|_| Err("no answer".to_owned()));
+        assert_eq!(
+            failed,
+            "resolution: nowhere.example did not resolve: no answer"
+        );
+    }
+
     /// A managed home's forecast names the revision on disk, and where the
     /// hub has not renewed it, since when it has been stale; before any
     /// revision is applied it says so. The state is written as the sync
@@ -3201,5 +3408,83 @@ mod tests {
             hook.contains("no other local host sends the event"),
             "{hook}"
         );
+    }
+
+    /// The background relay is a carrier for every host while it holds its
+    /// lock, beside the hook and the hosted service.
+    #[test]
+    fn the_automatic_relay_line_counts_a_running_background_relay() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home = home.path();
+        std::fs::write(
+            home.join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+        )
+        .unwrap();
+        let lock = std::fs::File::create(home.join("relay-loop.lock")).unwrap();
+        lock.lock().expect("held as a running loop holds it");
+        std::fs::write(
+            home.join("relay-loop.lock"),
+            r#"{"pid":7,"every_seconds":300}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::automatic_relay_line(home, true),
+            "automatic relay: at each Claude Code session end (its SessionEnd hook), and on the \
+             background relay's interval (every 300s), which relays every session in this home \
+             whatever its host"
+        );
+        std::fs::write(
+            home.join("hosted-service.json"),
+            r#"{"origin":"https://edge.example","hosts":["chatgpt"],"interval_seconds":60}"#,
+        )
+        .unwrap();
+        let service = std::fs::File::create(home.join("hosted-service.lock")).unwrap();
+        service.lock().expect("held");
+        let both = super::automatic_relay_line(home, false);
+        assert!(
+            both.starts_with(
+                "automatic relay: on the hosted service's interval (every 60s), and on the \
+                 background relay's interval (every 300s), each of which relays"
+            ),
+            "{both}"
+        );
+        drop(service);
+        drop(lock);
+        let off = super::automatic_relay_line(home, true);
+        assert!(
+            off.contains("start the background relay (`commonmeasure relay --every 300`"),
+            "{off}"
+        );
+    }
+
+    /// Review P2-4. With `relay.json` scoped to suppliers, the line names the
+    /// suppliers and the reporting consequence and does not say every
+    /// session is relayed, whichever carriers are in force.
+    #[test]
+    fn the_automatic_relay_line_names_a_receiver_scoped_to_suppliers() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home = home.path();
+        std::fs::write(
+            home.join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry","suppliers":["ozone","acme"]}"#,
+        )
+        .unwrap();
+        let consequence = "the receiver is scoped to suppliers (ozone, acme), so only their \
+                           events leave and a source whose licence demands usage reporting is \
+                           refused on this home";
+        let hook = super::automatic_relay_line(home, true);
+        assert!(hook.ends_with(consequence), "{hook}");
+        let lock = std::fs::File::create(home.join("relay-loop.lock")).unwrap();
+        lock.lock().expect("held as a running loop holds it");
+        let running = super::automatic_relay_line(home, false);
+        assert_eq!(
+            running,
+            format!(
+                "automatic relay: on the background relay's interval, which relays whatever the \
+                 host; {consequence}"
+            )
+        );
+        assert!(!running.contains("every session"), "{running}");
     }
 }

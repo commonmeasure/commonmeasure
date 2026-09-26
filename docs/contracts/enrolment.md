@@ -153,9 +153,9 @@ API keys page. Otherwise, in this order, under the home (`$COMMONMEASURE_HOME` o
    whatever its outcome (below).
 
 Each of these files is written whole through a temporary file of the
-writer's own, `<file>.<pid>.<nonce>.tmp` beside it, and renamed into place.
-The temporary files for `edge-key.json` and `relay.json` are created with
-mode `0600`. A change to the stored `enrolment.json` (a refusal, a stated
+writer's own, `<file>.<pid>.<seconds>.<nonce>.tmp` beside it, and renamed
+into place. The temporary files for `edge-key.json`, `relay.json` and
+`deployment.json` are created with mode `0600`. A change to the stored `enrolment.json` (a refusal, a stated
 revocation, a withdrawn refusal) and its removal by `disconnect` are made
 under an exclusive lock on `enrolment.lock` beside it, against the record as
 it then stands. A process holding an older copy of the record therefore
@@ -167,8 +167,9 @@ record holds a refusal that answer withdraws, reading the record again
 under it. `enrolment.lock` is created readable by its owner only. A writer
 waits up to 10 seconds for it; then the write refuses, changes nothing and
 says another process has held `enrolment.lock`. A lock file that exists and
-cannot be opened is named with its own remedy: make it readable and
-writable by this user, or remove it while no process holds it.
+cannot be opened is named, with its owner's uid, and its own remedy: make
+it readable and writable by this user, or stop any `commonmeasure` process
+run as another user, such as under `sudo`, and then remove it.
 
 Two `connect` runs at once are not serialised. Each writes its own key,
 record and `relay.json`, and the files left can come from different runs. A

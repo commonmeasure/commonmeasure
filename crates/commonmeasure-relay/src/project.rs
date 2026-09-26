@@ -81,6 +81,23 @@ pub const SUPPLIER_FIELD: &str = "commonmeasure-supplier";
 /// its own host's delay on its own retrievals.
 pub const CRAWL_DELAY_FIELD: &str = "commonmeasure-crawl-delay";
 
+/// The extension field on the `content_retrieved` event of a crossing that
+/// handed a file over (`delivered_file` in session evidence): an object
+/// holding the file's `content_type` where it is one the edge delivers as a
+/// file ([`DELIVERED_FILE_TYPES`]), and empty otherwise ([`delivered_file`]).
+///
+/// It records that the edge handed the bytes over unread and counted
+/// nothing, which is why the crossing itself projects no grounding.
+/// Content Telemetry v1.0 has no MIME field; `media_type` names a medium,
+/// `text` by default, and the relay sets it on no event, a file's included.
+pub const DELIVERED_FILE_FIELD: &str = "commonmeasure-delivered-file";
+
+/// The `content_type` values the edge writes on a crossing that delivered a
+/// file. Any other recorded value is not copied: the record is read as
+/// written, and a type this list does not name was not written by a build
+/// that delivers files.
+const DELIVERED_FILE_TYPES: &[&str] = &["application/pdf"];
+
 /// Informational declaration on each event: batch envelopes have no standard
 /// coverage field. The selection rule is defined in the telemetry projection
 /// contract under this opaque, versioned reference.
@@ -88,6 +105,26 @@ pub const PROJECTION_FIELD: &str = "commonmeasure-projection";
 /// Opaque reference for the exclusion rule in the telemetry projection
 /// contract.
 pub const SELECTION_TERMS: &str = "commonmeasure:telemetry-selection:v1";
+
+/// [`DELIVERED_FILE_FIELD`] for a crossing that records `delivered_file` as
+/// an object. The crossing's `delivered_file` marks it as a file, never its
+/// `content_type` or `breach`: a text crossing refused for its type has a
+/// `content_type` and is never projected, and a delivered file's `breach`
+/// may begin with other sentences. Nothing of `delivered_file` itself
+/// (`via`, `bytes`, `statement`) or of `breach` is carried.
+fn delivered_file(payload: &Value) -> Option<Value> {
+    if !payload["delivered_file"].is_object() {
+        return None;
+    }
+    let mut member = Map::new();
+    if let Some(content_type) = payload["content_type"]
+        .as_str()
+        .filter(|content_type| DELIVERED_FILE_TYPES.contains(content_type))
+    {
+        member.insert("content_type".to_owned(), json!(content_type));
+    }
+    Some(Value::Object(member))
+}
 
 fn projection_data() -> Map<String, Value> {
     let mut data = Map::new();
@@ -324,9 +361,34 @@ pub fn is_turn_boundary(record: &Value) -> bool {
 }
 
 /// Whether an evidence record is a crossing policy refused. Nothing of it is
-/// projected; the session's batches carry how many there were.
+/// projected; the session's batches carry how many there were. The event
+/// name alone decides: a refused file's `content_type` and `breach` are not
+/// read.
 pub fn is_refused(record: &Value) -> bool {
     record["event"] == json!("crossing_refused")
+}
+
+/// The `content_hash` of a crossing's grounding: the hash of the part the
+/// fetch result carried (`delivered.hash`) where the crossing records one,
+/// else the crossing's `content_hash`, as for older logs and search results.
+///
+/// The grounding's `tokens_ingested` is the part's, and Content Telemetry
+/// asks a citation's hash to match the grounding's and, for a chunked
+/// source, to be the chunk's; so the hash names the same text as the count.
+/// A crossing that records a part whose hash is missing or malformed has no
+/// hash on the wire: the whole text's hash would name text the result did
+/// not carry. A malformed `content_hash` is left off too, since the schema
+/// fixes the member's form and a receiver that validates it would reject
+/// the whole batch.
+fn grounded_hash(payload: &Value) -> Option<&str> {
+    match payload.get("delivered") {
+        None | Some(Value::Null) => payload["content_hash"]
+            .as_str()
+            .filter(|hash| commonmeasure_harness::session::observations::valid_hash(hash)),
+        Some(delivered) => delivered["hash"]
+            .as_str()
+            .filter(|hash| commonmeasure_harness::session::observations::valid_hash(hash)),
+    }
 }
 
 /// One session's projection: the batches to deliver, and where each of their
@@ -402,6 +464,28 @@ fn observed_context(record: &Value) -> bool {
             .is_some()
 }
 
+/// Whether a host observation grounds the acquisition it names. For a
+/// crossing that handed a file over (`delivered_file`), the host's
+/// `representation_hash` must be the crossing's `content_hash`, the SHA-256
+/// of the bytes handed over; a file crossing without a valid `content_hash`
+/// is grounded by no observation. Equality ties the host's claim to the
+/// delivered bytes. It does not show that the file entered the model
+/// request, since the fetch result gives the host that hash, so the
+/// grounding stays the host's claim. A page's observation grounds under the
+/// host's own hash.
+fn grounds(acquisition: &Value, observation: &Value) -> bool {
+    if !observed_context(observation) {
+        return false;
+    }
+    let payload = &acquisition["payload"];
+    if !payload["delivered_file"].is_object() {
+        return true;
+    }
+    // `observed_context` admits only a valid `representation_hash`, so
+    // equality also rejects a missing or malformed `content_hash`.
+    observation["payload"]["representation_hash"] == payload["content_hash"]
+}
+
 /// Count explicit output markers separately from context entry. A completion
 /// without an output observation retains unknown use rather than gaining zero.
 fn output_associations(
@@ -444,7 +528,7 @@ fn output_associations(
                 records[acquisition + 1..output_position]
                     .iter()
                     .any(|record| {
-                        observed_context(record)
+                        grounds(&records[acquisition], record)
                             && record["payload"]["acquisition_id"] == **handle
                             && record["payload"]["generation_id"] == boundary["turn_id"]
                     })
@@ -622,6 +706,9 @@ pub fn project_session(
                 if let Some(delay) = crawl_delay(record, url) {
                     data.insert(CRAWL_DELAY_FIELD.to_owned(), delay);
                 }
+                if let Some(file) = delivered_file(payload) {
+                    data.insert(DELIVERED_FILE_FIELD.to_owned(), file);
+                }
                 data
             },
         });
@@ -631,7 +718,7 @@ pub fn project_session(
             {
                 let observed = &observation["payload"];
                 if observed["acquisition_id"] != payload["acquisition_id"]
-                    || !observed_context(observation)
+                    || !grounds(record, observation)
                     || acquisition_position(
                         records,
                         &observed["acquisition_id"],
@@ -685,7 +772,7 @@ pub fn project_session(
             // the pairing rule (section 5.7.5) is satisfied by omitting both.
             // Absence is the honest emission until the host exposes a cache
             // marker the hook can read.
-            if let Some(hash) = payload["content_hash"].as_str() {
+            if let Some(hash) = grounded_hash(payload) {
                 data.insert("content_hash".to_owned(), json!(hash));
             }
             ingestion(
@@ -1244,6 +1331,401 @@ mod tests {
                 WireEventKind::ContentGrounded
             ]
         );
+    }
+
+    /// A mediated crossing of `url` that grounded, with the whole text's
+    /// hash and, where given, the part the result carried.
+    fn part(url: &str, content_hash: &str, delivered: Option<Value>) -> Value {
+        let mut record = crossing("crossing_mediated", url, true);
+        record["payload"]["mode"] = json!("mediated");
+        record["payload"]["http_status"] = json!(200);
+        record["payload"]["content_hash"] = json!(content_hash);
+        if let Some(delivered) = delivered {
+            record["payload"]["delivered"] = delivered;
+        }
+        record
+    }
+
+    fn grounded_hashes(records: &[Value]) -> Vec<Option<Value>> {
+        project_session(None, "s", records, &[], &|_| true).batches[0]
+            .events
+            .iter()
+            .filter(|event| event.kind == WireEventKind::ContentGrounded)
+            .map(|event| event.data.get("content_hash").cloned())
+            .collect()
+    }
+
+    // Catches: reading `content_hash` unconditionally, which puts the whole
+    // text's hash on both parts of a page read in two calls.
+    #[test]
+    fn each_part_of_a_page_is_grounded_under_its_own_hash() {
+        let whole = format!("sha256:{}", "a".repeat(64));
+        let first = format!("sha256:{}", "1".repeat(64));
+        let second = format!("sha256:{}", "2".repeat(64));
+        let url = "https://publisher.example/long";
+        let records = [
+            part(
+                url,
+                &whole,
+                Some(json!({"offset": 0, "chars": 60000, "total_chars": 70000, "hash": first})),
+            ),
+            part(
+                url,
+                &whole,
+                Some(
+                    json!({"offset": 60000, "chars": 10000, "total_chars": 70000, "hash": second}),
+                ),
+            ),
+        ];
+        assert_eq!(
+            grounded_hashes(&records),
+            vec![Some(json!(first)), Some(json!(second))]
+        );
+    }
+
+    // Pins that a page delivered whole, whose recorded part is the whole
+    // text, projects the hash it projected before parts were recorded.
+    #[test]
+    fn a_page_delivered_whole_is_grounded_under_the_whole_texts_hash() {
+        let whole = format!("sha256:{}", "a".repeat(64));
+        let records = [part(
+            "https://publisher.example/short",
+            &whole,
+            Some(json!({"offset": 0, "chars": 48, "total_chars": 48, "hash": whole})),
+        )];
+        assert_eq!(grounded_hashes(&records), vec![Some(json!(whole))]);
+    }
+
+    // Catches: reading `delivered.hash` alone, which drops the hash from
+    // every crossing recorded before parts were, and from search results.
+    #[test]
+    fn a_crossing_without_a_recorded_part_keeps_its_content_hash() {
+        let whole = format!("sha256:{}", "a".repeat(64));
+        let records = [part("https://publisher.example/old", &whole, None)];
+        assert_eq!(grounded_hashes(&records), vec![Some(json!(whole))]);
+    }
+
+    // Catches: copying a malformed `content_hash` onto the wire from a
+    // crossing that records no part.
+    #[test]
+    fn a_crossing_without_a_part_or_a_valid_hash_is_grounded_without_one() {
+        for content_hash in [
+            "md5:abc",
+            "sha256:00",
+            &format!("sha256:{}", "A".repeat(64)),
+        ] {
+            let records = [part("https://publisher.example/old", content_hash, None)];
+            assert_eq!(grounded_hashes(&records), vec![None], "{content_hash}");
+        }
+        let mut record = part("https://publisher.example/old", "", None);
+        record["payload"]["content_hash"] = json!(7);
+        assert_eq!(grounded_hashes(&[record]), vec![None]);
+    }
+
+    // Catches: falling back to the whole text's hash when the recorded
+    // part's hash is missing or malformed, which names text the result did
+    // not carry; and copying a malformed part hash onto the wire.
+    #[test]
+    fn a_part_without_a_valid_hash_is_grounded_without_one() {
+        let whole = format!("sha256:{}", "a".repeat(64));
+        for delivered in [
+            json!({"offset": 0, "chars": 10, "total_chars": 20}),
+            json!({"offset": 0, "chars": 10, "total_chars": 20, "hash": null}),
+            json!({"offset": 0, "chars": 10, "total_chars": 20, "hash": "sha256:00"}),
+            json!({"offset": 0, "chars": 10, "total_chars": 20,
+                   "hash": format!("sha256:{}", "A".repeat(64))}),
+            json!({"offset": 0, "chars": 10, "total_chars": 20, "hash": 7}),
+            json!("sha256:not-an-object"),
+        ] {
+            let records = [part(
+                "https://publisher.example/part",
+                &whole,
+                Some(delivered.clone()),
+            )];
+            assert_eq!(grounded_hashes(&records), vec![None], "{delivered}");
+        }
+    }
+
+    /// A mediated fetch of a PDF as the edge records it: the file handed over
+    /// unread, no part, no count, no grounding, and a `breach` naming both
+    /// screens after `breach_before`, if any.
+    fn delivered_pdf(url: &str, breach_before: &str) -> Value {
+        let mut record = crossing("crossing_mediated", url, false);
+        let payload = &mut record["payload"];
+        payload["mode"] = json!("mediated");
+        payload["http_status"] = json!(200);
+        payload["content_type"] = json!("application/pdf");
+        payload["content_hash"] = json!(format!("sha256:{}", "f".repeat(64)));
+        payload["retrieved_hash"] = json!(format!("sha256:{}", "f".repeat(64)));
+        payload["delivered_file"] = json!({
+            "via": "local_file", "bytes": 482113,
+            "statement": "delivered as a file, not read by the edge; the PII detector and the injection screen did not run over it",
+        });
+        payload["breach"] = json!(format!(
+            "{breach_before}The PII detector did not rule: the body is a PDF, which the edge does not read. The injection screen did not rule: the body is a PDF, which the edge does not read."
+        ));
+        record
+    }
+
+    fn only_batch(records: &[Value]) -> WireBatch {
+        let mut batches = project_session(None, "s", records, &[], &|_| true).batches;
+        assert_eq!(batches.len(), 1);
+        batches.remove(0)
+    }
+
+    // Catches: dropping the member, and a file crossing that grounds.
+    #[test]
+    fn a_delivered_pdf_projects_a_retrieval_naming_the_file_and_no_grounding() {
+        let batch = only_batch(&[delivered_pdf("https://publisher.example/paper.pdf", "")]);
+        let [retrieval] = <[_; 1]>::try_from(batch.events).expect("one event");
+        assert_eq!(retrieval.kind, WireEventKind::ContentRetrieved);
+        assert_eq!(
+            retrieval.data.get(DELIVERED_FILE_FIELD),
+            Some(&json!({"content_type": "application/pdf"}))
+        );
+        assert!(retrieval.data.get("media_type").is_none());
+        let text = serde_json::to_string(&retrieval).unwrap();
+        for withheld in [
+            "local_file",
+            "482113",
+            "not read by the edge",
+            "did not rule",
+        ] {
+            assert!(!text.contains(withheld), "{withheld}: {text}");
+        }
+    }
+
+    // Catches: copying `content_type` unfiltered.
+    #[test]
+    fn a_file_of_a_type_the_edge_does_not_deliver_names_no_type() {
+        for content_type in [
+            json!("image/png"),
+            json!("application/pdf; charset=x"),
+            json!(7),
+            Value::Null,
+        ] {
+            let mut record = delivered_pdf("https://publisher.example/f", "");
+            record["payload"]["content_type"] = content_type.clone();
+            let batch = only_batch(&[record]);
+            assert_eq!(
+                batch.events[0].data.get(DELIVERED_FILE_FIELD),
+                Some(&json!({})),
+                "{content_type}"
+            );
+        }
+    }
+
+    // Catches: keying the member on `content_type`, which a text crossing
+    // does not carry today and a record may carry without a file; and on
+    // anything but an object under `delivered_file`.
+    #[test]
+    fn a_crossing_without_a_delivered_file_carries_no_member() {
+        let text = part(
+            "https://publisher.example/page",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let mut typed = text.clone();
+        typed["payload"]["content_type"] = json!("application/pdf");
+        let mut not_an_object = delivered_pdf("https://publisher.example/f", "");
+        not_an_object["payload"]["delivered_file"] = json!("local_file");
+        for record in [text, typed, not_an_object] {
+            let batch = only_batch(std::slice::from_ref(&record));
+            for event in &batch.events {
+                assert!(event.data.get(DELIVERED_FILE_FIELD).is_none(), "{record}");
+            }
+        }
+    }
+
+    // Catches: keying on the screens' sentences at the start of `breach`,
+    // which a delivered file's `breach` need not have.
+    #[test]
+    fn a_delivered_pdf_projects_the_same_whatever_breach_comes_first() {
+        let url = "https://publisher.example/paper.pdf";
+        let plain = only_batch(&[delivered_pdf(url, "")]);
+        let after_host = only_batch(&[delivered_pdf(
+            url,
+            "The host publisher.example is not on the allow list. ",
+        )]);
+        assert_eq!(plain, after_host);
+    }
+
+    // Catches: projecting a refused file, or counting it by anything but
+    // its event. A refused file carries only the breach the declarations
+    // left, never the screens' sentences; the third record carries them
+    // anyway, so a projection keyed on `breach` would show.
+    #[test]
+    fn a_refused_pdf_projects_nothing_and_is_counted() {
+        let refused = |breach: Value| {
+            let mut record = delivered_pdf("https://publisher.example/paper.pdf", "");
+            record["event"] = json!("crossing_refused");
+            let payload = record["payload"].as_object_mut().unwrap();
+            payload.remove("delivered_file");
+            payload.insert(
+                "refusal".to_owned(),
+                json!("policy_mode strict refuses a file the screens cannot read"),
+            );
+            payload.insert("breach".to_owned(), breach);
+            record
+        };
+        let screens = delivered_pdf("https://x.example/", "")["payload"]["breach"].clone();
+        let admitted = part(
+            "https://publisher.example/page",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let projection = project_session(
+            None,
+            "s",
+            &[admitted.clone(), refused(Value::Null), refused(screens)],
+            &[],
+            &|_| true,
+        );
+        assert_eq!(projection.refused, Some(2));
+        let [batch] = <[_; 1]>::try_from(projection.batches).expect("one batch");
+        assert_eq!(batch.refused, Some(2));
+        let alone = only_batch(&[admitted]);
+        assert_eq!(batch.events, alone.events);
+        let text = serde_json::to_string(&batch).unwrap();
+        assert!(
+            !text.contains("paper.pdf") && !text.contains("application/pdf"),
+            "{text}"
+        );
+    }
+
+    /// [`host_observation_session`] with its first acquisition a delivered
+    /// PDF and its observation under `representation_hash`.
+    fn host_observed_file(representation_hash: &str) -> Vec<Value> {
+        let mut records = host_observation_session();
+        let acquisition = &mut records[0]["payload"];
+        acquisition["content_type"] = json!("application/pdf");
+        acquisition["delivered_file"] = json!({"via": "local_file", "bytes": 10});
+        records[2]["payload"]["representation_hash"] = json!(representation_hash);
+        records
+    }
+
+    fn file_hash() -> String {
+        format!("sha256:{}", "a".repeat(64))
+    }
+
+    // Catches: no equality check, and comparing with `delivered.hash`,
+    // which a file crossing does not have. Once the host has opted into
+    // observations, the edge stamps a delivered file `host_required` with
+    // an acquisition handle; an observation under the file's own hash
+    // grounds it under the turn scope, and the crossing itself grounds
+    // nothing.
+    #[test]
+    fn a_host_observation_of_a_delivered_file_grounds_it_for_the_turn() {
+        let records = host_observed_file(&file_hash());
+        let batch = only_batch(&records[..3]);
+        let used = "https://publisher.example/used";
+        let events: Vec<_> = batch
+            .events
+            .iter()
+            .filter(|event| event.content_url == used)
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, WireEventKind::ContentRetrieved);
+        assert_eq!(
+            events[0].data.get(DELIVERED_FILE_FIELD),
+            Some(&json!({"content_type": "application/pdf"}))
+        );
+        assert_eq!(events[1].kind, WireEventKind::ContentGrounded);
+        assert_eq!(events[1].data.get("scope"), Some(&json!("turn")));
+        assert_eq!(
+            events[1].data.get("content_hash"),
+            Some(&json!(file_hash()))
+        );
+        assert!(events[1].data.get(DELIVERED_FILE_FIELD).is_none());
+    }
+
+    // Catches: no equality check. A host that hashed anything but the
+    // delivered bytes, such as the fetch result's JSON, grounds nothing.
+    #[test]
+    fn a_host_observation_of_a_delivered_file_under_another_hash_grounds_nothing() {
+        let records = host_observed_file(&format!("sha256:{}", "b".repeat(64)));
+        let batch = only_batch(&records[..3]);
+        let used = "https://publisher.example/used";
+        let kinds: Vec<_> = batch
+            .events
+            .iter()
+            .filter(|event| event.content_url == used)
+            .map(|event| event.kind)
+            .collect();
+        assert_eq!(kinds, vec![WireEventKind::ContentRetrieved]);
+    }
+
+    // States that a file crossing without a valid `content_hash` is
+    // grounded by no observation. Two checks hold it, each alone enough:
+    // `acquisition_position` admits no acquisition without a valid hash,
+    // and `grounds` compares with a valid `representation_hash`.
+    #[test]
+    fn a_delivered_file_without_a_valid_hash_is_grounded_by_no_observation() {
+        for content_hash in [Value::Null, json!("sha256:00"), json!(7)] {
+            let mut records = host_observed_file("sha256:00");
+            records[0]["payload"]["content_hash"] = content_hash.clone();
+            let projected = project_session(None, "s", &records[..3], &[], &|_| true);
+            assert!(
+                projected
+                    .batches
+                    .iter()
+                    .flat_map(|b| &b.events)
+                    .all(|event| {
+                        event.kind != WireEventKind::ContentGrounded
+                            || event.content_url != "https://publisher.example/used"
+                    }),
+                "{content_hash}"
+            );
+        }
+        let mut records = host_observed_file(&file_hash());
+        records[0]["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("content_hash");
+        let batch = only_batch(&records[..3]);
+        assert!(
+            batch
+                .events
+                .iter()
+                .all(|event| event.kind != WireEventKind::ContentGrounded)
+        );
+    }
+
+    // Catches: applying the rule in the grounding arm alone, which leaves
+    // the output count counting a file that grounds nothing.
+    #[test]
+    fn a_file_observed_under_another_hash_is_not_counted_with_the_output() {
+        let count = |records: &[Value]| {
+            project_session(None, "s", records, &[], &|_| true).batches[0]
+                .events
+                .iter()
+                .find(|event| event.kind == WireEventKind::TurnCompleted)
+                .expect("a turn")
+                .data["commonmeasure-output-associations"]["count"]
+                .clone()
+        };
+        assert_eq!(count(&host_observed_file(&file_hash())), json!(2));
+        assert_eq!(
+            count(&host_observed_file(&format!("sha256:{}", "b".repeat(64)))),
+            json!(0)
+        );
+    }
+
+    // Catches: applying the file's equality rule to every crossing. A page's
+    // observation grounds under the host's hash, whatever it is.
+    #[test]
+    fn a_host_observation_of_a_page_grounds_under_the_hosts_hash() {
+        let records = host_observation_session();
+        let host_hash = format!("sha256:{}", "b".repeat(64));
+        assert_ne!(records[0]["payload"]["content_hash"], json!(host_hash));
+        let batch = only_batch(&records[..3]);
+        let grounded: Vec<_> = batch
+            .events
+            .iter()
+            .filter(|event| event.kind == WireEventKind::ContentGrounded)
+            .map(|event| event.data.get("content_hash").cloned())
+            .collect();
+        assert_eq!(grounded, vec![Some(json!(host_hash))]);
     }
 
     #[test]

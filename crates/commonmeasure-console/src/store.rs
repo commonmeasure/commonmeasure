@@ -1171,7 +1171,7 @@ impl Store {
 const WITHHELD_SYNC_REASON: &str = "withheld: the reason can quote a URL with credentials; the \
      session log keeps it, and `commonmeasure policy sync` reports the current one";
 
-/// A `policy_sync` record's `reason` as the console serves it. 0.4.2 and
+/// A `policy_sync` record's `reason` as the console serves it. 0.4.1 and
 /// earlier quoted the policy URL whole in some reasons (a name-resolution
 /// timeout, a refused `policy_url`), and a policy URL can carry credentials.
 /// The reason is free text, and reducing a URL inside it would need a

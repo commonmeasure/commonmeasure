@@ -159,6 +159,14 @@
       "refusal": "policy.json: record_internal_prefixes entry \"rag.example.internal/\" is not an absolute URL prefix and would never match anything"
     },
     {
+      "name": "a recordable prefix with a query or a fragment",
+      "policy": {"record_internal_prefixes": ["https://rag.example.internal/docs/#top/"]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "internal_prefix_query_or_fragment",
+      "refusal": "policy.json: record_internal_prefixes entry \"https://rag.example.internal/docs/#top/\" has a query or a fragment; a prefix names a path, so write it without them"
+    },
+    {
       "name": "a recordable prefix without a trailing slash",
       "policy": {"record_internal_prefixes": ["https://rag.example.internal"]},
       "schema_valid": true,

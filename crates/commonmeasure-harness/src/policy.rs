@@ -936,11 +936,23 @@ fn parse(encoded: &[u8], source: &Path) -> Result<PolicyFile, String> {
     // "https://rag.internal@other-host/y" — hosts the operator never
     // named. Requiring the "/" makes every match end at a component the
     // operator wrote.
+    //
+    // A query or a fragment names no corpus: a fragment is never sent, so the
+    // entry would cover exactly what it covers without one, and a query
+    // leaves every page under the path outside it. Either way the entry is
+    // not the consent the operator wrote.
     for prefix in &file.record_internal_prefixes {
-        if url::Url::parse(prefix).is_err() {
+        let Ok(parsed) = url::Url::parse(prefix) else {
             return Err(format!(
                 "{}: record_internal_prefixes entry {prefix:?} is not an absolute URL prefix and \
                  would never match anything",
+                source.display()
+            ));
+        };
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            return Err(format!(
+                "{}: record_internal_prefixes entry {prefix:?} has a query or a fragment; a \
+                 prefix names a path, so write it without them",
                 source.display()
             ));
         }
@@ -1484,8 +1496,8 @@ impl SessionPolicy {
     }
 
     /// Hold the private-address floor whatever the file says: neither
-    /// `allow_private_hosts` nor a named internal prefix admits a loopback,
-    /// private, link-local or `.internal` address, so a managed policy cannot
+    /// `allow_private_hosts` nor a named internal prefix admits an address
+    /// `commonmeasure_types::address` calls private, so a managed policy cannot
     /// steer this edge into the network it runs in. A hosted edge in service
     /// mode runs beside its cloud's metadata service, which answers with the
     /// machine's own credentials. Declining a permissive field is stricter
@@ -2627,6 +2639,34 @@ mod tests {
             Ok(_) => panic!("a slash-less prefix must not load"),
         };
         assert!(error.contains("must end with \"/\""), "got: {error}");
+    }
+
+    /// A prefix with a query or a fragment names no path the operator could
+    /// mean: the loader refuses it rather than accept an entry that covers
+    /// something else.
+    #[test]
+    fn a_prefix_with_a_query_or_a_fragment_is_a_load_error() {
+        for prefix in [
+            "https://rag.corp.internal/docs/?v=1/",
+            "https://rag.corp.internal/docs/?",
+            "https://rag.corp.internal/docs/#top/",
+            "https://rag.corp.internal/docs/#",
+        ] {
+            let directory = tempfile::tempdir().expect("tempdir");
+            std::fs::write(
+                directory.path().join("policy.json"),
+                serde_json::json!({"record_internal_prefixes": [prefix]}).to_string(),
+            )
+            .unwrap();
+            let error = match SessionPolicy::load(directory.path(), None) {
+                Err(error) => error,
+                Ok(_) => panic!("{prefix} must not load"),
+            };
+            assert!(
+                error.contains("has a query or a fragment"),
+                "{prefix}: {error}"
+            );
+        }
     }
 
     /// Demonstrated against the real MCP binary: a misspelled `"contraints"`

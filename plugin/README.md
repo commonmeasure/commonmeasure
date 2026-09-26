@@ -206,7 +206,10 @@ served over stdio. These run *before* the crossing, so policy can refuse.
 
 - `context_fetch` needs no credentials. It fetches over the real transport,
   checks the operator's source policy first, records the crossing either way,
-  and hands the agent the bytes plus the hash it recorded.
+  and hands the agent the text plus the hash it recorded. A PDF is saved
+  under the session's directory and the agent is given its path, to read
+  with its own file tools. The edge does not screen a PDF for personal data
+  or injection, so under `policy_mode` `strict` a PDF is refused.
 - `context_search` needs a provider credential, loaded at start from
   `$COMMONMEASURE_HOME/credentials.env` (`docs/GETTING-STARTED.md` §3).
   Without a credential it reports `unavailable`,

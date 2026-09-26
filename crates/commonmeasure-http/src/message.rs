@@ -10,8 +10,53 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Hard ceiling on body size. Provider search responses and extracted pages fit
 /// comfortably; anything larger is not something to place in a context window
 /// anyway. It bounds a decoded body as well as a served one, so a small gzip
-/// body that expands without limit is refused at the same size.
-const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// body that expands without limit is refused at the same size. It is also
+/// the largest file a mediated fetch hands over (a PDF), so one constant
+/// states both and the transfer stops at the bound rather than reading on.
+pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+/// A body refused for its size, before more than [`MAX_BODY_BYTES`] of it
+/// was read. Typed so a caller can say how large the body was, where the
+/// peer declared it, without parsing the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyOverCeiling {
+    /// The size the peer declared in `Content-Length`, where it declared
+    /// one. A chunked or EOF-delimited body is known only to be larger than
+    /// the ceiling.
+    pub declared: Option<u64>,
+    /// True where the served body was within the ceiling and its gzip
+    /// decoding was not.
+    pub decoded: bool,
+}
+
+impl std::fmt::Display for BodyOverCeiling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.decoded, self.declared) {
+            (true, _) => write!(
+                f,
+                "gzip body decodes past the size ceiling of {MAX_BODY_BYTES} bytes"
+            ),
+            (false, Some(declared)) => write!(
+                f,
+                "body of {declared} bytes exceeds size ceiling of {MAX_BODY_BYTES} bytes; none \
+                 of it was read"
+            ),
+            (false, None) => write!(
+                f,
+                "body exceeds size ceiling of {MAX_BODY_BYTES} bytes; reading stopped there"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BodyOverCeiling {}
+
+fn over_ceiling(declared: Option<u64>) -> anyhow::Error {
+    anyhow::Error::new(BodyOverCeiling {
+        declared,
+        decoded: false,
+    })
+}
 
 /// Ordered, case-insensitive header map.
 ///
@@ -303,7 +348,10 @@ fn gunzip(coded: &[u8]) -> Result<Vec<u8>> {
         .read_to_end(&mut decoded)
         .map_err(|error| anyhow::anyhow!("gzip body could not be decoded: {error}"))?;
     if decoded.len() > MAX_BODY_BYTES {
-        bail!("gzip body decodes past the size ceiling of {MAX_BODY_BYTES} bytes");
+        return Err(anyhow::Error::new(BodyOverCeiling {
+            declared: None,
+            decoded: true,
+        }));
     }
     Ok(decoded)
 }
@@ -325,7 +373,7 @@ fn read_body(
     }
     if let Some(len) = declared {
         if len > MAX_BODY_BYTES {
-            bail!("body exceeds size ceiling");
+            return Err(over_ceiling(Some(len as u64)));
         }
         let mut body = vec![0u8; len];
         reader.read_exact(&mut body).context("read body")?;
@@ -339,7 +387,7 @@ fn read_body(
             .read_to_end(&mut body)
             .context("read body to eof")?;
         if body.len() > MAX_BODY_BYTES {
-            bail!("body exceeds size ceiling");
+            return Err(over_ceiling(None));
         }
         return Ok(body);
     }
@@ -364,9 +412,9 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>> {
         let total = body
             .len()
             .checked_add(size)
-            .context("chunked body exceeds size ceiling")?;
+            .ok_or_else(|| over_ceiling(None))?;
         if total > MAX_BODY_BYTES {
-            bail!("chunked body exceeds size ceiling");
+            return Err(over_ceiling(None));
         }
         if size == 0 {
             // Trailer section, then final CRLF.

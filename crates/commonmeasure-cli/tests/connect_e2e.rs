@@ -1326,7 +1326,7 @@ fn upload_refusals_of_401_404_and_409_from_the_hub_are_stored_as_the_edges_concl
             listing["stated"]["edge_conclusion"],
             json!({"status": status, "detail": REASON})
         );
-        // Repeated for a reader of 0.4.2 or earlier, which ignores the
+        // Repeated for a reader of 0.4.1 or earlier, which ignores the
         // conclusion member and must still read the key as unlisted.
         assert_eq!(listing["stated"]["listed"], false);
         assert_eq!(listing["stated"]["unlisted_reason"], REASON);
@@ -3180,5 +3180,77 @@ fn disconnect_waits_for_a_writer_holding_the_enrolment_record() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!home.path().join("enrolment.json").exists());
+    server.stop();
+}
+
+/// Review P3-E. With the background relay's LaunchAgent installed for this
+/// home, `disconnect` names `service uninstall relay`: with `relay.json`
+/// gone the agent's next start is refused and it stays installed. The
+/// LaunchAgents directory is under a scratch `HOME`; nothing is loaded.
+#[test]
+fn disconnect_names_the_relay_uninstall_while_its_launch_agent_is_installed() {
+    let user = tempfile::tempdir().unwrap();
+    let home = user.path().join("edge");
+    std::fs::create_dir_all(&home).unwrap();
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state);
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(args)
+            .env("COMMONMEASURE_HOME", &home)
+            .env("HOME", user.path())
+            .env_remove("COMMONMEASURE_SERVICE_LABEL")
+            .output()
+            .expect("the binary should run")
+    };
+    let agents = user.path().join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let plist = agents.join("ai.commonmeasure.relay.plist");
+    let log = home.join("logs/relay.log");
+    let written = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\
+         \t<key>Label</key>\n\t<string>ai.commonmeasure.relay</string>\n\
+         \t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>{}</string>\n\
+         \t\t<string>relay</string>\n\t\t<string>--every</string>\n\t\t<string>300</string>\n\
+         \t</array>\n\
+         \t<key>EnvironmentVariables</key>\n\t<dict>\n\t\t<key>COMMONMEASURE_HOME</key>\n\
+         \t\t<string>{}</string>\n\t</dict>\n\
+         \t<key>StandardOutPath</key>\n\t<string>{}</string>\n\
+         \t<key>StandardErrorPath</key>\n\t<string>{}</string>\n\
+         </dict>\n</plist>\n",
+        env!("CARGO_BIN_EXE_commonmeasure"),
+        home.display(),
+        log.display(),
+        log.display()
+    );
+
+    for installed in [false, true] {
+        assert!(
+            run(&["connect", &server.url(), "--token", TOKEN])
+                .status
+                .success()
+        );
+        if installed {
+            std::fs::write(&plist, &written).unwrap();
+        }
+        let output = run(&["disconnect"]);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!home.join("relay.json").exists());
+        let note = format!(
+            "the background relay is still installed ({})",
+            plist.display()
+        );
+        assert_eq!(stdout.contains(&note), installed, "{stdout}");
+        assert_eq!(
+            stdout.contains("commonmeasure service uninstall relay"),
+            installed,
+            "{stdout}"
+        );
+    }
     server.stop();
 }

@@ -62,13 +62,26 @@ a receiver counts it once.
   crossing's URL without user information); `license_ref` where the crossing's
   licence is `declared`, also without user information, since a licence URL
   resolved against the page's URL keeps any the page URL carried;
-  `content_telemetry_id` (below); `instance` (§Instance reference).
+  `content_telemetry_id` (below); `instance` (§Instance reference). A
+  crossing that handed a file over unread (session evidence
+  `delivered_file`) also carries `data.commonmeasure-delivered-file`
+  (§Custom fields) and projects no grounding of its own; a host's
+  context-entry observation of it projects one only under the file's own
+  hash (§Grounding from host observations).
 - **`content_grounded`**, for a crossing that grounded: `data.scope`
   `session`, `data.content_hash` and the ingestion measure (§Ingestion
-  measure). `data.content_hash` is the hash of the whole text extracted for
-  the agent, of which one fetch result may carry only a part, as session
-  evidence `delivered` records; it is never `retrieved_hash`, the hash of the
-  body as served. A crossing whose context entry the host
+  measure). Where the crossing records the part of the extracted text its
+  fetch result carried (session evidence `delivered`), `data.content_hash`
+  is that part's hash, `delivered.hash`, the same text `tokens_ingested`
+  counts; for a page delivered whole it equals the crossing's
+  `content_hash`. A crossing that records a part without a valid
+  `delivered.hash` carries no `data.content_hash`. A crossing that records
+  no part (search results, and logs from before parts were recorded)
+  carries its `content_hash`, where that is a valid `sha256:` hash, and
+  none otherwise. The part is what the edge handed the host,
+  and, as session evidence says, not evidence of what the model read. The
+  hash is never `retrieved_hash`, the hash of the body as served. A
+  crossing whose context entry the host
   observes is grounded by the observation instead, with `data.scope` `turn`
   and the observation's representation hash (§Grounding from host
   observations).
@@ -98,6 +111,7 @@ admit because they do not close their objects:
 | `data.token_basis` | grounding events with `tokens_ingested` | the recorded basis of the count (§Ingestion measure) |
 | `data.commonmeasure-output-associations` | `turn_completed` with an output observation | `{"count": n}` (below) |
 | `data.commonmeasure-crawl-delay` | retrieval events of a mediated fetch sent under a host's `Crawl-delay` above zero | `{"delay_ms": n}`: the delay this edge kept for the host that answered (the reading's `honoured_ms`, at most 60000), read from the delay ruling on the crossing's `robots` evaluation ([session evidence §Source declarations](session-evidence.md#source-declarations)). The ruling can be read when its `host` matches the host that answered, its `delay_ms` is an integer from 1 to 60000 and its `outcome` is `clear` or `waited`; other members of the ruling are not read, and their values do not affect the field. Absent where the group states no delay, states `Crawl-delay: 0` or a value that cannot be read, where the ruling is missing or cannot be read, on every other event and on a run's events. The hub forwards `data` onward, so a content owner receives its own host's delay on its own retrievals |
+| `data.commonmeasure-delivered-file` | retrieval events of a crossing whose `delivered_file` is an object | `{"content_type": "application/pdf"}` where the crossing's `content_type` is one the edge writes for a delivered file (today `application/pdf` alone), otherwise `{}`. Nothing else from the record is carried: not `via`, `bytes` or `statement`, and not `breach`. It is keyed on `delivered_file`, never on `content_type` or `breach` text. It records that the edge handed the bytes over unread and counted nothing, so the crossing projects no grounding of its own; the file is grounded only by a host's context-entry observation under the file's own hash (§Grounding from host observations). Content Telemetry v1.0 has no MIME field; `media_type` names a medium, `text` by default, and the relay sets it on no event, a file's included |
 | `instance` | retrieval and grounding events, beside `data` | the instance reference, to the issuing hub only (§Instance reference) |
 | `refused` | the batch, beside `events` | the session's refused count (§The refused count on the wire) |
 
@@ -105,8 +119,10 @@ admit because they do not close their objects:
 host's output observation
 ([session evidence §Output-association observations](session-evidence.md#output-association-observations))
 whose acquisitions and context entries pass selected coverage and privacy
-checks. It is distinct from the number of `content_grounded` events, and a
-receiver counts it once per boundary event ID. It is absent on boundaries
+checks, and, for a delivered file, whose context entry names the file's own
+hash (§Grounding from host observations). It is distinct from the number
+of `content_grounded` events, and a receiver counts it once per boundary
+event ID. It is absent on boundaries
 without an output observation, so a missing observation never becomes a
 measured zero. It remains a Grounding-level extension: the relay makes no
 standard `content_cited` event and no Citation-conformance claim. The
@@ -159,7 +175,10 @@ A turn boundary requires its own clearance, resolved from `payload.detail.cwd`.
 It accompanies a session only when at least one source event is eligible.
 A neighbouring public crossing never clears a private boundary. The projection
 copies the recorded `turn_id` where supplied, normalises the timestamp and
-carries `turn: {"privacy_level": "minimal"}`. It excludes the working directory,
+carries `turn: {"privacy_level": "minimal"}`. The hub reads `turn` as a
+closed type holding `privacy_level` alone, so a hub that predates a new
+member of `turn` answers 400 to every batch that carries it; a change to
+`turn` lands in the hub first. It excludes the working directory,
 transcript path, privacy rationale and all conversation content. A boundary
 without a recorded `minimal` declaration or usable timestamp is excluded; the
 relay does not invent missing host boundaries or turn identifiers. Turn event
@@ -343,8 +362,11 @@ not model-tokeniser counts or measurements comparable between emitters.
 
 The relay does not emit `chars_ingested`: it reads hashes and counts from the
 record, not the captured text. Multiplying a rounded token estimate would not
-recover the Unicode code points placed in context. Existing `content_hash`
-continues to identify the captured content; page text never enters telemetry.
+recover the Unicode code points placed in context. A crossing's grounding
+carries in `content_hash` the hash of the text its count covers: the part a
+fetch result carried, which may be the whole text (§What is projected). A
+grounding from a host observation carries the host's hash and no count
+(§Grounding from host observations). Page text never enters telemetry.
 
 ## Delivery state
 
@@ -643,7 +665,8 @@ Only a host that sends a session-end event to the hook relays this way.
 `install claude` registers the `SessionEnd` hook and the plugin's
 `hooks.json` registers the same events; the other hosts' installs register
 none (`docs/contracts/host-integration.md` §2), so an edge used only through
-them relays when `commonmeasure relay` is run. A session that ends without
+them relays when `commonmeasure relay` is run, or on the background relay's
+interval where one runs (§Relay on an interval). A session that ends without
 the event, a crash for example, relays at the next session end. Removing
 `relay.json` stops it with every other relay, and writing `relay/manual`
 stops it alone, which also leaves a licence's reporting demand unmet
@@ -660,6 +683,82 @@ loopback receiver that records the bytes posted, and
 for the two cases that start nothing. Both establish the process behaviour
 on this platform, not delivery to a hub.
 
+## Relay on an interval
+
+A host that sends no session-end event (Claude Desktop, Codex, Cursor, the
+Copilot CLI, VS Code, Pi) relays without a person only through a process
+that relays on an interval: the hosted service
+([`host-integration.md`](host-integration.md) §1), or the background relay,
+`commonmeasure relay --every <seconds>`, for a local edge, with an interval
+from 1 second to a day (86,400 seconds); a longer one is refused, because a
+running loop admits a reporting demand whose report then waits that long.
+The background relay runs a relay at start and then every interval until
+SIGTERM or SIGINT, which end it once the run in progress has finished. Each run is the
+one a session end starts: every session log and every due spooled batch, to
+the receiver in `relay.json` only (`--every` takes none of `--receiver`,
+`--api-key`, `--run`, `--session`, `--dry-run` or `--policy`), under the same
+clearance, supplier scope, reporting approvals, backoff and spool lock, with
+the managed policy synced first as `commonmeasure relay` syncs it. It sends
+nothing a session-end run over the same home would not send. It does not
+start without a receiver in `relay.json`, with a `relay.json` that does not
+load, or while another background relay holds the home; it says why and
+exits 0. It skips a run while the receiver is gone or `relay/manual` is
+present, each time with a journal line naming why. Where `relay.json` has
+`suppliers` (§Supplier scope), its first journal line, the `service install
+relay` output and `doctor`'s `automatic relay` line name the list and say
+that only those suppliers' events leave and that a source whose licence
+demands usage reporting is refused on the home.
+
+For as long as it runs it holds `relay-loop.lock` in the home, created
+readable by its owner only, and writes its pid and interval into it. A
+second background relay on the same home keeps trying for a second, so a
+probe's momentary hold does not refuse it, and is then refused, naming the
+lock and, while that process is alive, the holder's pid and interval. The lock is apart from the spool's
+`relay/spool/delivery.lock`, which it takes only during a run, so a
+session-end run or a typed `commonmeasure relay` between its runs works as
+before; one that meets a run in progress loses the spool lock and leaves its
+work to the next run. The licence ruling, `status` and `doctor` read the
+lock ([session evidence §Source declarations](session-evidence.md#source-declarations)).
+`commonmeasure service install relay` runs it at login on macOS as the
+LaunchAgent `ai.commonmeasure.relay`, logging to `logs/relay.log` in the
+home. Its `KeepAlive` is `SuccessfulExit` false: launchd restarts the loop
+after an unsuccessful exit (an exit status other than 0, or a signal that
+kills it, such as a crash), and its `ThrottleInterval` of 300 seconds
+keeps it from starting more than once in five minutes, so a loop that
+crashes at every start runs a relay no more often than one on the default
+interval. Launchd counts from the last start, so a loop that ran for longer
+before it crashed starts again at once. It leaves the loop stopped
+after exit 0, which is SIGTERM or a refusal at start. A refused loop
+therefore stays stopped until `service install relay` runs again or the
+next login, including one refused for a cause that clears by itself: a
+home on a volume mounted after login has no `relay.json` yet, so the loop
+refuses for want of a receiver and stays stopped after the volume mounts.
+`doctor` names the state and the log. On other platforms `service` refuses and names
+the command to run under the platform's own service manager.
+
+The edge sees no end to a Claude Desktop session. Each run relays such a
+session as far as its log reads, as the hosted service's interval relay
+does. Event ids are derived from the records they project from
+(§Delivery state), and an event already in `relay/delivered.idx` or in a
+spooled batch is not projected again, so a crossing written after one run
+leaves on the next and nothing leaves twice. A session whose log does not read, such
+as one whose last line is being written at that moment, is skipped for that
+run and named (`relay/skipped-sessions.json`), and the next run reads it
+again.
+
+Tested against loopback receivers: `crates/commonmeasure-cli/tests/mediated_e2e.rs`
+`reporting_demand::a_claude_desktop_session_is_admitted_and_delivered_only_while_the_background_relay_runs`
+(a Claude Desktop session refused without the loop, admitted with it,
+delivered on the loop's next tick while the session is still being written,
+no event posted twice, SIGTERM releasing the lock), and
+`crates/commonmeasure-cli/tests/relay_e2e.rs`
+`the_background_relay_runs_once_per_home_stops_on_sigterm_and_is_reported_in_each_state`
+and `a_session_end_and_the_background_relay_at_once_deliver_each_event_once`.
+The admitted crossing in the first is to a loopback origin, which the
+private-address floor never projects, so the event delivered is that
+record moved to a public host and appended to the same log. The LaunchAgent
+is tested against a recorded `launchctl`, not a real launchd.
+
 ## Grounding from host observations
 
 The relay emits one `content_grounded` per eligible context-entry observation,
@@ -673,6 +772,16 @@ grounding events. Their hashes describe the representations; the event count
 measures representation occurrences. Receivers measuring distinct sources per
 generation count distinct (`turn_id`, `content_url`) pairs within the session,
 not grounding events. Event IDs remain the deduplication key for delivery retries.
+
+For a crossing that handed a file over (session evidence `delivered_file`), an
+observation grounds the file only where its `representation_hash` equals the
+crossing's `content_hash`, the SHA-256 of the bytes handed over. Any other
+observation of that acquisition projects no grounding and is not counted in
+`commonmeasure-output-associations`. The fetch result gives the host that
+hash, so equality ties the host's claim to the delivered bytes; it does not
+show that the file entered the model request, and it says nothing about which
+pages the model read. The grounding remains the host's claim. A page's
+observation grounds under the host's hash, whatever it is.
 
 ## Directory reporting consent
 
@@ -705,7 +814,10 @@ an integer at the top of the batch document and nothing else about them.
 The count exists so an organisation's owner can see that policy was
 enforced across its edges, and it is a count of enforcement, not of
 sources: a refusal to a private address or a named internal prefix is
-counted like any other, because nothing about the address leaves.
+counted like any other, because nothing about the address leaves. A
+`context_fetch` call for a part past the end of a page's text, and a call
+for a part of a PDF, are recorded as `crossing_refused` and counted here
+too: the request was made and nothing was delivered.
 
 The count is the session's running total at the time the batch is
 projected, never a per-batch difference. Every batch of one session

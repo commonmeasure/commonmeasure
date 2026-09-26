@@ -46,7 +46,10 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const VERSION: u32 = 1;
+/// Version 2 records whether an acquisition handed a file over. A version 1
+/// journal does not say, so it is discarded and the index rebuilt from the
+/// log, which does.
+const VERSION: u32 = 2;
 
 /// How many bytes before the covered offset the digest spans. Records carry
 /// timestamps and random identifiers, so two logs agreeing here and differing
@@ -71,10 +74,14 @@ fn canonical_uuid(value: &str) -> bool {
 enum Fact {
     /// A mediated crossing or a refusal exists, so opt-in is too late.
     Crossing,
-    /// A `crossing_mediated` record issued this handle.
+    /// A `crossing_mediated` record issued this handle. `file` where the
+    /// crossing handed a file over (`delivered_file`), whose context entry
+    /// must name `content_hash`.
     Acquisition {
         id: String,
         content_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        file: bool,
     },
     ContextEntry {
         acquisition: String,
@@ -100,6 +107,7 @@ enum Fact {
 struct Facts {
     crossing: bool,
     acquisitions: HashMap<String, Vec<String>>,
+    files: HashSet<String>,
     entries: HashMap<(String, String), Vec<String>>,
     outputs_by_generation: HashMap<String, u64>,
     outputs_by_id: HashMap<String, u64>,
@@ -137,12 +145,18 @@ impl Facts {
         }
         match fact {
             Fact::Crossing => !std::mem::replace(&mut self.crossing, true),
-            Fact::Acquisition { id, content_hash } => {
+            Fact::Acquisition {
+                id,
+                content_hash,
+                file,
+            } => {
                 let new = !self.acquisitions.contains_key(id);
-                add(
+                let hash = add(
                     self.acquisitions.entry(id.clone()).or_default(),
                     content_hash,
-                ) || new
+                );
+                let file = *file && self.files.insert(id.clone());
+                new || hash || file
             }
             Fact::ContextEntry {
                 acquisition,
@@ -182,6 +196,7 @@ impl Facts {
                     facts.push(Fact::Acquisition {
                         id,
                         content_hash: text("content_hash"),
+                        file: payload["delivered_file"].is_object(),
                     });
                 }
             }
@@ -236,6 +251,7 @@ impl Facts {
                     .map(|content_hash| Fact::Acquisition {
                         id: id.clone(),
                         content_hash,
+                        file: self.files.contains(id),
                     }),
             );
         }
@@ -524,6 +540,11 @@ impl ValidationIndex {
             .is_some_and(|hashes| hashes.iter().any(|hash| hash == content_hash))
     }
 
+    /// Whether the crossing that issued this handle handed a file over.
+    pub(super) fn delivered_file(&self, acquisition: &str) -> bool {
+        self.facts.files.contains(acquisition)
+    }
+
     fn entry(&self, acquisition: &str, generation: &str) -> Option<&Vec<String>> {
         self.facts
             .entries
@@ -674,10 +695,43 @@ mod tests {
         (log, index.journal, journal, covered, length)
     }
 
+    /// A journal written before acquisitions recorded whether they were
+    /// files lists a file's handle as a page. It is discarded, and the
+    /// index rebuilt from the log knows the file.
+    #[test]
+    fn a_journal_from_before_files_were_marked_is_rebuilt() {
+        let home = tempfile::tempdir().unwrap();
+        let log = home.path().join("s.ndjson");
+        append(
+            &log,
+            &json!({"event":"crossing_mediated", "payload":{"acquisition_id":"f",
+                "content_hash":"sha256:c", "delivered_file":{"via":"local_file"}}}),
+        );
+        let mut index = ValidationIndex::load(home.path(), "s", &log);
+        index.catch_up().unwrap();
+        assert!(index.delivered_file("f"));
+        let length = std::fs::metadata(&log).unwrap().len();
+        let old = json!([{"fact":"crossing"},
+            {"fact":"acquisition", "id":"f", "content_hash":"sha256:c"}]);
+        let tail = tail_digest(&mut File::open(&log).unwrap(), length).unwrap();
+        std::fs::write(
+            &index.journal,
+            format!(
+                "{}\n",
+                json!({"v":1, "from":0, "through":length, "tail":tail, "facts":old})
+            ),
+        )
+        .unwrap();
+        let mut reloaded = ValidationIndex::load(home.path(), "s", &log);
+        reloaded.catch_up().unwrap();
+        assert!(reloaded.delivered_file("f"));
+    }
+
     fn forged_acquisition() -> [Fact; 1] {
         [Fact::Acquisition {
             id: "forged".to_owned(),
             content_hash: Some("sha256:x".to_owned()),
+            file: false,
         }]
     }
 

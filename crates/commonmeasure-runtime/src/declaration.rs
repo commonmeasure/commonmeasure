@@ -57,10 +57,52 @@ pub fn replace_private(target: &Path, bytes: &[u8]) -> Result<(), String> {
     replace_as(target, bytes, Access::Owner)
 }
 
+/// [`replace`] for a file another program owns and the operator may have
+/// narrowed, such as a host's configuration, which can hold another MCP
+/// server's key: the replacement has the mode the file has now, set on the
+/// temporary file before a byte is written, so the bytes are never on disk
+/// under a wider mode. An absent file is created readable by its owner only,
+/// since the host may later put keys in it. Where the platform has no modes
+/// this is [`replace`].
+///
+/// The mode is read through a symbolic link, and the rename then replaces
+/// the link itself with a regular file, as it replaces any name: the file
+/// the link pointed to is left as it was.
+///
+/// Only the mode is kept, not the owner or the group. The replacement
+/// belongs to the user who runs this and takes the writer's group, and
+/// nothing is `chown`ed back: a file owned by
+/// another user, such as root after an earlier `sudo` run, comes back owned
+/// by this user with the old mode, and a file this user owns that a `sudo`
+/// run replaces comes back owned by root, which an owner-only mode then
+/// closes to this user until it is `chown`ed back.
+pub fn replace_keeping_mode(target: &Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = match std::fs::metadata(target) {
+            Ok(metadata) => metadata.permissions().mode() & 0o777,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0o600,
+            Err(error) => {
+                return Err(format!(
+                    "cannot read the mode of {}: {error}",
+                    target.display()
+                ));
+            }
+        };
+        replace_as(target, bytes, Access::Mode(mode))
+    }
+    #[cfg(not(unix))]
+    replace(target, bytes)
+}
+
 #[derive(Clone, Copy)]
 enum Access {
     Default,
     Owner,
+    /// Exactly these permission bits, whatever the umask.
+    #[cfg(unix)]
+    Mode(u32),
 }
 
 fn replace_as(target: &Path, bytes: &[u8], access: Access) -> Result<(), String> {
@@ -131,21 +173,34 @@ pub fn lock_within(path: &Path, wait: std::time::Duration) -> Result<Lock, LockR
 /// on a file that exists, the fault is that file's mode or owner, such as a
 /// lock file a `sudo` run created: its directory can be writable and the
 /// file still refuse this user. Anything else, a lock file that cannot be
-/// created among them, is the directory's.
+/// created among them, is the directory's. The file's owner is given where
+/// the platform has one: a lock file another user owns usually means a
+/// process run as that user, which this user cannot see holding it.
 fn refused_open(path: &Path, error: std::io::Error) -> LockRefused {
     let cause = format!("open lock {}: {error}", path.display());
-    if error.kind() == std::io::ErrorKind::PermissionDenied && path.symlink_metadata().is_ok() {
-        LockRefused::LockFile(cause)
-    } else {
-        LockRefused::Failed(cause)
+    match path.symlink_metadata() {
+        Ok(metadata) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                LockRefused::LockFile(format!("{cause} (owned by uid {})", metadata.uid()))
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = metadata;
+                LockRefused::LockFile(cause)
+            }
+        }
+        _ => LockRefused::Failed(cause),
     }
 }
 
 /// Open the lock file at `path` for reading and writing, creating it if
 /// absent. Every lock file in the home is created here, and every holder
 /// opens its lock file here, including those that wait differently from
-/// [`lock`]. The one other open of a lock file is the harness's
-/// `delivery::service_running`, a read-only probe that creates nothing.
+/// [`lock`]. The other opens of a lock file are the harness's
+/// `delivery::lock_state`, a read-only probe that creates nothing, and the
+/// background relay's refusal, which reads the holder's pid from the file.
 ///
 /// A lock file this call creates is readable by its owner only, where the
 /// platform has modes: `flock` needs only a read descriptor, so a lock file
@@ -196,9 +251,12 @@ pub enum LockRefused {
     Failed(String),
 }
 
-/// What to do about a lock file that exists and refuses this user. Removing
-/// one that a process holds would let a second holder in beside it.
-pub const LOCK_FILE_REMEDY: &str = "make that lock file readable and writable by this user, or remove it while no process holds it";
+/// What to do about a lock file that exists and refuses this user. Such a
+/// file is usually another user's, left by a run under `sudo`, and a process
+/// of that user may hold it where this user cannot see it: removing it then
+/// would let a second holder in beside that one, so the process is stopped
+/// first.
+pub const LOCK_FILE_REMEDY: &str = "make that lock file readable and writable by this user, or stop any commonmeasure process run as another user, such as under sudo, and then remove it";
 
 impl std::fmt::Display for LockRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -252,14 +310,30 @@ fn create_unique_temp(
 /// Create the writer's temporary file. The name is the writer's own, so the
 /// file must not exist: `create_new` refuses rather than writing into a file
 /// someone else made, whose mode would be theirs. The mode is set in the
-/// same call that creates the file.
+/// same call that creates the file. The umask can only narrow that mode, so
+/// [`Access::Mode`] then sets the bits exactly, still before any byte is
+/// written.
 fn create_temp(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
-    if let Access::Owner = access {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        match access {
+            Access::Default => {}
+            Access::Owner => {
+                options.mode(0o600);
+            }
+            Access::Mode(mode) => {
+                options.mode(mode);
+                let file = options.open(path)?;
+                if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(mode)) {
+                    std::fs::remove_file(path).ok();
+                    return Err(error);
+                }
+                return Ok(file);
+            }
+        }
     }
     #[cfg(not(unix))]
     let _ = access;
@@ -557,6 +631,67 @@ mod tests {
         );
     }
 
+    /// EGR-149. Catches: a host file's replacement written under the umask,
+    /// or owner-only whatever the file was; the umask narrowing a mode it
+    /// masks (0664 under 022); an absent host file created under the umask.
+    #[cfg(unix)]
+    #[test]
+    fn a_replacement_keeping_the_mode_has_the_targets_mode_or_owner_only() {
+        crate::test_umask::under_umask_022(
+            "declaration::tests::a_replacement_keeping_the_mode_has_the_targets_mode_or_owner_only",
+            a_replacement_keeping_the_mode_has_the_targets_mode_or_owner_only_body,
+        );
+    }
+
+    #[cfg(unix)]
+    fn a_replacement_keeping_the_mode_has_the_targets_mode_or_owner_only_body() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let home = tempfile::tempdir().unwrap();
+        for mode in [0o600, 0o644, 0o664, 0o400] {
+            let target = home.path().join(format!("host-{mode:o}.json"));
+            std::fs::write(&target, b"old").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+            replace_keeping_mode(&target, b"new").unwrap();
+            assert_eq!(std::fs::read(&target).unwrap(), b"new");
+            assert_eq!(mode_of(&target), mode, "{mode:o}");
+        }
+
+        let absent = home.path().join("absent.json");
+        replace_keeping_mode(&absent, b"new").unwrap();
+        assert_eq!(mode_of(&absent), 0o600);
+
+        let leftovers: Vec<_> = std::fs::read_dir(home.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// A linked host file (a dotfile manager's) is replaced by a regular
+    /// file with the mode of the file it pointed to; that file is left as
+    /// it was. This pins what the rename does rather than endorsing it.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_target_is_replaced_by_a_file_with_the_linked_files_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let linked = home.path().join("dotfiles-claude.json");
+        std::fs::write(&linked, b"old").unwrap();
+        std::fs::set_permissions(&linked, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let target = home.path().join(".claude.json");
+        std::os::unix::fs::symlink(&linked, &target).unwrap();
+
+        replace_keeping_mode(&target, b"new").unwrap();
+
+        let metadata = std::fs::symlink_metadata(&target).unwrap();
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::read(&linked).unwrap(), b"old");
+    }
+
     /// Two writers' temp files must not share a name, or one renames the
     /// other's file away mid-save.
     #[test]
@@ -601,9 +736,44 @@ mod tests {
             "{text}"
         );
         assert!(text.contains(&path.display().to_string()), "{text}");
+        let owner = std::fs::metadata(&path).unwrap().uid();
         assert!(
-            text.ends_with("make that lock file readable and writable by this user, or remove it while no process holds it"),
+            text.contains(&format!("(owned by uid {owner})")),
+            "the cause gives the file's owner: {text}"
+        );
+        assert!(
+            text.ends_with(
+                "make that lock file readable and writable by this user, or stop any \
+                 commonmeasure process run as another user, such as under sudo, and then remove it"
+            ),
             "{text}"
         );
+    }
+
+    /// Locks review P3-3. Catches: a denied open taken for the lock file's
+    /// fault when there is no lock file, so the remedy names a file that
+    /// does not exist instead of the directory that refused to create it.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_file_a_read_only_directory_cannot_create_is_the_directorys_fault() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let home = tempfile::tempdir().unwrap();
+        // Root creates a file in a directory whatever its mode, so the
+        // refusal this test needs cannot happen.
+        if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+            eprintln!("skipped: root is not refused by a read-only directory");
+            return;
+        }
+        let directory = home.path().join("read-only");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let path = directory.join("policy.lock");
+        let refusal = lock(&path);
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let refusal = refusal.unwrap_err();
+        let text = refusal.to_string();
+        assert!(matches!(refusal, LockRefused::Failed(_)), "{text}");
+        assert!(!text.contains(LOCK_FILE_REMEDY), "{text}");
+        assert!(!path.exists());
     }
 }

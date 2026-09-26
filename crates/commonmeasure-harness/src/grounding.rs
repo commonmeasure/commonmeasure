@@ -255,21 +255,55 @@ pub fn recordable_under(raw: &str, internal_prefixes: &[String]) -> bool {
 /// same reason the privacy floor judges parsed addresses: `https://host:443/p`,
 /// `HTTPS://HOST/p`, `https://host./p` and `https://host/./p` are one page
 /// under four spellings, and a verbatim comparison stamps three of them
-/// public. That is not a missed record but an egress decision — the
-/// `internal` marking is what keeps a named corpus on the operator's machine
-/// — so the spelling must not be able to change the answer. Both sides are
-/// normalised ([`commonmeasure_types::canonical_url`]), because the operator's
-/// prefix is a spelling too.
+/// public. So are `https://host/%70/x` and `https://host/p/x`. That is not a
+/// missed record but an egress decision — the `internal` marking is what
+/// keeps a named corpus on the operator's machine — so the spelling must not
+/// be able to change the answer. Both sides are compared in one form
+/// ([`commonmeasure_types::matching_url`]), because the operator's prefix is
+/// a spelling too; the prefix is read as written, and the URL is internal if
+/// any of its readings is under it
+/// ([`commonmeasure_types::matching_url_readings`]), so `https://host//p/x`,
+/// `https://host/x/..%2Fp/x`, `https://host/x//..%2Fp/x`,
+/// `https://host/p;v=1/x`, `https://host/p%3Bv=1/x` and
+/// `https://host/p%5Cx`, which a server may serve as `/p/x`, stay internal
+/// under `https://host/p/`. A URL with more readings than the cap is
+/// internal under any prefix on its origin.
 pub fn matches_internal_prefix(raw: &str, internal_prefixes: &[String]) -> bool {
     let Ok(parsed) = url::Url::parse(raw) else {
         return false;
     };
-    let parsed = commonmeasure_types::canonical_url(&parsed);
-    internal_prefixes
+    let prefixes = internal_prefixes
         .iter()
         .filter_map(|prefix| url::Url::parse(prefix).ok())
-        .map(|prefix| commonmeasure_types::canonical_url(&prefix))
-        .any(|prefix| parsed.as_str().starts_with(prefix.as_str()))
+        .map(|prefix| commonmeasure_types::matching_url(&prefix));
+    under_a_prefix(
+        commonmeasure_types::matching_url_readings(&parsed),
+        &commonmeasure_types::matching_url(&parsed),
+        prefixes,
+    )
+}
+
+/// Whether one of `readings` starts with one of `prefixes`, all in the
+/// matching form. Without its readings, the URL (`page`) is under every
+/// prefix on its origin, so a URL past the cap is kept home.
+fn under_a_prefix(
+    readings: Result<Vec<String>, commonmeasure_types::TooManyReadings>,
+    page: &str,
+    mut prefixes: impl Iterator<Item = String>,
+) -> bool {
+    match readings {
+        Ok(readings) => {
+            prefixes.any(|prefix| readings.iter().any(|reading| reading.starts_with(&prefix)))
+        }
+        Err(_) => {
+            let origin = |url: &str| {
+                url::Url::parse(url)
+                    .map(|url| url[..url::Position::BeforePath].to_owned())
+                    .ok()
+            };
+            prefixes.any(|prefix| origin(&prefix).is_some_and(|at| origin(page) == Some(at)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -466,9 +500,42 @@ mod tests {
         }
     }
 
-    /// Normalisation must not widen the prefix. A dot segment cannot climb out
-    /// of the named path, and a neighbouring host is still a different host
-    /// however it is spelled.
+    /// A URL whose readings went past the cap is held home under any prefix
+    /// on its origin, and only there.
+    #[test]
+    fn a_url_past_the_readings_cap_is_internal_under_a_prefix_on_its_origin() {
+        let too_many = || Err(commonmeasure_types::TooManyReadings { cap: 64 });
+        let prefixes = |prefixes: &[&str]| {
+            prefixes
+                .iter()
+                .map(|prefix| prefix.to_string())
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        let page = "https://corp.example/elsewhere";
+        assert!(under_a_prefix(
+            too_many(),
+            page,
+            prefixes(&["https://corp.example/private/"])
+        ));
+        assert!(!under_a_prefix(
+            too_many(),
+            page,
+            prefixes(&[
+                "https://other.example/private/",
+                "http://corp.example/private/"
+            ])
+        ));
+        assert!(!under_a_prefix(
+            Ok(vec![page.to_owned()]),
+            page,
+            prefixes(&["https://corp.example/private/"])
+        ));
+    }
+
+    /// Normalisation must not widen the prefix. A dot segment the parser
+    /// resolves cannot climb out of the named path, and a neighbouring host
+    /// is still a different host however it is spelled.
     #[test]
     fn normalisation_does_not_admit_anything_the_prefix_did_not_name() {
         let prefixes = vec!["https://intranet.example.com/private/".to_owned()];
@@ -485,6 +552,17 @@ mod tests {
                 "{outside} is not what the operator named"
             );
         }
+        // Decoded but not resolved, this path is under the prefix, and a
+        // proxy that decodes `%2F` without resolving routes it there.
+        assert!(matches_internal_prefix(
+            "https://intranet.example.com/private%2F..%2F..%2Fpublic/handbook",
+            &prefixes
+        ));
+        // A prefix is read as written: its doubled slash is not merged.
+        assert!(!matches_internal_prefix(
+            "https://intranet.example.com/private/handbook",
+            &["https://intranet.example.com//private/".to_owned()]
+        ));
     }
 
     /// An empty list is the default, and the default is exactly the floor.

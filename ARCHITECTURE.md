@@ -331,6 +331,11 @@ Local acquisition needs no continuously running Common Measure service:
   LaunchAgent that starts this binary by absolute path with the installing
   shell's Edge home; acquisition does not use it (`docs/GETTING-STARTED.md`
   §5).
+- A host that sends no session-end event delivers without a person only
+  while a background relay runs: `commonmeasure relay --every <seconds>`,
+  which holds `relay-loop.lock` in the home and relays it on an interval,
+  and which `commonmeasure service install relay` runs as a LaunchAgent on
+  macOS (`docs/contracts/telemetry-projection.md` §Relay on an interval).
 - State is `~/.commonmeasure/` plus the append-only evidence logs. Nothing
   from those records is reported by default; reporting goes to an explicitly
   configured receiver, spooled durably first. Supplier requests still send the
@@ -341,7 +346,8 @@ when each starts its own MCP process. Process separation alone does not create
 separate credentials, records or tenant boundaries.
 
 Every process using an Edge home runs the same release. Upgrade by stopping
-all of them, including `commonmeasure hosted service`.
+all of them, including `commonmeasure hosted service` and a background
+relay.
 
 `commonmeasure update` enforces part of this. Before it stops or downloads
 anything, it reads the process table and refuses while other processes of

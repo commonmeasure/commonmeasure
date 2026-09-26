@@ -173,7 +173,9 @@ only in batch runs whose suite declares `output_provenance`.
   `text/*` media types support Annex A.8 wrappers. A recovered Annex A.8
   wrapper is removed after verification, including where its manifest is
   invalid or untrusted. Other non-HTML content is delivered as decoded.
-  Unsupported or incomplete wrappers stay in the text.
+  Unsupported or incomplete wrappers stay in the text. A PDF, and the other
+  files `context_fetch` does not decode, never reach it
+  ([host integration](host-integration.md#a-fetched-file)).
   A body the origin served under the gzip content coding is gunzipped
   first, and the input hash stays over the coded bytes it served; a body
   under any other coding never reaches it. It runs before the admit screens, so the screens rule on the text the agent

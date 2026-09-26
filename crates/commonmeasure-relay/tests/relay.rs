@@ -910,6 +910,211 @@ fn a_dotted_spelling_under_an_internal_prefix_is_internal_and_stays_home() {
     }
 }
 
+/// A named internal prefix covers every spelling of a path under it: a
+/// percent-encoded unreserved character in the page URL or in the prefix,
+/// or a doubled slash or an encoded `/` in the page's path that a server may
+/// serve as a path under the prefix, leaves the crossing internal, and
+/// nothing is relayed. The prefix names the path its operator wrote: its
+/// own `//` is not merged, so it does not hold back a page it does not
+/// name.
+#[test]
+fn a_path_spelling_under_an_internal_prefix_is_internal_and_stays_home() {
+    let plain = "https://corp.example/private/".to_owned();
+    let encoded = "https://corp.example/%70rivate/".to_owned();
+    for (prefix, url) in [
+        (&plain, "https://corp.example/private/a"),
+        (&plain, "https://corp.example/%70rivate/a"),
+        (&plain, "https://corp.example/%70%72ivate/a"),
+        (&plain, "https://corp.example//private/a"),
+        (&plain, "https://corp.example/private//a"),
+        (&plain, "https://corp.example/private/a#part"),
+        (&plain, "https://corp.example/x/..%2Fprivate/a"),
+        (&plain, "https://corp.example/private%2Fa"),
+        (&encoded, "https://corp.example/private/a"),
+    ] {
+        let prefixes = std::slice::from_ref(prefix);
+        let captured = captured_lines("s-path-internal", url, prefixes);
+        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
+        let record: Value = serde_json::from_str(&captured[0]).unwrap();
+        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
+        let unmarked = [
+            crossing_in_cwd(
+                "crossing_observed",
+                "s-path-internal",
+                url,
+                true,
+                "/work/personal",
+            ),
+            crossing_in_cwd(
+                "crossing_observed",
+                "s-path-internal",
+                PUBLIC_PAGE,
+                true,
+                "/work/personal",
+            ),
+        ];
+        let marked = [captured[0].clone(), unmarked[1].clone()];
+        assert_eq!(
+            relayed_urls("s-path-internal", prefixes, &marked),
+            [PUBLIC_PAGE],
+            "{url} captured under {prefix} stays home"
+        );
+        assert_eq!(
+            relayed_urls("s-path-internal", prefixes, &unmarked),
+            [PUBLIC_PAGE],
+            "{url} recorded without the marker stays home under {prefix}"
+        );
+    }
+    let doubled = "https://corp.example//private/".to_owned();
+    let outside = "https://corp.example/private/a";
+    let lines = [crossing_in_cwd(
+        "crossing_observed",
+        "s-path-internal",
+        outside,
+        true,
+        "/work/personal",
+    )];
+    assert_eq!(
+        relayed_urls("s-path-internal", std::slice::from_ref(&doubled), &lines),
+        [outside]
+    );
+}
+
+/// A page URL is internal when decoding `%2F`, merging `/` and resolving
+/// dot segments, in any order and including only some of them, reach a
+/// path under the prefix: nginx serves `/x//..%2Fprivate/a` as
+/// `/private/a`, and the URL parser's order reaches `/x/private/a`. The
+/// capture marks it and the relay sends only the public page, whether the
+/// crossing carries the marker or not.
+#[test]
+fn a_path_any_order_of_the_operations_brings_under_an_internal_prefix_stays_home() {
+    for (prefix, url) in [
+        (
+            "https://corp.example/private/",
+            "https://corp.example/x//..%2Fprivate/a",
+        ),
+        (
+            "https://corp.example/x/private/",
+            "https://corp.example/x//..%2Fprivate/a",
+        ),
+        (
+            "https://corp.example/a/private/",
+            "https://corp.example/a/b//..%2F%2F..%2Fprivate/1",
+        ),
+    ] {
+        let prefixes = [prefix.to_owned()];
+        let captured = captured_lines("s-order-internal", url, &prefixes);
+        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
+        let record: Value = serde_json::from_str(&captured[0]).unwrap();
+        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
+        let public = crossing_in_cwd(
+            "crossing_observed",
+            "s-order-internal",
+            PUBLIC_PAGE,
+            true,
+            "/work/personal",
+        );
+        let unmarked = crossing_in_cwd(
+            "crossing_observed",
+            "s-order-internal",
+            url,
+            true,
+            "/work/personal",
+        );
+        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
+            assert_eq!(
+                relayed_urls("s-order-internal", &prefixes, &lines),
+                [PUBLIC_PAGE],
+                "{url} stays home under {prefix}"
+            );
+        }
+    }
+}
+
+/// A page URL is internal when stripping `;` path parameters or reading
+/// `%5C` as `/` reaches a path under the prefix: Tomcat serves
+/// `/private;x=1/a` and `/x/..;/private/a` as `/private/a`, and IIS reads
+/// `/private%5Ca` as `/private/a`. Jira and Confluence run on Tomcat. A
+/// crafted path past the readings cap is held home under any prefix on its
+/// origin.
+#[test]
+fn a_stripped_parameter_a_decoded_backslash_or_the_cap_under_an_internal_prefix_stays_home() {
+    let prefixes = ["https://corp.example/private/".to_owned()];
+    for url in [
+        "https://corp.example/private;x=1/a",
+        "https://corp.example/x/..;/private/a",
+        "https://corp.example/private%5Ca",
+        // More readings than the cap: internal under any prefix on its origin.
+        "https://corp.example/x//..;/.../;/..;/a/%2Fb/;//%2F..%2F..%2F;%5Cc",
+    ] {
+        let captured = captured_lines("s-strip-internal", url, &prefixes);
+        assert_eq!(captured.len(), 1, "the prefix admits {url} to the record");
+        let record: Value = serde_json::from_str(&captured[0]).unwrap();
+        assert_eq!(record["payload"]["internal"], json!(true), "{url}");
+        let public = crossing_in_cwd(
+            "crossing_observed",
+            "s-strip-internal",
+            PUBLIC_PAGE,
+            true,
+            "/work/personal",
+        );
+        let unmarked = crossing_in_cwd(
+            "crossing_observed",
+            "s-strip-internal",
+            url,
+            true,
+            "/work/personal",
+        );
+        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
+            assert_eq!(
+                relayed_urls("s-strip-internal", &prefixes, &lines),
+                [PUBLIC_PAGE],
+                "{url} stays home"
+            );
+        }
+    }
+}
+
+/// A page URL is internal when an encoded `;` read as `;` and stripped
+/// reaches a path under the prefix: nginx, when `proxy_pass` names a URI as
+/// Atlassian documents for Confluence, decodes `%3B` before Tomcat strips
+/// it, and serves `/confluence/private%3Bx/a` as `/confluence/private/a`.
+#[test]
+fn an_encoded_parameter_under_an_internal_prefix_stays_home() {
+    let prefixes = ["https://corp.example/confluence/private/".to_owned()];
+    for url in [
+        "https://corp.example/confluence/private%3Bx/a",
+        "https://corp.example/confluence/private%3bx/a",
+        "https://corp.example/confluence/x/..%3B/private/a",
+    ] {
+        let captured = captured_lines("s-encoded-parameter", url, &prefixes);
+        assert_eq!(captured.len(), 1, "the prefix admits {url} to the record");
+        let record: Value = serde_json::from_str(&captured[0]).unwrap();
+        assert_eq!(record["payload"]["internal"], json!(true), "{url}");
+        let public = crossing_in_cwd(
+            "crossing_observed",
+            "s-encoded-parameter",
+            PUBLIC_PAGE,
+            true,
+            "/work/personal",
+        );
+        let unmarked = crossing_in_cwd(
+            "crossing_observed",
+            "s-encoded-parameter",
+            url,
+            true,
+            "/work/personal",
+        );
+        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
+            assert_eq!(
+                relayed_urls("s-encoded-parameter", &prefixes, &lines),
+                [PUBLIC_PAGE],
+                "{url} stays home"
+            );
+        }
+    }
+}
+
 /// A licence declared relatively is resolved against the page's URL, so a
 /// page URL carrying credentials gives a licence URL carrying them. The
 /// receiver gets both URLs without them.
@@ -3745,9 +3950,10 @@ fn a_key_held_for_another_receiver_is_not_sent_to_the_enrolled_hub() {
 }
 
 /// The hash of the bytes an origin served stays in the operator's record.
-/// What crosses the wire is `content_hash`, the hash of what entered
-/// context, as before; `retrieved_hash` is the operator's evidence tying the
-/// two and is nobody else's business.
+/// What crosses the wire is the hash of the part the fetch result carried,
+/// which may be the whole text, and for a crossing that records no part,
+/// as here, its `content_hash`; `retrieved_hash` is the operator's evidence
+/// tying the served bytes to the text and is nobody else's business.
 #[test]
 fn the_retrieved_hash_stays_off_the_wire() {
     let home = tempfile::tempdir().unwrap();
@@ -3794,7 +4000,7 @@ fn the_retrieved_hash_stays_off_the_wire() {
     assert_eq!(grounded.len(), 1);
     assert_eq!(
         grounded[0]["data"]["content_hash"], content_hash,
-        "data.content_hash is the hash of what entered context"
+        "data.content_hash is the crossing's content_hash where no part is recorded"
     );
 }
 

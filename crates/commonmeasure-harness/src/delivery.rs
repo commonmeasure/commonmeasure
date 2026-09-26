@@ -5,13 +5,15 @@
 //! delivery happens by itself (owner decision, 22 September 2026). The last
 //! of those three is what this module answers.
 //!
-//! Two things relay without a person: the session-end hook, on a host whose
-//! registration sends a session-end event, and the hosted service's interval
-//! relay, which relays every session in its home, stdio sessions included.
-//! The ruling reads which one a session has from the session itself (the
-//! `--host` word, the client's `initialize` name, and whether the transport
-//! runs an interval relay) and from the home's own state (the marker, and
-//! whether a hosted service holds the home's lock), never from host files
+//! Three things relay without a person: the session-end hook, on a host whose
+//! registration sends a session-end event; the hosted service's interval
+//! relay; and the background relay (`commonmeasure relay --every`), for hosts
+//! that send no session-end event. The last two relay every session in their
+//! home, stdio sessions included. The ruling reads which one a session has
+//! from the session itself (the `--host` word, the client's `initialize`
+//! name, and whether the transport runs an interval relay) and from the
+//! home's own state (the marker, and whether a hosted service or a
+//! background relay holds its lock on the home), never from host files
 //! under `$HOME`: whether the hook is actually installed is `doctor`'s check,
 //! and reading it here would make a licence ruling depend on the developer's
 //! machine.
@@ -80,43 +82,61 @@ const OTHER_CLIENT_PREFIXES: [&str; 1] = ["local-agent-mode-"];
 /// takes it (`commonmeasure hosted service`).
 pub const SERVICE_LOCK_FILE: &str = "hosted-service.lock";
 
-/// What a probe of `home`'s hosted-service lock found.
+/// The lock a running background relay holds on its home, as `commonmeasure
+/// relay --every` takes it. Apart from the spool's `relay/spool/delivery.lock`,
+/// which every relay run takes only while it runs: the background relay holds
+/// this one between runs too, so that a probe can tell it is there, and a
+/// session-end run or a typed `commonmeasure relay` still gets the spool
+/// between its ticks.
+pub const RELAY_LOCK_FILE: &str = "relay-loop.lock";
+
+/// What a probe of a carrier's lock found: the hosted service's or the
+/// background relay's.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ServiceState {
-    /// A process holds the lock: a hosted service runs and relays every
-    /// session in the home on its interval.
+pub enum LockState {
+    /// A process holds the lock: the carrier runs and relays every session
+    /// in the home on its interval.
     Running,
     /// No lock file, or one nobody holds: configured but stopped, or never
     /// started.
     NotRunning,
-    /// The lock file could not be opened or probed, so whether a service
+    /// The lock file could not be opened or probed, so whether a process
     /// holds it is not known. The reason names the file and the error. A
-    /// lock file a service created is readable by its owner only, so
+    /// lock file a carrier created is readable by its owner only, so
     /// another user probing the home gets this.
     Unknown(String),
 }
 
-/// Probe `home`'s hosted-service lock. Takes the lock for an instant when
-/// nobody holds it, so a service starting in exactly that instant is refused
-/// once and is started again by its supervisor.
-pub fn service_state(home: &Path) -> ServiceState {
-    let path = home.join(SERVICE_LOCK_FILE);
-    let file = match std::fs::OpenOptions::new().read(true).open(&path) {
+/// Probe the lock file at `path`. Takes the lock for an instant when nobody
+/// holds it, so a carrier starting in exactly that instant is refused once
+/// and is started again by its supervisor. Creates nothing.
+pub fn lock_state(path: &Path) -> LockState {
+    let file = match std::fs::OpenOptions::new().read(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return ServiceState::NotRunning;
+            return LockState::NotRunning;
         }
         Err(error) => {
-            return ServiceState::Unknown(format!("cannot open {}: {error}", path.display()));
+            return LockState::Unknown(format!("cannot open {}: {error}", path.display()));
         }
     };
     match file.try_lock() {
-        Ok(()) => ServiceState::NotRunning,
-        Err(std::fs::TryLockError::WouldBlock) => ServiceState::Running,
+        Ok(()) => LockState::NotRunning,
+        Err(std::fs::TryLockError::WouldBlock) => LockState::Running,
         Err(std::fs::TryLockError::Error(error)) => {
-            ServiceState::Unknown(format!("cannot lock {}: {error}", path.display()))
+            LockState::Unknown(format!("cannot lock {}: {error}", path.display()))
         }
     }
+}
+
+/// Probe `home`'s hosted-service lock.
+pub fn service_state(home: &Path) -> LockState {
+    lock_state(&home.join(SERVICE_LOCK_FILE))
+}
+
+/// Probe `home`'s background-relay lock.
+pub fn relay_loop_state(home: &Path) -> LockState {
+    lock_state(&home.join(RELAY_LOCK_FILE))
 }
 
 /// Whether a hosted service is known to hold `home`'s lock now, and so
@@ -125,7 +145,13 @@ pub fn service_state(home: &Path) -> ServiceState {
 /// automatic delivery, so a licence that demands usage reporting is refused
 /// rather than waived.
 pub fn service_running(home: &Path) -> bool {
-    service_state(home) == ServiceState::Running
+    service_state(home) == LockState::Running
+}
+
+/// Whether a background relay is known to hold `home`'s lock now, read as
+/// [`service_running`] reads the service's.
+pub fn relay_loop_running(home: &Path) -> bool {
+    relay_loop_state(home) == LockState::Running
 }
 
 /// How a session's reports would leave without a person.
@@ -148,14 +174,16 @@ impl SessionDelivery<'_> {
         if let Some(reason) = withheld_reason(home) {
             return Some(reason);
         }
-        // A running hosted service relays every session in its home on its
-        // interval, whatever host or client this session has.
-        if self.interval_relay || service_running(home) {
+        // A running hosted service or background relay relays every session
+        // in its home on its interval, whatever host or client this session
+        // has. A lock that cannot be read counts as neither.
+        if self.interval_relay || service_running(home) || relay_loop_running(home) {
             return None;
         }
         if !SESSION_END_HOSTS.contains(&self.host) {
             return Some(format!(
-                "no automatic delivery; this host ({}) sends no session-end event, so reports \
+                "no automatic delivery; this host ({}) sends no session-end event and no \
+                 background relay (`commonmeasure relay --every`) holds this home, so reports \
                  leave only when someone runs `commonmeasure relay`",
                 self.host
             ));
@@ -340,6 +368,69 @@ mod tests {
         assert!(codex.withheld_reason(home.path()).is_some());
     }
 
+    /// A running background relay counts as a running hosted service does,
+    /// for every host and client, and a stopped one does not; the marker
+    /// still outranks it.
+    #[test]
+    fn a_running_background_relay_delivers_for_every_session_in_its_home() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let desktop = session(
+            "claude-desktop",
+            Some("local-agent-mode-commonmeasure"),
+            false,
+        );
+        let goose = session("claude-code", Some("goose"), false);
+        assert_eq!(relay_loop_state(home.path()), LockState::NotRunning);
+        let path = home.path().join(RELAY_LOCK_FILE);
+        let file = std::fs::File::create(&path).expect("lock file");
+        assert!(desktop.withheld_reason(home.path()).is_some());
+        file.lock().expect("held as the loop holds it");
+        assert!(relay_loop_running(home.path()));
+        assert!(!service_running(home.path()), "the two locks are apart");
+        assert!(desktop.withheld_reason(home.path()).is_none());
+        assert!(goose.withheld_reason(home.path()).is_none());
+        std::fs::create_dir_all(home.path().join("relay")).unwrap();
+        std::fs::write(manual_marker(home.path()), b"").unwrap();
+        let reason = desktop.withheld_reason(home.path()).expect("the marker");
+        assert!(reason.contains("manual"), "{reason}");
+        std::fs::remove_file(manual_marker(home.path())).unwrap();
+        drop(file);
+        assert!(!relay_loop_running(home.path()));
+        let reason = desktop
+            .withheld_reason(home.path())
+            .expect("a stopped loop relays nothing");
+        assert!(
+            reason.contains("this host (claude-desktop) sends no session-end event")
+                && reason.contains("commonmeasure relay --every"),
+            "the reason names the background relay: {reason}"
+        );
+    }
+
+    /// A background-relay lock this user cannot open is "cannot tell", and
+    /// the session withholds as with no loop.
+    #[cfg(unix)]
+    #[test]
+    fn a_relay_loop_lock_that_cannot_be_opened_is_unknown_and_withholds() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let home = tempfile::tempdir().expect("tempdir");
+        if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+            return;
+        }
+        let path = home.path().join(RELAY_LOCK_FILE);
+        let file = std::fs::File::create(&path).expect("lock file");
+        file.lock().expect("held as the loop holds it");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let state = relay_loop_state(home.path());
+        let withheld = session("claude-desktop", None, false).withheld_reason(home.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let LockState::Unknown(reason) = state else {
+            panic!("{state:?}");
+        };
+        assert!(reason.contains(&path.display().to_string()), "{reason}");
+        assert!(withheld.is_some());
+        drop(file);
+    }
+
     /// A service lock this user cannot open: whether a service runs is not
     /// known, and a session still fails closed, as with no service.
     #[cfg(unix)]
@@ -358,7 +449,7 @@ mod tests {
         let withheld =
             session("codex", Some("codex-mcp-client"), false).withheld_reason(home.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let ServiceState::Unknown(reason) = state else {
+        let LockState::Unknown(reason) = state else {
             panic!("{state:?}");
         };
         assert!(reason.contains(&path.display().to_string()), "{reason}");

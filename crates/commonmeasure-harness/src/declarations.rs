@@ -543,6 +543,11 @@ pub struct RobotsReading {
     /// product token, as for its access rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crawl_delay: Option<CrawlDelay>,
+    /// Set where the page's path has more readings than
+    /// [`commonmeasure_types::MAX_PAGE_READINGS`]: no rule was compared,
+    /// `crawlable` is false and `access_rule` names the cap.
+    #[serde(skip)]
+    pub too_many_readings: Option<commonmeasure_types::TooManyReadings>,
 }
 
 /// The most `Crawl-delay` this edge keeps between two requests to one host.
@@ -636,7 +641,37 @@ impl RobotsFile {
     /// the longest matching pattern wins and `Allow` wins an equal-length
     /// tie (section 2.2.2). The merged `Crawl-delay` values keep the longest,
     /// as several values in one group do.
+    ///
+    /// A path with more readings than
+    /// [`commonmeasure_types::MAX_PAGE_READINGS`] is refused, with or
+    /// without a group, as if a `Disallow` covered every reading.
     pub fn read(&self, token: &str, path: &str) -> RobotsReading {
+        self.read_readings(token, commonmeasure_types::matching_target_readings(path))
+    }
+
+    /// [`RobotsFile::read`] over the page's readings, or over the cap they
+    /// went past.
+    fn read_readings(
+        &self,
+        token: &str,
+        readings: Result<Vec<String>, commonmeasure_types::TooManyReadings>,
+    ) -> RobotsReading {
+        let readings = match readings {
+            Ok(readings) => readings,
+            Err(too_many) => {
+                return RobotsReading {
+                    group: None,
+                    group_is_wildcard: false,
+                    crawlable: Some(false),
+                    access_rule: Some(too_many.to_string()),
+                    access_rule_wildcard: None,
+                    statements: Vec::new(),
+                    licences: self.global_licences.clone(),
+                    crawl_delay: None,
+                    too_many_readings: Some(too_many),
+                };
+            }
+        };
         let wanted = token.to_ascii_lowercase();
         let named: Vec<&Group> = self
             .groups
@@ -660,6 +695,7 @@ impl RobotsFile {
                     statements: signal_statements(&self.global_content_signal, None),
                     licences: self.global_licences.clone(),
                     crawl_delay: None,
+                    too_many_readings: None,
                 };
             }
             (fallback, "*".to_owned())
@@ -683,18 +719,32 @@ impl RobotsFile {
             .iter()
             .flat_map(|group| group.crawl_delay.iter().cloned())
             .collect();
-        let decided = longest_match(
-            rules.iter().map(|rule| (rule.pattern.as_str(), *rule)),
-            path,
-        )
-        .max_by(|(length_a, rule_a), (length_b, rule_b)| {
-            // Among equally long matches Allow wins (RFC 9309 section
-            // 2.2.2).
-            length_a
-                .cmp(length_b)
-                .then_with(|| rule_a.allow.cmp(&rule_b.allow))
-        })
-        .map(|(_, rule)| rule);
+        // Each reading of the page is decided on its own, and a Disallow any
+        // reading reaches refuses the page: a server may serve `//news/1` or
+        // `/news%2F1` as `/news/1`, so an Allow reached through one reading
+        // cannot lift a Disallow reached through another.
+        let decisions: Vec<&AccessRule> = readings
+            .iter()
+            .filter_map(|reading| {
+                longest_match(
+                    rules.iter().map(|rule| (rule.pattern.as_str(), *rule)),
+                    reading,
+                )
+                .max_by(|(length_a, rule_a), (length_b, rule_b)| {
+                    // Among equally long matches Allow wins (RFC 9309
+                    // section 2.2.2).
+                    length_a
+                        .cmp(length_b)
+                        .then_with(|| rule_a.allow.cmp(&rule_b.allow))
+                })
+                .map(|(_, rule)| rule)
+            })
+            .collect();
+        let decided = decisions
+            .iter()
+            .find(|rule| !rule.allow)
+            .or_else(|| decisions.first())
+            .copied();
         let crawlable = decided.is_none_or(|rule| rule.allow);
         let access_rule = decided.map(|rule| {
             format!(
@@ -709,23 +759,32 @@ impl RobotsFile {
             // The Content-Usage rule with the longest matching path applies;
             // identical paths with conflicting preferences apply separately
             // and combine most-restrictive-wins (attachment draft
-            // section 3.1).
-            let candidates: Vec<(usize, &(Option<String>, String))> = content_usage
-                .iter()
-                .filter_map(|rule| {
-                    let pattern = rule.0.as_deref().unwrap_or("");
-                    if pattern.is_empty() {
-                        Some((0, *rule))
-                    } else {
-                        matches_pattern(pattern, path).then_some((pattern.len(), *rule))
+            // section 3.1). The rules each reading of the page selects all
+            // apply, combined the same way.
+            let mut selected: Vec<&(Option<String>, String)> = Vec::new();
+            for reading in &readings {
+                let candidates: Vec<(usize, &(Option<String>, String))> = content_usage
+                    .iter()
+                    .filter_map(|rule| {
+                        let pattern = rule.0.as_deref().unwrap_or("");
+                        if pattern.is_empty() {
+                            Some((0, *rule))
+                        } else {
+                            let form = commonmeasure_types::matching_pattern(pattern);
+                            matches_form(&form, reading).then_some((form.len(), *rule))
+                        }
+                    })
+                    .collect();
+                let longest = candidates.iter().map(|(length, _)| *length).max();
+                for (length, rule) in candidates {
+                    if Some(length) == longest
+                        && !selected.iter().any(|kept| std::ptr::eq(*kept, rule))
+                    {
+                        selected.push(rule);
                     }
-                })
-                .collect();
-            let longest = candidates.iter().map(|(length, _)| *length).max();
-            for (length, (rule_path, preference)) in candidates {
-                if Some(length) != longest {
-                    continue;
                 }
+            }
+            for (rule_path, preference) in selected {
                 for (category, preference, label) in parse_content_usage(preference) {
                     statements.push(Statement {
                         source: StatementSource::RobotsContentUsage,
@@ -761,6 +820,7 @@ impl RobotsFile {
             statements,
             licences,
             crawl_delay: CrawlDelay::read(&crawl_delay_values),
+            too_many_readings: None,
         }
     }
 }
@@ -783,9 +843,12 @@ fn signal_statements(signals: &[String], group: Option<&str>) -> Vec<Statement> 
         .collect()
 }
 
+/// The rules whose pattern matches one reading of the page (already in
+/// [`commonmeasure_types::matching_target`]'s form), each with the length it
+/// ranks by.
 fn longest_match<'a, T: 'a>(
     rules: impl Iterator<Item = (&'a str, T)>,
-    path: &'a str,
+    reading: &'a str,
 ) -> impl Iterator<Item = (usize, T)> {
     rules.filter_map(move |(pattern, rule)| {
         if pattern.is_empty() {
@@ -793,32 +856,59 @@ fn longest_match<'a, T: 'a>(
             // section 2.2.2).
             return None;
         }
-        matches_pattern(pattern, path).then_some((pattern.len(), rule))
+        let form = commonmeasure_types::matching_pattern(pattern);
+        matches_form(&form, reading).then_some((form.len(), rule))
     })
 }
 
-/// RFC 9309 section 2.2.3 matching: a prefix match with `*` matching any
-/// sequence and `$` anchoring the end. Compared byte-wise, as the protocol
-/// says; percent-encoding is compared as written.
-pub fn matches_pattern(pattern: &str, path: &str) -> bool {
+/// RFC 9309 section 2.2.3 matching of one target: a prefix match with `*`
+/// matching any sequence and a final `$` anchoring the end. Both sides are
+/// compared byte-wise in one spelling
+/// ([`commonmeasure_types::matching_pattern`] and
+/// [`commonmeasure_types::matching_target`]): a percent-encoded unreserved
+/// octet is decoded, the hex of every other encoding is upper-cased, a
+/// reserved octet stays encoded, and a literal `*` or `$` in the target is
+/// `%2A` or `%24`. So `/%6Eews/1` is under `/news/`, `/news/1` is under
+/// `/%6Eews/`, `/file-*.html` is under `/file-%2A.html`, and `/a%2Fb` is not
+/// under `/a/b`. Slashes are compared as written. A page is compared reading
+/// by reading ([`commonmeasure_types::matching_target_readings`]), which is
+/// where `//news/1`, `/news%2F1` and `/news;x/1` meet `/news/`; this function compares
+/// `target` as given. Rules rank by the length of the pattern's form.
+pub fn matches_pattern(pattern: &str, target: &str) -> bool {
+    matches_form(
+        &commonmeasure_types::matching_pattern(pattern),
+        &commonmeasure_types::matching_target(target),
+    )
+}
+
+/// [`matches_pattern`] over a pattern and a target already in the matching
+/// form. The parts before the last match leftmost; an anchored pattern's
+/// last part must end the target, wherever else it occurs, so `/*.pdf$`
+/// covers `/a.pdf/b.pdf`.
+fn matches_form(pattern: &str, target: &str) -> bool {
     let (pattern, anchored) = match pattern.strip_suffix('$') {
         Some(stripped) => (stripped, true),
         None => (pattern, false),
     };
-    let mut parts = pattern.split('*');
-    let Some(first) = parts.next() else {
-        return true;
+    let mut parts: Vec<&str> = pattern.split('*').collect();
+    let last = if anchored { parts.pop() } else { None };
+    let Some((first, middle)) = parts.split_first() else {
+        // An anchored pattern with no `*`: the target must be it exactly.
+        return last.is_some_and(|last| target == last);
     };
-    let Some(mut rest) = path.strip_prefix(first) else {
+    let Some(mut rest) = target.strip_prefix(first) else {
         return false;
     };
-    for part in parts {
+    for part in middle {
         match rest.find(part) {
             Some(at) => rest = &rest[at + part.len()..],
             None => return false,
         }
     }
-    !anchored || rest.is_empty() || pattern.ends_with('*')
+    match last {
+        Some(last) => rest.ends_with(last),
+        None => true,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,14 +1181,33 @@ fn finish_usage(licence: &mut Option<RslLicence>, element: &str, kind: Option<St
 impl RslDocument {
     /// The `<content>` entry governing one page: the most specific matching
     /// `url` (RSL sections 3.1.1 and 4.9). A path pattern is matched against
-    /// the page's path under RFC 9309 rules; an absolute URL is matched as a
-    /// prefix of the page URL, both in [`commonmeasure_types::canonical_url`]'s
-    /// form; an empty `url` names the scope the discovery mechanism
-    /// established and matches with the least specificity.
+    /// the page's path under RFC 9309 rules ([`matches_pattern`]); an
+    /// absolute URL is matched as a prefix of the page URL, both in
+    /// [`commonmeasure_types::matching_url`]'s form; an empty `url` names the
+    /// scope the discovery mechanism established and matches with the least
+    /// specificity. Host case, trailing dots, default ports, credentials,
+    /// percent-encoded unreserved characters, lower-case hex, a literal `*`
+    /// or `$` and fragments do not take a page out of its entry.
+    ///
+    /// The page is read as parsed and as every path decoding `%2F` and
+    /// `%5C` as `/` and `%3B` as `;`, merging slashes, resolving dot
+    /// segments and stripping `;` parameters reach from it, in any order
+    /// ([`commonmeasure_types::matching_target_readings`]); an entry's `url`
+    /// is read as written. The entry the page as parsed selects governs;
+    /// when it selects none, the entry the first later reading selects, in
+    /// that function's breadth-first order. So a page an entry governs as
+    /// parsed keeps that entry, and `//news/1`, `/news%2F1`,
+    /// `/x//..%2Fnews/1`, `/news;x/1` or `/news%3Bx/1` falls to `/news/`
+    /// only when no entry covers it as parsed. The requested spelling can
+    /// therefore select a less restrictive entry: a catch-all beside a
+    /// narrower entry, or a permissive sub-scope a reading climbs out of. A
+    /// page with more readings than the cap is ruled on as parsed only here;
+    /// the robots ruling refuses it before any licence is read.
     ///
     /// Specificity is the length of the path the entry constrains, as RFC
-    /// 9309 ranks rules: a path pattern's own length, and an absolute scope's
-    /// canonical path and query, since its host has already matched. Ranking
+    /// 9309 ranks rules: a path pattern's length and an absolute scope's path
+    /// and query, each in the matching form, since the host has already
+    /// matched. Ranking
     /// by the written length would let a broad scope spelled long, or any
     /// absolute scope, outrank a narrower entry and its prohibition. An
     /// absolute scope that does not parse ranks 0, with the empty `url`, as
@@ -1115,12 +1224,34 @@ impl RslDocument {
     /// governs only between two absolute scopes of equal written length that
     /// both match the page as written, which makes them the same string, or
     /// that neither does; and between two relative entries, or two empty
-    /// `url`s, of equal length.
+    /// `url`s, of equal length in the matching form, whatever their written
+    /// lengths.
     pub fn content_for(&self, page_url: &str) -> Option<&RslContent> {
-        let path = request_target(page_url);
-        let page = url::Url::parse(page_url)
-            .ok()
-            .map(|page| commonmeasure_types::canonical_url(&page));
+        let target = request_target(page_url);
+        let targets = commonmeasure_types::matching_target_readings(&target)
+            .unwrap_or_else(|_| vec![commonmeasure_types::matching_target(&target)]);
+        // Both lists read the same target, so they align reading by reading.
+        let pages = url::Url::parse(page_url).ok().map(|page| {
+            commonmeasure_types::matching_url_readings(&page)
+                .unwrap_or_else(|_| vec![commonmeasure_types::matching_url(&page)])
+        });
+        targets.iter().enumerate().find_map(|(index, target)| {
+            let page = pages
+                .as_ref()
+                .and_then(|pages| pages.get(index))
+                .map(String::as_str);
+            self.content_for_reading(target, page, page_url)
+        })
+    }
+
+    /// The entry one reading of the page selects: `target` and `page` are
+    /// its request target and URL in the matching form.
+    fn content_for_reading(
+        &self,
+        target: &str,
+        page: Option<&str>,
+        page_url: &str,
+    ) -> Option<&RslContent> {
         self.contents
             .iter()
             .filter_map(|content| {
@@ -1129,14 +1260,17 @@ impl RslDocument {
                 let matched = if pattern.is_empty() {
                     Some(0)
                 } else if pattern.starts_with('/') {
-                    matches_pattern(pattern, &path).then_some(pattern.len())
+                    let form = commonmeasure_types::matching_pattern(pattern);
+                    matches_form(&form, target).then_some(form.len())
                 } else {
-                    within_absolute_scope(pattern, page.as_ref(), page_url)
+                    within_absolute_scope(pattern, page, page_url)
                 };
-                // Written-form tie-breaks for absolute scopes; for a relative
-                // entry both are constant or its length.
+                // Written-form tie-breaks for absolute scopes. For a relative
+                // entry both are constant, so two relative entries that are
+                // one path in two spellings tie and the later one governs.
                 let as_written = absolute && page_url.starts_with(pattern);
-                matched.map(|length| ((length, absolute, as_written, pattern.len()), content))
+                let written = if absolute { pattern.len() } else { 0 };
+                matched.map(|length| ((length, absolute, as_written, written), content))
             })
             .max_by_key(|(rank, _)| *rank)
             .map(|(_, content)| content)
@@ -1144,22 +1278,25 @@ impl RslDocument {
 }
 
 /// The specificity of an absolute `<content>` scope the page is under, or
-/// `None` when it is not. A trailing dot, a change of host case, an explicit
-/// default port or credentials in the URL name the same resource, so none
-/// of them may take a page out of its licence and the licence's prohibitions
-/// and reporting demands out of the ruling. A parsed scope ranks by its
-/// canonical request target, the path and query it constrains; a scope that
-/// does not parse is compared as written and ranks 0, since its written
-/// length says nothing about the path it constrains.
-fn within_absolute_scope(pattern: &str, page: Option<&url::Url>, page_url: &str) -> Option<usize> {
+/// `None` when it is not. `page` is one reading of the page in the matching
+/// form. A trailing dot, a change of host case, an explicit default port,
+/// credentials, a percent-encoded unreserved character or a fragment in
+/// either URL names the same resource, so none of them may take a page out
+/// of its licence and the licence's prohibitions and reporting demands out
+/// of the ruling. The scope's own slashes are compared as written. A parsed
+/// scope ranks by its request target in the matching form, the path and
+/// query it constrains; a scope that does not parse is compared as written
+/// and ranks 0, since its written length says nothing about the path it
+/// constrains.
+fn within_absolute_scope(pattern: &str, page: Option<&str>, page_url: &str) -> Option<usize> {
     match url::Url::parse(pattern) {
         Ok(scope) => {
-            let scope = commonmeasure_types::canonical_url(&scope);
+            let scope = commonmeasure_types::matching_url(&scope);
             let within = match page {
-                Some(page) => page.as_str().starts_with(scope.as_str()),
+                Some(page) => page.starts_with(&scope),
                 None => page_url.starts_with(pattern),
             };
-            within.then(|| request_target(scope.as_str()).len())
+            within.then(|| commonmeasure_types::matching_target(&request_target(&scope)).len())
         }
         Err(_) => page_url.starts_with(pattern).then_some(0),
     }
@@ -1624,6 +1761,307 @@ Content-Usage: train-ai=y
         assert!(matches_pattern("/", "/anything"));
         assert!(!matches_pattern("/b", "/a"));
         assert!(matches_pattern("/*", "/"));
+    }
+
+    /// An anchored pattern's last part must end the target, wherever else it
+    /// occurs; the parts before it match leftmost and the last must follow
+    /// them.
+    #[test]
+    fn an_anchored_pattern_matches_where_the_target_ends() {
+        assert!(matches_pattern("/*.pdf$", "/a.pdf/b.pdf"));
+        assert!(matches_pattern("/*.pdf$", "/.pdf"));
+        assert!(!matches_pattern("/*.pdf$", "/a.pdf/b"));
+        assert!(matches_pattern("/a*b$", "/axbyb"));
+        assert!(!matches_pattern("/*ab*b$", "/ab"));
+        assert!(matches_pattern("/a$", "/a"));
+        assert!(!matches_pattern("/a$", "/ab"));
+        assert!(matches_pattern("/a*$", "/abc"));
+        let file = parse_robots("User-agent: *\nDisallow: /*.pdf$\n");
+        let reading = file.read(PRODUCT_TOKEN, "/a.pdf/b.pdf");
+        assert_eq!(reading.crawlable, Some(false), "{reading:?}");
+        let file = parse_robots("User-agent: *\nAllow: /\nContent-Usage: /*.pdf$ ai-use=n\n");
+        let reading = file.read(PRODUCT_TOKEN, "/a.pdf/b.pdf");
+        assert_eq!(
+            combine(&reading.statements)[&Category::AiInput],
+            Effective::Disallow
+        );
+    }
+
+    /// A bare `*` or final `$` in a pattern is an operator, so a rule names a
+    /// literal `*` or `$` as `%2A` or `%24` (RFC 9309 section 2.2.3), and the
+    /// URL's literal meets it there. A `$` that is not final is a literal.
+    #[test]
+    fn a_rule_names_a_literal_star_or_dollar_by_its_encoding() {
+        let crawlable = |rules: &str, path: &str| {
+            parse_robots(&format!("User-agent: *\n{rules}\n"))
+                .read(PRODUCT_TOKEN, path)
+                .crawlable
+        };
+        assert_eq!(crawlable("Disallow: /a$", "/a$"), Some(true));
+        assert_eq!(crawlable("Disallow: /a*", "/a$"), Some(false));
+        assert_eq!(crawlable("Disallow: /a*", "/a%2A"), Some(false));
+        assert_eq!(
+            crawlable(
+                "Disallow: /path/file-with-a-%2A.html",
+                "/path/file-with-a-*.html"
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            crawlable("Disallow: /path/foo-%24", "/path/foo-$"),
+            Some(false)
+        );
+        assert_eq!(crawlable("Disallow: /a$b", "/a$b"), Some(false));
+        assert_eq!(crawlable("Disallow: /a$b", "/a%24b"), Some(false));
+    }
+
+    /// A page is read as parsed, merged and with its separators decoded. A
+    /// `Disallow` any reading reaches refuses it, and no `Allow` in another
+    /// reading lifts that; `Content-Usage` rules every reading selects all
+    /// apply. A rule's own `//` is read as written.
+    #[test]
+    fn a_disallow_any_reading_of_the_page_reaches_refuses_it() {
+        let read = |rules: &str, path: &str| {
+            parse_robots(&format!("User-agent: *\n{rules}\n")).read(PRODUCT_TOKEN, path)
+        };
+        for (rules, path, crawlable, rule) in [
+            (
+                "Disallow: /a/\nAllow: /a/b",
+                "/a//b",
+                false,
+                "Disallow: /a/",
+            ),
+            ("Disallow: /a/\nAllow: /a/b", "/a/b", true, "Allow: /a/b"),
+            (
+                "Disallow: /*/private",
+                "//private",
+                false,
+                "Disallow: /*/private",
+            ),
+            ("Disallow: /news/", "//news/1", false, "Disallow: /news/"),
+            ("Disallow: /news/", "/news%2F1", false, "Disallow: /news/"),
+            (
+                "Disallow: /news/",
+                "/x/..%2Fnews/1",
+                false,
+                "Disallow: /news/",
+            ),
+            (
+                "Disallow: /\nAllow: /news/",
+                "//news/1",
+                false,
+                "Disallow: /",
+            ),
+            (
+                "Disallow: /\nAllow: /news/",
+                "/news/1",
+                true,
+                "Allow: /news/",
+            ),
+            ("Disallow: //", "//news/1", false, "Disallow: //"),
+            (
+                "Allow: /\nDisallow: /news/",
+                "//news/1",
+                false,
+                "Disallow: /news/",
+            ),
+            (
+                "Allow: /\nDisallow: /news/",
+                "/news%2F1",
+                false,
+                "Disallow: /news/",
+            ),
+            (
+                "Allow: /\nDisallow: /news/",
+                "/x/..%2Fnews/1",
+                false,
+                "Disallow: /news/",
+            ),
+            (
+                "Allow: /\nDisallow: /news/",
+                "/news/1",
+                false,
+                "Disallow: /news/",
+            ),
+            (
+                "Disallow: /a/b%2Fc",
+                "/a//b%2Fc",
+                false,
+                "Disallow: /a/b%2Fc",
+            ),
+            (
+                "Allow: /\nDisallow: /news//",
+                "/news//1",
+                false,
+                "Disallow: /news//",
+            ),
+        ] {
+            let reading = read(rules, path);
+            assert_eq!(reading.crawlable, Some(crawlable), "{rules} {path}");
+            assert_eq!(reading.access_rule.as_deref(), Some(rule), "{rules} {path}");
+        }
+        for (rules, path) in [
+            ("Disallow: //", "/"),
+            ("Disallow: //", "/news/1"),
+            ("Disallow: //", "/news//1"),
+            ("Disallow: /*//", "/news/1"),
+            ("Disallow: /*//", "/news/a/b"),
+            ("Allow: /\nDisallow: /news//", "/news/1"),
+            ("Disallow: /news/1/", "/news%2F1"),
+            ("Disallow: /a%2Fb", "/a/b"),
+        ] {
+            assert_ne!(read(rules, path).crawlable, Some(false), "{rules} {path}");
+        }
+        let reading = read(
+            "Content-Usage: /a/ ai-use=n\nContent-Usage: /a/b ai-use=y",
+            "/a//b",
+        );
+        assert_eq!(
+            combine(&reading.statements)[&Category::AiInput],
+            Effective::Disallow
+        );
+        assert!(
+            read("Content-Usage: // ai-use=n", "/news/1")
+                .statements
+                .is_empty()
+        );
+    }
+
+    /// Decoding `%2F`, merging `/` and resolving dot segments, in any order
+    /// and including only some of them: a `Disallow` any of those paths
+    /// reaches refuses the page, and a `Content-Usage` rule any of them
+    /// selects applies.
+    #[test]
+    fn a_disallow_any_order_of_the_operations_reaches_refuses_it() {
+        let read = |rules: &str, path: &str| {
+            parse_robots(&format!("User-agent: *\n{rules}\n")).read(PRODUCT_TOKEN, path)
+        };
+        for (rules, path, rule) in [
+            ("Disallow: /news/", "/x//..%2Fnews/1", "Disallow: /news/"),
+            (
+                "Disallow: /x/news/",
+                "/x//..%2Fnews/1",
+                "Disallow: /x/news/",
+            ),
+            (
+                "Allow: /\nDisallow: /news/",
+                "/x//..%2Fnews/1",
+                "Disallow: /news/",
+            ),
+            (
+                "Disallow: /a/news/",
+                "/a//..%2F/news/1",
+                "Disallow: /a/news/",
+            ),
+            (
+                "Disallow: /a/news/",
+                "/a/b//..%2F%2F..%2Fnews/1",
+                "Disallow: /a/news/",
+            ),
+            ("Disallow: //news/", "/a//..%2F/news/1", "Disallow: //news/"),
+            (
+                "Disallow: /news/",
+                "/news%2F..%2Fsports/1",
+                "Disallow: /news/",
+            ),
+        ] {
+            let reading = read(rules, path);
+            assert_eq!(reading.crawlable, Some(false), "{rules} {path}");
+            assert_eq!(reading.access_rule.as_deref(), Some(rule), "{rules} {path}");
+        }
+        let reading = read(
+            "Content-Usage: /news/ ai-use=n\nContent-Usage: /x/ ai-use=y",
+            "/x//..%2Fnews/1",
+        );
+        assert_eq!(
+            combine(&reading.statements)[&Category::AiInput],
+            Effective::Disallow
+        );
+    }
+
+    /// A page past the readings cap is refused unread, with or without a
+    /// group, and the reason names the cap.
+    #[test]
+    fn a_page_past_the_readings_cap_is_refused() {
+        let too_many = commonmeasure_types::TooManyReadings { cap: 64 };
+        for robots in [
+            "User-agent: *\nAllow: /\n",
+            "",
+            "User-agent: other\nDisallow: /\n",
+        ] {
+            let reading = parse_robots(robots).read_readings(PRODUCT_TOKEN, Err(too_many));
+            assert_eq!(reading.crawlable, Some(false), "{robots:?}");
+            assert_eq!(reading.too_many_readings, Some(too_many), "{robots:?}");
+            assert!(
+                reading
+                    .access_rule
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("more than 64 readings")),
+                "{robots:?}: {reading:?}"
+            );
+            assert!(reading.statements.is_empty(), "{robots:?}");
+        }
+    }
+
+    /// Rules rank by the length of their matching form, so spelling a rule
+    /// longer does not make it more specific; two spellings of one path tie,
+    /// and the tie rule decides as it does for two identical rules.
+    #[test]
+    fn a_rule_ranks_by_the_path_it_names_whatever_its_spelling() {
+        let file = parse_robots("User-agent: *\nDisallow: /%6Eews/\nAllow: /news/1\n");
+        let reading = file.read(PRODUCT_TOKEN, "/news/1");
+        assert_eq!(reading.crawlable, Some(true), "{reading:?}");
+        assert_eq!(reading.access_rule.as_deref(), Some("Allow: /news/1"));
+        let reading = file.read(PRODUCT_TOKEN, "/%6Eews/2");
+        assert_eq!(reading.crawlable, Some(false), "{reading:?}");
+
+        // A tie that only exists in the matching form: Allow wins it, as it
+        // wins any equal-length match (RFC 9309 section 2.2.2).
+        let file = parse_robots("User-agent: *\nDisallow: /%6Eews/\nAllow: /news/\n");
+        for path in ["/news/1", "/%6Eews/1"] {
+            let reading = file.read(PRODUCT_TOKEN, path);
+            assert_eq!(reading.crawlable, Some(true), "{path}");
+            assert_eq!(reading.access_rule.as_deref(), Some("Allow: /news/"));
+        }
+
+        // Two Content-Usage rules naming one path in two spellings are
+        // identical paths: both apply, most restrictive wins.
+        let file = parse_robots(
+            "User-agent: *\nContent-Usage: /news/ ai-use=y\nContent-Usage: /%6Eews/ ai-use=n\n",
+        );
+        for path in ["/news/1", "/%6Eews/1"] {
+            let reading = file.read(PRODUCT_TOKEN, path);
+            assert_eq!(
+                combine(&reading.statements)[&Category::AiInput],
+                Effective::Disallow,
+                "{path}"
+            );
+        }
+    }
+
+    /// Two relative `<content>` entries naming one path in two spellings
+    /// tie; the later one governs in either order, as between two identical
+    /// entries.
+    #[test]
+    fn two_spellings_of_one_relative_scope_tie_and_the_later_governs() {
+        let entry = |url: &str| format!(r#"<content url="{url}"><license/></content>"#);
+        for (first, second) in [("/news/", "/%6Eews/"), ("/%6Eews/", "/news/")] {
+            let document = parse_rsl(&format!(
+                r#"<rsl xmlns="https://rslstandard.org/rsl">{}{}</rsl>"#,
+                entry(first),
+                entry(second)
+            ))
+            .expect("parses");
+            for page in ["https://example.com/news/1", "https://example.com/%6Eews/1"] {
+                assert_eq!(
+                    document
+                        .content_for(page)
+                        .map(|content| content.url.as_str()),
+                    Some(second),
+                    "{first} then {second}: {page}"
+                );
+            }
+        }
     }
 
     #[test]

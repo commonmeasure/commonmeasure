@@ -267,6 +267,56 @@ pub fn invoke(
     (invocation, ruling)
 }
 
+/// The verdict on a body the edge hands over as a file without reading it:
+/// the injection screen did not run, so its verdict is unknown, and an unknown
+/// verdict is a breach (`docs/FAIL-POLICY.md` §6). `strict` fails closed on
+/// it, whatever the source; `observe` and `prefer` carry the crossing with
+/// the breach recorded. The record's gap says the screen did not rule
+/// rather than listing no findings.
+pub fn not_read(
+    mode: PolicyMode,
+    source_ref: &str,
+    basis: &str,
+    content_hash: Option<&str>,
+) -> (Invocation, Ruling) {
+    let started_at = Utc::now();
+    let gap = Gap::new(
+        GapReason::CapabilityUnavailable,
+        format!(
+            "{source_ref} is {basis}; the edge does not read files, so the injection screen \
+             did not rule on it."
+        ),
+    );
+    let ruling = Ruling::breach(
+        mode,
+        format!(
+            "The injection screen did not rule: the body is {basis}, which the edge does not read."
+        ),
+        gap.clone(),
+    );
+    let decision = if ruling.is_refusal() {
+        Decision::Refuse
+    } else {
+        Decision::Abstain
+    };
+    let invocation = Invocation::new(
+        manifest(),
+        started_at,
+        decision,
+        "not run: the body is a file, which the edge does not read",
+        vec![ArtefactRef {
+            reference: source_ref.to_owned(),
+            content_hash: content_hash.map(str::to_owned),
+            tokens: None,
+        }],
+        Vec::new(),
+        json!({ "read": false }),
+        vec![gap],
+        BLIND_SPOTS.to_vec(),
+    );
+    (invocation, ruling)
+}
+
 fn rules_matched(findings: &[InjectionFinding]) -> serde_json::Map<String, serde_json::Value> {
     let mut counts: std::collections::BTreeMap<&'static str, usize> =
         std::collections::BTreeMap::new();
@@ -314,6 +364,32 @@ pub fn scan(text: &str) -> Vec<InjectionFinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file the edge did not read is a breach in every mode: `strict`
+    /// refuses it, and `observe` and `prefer` carry it with the breach and
+    /// the gap recorded.
+    #[test]
+    fn a_file_not_read_is_a_breach_that_only_strict_refuses() {
+        for (mode, refused, decision) in [
+            (PolicyMode::Strict, true, "refuse"),
+            (PolicyMode::Prefer, false, "abstain"),
+            (PolicyMode::Observe, false, "abstain"),
+        ] {
+            let (invocation, ruling) = not_read(mode, "https://example.test/a.pdf", "a PDF", None);
+            assert_eq!(ruling.is_refusal(), refused, "{mode:?}");
+            assert!(
+                ruling
+                    .reason()
+                    .is_some_and(|reason| reason.starts_with("The injection screen did not rule")),
+                "{mode:?}: {ruling:?}"
+            );
+            assert_eq!(
+                ruling.gap().map(|gap| gap.reason),
+                Some(GapReason::CapabilityUnavailable)
+            );
+            assert_eq!(invocation.to_value()["decision"], decision, "{mode:?}");
+        }
+    }
 
     #[test]
     fn every_rule_phrase_appears_in_the_canonical_rule_text() {

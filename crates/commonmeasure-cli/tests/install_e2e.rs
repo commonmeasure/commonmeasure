@@ -584,6 +584,25 @@ fn claude_desktop_registration_is_one_key_and_leaves_the_rest_byte_for_byte() {
         text.contains("each that makes a call leaves its own session"),
         "{text}"
     );
+    // One line names the background relay and the command that installs
+    // it; installing it is left to the operator.
+    let relay: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("background relay"))
+        .collect();
+    assert_eq!(relay.len(), 1, "{text}");
+    assert!(
+        relay[0].contains("demands usage reporting")
+            && relay[0].contains("commonmeasure service install relay"),
+        "{text}"
+    );
+    assert!(
+        !home
+            .path()
+            .join("Library/LaunchAgents/ai.commonmeasure.relay.plist")
+            .exists()
+            && !home.path().join("commonmeasure/relay-loop.lock").exists()
+    );
     let expected = format!(
         "{{\n  \"coworkUserFilesPath\": \"/home/op/Claude\",\n  \"preferences\": {{\n    \"sidebarMode\": \"epitaxy\"\n  }},\n  \"mcpServers\": {{\n    \"commonmeasure\": {{\n      \"command\": \"{binary}\",\n      \"args\": [\n        \"mcp\",\n        \"--host\",\n        \"claude-desktop\"\n      ]\n    }}\n  }}\n}}\n"
     );

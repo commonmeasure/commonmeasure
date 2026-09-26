@@ -833,3 +833,350 @@ fn a_robots_file_five_redirects_away_is_read_and_six_is_unreachable() {
         );
     }
 }
+
+/// A `Disallow` covers every spelling of a path under it: a percent-encoded
+/// unreserved character or lower-case hex, in the page URL or in the rule,
+/// does not take the page out of it (RFC 9309 §2.2.2). Nor does a doubled
+/// slash or an encoded `/` in the page's path: a server that merges slashes
+/// serves `//news/1` as `/news/1`, and one that decodes the path before
+/// resolving it serves `/news%2F1` and `/x/..%2Fnews/1` as `/news/1`.
+#[test]
+fn a_disallow_refuses_every_spelling_of_a_path_under_it() {
+    for (rule, path) in [
+        ("/news/", "/%6Eews/1"),
+        ("/news/", "/%6eews/1"),
+        ("/news/", "//news/1"),
+        ("/news/", "/news//1"),
+        ("/%6Eews/", "/news/1"),
+        ("/a%2fb", "/a%2Fb"),
+        ("/a%2Fb", "/a%2fb"),
+        ("/a/b", "/a%2Fb"),
+        ("//", "//news/1"),
+    ] {
+        assert_refused_under(
+            &format!("Disallow: {rule}"),
+            &format!("Disallow: {rule}"),
+            path,
+            &["observe"],
+        );
+    }
+    for path in ["/x/..%2Fnews/1", "/news%2F1", "/x/%2E%2E%2Fnews/1"] {
+        assert_refused_under("Disallow: /news/", "Disallow: /news/", path, &MODES);
+    }
+}
+
+/// A page is refused when decoding `%2F`, merging `/` and resolving dot
+/// segments, in any order and including only some of them, reach a
+/// `Disallow`. nginx merges before it resolves, so it serves
+/// `/x//..%2Fnews/1` as `/news/1`; the URL parser resolves first and reaches
+/// `/x/news/1`; both refuse. A merging proxy in front of a server that
+/// decodes and resolves reaches `/a/news/1` from `/a/b//..%2F%2F..%2Fnews/1`,
+/// and a server that decodes and resolves without merging reaches
+/// `//news/1` from `/a//..%2F/news/1`.
+#[test]
+fn a_disallow_any_order_of_decoding_merging_and_resolving_reaches_refuses_in_every_mode() {
+    for (rule, path) in [
+        ("Disallow: /news/", "/x//..%2Fnews/1"),
+        ("Disallow: /x/news/", "/x//..%2Fnews/1"),
+        ("Disallow: /a/news/", "/a//..%2F/news/1"),
+        ("Disallow: /a/news/", "/a/b//..%2F%2F..%2Fnews/1"),
+        ("Disallow: //news/", "/a//..%2F/news/1"),
+        ("Disallow: /news/", "/news%2F..%2Fsports/1"),
+    ] {
+        assert_refused_under(rule, rule, path, &MODES);
+    }
+    assert_refused_under(
+        "Allow: /\nDisallow: /news/",
+        "Disallow: /news/",
+        "/x//..%2Fnews/1",
+        &["observe"],
+    );
+}
+
+/// A page is refused when stripping `;` path parameters or reading `%5C` as
+/// `/` reaches a `Disallow`: Tomcat serves `/news;x=1/1` and `/x/..;/news/1`
+/// as `/news/1`, and IIS reads `/news%5C1` as `/news/1`. An encoded `;` is
+/// read as `;`, since nginx, when `proxy_pass` names a URI, decodes it
+/// before Tomcat strips it and serves `/news%3Bx/1` as `/news/1`.
+#[test]
+fn a_disallow_a_stripped_parameter_or_a_decoded_backslash_reaches_refuses_in_every_mode() {
+    for path in [
+        "/news;x=1/1",
+        "/x/..;/news/1",
+        "/news;jsessionid=AB12/1",
+        "/news/%2E%2E;/news/1",
+        "/x/%2E%2E;/news/1",
+        "/news%5C1",
+        "/news%5c1",
+        "/x/..%5Cnews/1",
+        "/news%3Bx/1",
+        "/news%3bx/1",
+        "/x/..%3B/news/1",
+        "/x/%2E%2E%3B/news/1",
+    ] {
+        assert_refused_under("Disallow: /news/", "Disallow: /news/", path, &MODES);
+    }
+    // Read as `/`, `%3B` would give `/news/x/1`, which this rule misses.
+    assert_refused_under(
+        "Disallow: /news/1",
+        "Disallow: /news/1",
+        "/news%3Bx/1",
+        &MODES,
+    );
+}
+
+/// Readings are for matching only: a page no reading puts under a rule is
+/// requested and recorded as written, its `%3B`, `%5C` and `;` untouched.
+#[test]
+fn a_page_is_requested_and_recorded_as_written() {
+    for path in [
+        "/news%3Bx/1",
+        "/news%3bx/1",
+        "/news;x=1/1",
+        "/a;b/..;c/news%5c1?q=;x",
+    ] {
+        let site = origin("User-agent: *\nDisallow: /private/\n");
+        let home = home_with_mode("strict");
+        let page = site.url(path);
+        let response = fetch(home.path(), &page);
+        assert_eq!(response["result"]["isError"], false, "{path}: {response}");
+        assert_eq!(site.requests()[..2], ["/robots.txt", path], "{path}");
+        let payload = &crossings(home.path())[0]["payload"];
+        assert_eq!(payload["url"], page, "{path}");
+        let robots = &payload["declarations"]["robots"];
+        assert_eq!(robots["requested_url"], page, "{path}");
+        assert_eq!(robots["outcome"], "allowed", "{path}");
+    }
+}
+
+/// A crafted path can have more readings than the cap; the page is then
+/// refused in every mode without comparing them, even where every rule
+/// allows it.
+#[test]
+fn a_page_past_the_readings_cap_is_refused_in_every_mode() {
+    const CRAFTED: &str = "/x//..;/.../;/..;/a/%2Fb/;//%2F..%2F..%2F;%5Cc";
+    for mode in MODES {
+        let site = origin("User-agent: *\nAllow: /\n");
+        let home = home_with_mode(mode);
+        let page = site.url(CRAFTED);
+        let response = fetch(home.path(), &page);
+        assert_eq!(response["result"]["isError"], true, "{mode}: {response}");
+        assert!(
+            text_of(&response).contains("more than 64 readings"),
+            "{mode}: {response}"
+        );
+        assert_eq!(site.requests(), ["/robots.txt"], "{mode}");
+        let recorded = crossings(home.path());
+        assert_eq!(recorded[0]["event"], "crossing_refused", "{mode}");
+        assert_eq!(recorded[0]["payload"]["url"], page, "{mode}");
+        let robots = &recorded[0]["payload"]["declarations"]["robots"];
+        assert_eq!(robots["outcome"], "refused", "{mode}");
+        assert_eq!(robots["reading"]["crawlable"], false, "{mode}");
+        assert!(
+            robots["reading"]["access_rule"]
+                .as_str()
+                .is_some_and(|rule| rule.contains("more than 64 readings")),
+            "{mode}: {robots}"
+        );
+    }
+}
+
+/// `rules` in the wildcard group refuse `path` in each of `modes`, naming
+/// `rule`.
+fn assert_refused_under(rules: &str, rule: &str, path: &str, modes: &[&str]) {
+    for mode in modes {
+        let robots: &'static str =
+            Box::leak(format!("License: /license.xml\nUser-agent: *\n{rules}\n").into_boxed_str());
+        let site = origin(robots);
+        let home = home_with_mode(mode);
+        let page = site.url(path);
+        let response = fetch(home.path(), &page);
+        assert_refused(mode, &site, &page, "*", rule, &response, home.path());
+    }
+}
+
+/// `rules` in the wildcard group let `path` be requested under observe.
+fn assert_requested_under(rules: &str, path: &str) {
+    let robots: &'static str = Box::leak(format!("User-agent: *\n{rules}\n").into_boxed_str());
+    let site = origin(robots);
+    let home = home_with_mode("observe");
+    let response = fetch(home.path(), &site.url(path));
+    assert_eq!(
+        response["result"]["isError"], false,
+        "{rules} {path}: {response}"
+    );
+    assert!(
+        site.requests().iter().any(|target| target == path),
+        "{rules} {path}: the page was requested: {:?}",
+        site.requests()
+    );
+    let recorded = crossings(home.path());
+    assert_eq!(recorded[0]["event"], "crossing_mediated", "{rules} {path}");
+    assert_eq!(
+        recorded[0]["payload"]["declarations"]["robots"]["outcome"], "allowed",
+        "{rules} {path}"
+    );
+}
+
+/// A rule names the path its author wrote. Its own `//` is never merged, so
+/// `Disallow: //` refuses only doubled-slash paths and `Disallow: /*//` only
+/// paths with a doubled slash; its own `%2F` and `%3B` are never decoded and
+/// its own `;` is never stripped. A page's encoded `/` is decoded only to
+/// find the path a server may serve, so `/news%2F1` is not under
+/// `Disallow: /news/1/`.
+#[test]
+fn a_rule_covers_only_the_path_it_names() {
+    for (rules, path) in [
+        ("Disallow: //", "/"),
+        ("Disallow: //", "/news/1"),
+        ("Disallow: //", "/news//1"),
+        ("Disallow: /*//", "/news/1"),
+        ("Disallow: /*//", "/news/a/b"),
+        ("Allow: /\nDisallow: /news//", "/news/1"),
+        ("Disallow: /news/1/", "/news%2F1"),
+        ("Disallow: /a%2Fb", "/a/b"),
+        ("Disallow: /news%3Bx/", "/news/1"),
+        ("Disallow: /news%3Bx/", "/news;x/1"),
+        ("Disallow: /news;x/", "/news/1"),
+        ("Disallow: /a$", "/a$"),
+    ] {
+        assert_requested_under(rules, path);
+    }
+}
+
+/// A page is refused when any reading of it reaches a `Disallow`, and an
+/// `Allow` another reading reaches does not lift it: `/a//b` is refused
+/// under `Disallow: /a/` whatever `Allow: /a/b` says, as up to 0.4.2, and
+/// under `Allow: /` with `Disallow: /news/` the `Allow` that `//news/1` or
+/// `/x/..%2Fnews/1` reaches as requested does not lift the `Disallow` its
+/// other readings reach. A rule naming `%2F` covers a merged reading:
+/// `/a//b%2Fc` is under `Disallow: /a/b%2Fc`. The cost is stated: under
+/// `Disallow: /` with `Allow: /news/`, `//news/1` stays refused.
+#[test]
+fn a_disallow_any_reading_reaches_is_not_lifted_by_another_readings_allow() {
+    for (rules, rule, path) in [
+        ("Disallow: /a/\nAllow: /a/b", "Disallow: /a/", "/a//b"),
+        ("Disallow: /*/private", "Disallow: /*/private", "//private"),
+        ("Disallow: /\nAllow: /news/", "Disallow: /", "//news/1"),
+        ("Allow: /\nDisallow: /news/", "Disallow: /news/", "//news/1"),
+        (
+            "Allow: /\nDisallow: /news/",
+            "Disallow: /news/",
+            "/news%2F1",
+        ),
+        (
+            "Allow: /\nDisallow: /news/",
+            "Disallow: /news/",
+            "/x/..%2Fnews/1",
+        ),
+        ("Disallow: /a/b%2Fc", "Disallow: /a/b%2Fc", "/a//b%2Fc"),
+    ] {
+        assert_refused_under(rules, rule, path, &["observe"]);
+    }
+}
+
+/// An anchored pattern's suffix ends the path wherever else it occurs, so
+/// `Disallow: /*.pdf$` refuses `/a.pdf/b.pdf` in every mode.
+#[test]
+fn an_anchored_disallow_refuses_a_path_ending_in_its_suffix_in_every_mode() {
+    for path in ["/a.pdf/b.pdf", "/a/b.pdf"] {
+        assert_refused_under("Disallow: /*.pdf$", "Disallow: /*.pdf$", path, &MODES);
+    }
+}
+
+/// RFC 9309 §2.2.3: a rule names a literal `*` or `$` as `%2A` or `%24`,
+/// and a page URL carrying the literal is under it.
+#[test]
+fn a_rule_naming_an_encoded_star_or_dollar_refuses_the_literal() {
+    for (rule, path) in [
+        ("/path/file-with-a-%2A.html", "/path/file-with-a-*.html"),
+        ("/path/foo-%24", "/path/foo-$"),
+        ("/a*", "/a$"),
+    ] {
+        assert_refused_under(
+            &format!("Disallow: {rule}"),
+            &format!("Disallow: {rule}"),
+            path,
+            &["observe"],
+        );
+    }
+}
+
+/// A `Content-Usage` path rule covers every spelling of a path under it, as
+/// an access rule does, and the rules every reading of the page selects all
+/// apply: strict refuses the page before requesting it.
+#[test]
+fn a_content_usage_path_rule_binds_an_encoded_spelling_of_its_path() {
+    for (rules, rule, path) in [
+        (
+            "Content-Usage: /news/ ai-use=n",
+            "Content-Usage: /news/ ai-use=n",
+            "/%6Eews/1",
+        ),
+        (
+            "Content-Usage: /news/ ai-use=n",
+            "Content-Usage: /news/ ai-use=n",
+            "//news/1",
+        ),
+        (
+            "Content-Usage: /news/ ai-use=n",
+            "Content-Usage: /news/ ai-use=n",
+            "/news%2F1",
+        ),
+        (
+            "Content-Usage: /news/ ai-use=n",
+            "Content-Usage: /news/ ai-use=n",
+            "/x/..%2Fnews/1",
+        ),
+        (
+            "Content-Usage: /*.pdf$ ai-use=n",
+            "Content-Usage: /*.pdf$ ai-use=n",
+            "/a.pdf/b.pdf",
+        ),
+        (
+            "Content-Usage: /a/ ai-use=n\nContent-Usage: /a/b ai-use=y",
+            "Content-Usage: /a/ ai-use=n",
+            "/a//b",
+        ),
+    ] {
+        let robots: &'static str =
+            Box::leak(format!("User-agent: *\nAllow: /\n{rules}\n").into_boxed_str());
+        let site = origin(robots);
+        let home = home_with_mode("strict");
+        let response = fetch(home.path(), &site.url(path));
+        assert_eq!(response["result"]["isError"], true, "{path}: {response}");
+        let detail = text_of(&response);
+        assert!(
+            detail.contains("disallows AI input") && detail.contains(rule),
+            "{path}: {detail}"
+        );
+        assert_eq!(site.requests(), ["/robots.txt"], "{path}");
+        let statements = &crossings(home.path())[0]["payload"]["declarations"]["statements"];
+        assert!(
+            statements.as_array().unwrap().iter().any(|s| {
+                s["source"] == "robots-content-usage"
+                    && s["category"] == "ai-input"
+                    && s["preference"] == "disallow"
+            }),
+            "{path}: {statements}"
+        );
+    }
+}
+
+/// A `Content-Usage` rule's own `//` is read as written: `Content-Usage: //
+/// ai-use=n` states nothing about `/news/1`, and strict requests it.
+#[test]
+fn a_content_usage_rule_with_a_doubled_slash_states_nothing_about_other_paths() {
+    let site = origin("User-agent: *\nAllow: /\nContent-Usage: // ai-use=n\n");
+    let home = home_with_mode("strict");
+    let response = fetch(home.path(), &site.url("/news/1"));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert!(site.requests().iter().any(|target| target == "/news/1"));
+    let statements = &crossings(home.path())[0]["payload"]["declarations"]["statements"];
+    assert!(
+        !statements
+            .as_array()
+            .is_some_and(|all| all.iter().any(|s| s["source"] == "robots-content-usage")),
+        "{statements}"
+    );
+}

@@ -646,7 +646,14 @@ fn a_service_lock_that_cannot_be_read_is_reported_as_unknown_not_stopped() {
         status.contains(&format!("service mode      {unknown}")),
         "{status}"
     );
-    assert!(!status.contains("not running"), "{status}");
+    // The service's own line; the background relay has a line of its own.
+    assert!(
+        status
+            .lines()
+            .filter(|line| line.starts_with("service mode"))
+            .all(|line| !line.contains("not running")),
+        "{status}"
+    );
     assert!(doctor_ok, "{doctor}");
     assert!(
         doctor.contains(&format!("hosted service: {unknown}")),

@@ -29,6 +29,7 @@ pub mod delivery;
 pub mod directory;
 pub mod discovery;
 pub mod enrolment;
+pub mod fetched_file;
 pub mod fleet;
 pub mod grounding;
 pub mod hook;

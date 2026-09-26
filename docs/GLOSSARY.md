@@ -107,6 +107,11 @@ authoritative technical definitions live in the contracts under
 - **Relay** — the command (`commonmeasure relay`) that sends cleared records to
   the configured receiver. It is the only way records leave the machine, and
   it refuses to run without a configured receiver.
+- **Background relay** — the relay run on an interval by a process that
+  holds a lock on the operator home (`commonmeasure relay --every`), so a
+  host that sends no session-end event, such as Claude Desktop, delivers
+  without anyone running a command
+  ([telemetry projection](contracts/telemetry-projection.md#relay-on-an-interval)).
 - **Spool** — the local, durable queue of projected batches the relay writes
   before any delivery attempt, so a crash cannot lose or double-count a batch.
 - **Content Telemetry** — the published standard (v1.0) for reporting what

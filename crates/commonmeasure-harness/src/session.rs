@@ -146,6 +146,19 @@ pub struct Crossing {
     /// what the host kept, stored or excerpted from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered: Option<Delivered>,
+    /// The media type of a mediated fetch's body where the edge delivered it
+    /// as a file, or ruled it a file it does not deliver: `application/pdf`
+    /// for a PDF, whatever the origin labelled it, or the type as served.
+    /// Absent on a body delivered as text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// How a mediated fetch handed a file over, on a crossing that did.
+    /// `content_hash` is then the SHA-256 of exactly the bytes handed over,
+    /// there is no `delivered` and no `estimated_tokens`, and `grounded` is
+    /// false: the edge read none of it, and the record claims nothing about
+    /// what the model read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_file: Option<DeliveredFile>,
     /// True only for tools whose result put page text into context.
     pub grounded: bool,
     /// `unknown` unless a supplier declared a machine-readable licence. No
@@ -266,6 +279,26 @@ pub struct Delivered {
     pub hash: String,
 }
 
+/// How a fetched file was handed to the host ([`Crossing::delivered_file`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveredFile {
+    /// `local_file` (saved under the session's directory, its path in the
+    /// result) or `embedded_resource` (an MCP resource block in the result).
+    pub via: FileDelivery,
+    /// The size of the bytes handed over.
+    pub bytes: u64,
+    /// Always [`crate::fetched_file::NOT_READ`].
+    pub statement: String,
+}
+
+/// The two ways a fetched file reaches a host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileDelivery {
+    LocalFile,
+    EmbeddedResource,
+}
+
 impl Crossing {
     /// The token estimate's basis travels with the number, so nobody mistakes
     /// it for a tokeniser's output.
@@ -307,6 +340,14 @@ pub struct SessionSummary {
     pub host_observed: HostObservationSummary,
     /// Acquisitions awaiting host context evidence are not unread URL mentions.
     pub host_required: u64,
+    /// Mediated crossings that handed a file over unread
+    /// ([`Crossing::delivered_file`]): delivered, and whether the model read
+    /// them is unknown, so they are neither grounded nor left unread.
+    pub delivered_files: u64,
+    /// The delivered files not already counted in `host_required`: a file
+    /// crossing in a session with host observations carries both marks, and
+    /// is one crossing to take away from the unread count, not two.
+    delivered_files_apart: u64,
 }
 
 impl SessionSummary {
@@ -326,6 +367,7 @@ impl SessionSummary {
         self.carried_witnessed()
             .saturating_sub(self.grounded_witnessed)
             .saturating_sub(self.host_required)
+            .saturating_sub(self.delivered_files_apart)
     }
 }
 
@@ -354,6 +396,13 @@ pub fn summarise<'a>(records: impl IntoIterator<Item = &'a Value>) -> SessionSum
             && record["payload"]["context_observation"] == "host_required"
         {
             summary.host_required += 1;
+        }
+        // An object, as the relay reads it; the edge omits the key otherwise.
+        if event == Some("crossing_mediated") && record["payload"]["delivered_file"].is_object() {
+            summary.delivered_files += 1;
+            if record["payload"]["context_observation"] != "host_required" {
+                summary.delivered_files_apart += 1;
+            }
         }
         if record["payload"]["grounded"] == Value::Bool(true)
             && record["payload"]["context_observation"] != "host_required"
@@ -1380,6 +1429,66 @@ mod tests {
         assert_eq!(summary.named_not_read(), 1);
     }
 
+    /// A PDF handed over as a file was delivered, and the edge cannot say
+    /// whether the model read it, so it is counted apart and never as a URL
+    /// whose page was not read.
+    #[test]
+    fn a_delivered_file_is_counted_apart_from_a_page_left_unread() {
+        let file = json!({"event": "crossing_mediated", "payload": {
+            "grounded": false,
+            "content_type": "application/pdf",
+            "delivered_file": {"via": "local_file", "bytes": 10,
+                               "statement": crate::fetched_file::NOT_READ},
+        }});
+        let summary = summarise(&vec![
+            file.clone(),
+            file,
+            crossing("crossing_mediated", true),
+            crossing("crossing_observed", false),
+        ]);
+        assert_eq!(summary.carried_witnessed(), 4);
+        assert_eq!(summary.delivered_files, 2);
+        assert_eq!(summary.named_not_read(), 1);
+    }
+
+    // Catches: counting a `delivered_file` that is not an object, which the
+    // relay does not treat as a file.
+    #[test]
+    fn only_an_object_marks_a_delivered_file() {
+        let mut records = Vec::new();
+        for value in [Value::Null, json!("local_file"), json!(true)] {
+            records.push(json!({"event": "crossing_mediated", "payload": {
+                "grounded": false, "delivered_file": value,
+            }}));
+        }
+        let summary = summarise(&records);
+        assert_eq!(summary.delivered_files, 0);
+        assert_eq!(summary.named_not_read(), 3);
+    }
+
+    /// Once a host has opted into observations, a delivered file is also
+    /// stamped `host_required`. It is one crossing and is subtracted once, so
+    /// a search result beside it is still counted as a URL left unread.
+    #[test]
+    fn a_file_awaiting_host_evidence_is_not_subtracted_twice() {
+        let summary = summarise(&vec![
+            json!({"event": "observations_started", "payload": {}}),
+            json!({"event": "crossing_mediated", "payload": {
+                "grounded": false,
+                "http_status": 200,
+                "content_type": "application/pdf",
+                "context_observation": "host_required",
+                "delivered_file": {"via": "local_file", "bytes": 10,
+                                   "statement": crate::fetched_file::NOT_READ},
+            }}),
+            crossing("crossing_mediated", false),
+        ]);
+        assert_eq!(summary.carried_witnessed(), 2);
+        assert_eq!(summary.host_required, 1);
+        assert_eq!(summary.delivered_files, 1);
+        assert_eq!(summary.named_not_read(), 1);
+    }
+
     /// Only a plain name opens a log. A traversal, a separator, a leading dot,
     /// an empty or overlong identifier, or a character outside the set is
     /// refused, and nothing is created anywhere under the home or beside it.
@@ -1443,7 +1552,7 @@ mod tests {
     }
 
     // Catches: a reader that requires the send time, or a writer that fills
-    // it in, on a mediated crossing written by 0.4.2, which has none.
+    // it in, on a mediated crossing written by 0.4.1, which has none.
     #[test]
     fn a_crossing_written_before_the_send_time_reads_without_one() {
         let written = json!({
@@ -1454,7 +1563,7 @@ mod tests {
             "grounded": true, "licence": {"state": "unknown"},
             "principal": "os-user:test", "authentication_basis": "os_user"
         });
-        let crossing: Crossing = serde_json::from_value(written.clone()).expect("0.4.2 reads");
+        let crossing: Crossing = serde_json::from_value(written.clone()).expect("0.4.1 reads");
         assert_eq!(crossing.requested_at, None);
         assert_eq!(crossing.to_record(), written);
         let summary = summarise(&[json!({"event": "crossing_mediated", "payload": written})]);

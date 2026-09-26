@@ -717,7 +717,9 @@ fn refusal(target: &Path, others: &[crate::processes::Process]) -> String {
             "other processes run {}, and would keep running the old release beside the new \
              one:\n{}\nClose them, then run update again: quit the host app that started an MCP \
              server (commonmeasure mcp), and stop commonmeasure hosted service and commonmeasure \
-             relay.",
+             relay. A background relay installed as a login service starts again at login: \
+             remove it with commonmeasure service uninstall relay, and install it again after \
+             the update.",
             target.display(),
             running.join("\n")
         ));

@@ -27,8 +27,8 @@ mod server;
 mod tls;
 
 pub use message::{
-    CodedBody, Headers, Request, Response, read_request, read_response, write_request,
-    write_response,
+    BodyOverCeiling, CodedBody, Headers, MAX_BODY_BYTES, Request, Response, read_request,
+    read_response, write_request, write_response,
 };
 pub use server::{MAX_CONCURRENT_CONNECTIONS, SERVER_TIMEOUT, Server, ServerHandle};
 

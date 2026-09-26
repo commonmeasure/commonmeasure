@@ -21,7 +21,16 @@ const ROBOTS: &str = "License: /license.xml\nUser-agent: *\nAllow: /\n";
 /// and demands usage reporting.
 fn licence(scope: &str) -> String {
     format!(
-        r#"<rsl xmlns="https://rslstandard.org/rsl">
+        r#"<rsl xmlns="https://rslstandard.org/rsl">{}</rsl>"#,
+        prohibiting(scope)
+    )
+}
+
+/// A `<content>` entry that names `scope`, prohibits AI input and demands
+/// usage reporting.
+fn prohibiting(scope: &str) -> String {
+    format!(
+        r#"
   <content url="{scope}">
     <license>
       <prohibits type="usage">ai-input</prohibits>
@@ -30,16 +39,31 @@ fn licence(scope: &str) -> String {
       </reporting>
     </license>
   </content>
-</rsl>"#
+"#
+    )
+}
+
+/// A `<content>` entry that names `scope`, permits AI input and demands
+/// nothing.
+fn permitting(scope: &str) -> String {
+    format!(
+        r#"
+  <content url="{scope}"><license><permits type="usage">ai-input</permits></license></content>
+"#
     )
 }
 
 /// The publisher, serving `robots.txt` and a licence scoped to `scope`, and
 /// every path it was asked for.
 fn publisher(scope: &str) -> (ServerHandle, Arc<Mutex<Vec<String>>>) {
+    publishing(licence(scope))
+}
+
+/// The publisher, serving `robots.txt` and the licence `body`, and every
+/// path it was asked for.
+fn publishing(body: String) -> (ServerHandle, Arc<Mutex<Vec<String>>>) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&asked);
-    let body = licence(scope);
     let handle = Server::bind("127.0.0.1:0")
         .expect("bind")
         .spawn(move |request| {
@@ -189,4 +213,183 @@ fn an_absolute_scope_does_not_govern_another_scheme_port_or_path() {
             "{page}"
         );
     }
+}
+
+/// A relative and an absolute scope govern every spelling of a path under
+/// them: a percent-encoded unreserved character, lower-case hex, a literal
+/// `*` the scope names as `%2A`, or a fragment, on either side, leaves the
+/// licence's prohibition and reporting demand in the ruling. So does a
+/// doubled slash or an encoded `/` in the page's path, which a server may
+/// serve as the path under the scope, when no entry covers the page as
+/// parsed. An anchored scope covers a path that ends with its suffix
+/// wherever else the suffix occurs.
+#[test]
+fn a_scope_governs_every_path_spelling_of_a_page_under_it() {
+    for (scope, page) in [
+        ("/news/", "https://publisher.example/%6Eews/1"),
+        ("/news/", "https://publisher.example/%6eews/1"),
+        ("/news/", "https://publisher.example//news/1"),
+        ("/news/", "https://publisher.example/news%2F1"),
+        ("/news/", "https://publisher.example/x/..%2Fnews/1"),
+        ("/%6Eews/", "https://publisher.example/news/1"),
+        ("/*.pdf$", "https://publisher.example/a.pdf/b.pdf"),
+        ("/a/b%2Fc", "https://publisher.example/a//b%2Fc"),
+        ("/file-%2A.html", "https://publisher.example/file-*.html"),
+        (
+            "https://publisher.example/news/",
+            "https://publisher.example/%6Eews/1",
+        ),
+        (
+            "https://publisher.example/news/",
+            "https://publisher.example//news/1",
+        ),
+        (
+            "https://publisher.example/news/",
+            "https://publisher.example/news%2F1",
+        ),
+        (
+            "https://publisher.example/news/",
+            "https://publisher.example/x/..%2Fnews/1",
+        ),
+        (
+            "https://publisher.example/%6eews/",
+            "https://publisher.example/news/1",
+        ),
+        (
+            "https://publisher.example/news/#part",
+            "https://publisher.example/news/1",
+        ),
+    ] {
+        let (site, asked) = publisher(scope);
+        let declarations = before_fetch(&site, page);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["/robots.txt", "/license.xml"],
+            "{page}: the licence is read before the page"
+        );
+        assert_governed(page, scope, &declarations);
+    }
+}
+
+/// A scope names the path its author wrote: its own `//` or `%2F` is never
+/// merged or decoded, so it does not reach a page it does not name. A page's
+/// encoded `/` is decoded only to find the path a server may serve, never
+/// to widen a scope beyond that path.
+#[test]
+fn a_scope_does_not_govern_a_page_outside_the_path_it_names() {
+    for (scope, page) in [
+        ("/news/1/", "https://publisher.example/news%2F1"),
+        ("//news/", "https://publisher.example/news/1"),
+        ("/a%2Fb", "https://publisher.example/a/b"),
+        (
+            "https://publisher.example/news/1/",
+            "https://publisher.example/news%2F1",
+        ),
+        (
+            "https://publisher.example//news/",
+            "https://publisher.example/news/1",
+        ),
+    ] {
+        let (site, _) = publisher(scope);
+        let declarations = before_fetch(&site, page);
+        assert!(
+            declarations.licence_terms().is_none(),
+            "{scope} does not govern {page}: {declarations:#?}"
+        );
+    }
+}
+
+/// Where a page's readings select different entries, the entry the page as
+/// parsed selects governs: `/a//b` stays under the broad `/a/` entry and its
+/// prohibition, as up to 0.4.2, and is not moved to the narrower `/a/b`
+/// entry that permits AI input.
+#[test]
+fn the_entry_the_page_as_parsed_selects_governs_over_a_merged_reading() {
+    for (broad, narrow) in [
+        ("/a/", "/a/b"),
+        (
+            "https://publisher.example/a/",
+            "https://publisher.example/a/b",
+        ),
+    ] {
+        let body = format!(
+            r#"<rsl xmlns="https://rslstandard.org/rsl">{}{}</rsl>"#,
+            prohibiting(broad),
+            permitting(narrow)
+        );
+        let page = "https://publisher.example/a//b";
+        let (site, _) = publishing(body);
+        assert_governed(page, broad, &before_fetch(&site, page));
+    }
+}
+
+/// A scope governs a page that decoding `%2F`, merging `/` and resolving
+/// dot segments reach in any order: nginx serves `/x//..%2Fnews/1` as
+/// `/news/1`, merging before it resolves, so the `/news/` entry's
+/// prohibition and reporting demand bind where no entry covers the page as
+/// parsed. A merging proxy in front of a server that decodes and resolves
+/// reaches `/a/news/1` from `/a/b//..%2F%2F..%2Fnews/1`.
+#[test]
+fn a_scope_governs_a_page_any_order_of_the_operations_reaches() {
+    for (scope, page) in [
+        ("/news/", "https://publisher.example/x//..%2Fnews/1"),
+        ("/x/news/", "https://publisher.example/x//..%2Fnews/1"),
+        (
+            "/a/news/",
+            "https://publisher.example/a/b//..%2F%2F..%2Fnews/1",
+        ),
+        (
+            "https://publisher.example/news/",
+            "https://publisher.example/x//..%2Fnews/1",
+        ),
+    ] {
+        let (site, asked) = publisher(scope);
+        let declarations = before_fetch(&site, page);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["/robots.txt", "/license.xml"],
+            "{page}: the licence is read before the page"
+        );
+        assert_governed(page, scope, &declarations);
+    }
+}
+
+/// A scope governs a page that stripping `;` path parameters or reading
+/// `%5C` as `/` brings under it, as Tomcat serves `/news;x/1` and IIS reads
+/// `/news%5C1` as `/news/1`, where no entry covers the page as parsed. An
+/// encoded `;` is read as `;` and stripped, as nginx in front of Tomcat
+/// serves `/news%3Bx/1` as `/news/1`.
+#[test]
+fn a_scope_governs_a_page_a_stripped_parameter_or_a_decoded_backslash_reaches() {
+    for page in [
+        "https://publisher.example/news;x/1",
+        "https://publisher.example/x/..;/news/1",
+        "https://publisher.example/news%5C1",
+        "https://publisher.example/news%3Bx/1",
+    ] {
+        let (site, asked) = publisher("/news/");
+        let declarations = before_fetch(&site, page);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["/robots.txt", "/license.xml"],
+            "{page}: the licence is read before the page"
+        );
+        assert_governed(page, "/news/", &declarations);
+    }
+}
+
+/// Where no entry covers the page as parsed, the first reading in
+/// breadth-first order that selects an entry governs: `/x//..%2Fnews/1`
+/// reaches `/x/news/1` in two steps (decode, then resolve) and `/news/1`
+/// in three (decode, merge, resolve), so `/x/news/` governs over `/news/`.
+#[test]
+fn the_entry_the_nearest_reading_selects_governs_over_a_farther_one() {
+    let body = format!(
+        r#"<rsl xmlns="https://rslstandard.org/rsl">{}{}</rsl>"#,
+        permitting("/news/"),
+        prohibiting("/x/news/"),
+    );
+    let page = "https://publisher.example/x//..%2Fnews/1";
+    let (site, _) = publishing(body);
+    assert_governed(page, "/x/news/", &before_fetch(&site, page));
 }

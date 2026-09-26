@@ -85,6 +85,90 @@ counts the part ([session evidence](session-evidence.md#crossing),
 The input schema sets `additionalProperties: false`. The server does not
 enforce it: an argument it does not know is ignored.
 
+### A fetched file
+
+A PDF is fetched as any page is (host policy, `robots.txt`, the licence,
+pacing, the private-address floor, redirects and the crossing) and is never
+decoded as text. The harness's own tools read it
+(`crates/commonmeasure-harness/src/fetched_file.rs`).
+
+- **Which bodies are files.** A body starting `%PDF-`, whatever its
+  `Content-Type`, and one labelled `application/pdf`, is a PDF. A body
+  labelled `image/*`, `audio/*`, `video/*`, `font/*`, `model/*`,
+  `application/octet-stream`, an archive type (`application/zip`, any
+  `+zip` type, gzip, tar, bzip2, xz, zstd, 7z, rar, jar), `application/wasm`,
+  `application/rtf` or an office document type (`application/msword`,
+  `application/vnd.ms-*`, OpenXML, OpenDocument) is a file this edge does
+  not deliver. Every other body, including one with no `Content-Type`, is
+  text, delivered as [the parts of a fetch](#the-parts-of-a-fetch) describe.
+- **Whole, in one call.** A PDF has no parts. A call naming an `offset`
+  above 0 or any `max_chars` for a PDF is refused with the reason, after the
+  request (the type is known only from the answer); nothing is kept.
+- **The bound.** One fetch reads at most 33,554,432 bytes (32 MiB,
+  `commonmeasure_http::MAX_BODY_BYTES`). A larger body is unavailable: the
+  error names the size where the origin declared it in `Content-Length`,
+  and the edge stops reading at the bound. A declared size over the bound
+  is refused before any of the body is read.
+- **Another file.** An image or another listed type is an error starting
+  `unavailable:` that names the media type. Nothing of the body is kept.
+- **Not screened.** The PII detector and the injection screen rule on text,
+  and the edge does not read a PDF, so they give no verdict on it. Each
+  records a processor invocation with a `capability_unavailable` gap. Under
+  `policy_mode` `strict`, which refuses on those screens' findings, a PDF is
+  an error starting `unavailable:` that names the setting; nothing is kept
+  and the crossing is recorded as refused with `content_type` and
+  `content_hash`. This includes a body served as `text/html` that starts
+  `%PDF-`. Under `observe` (the default) and `prefer` the PDF is delivered
+  with a `breach` naming the two screens, in the result and on the crossing,
+  and the crossing's `delivered_file.statement` says the screens did not run
+  (`docs/FAIL-POLICY.md` §6).
+
+On a local (stdio) edge the PDF is saved as
+`<home>/sessions/<session>.files/<sha256>.pdf`: the directory 0700, the file
+0600, whatever the umask. A second fetch of the same bytes reuses the file.
+The result is one text block whose JSON carries:
+
+```json
+{
+  "url": "https://example.org/paper.pdf", "content_type": "application/pdf",
+  "bytes": 482113, "sha256": "9f…", "content_hash": "sha256:9f…",
+  "retrieved_hash": "sha256:9f…", "path": "/home/operator/.commonmeasure/sessions/<session>.files/9f….pdf",
+  "read": "Common Measure saved this PDF without reading it: read the file at path with your own file tools.",
+  "http_status": 200, "licence": {"state": "unknown"}, "declarations": {…},
+  "policy": "…",
+  "breach": "The PII detector did not rule: the body is a PDF, which the edge does not read. The injection screen did not rule: …",
+  "named_by": "agent",
+  "content_telemetry_id": null, "allowance": null, "recorded_in": "…"
+}
+```
+
+`path` is absolute. `sha256` is the bare hex digest that names the file;
+`content_hash` is the same digest in the `sha256:` form. There is no
+`content`, `content_range`, `truncated` or `estimated_tokens`. A file that
+cannot be saved is an `unavailable:` error, and the crossing is recorded as
+refused.
+
+The files stay with the session log they sit beside. Nothing in the
+product deletes a session log or its files; an operator removing a
+session's log removes `<session>.files/` with it.
+
+On a hosted edge, which shares no file system with the harness, the result
+has two content blocks: the same JSON as text, without `path`, and an MCP
+embedded resource:
+
+```json
+{"type": "resource",
+ "resource": {"uri": "https://example.org/paper.pdf", "mimeType": "application/pdf",
+              "blob": "JVBERi0xLjcK…"}}
+```
+
+`uri` is the URL as asked and `blob` the bytes in standard base64. The
+result also carries the JSON as `structuredContent`, which the revisions a
+hosted edge serves (2025-06-18 and 2025-11-25) define. The boundary rewrite
+that names the operator home relative to itself leaves `blob` and `uri`
+as they are, since base64 can spell a path by chance, and the served bytes
+still hash to the recorded `content_hash`.
+
 ### The hosted path
 
 The same server, served over HTTP to the hosts that reach an MCP server
@@ -118,9 +202,11 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
   A body that is not JSON is not sent. The fields that carry what a
   supplier sent are served as received: a fetch's `content`, `url` and
   `next` and its `declarations.robots` `requested_url`, `robots_url` and
-  `final_url`, and a search result's `url`, `title` and `text` and a
-  refused result's `url`. A page that quotes the operator home reaches the
-  tenant as sent and still matches its `content_hash`. Every other string
+  `final_url`, a search result's `url`, `title` and `text` and a
+  refused result's `url`, the same fields in a fetched file's
+  `structuredContent`, and the file's resource `blob` and `uri`
+  ([a fetched file](#a-fetched-file)). A page that quotes the operator
+  home reaches the tenant as sent and still matches its `content_hash`. Every other string
   is rewritten, including `declarations.robots.explanation`, which quotes
   the asked URL. An
   internal corpus kept under the home is served by its full `file://` URLs.
@@ -174,8 +260,10 @@ another process holds `~/.commonmeasure/hosted-service.lock` (created
 readable by the owner only), and it holds
 the private-address floor whatever the policy says: `allow_private_hosts`
 and `record_internal_prefixes`
-([`docs/contracts/source-policy.md`](source-policy.md) §Fields) admit no loopback,
-private, link-local or `.internal` address, `context_status` reports
+([`docs/contracts/source-policy.md`](source-policy.md) §Fields) admit no private
+address ([§Recording](source-policy.md#recording)), a tailnet's
+`100.64.0.0/10` and a fake-IP proxy's `198.18.0.0/15` among them,
+`context_status` reports
 `policy.private_floor: "held"`, and the refusal says no policy setting lifts
 it. On its interval it ends idle sessions, refreshes managed policy, runs the
 relay ([`docs/contracts/policy-envelope.md`](policy-envelope.md) §Cadence
@@ -268,7 +356,21 @@ The binary writes, checks and removes its own registration with a host
 |---|---|---|---|
 | `commonmeasure install <host> [--binary PATH]` | the five hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; the state file is written first and restored if the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured), naming the binary, `mcp --host codex`, and `default_tools_approval_mode = "approve"`, without which Codex asks before every call and its non-interactive runs refuse the tools; the table is read by the Codex CLI, the ChatGPT desktop app and the Codex IDE extension | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
 | `commonmeasure uninstall <host>` | exactly those entries removed; every other key keeps its value | exactly that table removed; every other table, key and comment kept byte for byte | the extension and its directory removed |
-| `commonmeasure doctor [<host>]` | per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration), whether the sessions directory is writable, whether the policy file loads | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
+| `commonmeasure doctor [<host>] [--resolve <name>]` | with `--resolve`, the addresses a name resolves to and whether the privacy floor calls them private, naming a fake-IP proxy's or a tailnet's range; per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration), whether the sessions directory is writable, whether the policy file loads | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
+
+Every host file these commands write, for every host below as well, is
+replaced whole: a temporary file of the writer's own beside it, renamed over
+the old one, so a host reading the file mid-write sees the old bytes or the
+new ones. The replacement keeps the mode the file had, set on the temporary
+file before a byte is written, and a file the command creates is readable by
+its owner only, because a host file can hold another MCP server's key. The
+owner and the group are not kept: the replacement belongs to the user who
+ran the command and takes the writer's group, so a run under `sudo` leaves a
+file root owns where `sudo` keeps `HOME`, as macOS's default sudoers does;
+on most Linux distributions `sudo` sets `HOME=/root` and writes root's own
+files. A host file that is a symbolic link is replaced by a regular file
+with the mode of the file the link named, and that file is left as it was
+(`crates/commonmeasure-runtime/src/declaration.rs` `replace_keeping_mode`).
 
 Before the per-host lines, `doctor` prints the relay's delivery state for the
 operator home: queued, dead and delivered batches; the last delivery from
@@ -277,15 +379,21 @@ operator home: queued, dead and delivered batches; the last delivery from
 its origin alone, only where it does not reach the configured one the egress
 lines already name ([telemetry projection §One receiver](telemetry-projection.md#one-receiver));
 and whether
-the relay runs without a person. That last line is `at each Claude Code
-session end` only where `relay.json` names a receiver, the marker file
-`relay/manual` is absent, and a Claude Code registration that fires the
-`SessionEnd` hook is in place — its own entry in the settings file or an
-enabled plugin that loads. Otherwise it is `off` with the first of those that
-does not hold, and where the marker is the cause it adds that a source whose
-licence demands usage reporting is refused while the marker is there
+the relay runs without a person. That last line names each carrier in force
+where `relay.json` names a receiver and the marker file `relay/manual` is
+absent: `at each Claude Code session end` where a Claude Code registration
+that fires the `SessionEnd` hook is in place — its own entry in the settings
+file or an enabled plugin that loads — and the hosted service's or the
+background relay's interval while that process holds its lock on the home,
+either of which relays every session whatever its host. Otherwise it is
+`off` with the first of those that does not hold, `unknown` where a lock
+cannot be read, and where the marker is the cause it adds that a source
+whose licence demands usage reporting is refused while the marker is there
 ([`docs/contracts/session-evidence.md`](session-evidence.md) §Source
-declarations).
+declarations). A `background relay:` line above it says whether a
+background relay holds the home, with its pid and interval, and `status`
+prints the same as `background relay`
+([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval)).
 
 Two more hosts take the same commands. `install claude-desktop` writes one
 `mcpServers.commonmeasure` entry (the binary's absolute path, `mcp --host
@@ -436,10 +544,15 @@ no other host's install sends the event, a mediated session under any
 `--host` word but `claude-code`, or under `claude-code` from a client that
 does not announce itself as `claude-code` (Goose, registered by hand with no
 `--host`, is one), has no automatic delivery, and a licence's reporting
-demand is unmet and refused there, unless a running `hosted service` holds
-the same home and relays it on its interval
+demand is unmet and refused there, unless a running `hosted service` or
+background relay holds the same home and relays it on its interval
 ([`docs/contracts/session-evidence.md`](session-evidence.md) §Source
-declarations). A host
+declarations). The background relay is `commonmeasure relay --every
+<seconds>`, which `commonmeasure service install relay` runs at login on
+macOS ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval));
+it is how a Claude Desktop session delivers with nobody running a command.
+`install claude-desktop` prints one line saying so and naming the command,
+and installs nothing: starting unattended egress is the operator's act. A host
 that runs Claude Code's `SessionEnd` command from its hook files is
 refused or accepted by the rules below, as at the other four events.
 
@@ -675,7 +788,8 @@ its own contract in this directory.
 - **The relay is the only egress.** `commonmeasure relay` sends cleared records
   to a receiver the operator configured and refuses to run without one; on a
   local edge the session-end hook starts the same command when a session ends,
-  and the hosted service runs it on its interval, unless the operator wrote
+  and the hosted service and the background relay (`relay --every`) run it
+  on their interval, unless the operator wrote
   the `relay/manual` marker
   ([`docs/GLOSSARY.md`](../GLOSSARY.md) §Relay). Records leave only under a scope with a named
   governing engagement and explicit clearance ([`docs/contracts/telemetry-projection.md`](telemetry-projection.md) §Selected coverage).
@@ -704,7 +818,10 @@ its own contract in this directory.
   ([session evidence](session-evidence.md#acquisition-handles)) before
   fetching, fetch through durable acquisition handles, and submit hash-only
   context and output observations. The edge appends them to the same session
-  file as the crossings. Loopback sources used this way stay private under
+  file as the crossings. A context observation of a delivered file names the
+  file's `content_hash` from the fetch result, the SHA-256 of the bytes
+  handed over; the edge refuses any other hash with `-32602`
+  ([session evidence](session-evidence.md#context-entry-observations)). Loopback sources used this way stay private under
   the relay's address floor.
 
 ## 6. Verification state of each path
@@ -748,6 +865,7 @@ defines and are never collapsed.
 | ChatGPT on the web, observed | `fixture-tested` | `browser/test/parse.test.js` holds the stream parser to the assertions of the Rust parser it was ported from, over a compact stream in the shape ChatGPT sends, and asserts it produces the message `crates/commonmeasure-cli/tests/browser_e2e.rs` feeds the real binary over native messaging framing; no ChatGPT turn has been recorded through the extension |
 | Google AI Overviews, observed | `planned` | the message path is the one `crates/commonmeasure-cli/tests/browser_e2e.rs` drives; on the live results page the overview's links are opaque `/goto?url=` tokens that name no destination, so the page reader finds no source and records nothing |
 | Bing Copilot Search, observed | `fixture-tested` | the message path is driven by `crates/commonmeasure-cli/tests/browser_e2e.rs`; the page reader has no committed test; one search on `bing.com/search` on an operator machine recorded five observed crossings from the Copilot answer through Chrome, which is the operator's record and not committed |
+| Background relay (`relay --every`, `service install relay`) | `fixture-tested` | `crates/commonmeasure-cli/tests/mediated_e2e.rs` and `relay_e2e.rs` run the real binary's loop against a loopback receiver: a Claude Desktop session refused without it and admitted with it, delivery on its next tick with no command run, one loop per home, SIGTERM, `doctor` and `status` in each state, and a session end racing it with each event posted once; the LaunchAgent is tested against a recorded `launchctl` (`crates/commonmeasure-cli/src/service.rs`), not a real launchd |
 | Hosted edge, transport and resource server (`hosted serve`, `hosted service`) | `fixture-tested` | `crates/commonmeasure-cli/tests/hosted_mcp.rs` drives the real binary over HTTP against a loopback origin and a loopback issuer that serves a JWKS and signs tokens: a fetch recorded under the subject, two concurrent sessions, the refusal table, fifteen token checks refused by name, a revoked and a bound edge token; `crates/commonmeasure-cli/tests/hosted_service.rs` runs the service against a loopback hub: the three refusals to start and the locked home, five private addresses refused under a managed policy that admits them, the relay and the key refresh on the interval with no command run |
 | Claude custom connector (`/mcp/claude-connector`), mediated | `planned` | no `initialize` from the host is recorded; which `Origin` and `clientInfo` it sends is unknown until one is |
 | ChatGPT (`/mcp/chatgpt`), mediated | `planned` | the same |

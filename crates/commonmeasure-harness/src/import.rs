@@ -341,6 +341,8 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
                 retrieved_hash: None,
                 estimated_tokens: tokens,
                 delivered: None,
+                content_type: None,
+                delivered_file: None,
                 grounded,
                 licence: LicenceState::Unknown,
                 refusal: None,

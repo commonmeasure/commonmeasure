@@ -17,9 +17,9 @@ terms such as crossing, host and edge are in [`docs/GLOSSARY.md`](../GLOSSARY.md
 
 You need `commonmeasure` 0.4.0 or later on `PATH`
 ([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). The release download and
-`commonmeasure --version` were checked on 0.4.1 on macOS (Apple silicon). The integration commands below were run on 0.4.0
+`commonmeasure --version` were checked on 0.4.2 on macOS (Apple silicon). The integration commands below were run on 0.4.0
 with loopback servers standing in for the web; they were not rerun for
-0.4.1.
+0.4.1 or 0.4.2.
 
 ## 1. A host the binary already knows
 
@@ -65,7 +65,9 @@ commonmeasure mcp --host claude-code --session <your session id>
 It offers `context_fetch`, `context_search`, `context_status` and
 `context_enrol`. To try it without a host, use a throwaway operator home,
 serve a page on loopback and allow the edge to reach private addresses,
-which it refuses by default:
+which it refuses by default
+([source policy §Recording](../contracts/source-policy.md#recording) says
+which addresses are private, and how to allow a single tailnet host):
 
 ```sh
 export COMMONMEASURE_HOME=$(mktemp -d)
@@ -220,8 +222,11 @@ That is the `content_hash` the hook recorded for the crossing.
 
 A source whose licence demands usage reporting is admitted only where the
 session's events leave without anyone running a command. Among local hosts
-that is Claude Code alone, through its `session-end` hook; a session under
+on their own, that is Claude Code alone, through its `session-end` hook; a session under
 `--host claude-code` whose `clientInfo` name is not `claude-code` does not
 count. Elsewhere such a source is refused unless `commonmeasure hosted
-service` runs on the same home ([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
+service` or a background relay (`commonmeasure relay --every`, or
+`commonmeasure service install relay` on macOS) runs on the same home. In
+every case the session's policy scope must clear telemetry egress and
+`relay.json` must name a receiver not scoped to suppliers ([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
 §Source declarations).

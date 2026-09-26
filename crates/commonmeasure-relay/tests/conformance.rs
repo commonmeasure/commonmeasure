@@ -603,6 +603,105 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
     )
     .batches;
 
+    // A session that fetched a PDF: the file handed over unread projects a
+    // retrieval naming it as a file and no grounding, and a PDF `strict`
+    // refused is counted and nothing else.
+    let pdf = |minute: u8, event: &str, url: &str| {
+        let mut record = json!({
+            "event": event,
+            "payload": {
+                "timestamp": format!("2026-09-26T14:{minute:02}:00.500Z"),
+                "mode": "mediated",
+                "host": "claude-code",
+                "url": url,
+                "http_status": 200,
+                "content_type": "application/pdf",
+                "grounded": false,
+                "licence": {"state": "unknown"},
+            },
+        });
+        if event == "crossing_mediated" {
+            let payload = record["payload"].as_object_mut().unwrap();
+            let hash = "sha256:5d1c0e2b7a9f38e46c2d1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a098f7e6d5";
+            payload.insert("content_hash".to_owned(), json!(hash));
+            payload.insert("retrieved_hash".to_owned(), json!(hash));
+            payload.insert(
+                "delivered_file".to_owned(),
+                json!({"via": "local_file", "bytes": 482113,
+                       "statement": "delivered as a file, not read by the edge; the PII detector and the injection screen did not run over it"}),
+            );
+            payload.insert(
+                "breach".to_owned(),
+                json!("The PII detector did not rule: the body is a PDF, which the edge does not read. The injection screen did not rule: the body is a PDF, which the edge does not read."),
+            );
+        } else {
+            record["payload"]["refusal"] =
+                json!("policy_mode strict refuses a file the screens cannot read");
+        }
+        record
+    };
+    let file = commonmeasure_relay::project::project_session(
+        None,
+        "golden-session-file",
+        &[
+            pdf(
+                0,
+                "crossing_mediated",
+                "https://publisher.example.org/report.pdf",
+            ),
+            pdf(
+                1,
+                "crossing_refused",
+                "https://publisher.example.org/annex.pdf",
+            ),
+        ],
+        &[],
+        &|_| true,
+    )
+    .batches;
+
+    // A page fetched in two parts: each grounding carries the hash of the
+    // part its fetch result delivered, the text its count covers, and not
+    // the hash of the whole text both crossings record.
+    let part = |minute: u8, offset: u64, hash: &str| {
+        json!({
+            "event": "crossing_mediated",
+            "payload": {
+                "timestamp": format!("2026-09-26T15:{minute:02}:00.500Z"),
+                "mode": "mediated",
+                "host": "claude-code",
+                "url": "https://www.example.org/long-report",
+                "http_status": 200,
+                "grounded": true,
+                "content_hash":
+                    "sha256:137404ede7bb3670d8e62aaffb9d49aa331692e1bc3cb71f4fa9841408eccb22",
+                "delivered": {"offset": offset, "chars": 60000, "total_chars": 120000, "hash": hash},
+                "estimated_tokens": 15000,
+                "token_basis": "characters/4",
+                "licence": {"state": "unknown"},
+            },
+        })
+    };
+    let parts = commonmeasure_relay::project::project_session(
+        None,
+        "golden-session-parts",
+        &[
+            part(
+                0,
+                0,
+                "sha256:5f9e269793aba63856b018c0d96ab41d31b5800cdae747bc4b6a5f69e75d09b9",
+            ),
+            part(
+                1,
+                60000,
+                "sha256:1b874413524a42b9ea4e5d7162efb5e8f4673f88aae117ee2012221382a90c6f",
+            ),
+        ],
+        &[],
+        &|_| true,
+    )
+    .batches;
+
     let [turn_batch] = <[_; 1]>::try_from(turns).expect("one turn batch");
     let [session_batch] = <[_; 1]>::try_from(session).expect("one session batch");
     let [run_batch] = <[_; 1]>::try_from(run).expect("one run batch");
@@ -610,6 +709,13 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
     let [supplied_run_batch] = <[_; 1]>::try_from(supplied_run).expect("one supplied run batch");
     let [refused_batch] = <[_; 1]>::try_from(refused).expect("one refused session batch");
     let [paced_batch] = <[_; 1]>::try_from(paced).expect("one paced session batch");
+    let [file_batch] = <[_; 1]>::try_from(file).expect("one file session batch");
+    let [parts_batch] = <[_; 1]>::try_from(parts).expect("one parts session batch");
+    assert_eq!(
+        (file_batch.events.len(), file_batch.refused),
+        (1, Some(1)),
+        "the delivered file is retrieved and not grounded; the refused one is counted"
+    );
     assert_eq!(
         paced_batch
             .events
@@ -634,6 +740,8 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
         ("session-refused.json", refused_batch),
         ("session-registered.json", registered_batch),
         ("session-paced.json", paced_batch),
+        ("session-file.json", file_batch),
+        ("session-parts.json", parts_batch),
     ]
 }
 

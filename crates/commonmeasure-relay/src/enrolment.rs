@@ -467,8 +467,9 @@ fn pin_signer(
     // Through a temporary file of this writer's own and a rename, so a
     // synchronisation reading the file mid-write sees the old deployment or
     // the new one, and two `connect --managed` runs cannot rename each
-    // other's file away.
-    commonmeasure_harness::declaration::replace(&path, &encoded)
+    // other's file away. Owner-only: the policy URL is the hub signer's to
+    // name, and a signer can name one that carries a credential.
+    commonmeasure_harness::declaration::replace_private(&path, &encoded)
         .map_err(|error| format!("cannot replace {}: {error}", path.display()))?;
     if let Err(refused) = Deployment::read(home) {
         let _ = std::fs::remove_file(&path);
@@ -1516,13 +1517,10 @@ mod tests {
         );
     }
 
-    /// Two `connect --managed` runs at once each pin the signer. Each writes
-    /// `deployment.json` through its own temporary file, so neither renames
-    /// the other's away or reads back the other's half-written file.
-    #[test]
-    fn concurrent_pins_each_land_whole() {
-        let home = tempfile::tempdir().unwrap();
-        let enrolled = |n: usize| Enrolled {
+    /// A managed enrolment whose answer carries the signer, so pinning
+    /// needs no hub. `n` varies the signer's key id and its length.
+    fn enrolled(n: usize) -> Enrolled {
+        Enrolled {
             organization: EnrolledOrganization {
                 id: "org-1".to_owned(),
                 name: "Org".to_owned(),
@@ -1544,7 +1542,35 @@ mod tests {
                 policy_path: Some("/api/v1/policy".to_owned()),
                 policy_url: None,
             }),
-        };
+        }
+    }
+
+    /// EGR-143. Catches: `deployment.json` written under the umask; it holds
+    /// the policy URL, which a hub's signer may name with a credential.
+    #[cfg(unix)]
+    #[test]
+    fn a_pinned_deployment_is_owner_only() {
+        crate::test_umask::under_umask_022(
+            "enrolment::tests::a_pinned_deployment_is_owner_only",
+            || {
+                use std::os::unix::fs::PermissionsExt as _;
+                let home = tempfile::tempdir().unwrap();
+                pin_signer(home.path(), "https://hub.example", &enrolled(0)).unwrap();
+                let mode = std::fs::metadata(Deployment::path(home.path()))
+                    .unwrap()
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o600);
+            },
+        );
+    }
+
+    /// Two `connect --managed` runs at once each pin the signer. Each writes
+    /// `deployment.json` through its own temporary file, so neither renames
+    /// the other's away or reads back the other's half-written file.
+    #[test]
+    fn concurrent_pins_each_land_whole() {
+        let home = tempfile::tempdir().unwrap();
         let failures = std::sync::Mutex::new(Vec::new());
         std::thread::scope(|scope| {
             for n in 0..4 {

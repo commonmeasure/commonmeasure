@@ -421,3 +421,123 @@ fn an_approval_renewed_after_expiry_clears_evidence_on_the_next_relay() {
     assert!(urls.iter().any(|url| url == FIXTURE_URL), "{urls:?}");
     assert!(ids.values().all(|&times| times == 1), "{ids:?}");
 }
+
+/// A licence whose reporting demand this runtime can meet: grounding
+/// conformance through the Content Telemetry profile.
+const REPORTING_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
+  <content url="/"><license>
+    <permits type="usage">ai-input</permits>
+    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur">
+      <![CDATA[{"conformance_level": "grounding"}]]>
+    </reporting>
+  </license></content></rsl>"#;
+
+/// Review P2-A, on a managed, directory-selected home. A Claude Code MCP
+/// server started while a signed approval cleared its directory rules a
+/// reporting demand met; once that approval expires, with the server still
+/// running, the next demand is refused, because the relay would withhold
+/// the crossing's events. The approval lives two seconds; the hub serves no
+/// renewal.
+#[test]
+fn a_reporting_demand_is_refused_once_the_approval_the_server_started_under_expires() {
+    let hub = Hub::start();
+    let home = tempfile::tempdir().expect("home");
+    let root = tempfile::tempdir().expect("root");
+    hub.enrol_managed(home.path());
+    let project =
+        Registry::enrol(home.path(), root.path(), "Expiry test", true).expect("selection");
+    // A relay run applies the hub's policy, under which alone an approval
+    // is honoured.
+    relay_ok(home.path());
+    let lifetime = Duration::from_secs(3);
+    let short = signed_approvals(
+        &hub,
+        home.path(),
+        1,
+        json!([{"project_id": project.id, "binding": project.binding}]),
+        chrono::Duration::from_std(lifetime).expect("duration"),
+    );
+    let expires = Instant::now() + lifetime;
+    commonmeasure_harness::directory::accept(home.path(), &short).expect("valid signed snapshot");
+    let cwd = root.path().canonicalize().expect("canonical root");
+    assert!(
+        commonmeasure_harness::policy::SessionPolicy::load(home.path(), cwd.to_str())
+            .expect("policy")
+            .allows_telemetry_egress(),
+        "the approval clears the directory"
+    );
+
+    let site = Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(|request| match request.target.as_str() {
+            "/robots.txt" => {
+                Response::text(200, "License: /license.xml\nUser-agent: *\nAllow: /\n")
+            }
+            "/license.xml" => Response::new(200, REPORTING_LICENCE.as_bytes().to_vec()),
+            "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+            _ => Response::text(200, "the reported article"),
+        })
+        .expect("spawn");
+    let mut server = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["mcp", "--host", "claude-code", "--session", "expiry"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .env("HOME", home.path())
+        .current_dir(&cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the server starts");
+    let mut stdin = server.stdin.take().expect("stdin");
+    let mut stdout = BufReader::new(server.stdout.take().expect("stdout"));
+    let mut ask = |request: Value| -> Value {
+        writeln!(stdin, "{request}").expect("write request");
+        let mut line = String::new();
+        stdout.read_line(&mut line).expect("a response");
+        serde_json::from_str(&line).expect("one JSON object per line")
+    };
+    ask(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                          "clientInfo": {"name": "claude-code", "version": "1"}}}));
+    let mut fetch = |id: u64, page: &str| {
+        ask(json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                   "params": {"name": "context_fetch",
+                              "arguments": {"url": format!("{}/{page}", site.url())}}}))
+    };
+    let reporting = |index: usize| {
+        commonmeasure_harness::SessionLog::read(&home.path().join("sessions/expiry.ndjson"))
+            .expect("session log")
+            .into_iter()
+            .filter(|record| {
+                record["event"]
+                    .as_str()
+                    .is_some_and(|event| event.starts_with("crossing_"))
+            })
+            .nth(index)
+            .expect("the crossing")["payload"]["declarations"]["reporting"]
+            .clone()
+    };
+
+    let approved = fetch(1, "approved");
+    assert_eq!(approved["result"]["isError"], false, "{approved}");
+    assert_eq!(reporting(0)["met"], true, "{}", reporting(0));
+
+    std::thread::sleep(
+        expires.saturating_duration_since(Instant::now()) + Duration::from_millis(200),
+    );
+    let expired = fetch(2, "expired");
+    assert_eq!(expired["result"]["isError"], true, "{expired}");
+    assert_eq!(reporting(1)["met"], false);
+    assert_eq!(reporting(1)["telemetry_egress_cleared"], false);
+    let reason = reporting(1)["reason"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        reason.contains("as it stands now clears no telemetry egress"),
+        "{reason}"
+    );
+
+    drop(stdin);
+    assert!(server.wait().expect("the server exits").success());
+}

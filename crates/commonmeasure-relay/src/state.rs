@@ -758,43 +758,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn state_files_are_owner_only_and_never_staged_through_a_leftover() {
-        under_umask_022(
+        crate::test_umask::under_umask_022(
             "state::tests::state_files_are_owner_only_and_never_staged_through_a_leftover",
             state_files_are_owner_only_and_never_staged_through_a_leftover_body,
-        );
-    }
-
-    /// Runs `body` in a child of this test binary whose umask is 022, set
-    /// between fork and exec, and asserts that the child ran the one test
-    /// `name` and passed. An owner-only assertion passes whatever mode the
-    /// writer asks for under a umask that already masks 066, such as 077.
-    #[cfg(unix)]
-    fn under_umask_022(name: &str, body: impl FnOnce()) {
-        use std::os::unix::process::CommandExt as _;
-        const CHILD: &str = "COMMONMEASURE_TEST_UMASK_CHILD";
-        if std::env::var_os(CHILD).is_some_and(|test| test == name) {
-            body();
-            return;
-        }
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        child
-            .args(["--exact", name, "--test-threads=1"])
-            .env(CHILD, name);
-        // SAFETY: `umask` is async-signal-safe and changes only the child's
-        // own process state, between fork and exec.
-        unsafe {
-            child.pre_exec(|| {
-                libc::umask(0o022);
-                Ok(())
-            });
-        }
-        let output = child.output().unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(output.status.success(), "{stdout}{stderr}");
-        assert!(
-            stdout.contains("test result: ok. 1 passed"),
-            "the child did not run exactly one test: {stdout}"
         );
     }
 

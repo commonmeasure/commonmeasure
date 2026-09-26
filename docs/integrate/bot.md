@@ -20,6 +20,53 @@ The product token is `CommonMeasureBot`. The edge obeys `User-agent`,
 `Allow` and `Disallow`, in every policy mode, and honours `Crawl-delay`.
 Where no group names it, the `*` group applies.
 
+How a path is matched against your rules:
+
+- Percent-encodings are compared in one spelling, on the URL and on your
+  rule alike: an encoded unreserved character is decoded and hex case does
+  not matter. `Disallow: /private/` refuses `/%70rivate/staff`.
+- Your rule is read as you wrote it. Its slashes are never merged, its
+  `%2F` is never read as `/`, its `%3B` is never read as `;` and its `;` is
+  never stripped, so `Disallow: //` refuses only a page whose path, or a
+  reading of it, starts with a doubled slash.
+- The page's path is read as requested and as every path four operations
+  reach from it, in any order and including only some of them: `%2F` or
+  `%5C` read as `/` and `%3B` read as `;`, each run of `/` read as one, `.`
+  and `..` segments resolved, and each segment's `;` path parameters
+  removed. Servers differ in which they apply and in what order: nginx
+  serves `/x//..%2Fprivate/staff` as `/private/staff`, Tomcat serves
+  `/private;x=1/staff` and `/x/..;/private/staff` as `/private/staff`,
+  nginx in front of Tomcat serves `/private%3Bx/staff` as `/private/staff`
+  when `proxy_pass` names a URI, and others serve `//private/staff` or
+  `/private%2Fstaff` as `/private/staff`. An encoded `;` (`%3B`, either
+  case) is read as `;`, as a proxy that decodes the path before a Java
+  server does, and then stripped. A `Disallow` that any reading reaches
+  refuses the page. An `Allow` reached by one reading does not lift that
+  `Disallow`: under `Disallow: /` and `Allow: /news/`, `//news/1` is
+  refused. Readings are capped at 64, and a crafted path can reach the cap;
+  a page past it is refused without comparing them.
+- A literal `*` or `$` in a URL is matched by `%2A` or `%24` in your rule
+  (RFC 9309 §2.2.3): `Disallow: /file-%2A.html` refuses `/file-*.html`. A
+  final `$` anchors the end of the path: `Disallow: /*.pdf$` refuses
+  `/a.pdf/b.pdf`.
+- `Content-Usage` path rules and the `url` of an RSL `<content>` entry are
+  matched the same way. Where the readings of a page fall under different
+  `<content>` entries, the entry that covers the page as requested governs;
+  where none does, the entry the fewest operations reach. So an entry
+  covers these spellings only where no other entry of the licence covers
+  the URL as requested, and the requested spelling can select a less
+  restrictive entry: beside a catch-all `/` entry, `//premium/x` is
+  governed by `/` and not by a `/premium/` entry, and under a permissive
+  `/news/free/` entry, `/news/free/..%2Fpaid/x` is governed by
+  `/news/free/` and not by `/news/`.
+
+Some spellings are not matched. A query your rule writes with a raw
+reserved character (`Disallow: /go?u=https://x`) does not match the URL's
+encoded `?u=https%3A%2F%2Fx`. An empty query is kept, so `/news?` is not
+under `Disallow: /news$`. A change of letter case is not read: a server on
+a case-insensitive file system or IIS serves `/NEWS/1` as `/news/1`, and
+`Disallow: /news/` does not cover it.
+
 ```text
 User-agent: CommonMeasureBot
 Disallow: /private/

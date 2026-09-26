@@ -9,7 +9,7 @@ section: get-started
 
 From the installer to an operator console showing the first crossing your
 own agent made. Only §8 needs a checkout or a toolchain. The release
-downloads and version checks in §1 were run against release 0.4.1 on macOS
+downloads and version checks in §1 were run against release 0.4.2 on macOS
 (Apple silicon), from empty home directories. The remaining walkthrough
 commands and quoted output were checked on 0.4.0; the update and
 login-service instructions require 0.4.2. Terms such as crossing, run,
@@ -77,15 +77,15 @@ commands that install it into Claude Code:
 
 ```sh
 curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs \
-  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/install.sh
-sh /tmp/commonmeasure-release/install.sh --tag v0.4.1 --plugin ~/commonmeasure-plugin
+  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/install.sh
+sh /tmp/commonmeasure-release/install.sh --tag v0.4.2 --plugin ~/commonmeasure-plugin
 ```
 
 To check a download by hand, fetch `SHA256SUMS` beside it:
 
 ```sh
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/SHA256SUMS
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/commonmeasure-darwin-arm64
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/SHA256SUMS
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/commonmeasure-darwin-arm64
 shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
@@ -192,7 +192,9 @@ launchd. A process whose executable the system does not identify is listed
 by its process name when that name is `commonmeasure`: on macOS, a process
 that still runs a binary whose file has since been removed. Close them and
 run `update` again: quit the host app that started an MCP server, and stop
-`commonmeasure hosted service` and `commonmeasure relay`. It does not stop
+`commonmeasure hosted service` and `commonmeasure relay`. A background relay
+installed as a login service starts again at login: run `commonmeasure
+service uninstall relay`, update, and install it again. It does not stop
 them itself and has no option to skip the check.
 
 Two other cases also refuse, with their own remedy:
@@ -295,9 +297,12 @@ approval mode Codex needs to call the tools without asking, and it serves
 the Codex CLI, the ChatGPT desktop app and the Codex IDE extension alike.
 `commonmeasure install claude-desktop` and `commonmeasure install cursor`
 register with those two applications (`plugin/README.md` §Claude Desktop
-and Cursor), and `commonmeasure install copilot` and `commonmeasure install
-vscode` with the Copilot CLI and VS Code (`plugin/README.md` §GitHub
-Copilot and VS Code). `commonmeasure install chrome` registers the binary
+and Cursor). Neither sends a session-end event, so a source whose licence
+demands usage reporting is refused in their sessions until a background
+relay runs on the Edge home; `install claude-desktop` says so and names the
+command ([Relay without a session end](#relay-without-a-session-end)). `commonmeasure install copilot`
+and `commonmeasure install vscode` register with the Copilot CLI and VS
+Code (`plugin/README.md` §GitHub Copilot and VS Code). `commonmeasure install chrome` registers the binary
 for the browser extension in `browser/`, which records the sources ChatGPT
 on the web and Bing Copilot Search show (`browser/README.md`).
 
@@ -316,6 +321,14 @@ installed beside the registration, whether the sessions directory can be
 written, and whether the policy file loads. A registration whose binary has
 gone is reported as not found, which is the one state in which every hook
 exits without recording and nothing in the session says so.
+
+If every fetch is refused with a name that "resolves to a local or private
+address", `commonmeasure doctor --resolve <name>` looks the name up and says
+which range answered. `198.18.0.0/15` means a fake-IP proxy (Clash, Surge,
+sing-box) is answering names on this machine: set it to return real addresses
+to the machine running the edge. `100.64.0.0/10` is a tailnet or carrier-grade
+NAT; [source policy §Recording](contracts/source-policy.md#recording) says how
+to allow one host.
 
 ## 2. Record a session of your own work
 
@@ -711,6 +724,10 @@ equivalent systemd command:
 systemd-run --user --unit=commonmeasure-console "$(command -v commonmeasure)" serve --listen 127.0.0.1:4173
 ```
 
+That unit is transient: systemd does not restart it if it exits, and it
+does not start at login. For both, write a unit under
+`~/.config/systemd/user` with `Restart=on-failure` and enable it.
+
 ## 6. Import history from before Common Measure
 
 Work done before the plugin was installed left host transcripts behind.
@@ -796,16 +813,49 @@ Once `relay.json` names a receiver, the relay also runs by itself when a
 Claude Code session ends: the `SessionEnd` hook starts `commonmeasure relay`
 in the background and returns without waiting. The other hosts send no
 session-end event, so with them run `commonmeasure relay` yourself, and a
-source whose licence demands usage reporting is refused there. On a managed
-home, `commonmeasure hosted service` relays every session in the home on an
-interval while it runs, which meets that demand. `commonmeasure doctor`
-prints the last delivery and how automatic relaying is set up.
+source whose licence demands usage reporting is refused there, unless a
+background relay runs (below). On a managed home, `commonmeasure hosted
+service` relays every session in the home on an interval while it runs,
+which meets that demand too. `commonmeasure doctor` prints the last
+delivery and how automatic relaying is set up.
+
+#### Relay without a session end
+
+Requires 0.4.3. Claude Desktop, Codex, Cursor, the Copilot CLI and VS Code
+send no session-end event. The background relay relays the Edge home on an
+interval instead, to the receiver in `relay.json`:
+
+```sh
+commonmeasure service install relay       # macOS, every 300 s; --every to change
+commonmeasure service status relay
+commonmeasure service uninstall relay
+```
+
+`install relay` writes `~/Library/LaunchAgents/ai.commonmeasure.relay.plist`,
+which runs `commonmeasure relay --every 300` at login, logging to
+`logs/relay.log` in the Edge home, and waits until the loop holds the home.
+Launchd restarts the loop if it crashes, at most once in five minutes. A loop that finds no receiver in
+`relay.json`, or a `relay.json` that does not load, says so in the log,
+exits and stays stopped until you install it again; `status` and `doctor`
+then say the agent is installed but not holding the home, and name its log. `install relay` refuses
+when `relay.json` names no receiver, and when a background relay you
+started by hand already holds the home. `commonmeasure disconnect` removes
+`relay.json` and names `service uninstall relay` while the agent is
+installed. On
+Linux, run `commonmeasure relay --every 300` under your own service manager;
+`service` names a `systemd-run` command, whose unit is transient (not
+restarted, not started at login), as for the console above. While it runs, `status` and
+`doctor` show `background relay: running`, and a Claude Desktop session may
+use a source whose licence demands usage reporting, where its policy scope
+clears telemetry egress and `relay.json` names a receiver not scoped to
+suppliers. A second one on the same
+home is refused. Each run sends what a session-end run would send, no more.
 
 To review each run before it leaves, create the empty file
 `~/.commonmeasure/relay/manual`. Nothing then relays at a session end or on
-the hosted service's interval, and a source whose licence demands usage
-reporting is refused while the file is there. Delete it to relay
-automatically again.
+the hosted service's or the background relay's interval, and a source whose
+licence demands usage reporting is refused while the file is there. Delete
+it to relay automatically again.
 
 ### Joining Common Measure Hub
 

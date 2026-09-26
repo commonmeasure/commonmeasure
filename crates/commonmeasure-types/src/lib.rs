@@ -20,8 +20,10 @@ pub use envelope::{
 };
 pub use evidence::{AssuranceBasis, Decision, DecisionRecord, EvidenceError, Gap, GapReason};
 pub use job::{
-    AccessAction, Constraint, ContextJob, EvidenceRequirement, HostPattern, JobError, Objective,
-    PolicyMode, canonical_url, normalised_host,
+    AccessAction, Constraint, ContextJob, EvidenceRequirement, HostPattern, JobError,
+    MAX_PAGE_READINGS, Objective, PolicyMode, TooManyReadings, canonical_url, matching_pattern,
+    matching_target, matching_target_readings, matching_url, matching_url_readings,
+    normalised_host,
 };
 pub use money::Money;
 pub use plan::{ModelPlan, PlanError, ProviderCapability, ProviderRef, SupplyPlan, SupplyStep};

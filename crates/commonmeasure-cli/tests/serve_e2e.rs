@@ -2073,7 +2073,7 @@ fn an_old_session_record_never_shows_the_hub_urls_credentials() {
     }
 }
 
-/// 0.4.2 and earlier quoted the policy URL whole in a `policy_sync` reason:
+/// 0.4.1 and earlier quoted the policy URL whole in a `policy_sync` reason:
 /// a name-resolution timeout, and a refused `policy_url`, recorded with a
 /// null `policy_url`. The log is not rewritten; every console surface
 /// withholds such a reason and serves any other as recorded.
@@ -2209,7 +2209,7 @@ fn a_credentialed_policy_url_withholds_a_reason_that_holds_no_at() {
 }
 
 /// Credentials an `@` test cannot see: a key in the policy URL's query,
-/// which 0.4.2 and earlier quoted in a name-resolution timeout, and a
+/// which 0.4.1 and earlier quoted in a name-resolution timeout, and a
 /// refused `policy_url` that does not parse, quoted in the refusal on a
 /// record whose `policy_url` is null. Neither reason is served, nor a reason
 /// whose record holds a `policy_url` that does not parse. A current
@@ -2294,7 +2294,7 @@ fn an_old_policy_sync_reason_never_shows_a_credential_outside_userinfo() {
     );
 }
 
-/// A key in the policy URL's path or fragment, which 0.4.2 and earlier
+/// A key in the policy URL's path or fragment, which 0.4.1 and earlier
 /// quoted whole in a name-resolution timeout: the reason holds the record's
 /// `policy_url` verbatim, and that URL is more than its origin, so the
 /// reason is withheld, including where the path is `/` and only the

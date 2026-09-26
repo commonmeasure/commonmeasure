@@ -4912,6 +4912,483 @@ mod reporting_demand {
         assert_eq!(responses[1]["result"]["isError"], true, "{responses:?}");
     }
 
+    /// The background relay under test: `commonmeasure relay --every 1` on
+    /// `home`, its journal in `journal`. Killed if the test fails first.
+    struct BackgroundRelay(std::process::Child);
+
+    impl BackgroundRelay {
+        fn start(home: &Path, journal: &Path) -> Self {
+            let child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .args(["relay", "--every", "1"])
+                .env("COMMONMEASURE_HOME", home)
+                .stdin(Stdio::null())
+                .stdout(std::fs::File::create(journal).unwrap())
+                .stderr(std::fs::File::create(journal.with_extension("err")).unwrap())
+                .spawn()
+                .expect("the loop starts");
+            let lock = home.join("relay-loop.lock");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while !std::fs::File::open(&lock)
+                .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the loop did not take its lock"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Self(child)
+        }
+    }
+
+    impl Drop for BackgroundRelay {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Every event id the receiver was posted, in order, duplicates kept.
+    fn posted_ids(bodies: &std::sync::Mutex<Vec<Value>>) -> Vec<String> {
+        bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .map(|event| event["id"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    /// Append to the session log a copy of the last crossing the server
+    /// admitted, moved to the public host `news.example.com` under `page`
+    /// with an acquisition id of its own. The relay never projects a
+    /// crossing to a private address, and the test's origin is loopback, so
+    /// the admitted crossing itself cannot leave; its copy, in the shape the
+    /// server wrote, stands in for the same fetch from a public origin.
+    fn publicise_last_admitted(home: &Path, page: &str, n: u32) {
+        let log = home.join("sessions/test-session.ndjson");
+        let mut record = crossings(home)
+            .into_iter()
+            .rev()
+            .find(|record| record["event"] == "crossing_mediated")
+            .expect("an admitted crossing");
+        let payload = &mut record["payload"];
+        payload["url"] = json!(format!("https://news.example.com/{page}"));
+        payload["host_name"] = json!("news.example.com");
+        if let Some(id) = payload["acquisition_id"].as_str() {
+            payload["acquisition_id"] = json!(format!("{n:08x}{}", &id[8..]));
+        }
+        let mut file = std::fs::OpenOptions::new().append(true).open(log).unwrap();
+        writeln!(file, "{record}").unwrap();
+    }
+
+    /// Wait up to 30 s for `done`; on a timeout the loop's `journal` is in
+    /// the failure.
+    fn wait_for(what: &str, journal: &Path, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out: {what}\n{}\n{}",
+                std::fs::read_to_string(journal).unwrap_or_default(),
+                std::fs::read_to_string(journal.with_extension("err")).unwrap_or_default()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// EDGE-4. Claude Desktop sends no session-end event. With no background
+    /// relay its session is refused a source whose licence demands usage
+    /// reporting (today's behaviour, pinned); with `relay --every` holding
+    /// the home the same session is admitted, and its events reach the
+    /// loopback receiver on the loop's next tick with nobody running a
+    /// command. What reaches the receiver is the admitted record moved to a
+    /// public host ([`publicise_last_admitted`]), with the session's refused
+    /// count on its batch. The session keeps being written between ticks: a later
+    /// fetch leaves on a later tick and no event is posted twice. SIGTERM
+    /// stops the loop cleanly and releases the lock, and the next session is
+    /// refused again.
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_desktop_session_is_admitted_and_delivered_only_while_the_background_relay_runs() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let bodies: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
+        let receiver = {
+            let bodies = std::sync::Arc::clone(&bodies);
+            Server::bind("127.0.0.1:0")
+                .unwrap()
+                .spawn(move |request| {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                    let events = body["events"].as_array().map(Vec::len).unwrap_or(0);
+                    bodies.lock().unwrap().push(body);
+                    Response::json(
+                        201,
+                        &json!({"status": "ok", "events_created": events}).to_string(),
+                    )
+                })
+                .unwrap()
+        };
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cleared = workspace.path().join("reporting-cleared");
+        std::fs::create_dir_all(&cleared).unwrap();
+        write_policy(
+            home.path(),
+            r#"{"policy_mode":"observe","allow_private_hosts":true,
+                "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
+        );
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver": receiver.url()}).to_string(),
+        )
+        .unwrap();
+        let fetch = |page: &str| {
+            converse_as_host(
+                home.path(),
+                Some(&cleared),
+                None,
+                "claude-desktop",
+                &[
+                    initialize(Some(
+                        json!({"name": "local-agent-mode-commonmeasure", "version": "1"}),
+                    )),
+                    call(
+                        "context_fetch",
+                        json!({"url": format!("{}/{page}", site.url())}),
+                    ),
+                ],
+            )
+        };
+
+        let refused = fetch("before");
+        assert_eq!(refused[1]["result"]["isError"], true, "{refused:?}");
+        let reason = crossings(home.path())[0]["payload"]["declarations"]["reporting"]["reason"]
+            .as_str()
+            .expect("a reason")
+            .to_owned();
+        assert!(
+            reason.contains("this host (claude-desktop) sends no session-end event")
+                && reason.contains("commonmeasure relay --every"),
+            "{reason}"
+        );
+
+        let journal = home.path().join("loop.out");
+        let background = BackgroundRelay::start(home.path(), &journal);
+        let admitted = fetch("during");
+        assert_eq!(admitted[1]["result"]["isError"], false, "{admitted:?}");
+        let recorded = crossings(home.path());
+        assert_eq!(recorded[1]["event"], "crossing_mediated");
+        assert_eq!(
+            recorded[1]["payload"]["declarations"]["reporting"]["met"],
+            true
+        );
+        publicise_last_admitted(home.path(), "during", 1);
+        // No command is run here: the loop's next tick delivers.
+        wait_for("the first delivery", &journal, || {
+            !posted_ids(&bodies).is_empty()
+        });
+        let first = posted_ids(&bodies);
+        let types: Vec<String> = bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .map(|event| event["type"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert!(
+            types.iter().any(|kind| kind == "content_retrieved"),
+            "{types:?}"
+        );
+        assert!(
+            bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|body| body.to_string().contains("news.example.com/during")),
+            "the admitted session's crossing left"
+        );
+
+        // The session is still being written: a later fetch leaves on a
+        // later tick, and what left already is not posted again.
+        let again = fetch("after");
+        assert_eq!(again[1]["result"]["isError"], false, "{again:?}");
+        publicise_last_admitted(home.path(), "after", 2);
+        wait_for("the second delivery", &journal, || {
+            posted_ids(&bodies).len() > first.len()
+        });
+        // Two more ticks with nothing new.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let ids = posted_ids(&bodies);
+        let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(
+            unique.len(),
+            ids.len(),
+            "an event was posted twice: {ids:?}"
+        );
+
+        let mut background = background;
+        // SAFETY: the pid is this test's own child, still unwaited.
+        assert_eq!(
+            unsafe { libc::kill(background.0.id() as libc::pid_t, libc::SIGTERM) },
+            0
+        );
+        let status = background.0.wait().expect("the loop exits");
+        assert!(status.success(), "{status:?}");
+        let stderr = std::fs::read_to_string(journal.with_extension("err")).unwrap();
+        assert!(
+            stderr.contains("background relay stopped by SIGTERM"),
+            "{stderr}"
+        );
+        let lock = std::fs::File::open(home.path().join("relay-loop.lock")).unwrap();
+        lock.try_lock().expect("the lock is released");
+        drop(lock);
+        let refused = fetch("later");
+        assert_eq!(refused[1]["result"]["isError"], true, "{refused:?}");
+    }
+
+    /// Review P2-3. One Claude Desktop session, one MCP server process, and
+    /// `relay.json` rewritten between its fetches while the background relay
+    /// holds the home. The reporting ruling reads `relay.json` when it rules,
+    /// not the copy taken when the server started: a fetch admitted under an
+    /// unscoped receiver is followed by one refused once the receiver is
+    /// scoped to suppliers, admitted again once it is not, and refused once
+    /// the file is gone.
+    #[cfg(unix)]
+    #[test]
+    fn the_reporting_ruling_reads_relay_json_at_each_fetch_of_one_session() {
+        use std::io::BufRead as _;
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let receiver = Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(|_| Response::json(201, r#"{"status":"ok","events_created":0}"#))
+            .unwrap();
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cleared = workspace.path().join("reporting-cleared");
+        std::fs::create_dir_all(&cleared).unwrap();
+        write_policy(
+            home.path(),
+            r#"{"policy_mode":"observe","allow_private_hosts":true,
+                "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
+        );
+        let relay_json = home.path().join("relay.json");
+        let unscoped = json!({"receiver": receiver.url()}).to_string();
+        std::fs::write(&relay_json, &unscoped).unwrap();
+        let _background = BackgroundRelay::start(home.path(), &home.path().join("loop.out"));
+
+        let mut server = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args([
+                "mcp",
+                "--host",
+                "claude-desktop",
+                "--session",
+                "test-session",
+            ])
+            .env("COMMONMEASURE_HOME", home.path())
+            .current_dir(&cleared)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the server starts");
+        let mut stdin = server.stdin.take().expect("stdin");
+        let mut stdout = std::io::BufReader::new(server.stdout.take().expect("stdout"));
+        let mut ask = |request: Value| -> Value {
+            writeln!(stdin, "{request}").expect("write request");
+            let mut line = String::new();
+            stdout.read_line(&mut line).expect("a response");
+            serde_json::from_str(&line).expect("one JSON object per line")
+        };
+        ask(initialize(Some(
+            json!({"name": "local-agent-mode-commonmeasure", "version": "1"}),
+        )));
+        let mut fetch = |page: &str| {
+            ask(call(
+                "context_fetch",
+                json!({"url": format!("{}/{page}", site.url())}),
+            ))
+        };
+        let reporting = |index: usize| {
+            crossings(home.path())[index]["payload"]["declarations"]["reporting"].clone()
+        };
+
+        let first = fetch("unscoped");
+        assert_eq!(first["result"]["isError"], false, "{first}");
+        assert_eq!(reporting(0)["met"], true);
+
+        std::fs::write(
+            &relay_json,
+            json!({"receiver": receiver.url(), "suppliers": ["ozone"]}).to_string(),
+        )
+        .unwrap();
+        let scoped = fetch("scoped");
+        assert_eq!(scoped["result"]["isError"], true, "{scoped}");
+        let reason = reporting(1)["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(reason.contains("scoped to suppliers (ozone)"), "{reason}");
+
+        std::fs::write(&relay_json, &unscoped).unwrap();
+        let again = fetch("unscoped-again");
+        assert_eq!(again["result"]["isError"], false, "{again}");
+        assert_eq!(reporting(2)["met"], true);
+
+        std::fs::remove_file(&relay_json).unwrap();
+        let absent = fetch("absent");
+        assert_eq!(absent["result"]["isError"], true, "{absent}");
+        let reason = reporting(3)["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            reason.contains("no telemetry receiver is configured"),
+            "{reason}"
+        );
+        assert_eq!(reporting(3)["receiver"], Value::Null);
+
+        drop(stdin);
+        assert!(server.wait().expect("the server exits").success());
+    }
+
+    /// One Claude Code MCP server process, run as the host runs it, in
+    /// `cwd`. Claude Code's own client name makes the session-end hook the
+    /// carrier, so no background relay is needed for a demand to be met.
+    struct StdioServer {
+        child: std::process::Child,
+        stdin: std::process::ChildStdin,
+        stdout: std::io::BufReader<std::process::ChildStdout>,
+    }
+
+    impl StdioServer {
+        fn start(home: &std::path::Path, cwd: &std::path::Path) -> Self {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .args(["mcp", "--host", "claude-code", "--session", "test-session"])
+                .env("COMMONMEASURE_HOME", home)
+                .current_dir(cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the server starts");
+            let stdin = child.stdin.take().expect("stdin");
+            let stdout = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+            let mut server = Self {
+                child,
+                stdin,
+                stdout,
+            };
+            server.ask(initialize(Some(
+                json!({"name": "claude-code", "version": "1"}),
+            )));
+            server
+        }
+
+        fn ask(&mut self, request: Value) -> Value {
+            use std::io::BufRead as _;
+            writeln!(self.stdin, "{request}").expect("write request");
+            let mut line = String::new();
+            self.stdout.read_line(&mut line).expect("a response");
+            serde_json::from_str(&line).expect("one JSON object per line")
+        }
+
+        fn fetch(&mut self, url: String) -> Value {
+            self.ask(call("context_fetch", json!({"url": url})))
+        }
+
+        fn stop(self) {
+            let Self {
+                mut child, stdin, ..
+            } = self;
+            drop(stdin);
+            assert!(child.wait().expect("the server exits").success());
+        }
+    }
+
+    /// Review P2-A. The reporting ruling predicts whether the relay will
+    /// send, and the relay resolves egress clearance from the source policy
+    /// as it stands at each run. Within one server process: a scope whose
+    /// `allow_telemetry_egress` is withdrawn between two fetches refuses the
+    /// second, and a source policy that that does not load refuses too. A
+    /// grant made after a server started does not widen that session: its
+    /// fetches stay refused.
+    #[test]
+    fn the_reporting_ruling_reads_egress_clearance_at_each_fetch_of_one_session() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cleared = workspace.path().join("reporting-cleared");
+        std::fs::create_dir_all(&cleared).unwrap();
+        let policy = |allow: bool| {
+            format!(
+                r#"{{"policy_mode":"observe","allow_private_hosts":true,
+                    "scopes":[{{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":{allow}}}]}}"#
+            )
+        };
+        write_policy(home.path(), &policy(true));
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+        )
+        .unwrap();
+        let page = |name: &str| format!("{}/{name}", site.url());
+        let reporting = |index: usize| {
+            crossings(home.path())[index]["payload"]["declarations"]["reporting"].clone()
+        };
+        let reason = |index: usize| {
+            reporting(index)["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        };
+
+        let mut server = StdioServer::start(home.path(), &cleared);
+        let first = server.fetch(page("cleared"));
+        assert_eq!(first["result"]["isError"], false, "{first}");
+        assert_eq!(reporting(0)["met"], true);
+        assert_eq!(reporting(0)["telemetry_egress_cleared"], true);
+
+        write_policy(home.path(), &policy(false));
+        let withdrawn = server.fetch(page("withdrawn"));
+        assert_eq!(withdrawn["result"]["isError"], true, "{withdrawn}");
+        assert_eq!(reporting(1)["met"], false);
+        assert_eq!(reporting(1)["telemetry_egress_cleared"], false);
+        assert!(
+            reason(1).contains("policy.json as it stands now clears no telemetry egress"),
+            "{}",
+            reason(1)
+        );
+
+        write_policy(home.path(), &policy(true));
+        let restored = server.fetch(page("restored"));
+        assert_eq!(restored["result"]["isError"], false, "{restored}");
+        assert_eq!(reporting(2)["met"], true);
+
+        std::fs::write(home.path().join("policy.json"), "{ not json").unwrap();
+        let broken = server.fetch(page("broken"));
+        assert_eq!(broken["result"]["isError"], true, "{broken}");
+        assert_eq!(reporting(3)["met"], false);
+        assert!(reason(3).contains("policy.json"), "{}", reason(3));
+        server.stop();
+
+        // A server started while the scope cleared nothing: the grant that
+        // follows applies from the next session on.
+        write_policy(home.path(), &policy(false));
+        let mut server = StdioServer::start(home.path(), &cleared);
+        let before = server.fetch(page("before-grant"));
+        assert_eq!(before["result"]["isError"], true, "{before}");
+        write_policy(home.path(), &policy(true));
+        let after = server.fetch(page("after-grant"));
+        assert_eq!(after["result"]["isError"], true, "{after}");
+        assert_eq!(reporting(5)["met"], false);
+        assert!(
+            reason(5).contains("clears no telemetry egress"),
+            "{}",
+            reason(5)
+        );
+        server.stop();
+    }
+
     /// `robots.txt` naming the licence, with a `Content-Signal` that
     /// disallows AI input beside it.
     const SIGNAL_DISALLOWS: &str =

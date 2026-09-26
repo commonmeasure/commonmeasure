@@ -396,6 +396,8 @@ pub fn capture(
             retrieved_hash: None,
             estimated_tokens: tokens,
             delivered: None,
+            content_type: None,
+            delivered_file: None,
             grounded,
             // No host tool reports rights, and accessibility is not permission.
             licence: LicenceState::Unknown,

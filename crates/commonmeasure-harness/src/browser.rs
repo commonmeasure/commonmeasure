@@ -133,6 +133,8 @@ pub fn capture(
             retrieved_hash: None,
             estimated_tokens: None,
             delivered: None,
+            content_type: None,
+            delivered_file: None,
             grounded: false,
             // No surface reports rights, and being shown a source is not
             // permission.

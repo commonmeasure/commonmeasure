@@ -498,3 +498,174 @@ fn a_url_is_compared_with_its_host_normalised_and_nothing_else_widened() {
         assert_eq!(canonical(raw), kept, "{raw}");
     }
 }
+
+/// What the URL parser already does to a path before the matching form sees
+/// it: dot segments, `%2E` spellings of them included, are resolved, and the
+/// resolved path is what the client requests; doubled slashes, percent
+/// encodings and their hex case are left as written.
+#[test]
+fn the_parser_resolves_dot_segments_and_leaves_other_spellings() {
+    let path = |raw: &str| url::Url::parse(raw).unwrap().path().to_owned();
+    assert_eq!(path("https://h/a/%2E%2E/b"), "/b");
+    assert_eq!(path("https://h/a/%2e./b"), "/b");
+    assert_eq!(path("https://h/a/./b"), "/a/b");
+    assert_eq!(path("https://h/a//../b"), "/a/b");
+    assert_eq!(path("https://h//news/1"), "//news/1");
+    assert_eq!(path("https://h/%6Eews/1"), "/%6Eews/1");
+    assert_eq!(path("https://h/a%2fb"), "/a%2fb");
+}
+
+/// One matching form for every spelling of a path: unreserved encodings
+/// decoded, every other encoding upper-cased and kept, octets outside the
+/// URI character set encoded, a literal `*` or `$` encoded, and the fragment
+/// dropped. Reserved octets never decode, so an encoded `/`, `?`, `*` or `$`
+/// cannot become a separator or a pattern operator. Slashes stay as
+/// written, in a rule and in the form of a URL alike.
+#[test]
+fn a_path_is_compared_in_one_form_whatever_its_spelling() {
+    use commonmeasure_types::{matching_pattern, matching_target, matching_url};
+    let form = |raw: &str| matching_url(&url::Url::parse(raw).unwrap());
+    for spelling in [
+        "https://publisher.example/news/1",
+        "https://publisher.example/%6Eews/1",
+        "https://publisher.example/%6eews/%31",
+        "https://publisher.example/news/1#top",
+        "https://publisher.example/a/%2E%2E/news/1",
+        "HTTPS://u:p@Publisher.Example.:443/%6E%65%77%73/1",
+    ] {
+        assert_eq!(
+            form(spelling),
+            "https://publisher.example/news/1",
+            "{spelling}"
+        );
+    }
+    for (raw, expected) in [
+        ("https://h//news///1", "https://h//news///1"),
+        ("https://h/a%2fb", "https://h/a%2Fb"),
+        ("https://h/a%2Fb", "https://h/a%2Fb"),
+        ("https://h/a%3fb?c", "https://h/a%3Fb?c"),
+        ("https://h/a?x=%7e//y", "https://h/a?x=~//y"),
+        ("https://h/caf%c3%a9", "https://h/caf%C3%A9"),
+        ("https://h/café", "https://h/caf%C3%A9"),
+        ("https://h/100%", "https://h/100%25"),
+        ("https://h/a|b", "https://h/a%7Cb"),
+        ("https://h/n/#x", "https://h/n/"),
+        ("https://h/file-*.html", "https://h/file-%2A.html"),
+        ("https://h/foo-$?a=$*", "https://h/foo-%24?a=%24%2A"),
+    ] {
+        assert_eq!(form(raw), expected, "{raw}");
+    }
+    for (pattern, expected) in [
+        ("/%6Eews/", "/news/"),
+        ("//news//*", "//news//*"),
+        ("/a%2a*%24$", "/a%2A*%24$"),
+        ("/a*/%62$", "/a*/b$"),
+        ("/café/", "/caf%C3%A9/"),
+        ("/p?q=//*//", "/p?q=//*//"),
+        ("/a$b$", "/a%24b$"),
+        ("/file-%2a.html", "/file-%2A.html"),
+    ] {
+        assert_eq!(matching_pattern(pattern), expected, "{pattern}");
+    }
+    for (target, expected) in [
+        ("/file-*.html", "/file-%2A.html"),
+        ("/foo-$", "/foo-%24"),
+        ("/a%+1", "/a%25+1"),
+        ("/a%1+", "/a%251+"),
+        ("/a%-1", "/a%25-1"),
+        ("/a%2f%2", "/a%2F%252"),
+    ] {
+        assert_eq!(matching_target(target), expected, "{target}");
+    }
+    for target in [
+        "/%6Eews//1",
+        "/a%2fb?c=%7e//d",
+        "/café/%",
+        "/%%41%4",
+        "/ *",
+        "/a%+1$",
+    ] {
+        let once = matching_target(target);
+        assert_eq!(matching_target(&once), once, "{target}");
+        assert_eq!(
+            matching_pattern(&once),
+            matching_pattern(&matching_pattern(&once))
+        );
+    }
+    for raw in [
+        "https://h//%6Eews/%2f?q=%7e#f",
+        "https://h/café/100%",
+        "http://h:8080/a|b/",
+        "https://h/a*b$",
+    ] {
+        let once = form(raw);
+        assert_eq!(form(&once), once, "{raw}");
+    }
+}
+
+/// A page is read as parsed and as every path decoding `%2F`, merging runs
+/// of `/` and resolving dot segments reach from it, in any order and
+/// including only some of them, each in the matching form, without
+/// repeats. The query is never merged or decoded.
+#[test]
+fn a_page_is_read_as_parsed_merged_and_with_its_separators_decoded() {
+    use commonmeasure_types::{matching_target_readings, matching_url_readings};
+    for (target, readings) in [
+        ("/news/1", vec!["/news/1"]),
+        ("/%6Eews/1", vec!["/news/1"]),
+        ("//news//1", vec!["//news//1", "/news/1"]),
+        ("/news%2F1", vec!["/news%2F1", "/news/1"]),
+        ("/news%2f1", vec!["/news%2F1", "/news/1"]),
+        (
+            "/x/..%2Fnews/1",
+            vec!["/x/..%2Fnews/1", "/x/../news/1", "/news/1"],
+        ),
+        (
+            "/x/%2E%2E%2Fnews/1",
+            vec!["/x/..%2Fnews/1", "/x/../news/1", "/news/1"],
+        ),
+        (
+            "/a//b%2F..%2Fc?q=//%2F",
+            vec![
+                "/a//b%2F..%2Fc?q=//%2F",
+                "/a//b/../c?q=//%2F",
+                "/a/b%2F..%2Fc?q=//%2F",
+                "/a/b/../c?q=//%2F",
+                "/a//c?q=//%2F",
+                "/a/c?q=//%2F",
+            ],
+        ),
+        (
+            "/..%2F..%2Fnews",
+            vec!["/..%2F..%2Fnews", "/../../news", "/news"],
+        ),
+        ("/a%252Fb", vec!["/a%252Fb"]),
+        (
+            "/a//b%2Fc",
+            vec!["/a//b%2Fc", "/a//b/c", "/a/b%2Fc", "/a/b/c"],
+        ),
+        ("/file-*.html", vec!["/file-%2A.html"]),
+    ] {
+        assert_eq!(
+            matching_target_readings(target),
+            Ok(readings.iter().map(|r| r.to_string()).collect()),
+            "{target}"
+        );
+    }
+    let url = url::Url::parse("https://Corp.Example//private/a#top").unwrap();
+    assert_eq!(
+        matching_url_readings(&url).unwrap(),
+        [
+            "https://corp.example//private/a",
+            "https://corp.example/private/a"
+        ]
+    );
+    let url = url::Url::parse("https://corp.example/x//..%2Fprivate/a").unwrap();
+    assert_eq!(
+        matching_url_readings(&url)
+            .unwrap()
+            .last()
+            .map(String::as_str),
+        Some("https://corp.example/private/a")
+    );
+}

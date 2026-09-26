@@ -165,6 +165,16 @@ impl SessionLog {
                 if !index.admitted(&acquisition) {
                     return Err(invalid("unknown acquisition handle in this session"));
                 }
+                // Equality ties the host's claim to the bytes handed over; the
+                // fetch result gave the host this hash, so it does not show
+                // the file entered the request.
+                if index.delivered_file(&acquisition)
+                    && !index.admitted_with(&acquisition, &representation_hash)
+                {
+                    return Err(invalid(
+                        "a delivered file's representation_hash must be its content_hash, the SHA-256 of the bytes handed over",
+                    ));
+                }
                 if index.entered_as(&acquisition, &generation, &representation_hash) {
                     return Err(invalid("duplicate context-entry observation"));
                 }
@@ -503,6 +513,65 @@ mod tests {
         std::fs::create_dir(log.path()).unwrap();
         assert!(log.record_crossing(&crossing).is_err());
         assert!(log.acquisition_handle().is_err());
+    }
+
+    // Catches: accepting a delivered file's context entry under any hash,
+    // applying the rule to pages too, and an index that forgets which
+    // handle was a file when the log is reopened.
+    #[test]
+    fn a_delivered_file_enters_context_only_under_its_own_hash() {
+        let home = tempfile::tempdir().unwrap();
+        let mut log = SessionLog::open(home.path(), "s").unwrap();
+        log.record_host_observation(json!({"event":"observations_started"}), "pi", None)
+            .unwrap();
+        let file_hash = format!("sha256:{}", "a".repeat(64));
+        let other = format!("sha256:{}", "b".repeat(64));
+        let mut file = crossing("mediated", json!(200));
+        file.grounded = false;
+        file.content_type = Some("application/pdf".to_owned());
+        file.delivered_file = Some(super::super::DeliveredFile {
+            via: super::super::FileDelivery::LocalFile,
+            bytes: 10,
+            statement: crate::fetched_file::NOT_READ.to_owned(),
+        });
+        log.record_crossing(&file).unwrap();
+        let file_handle = log.acquisition_handle().unwrap().unwrap();
+        log.record_crossing(&crossing("mediated", json!(200)))
+            .unwrap();
+        let page_handle = log.acquisition_handle().unwrap().unwrap();
+        let entry = |handle: Uuid, hash: &str| {
+            json!({"event":"context_entered", "acquisition_id":handle,
+                "generation_id":Uuid::new_v4(), "representation_hash":hash})
+        };
+        // Journals both crossings, so the reopened log answers from the
+        // journal.
+        log.record_host_observation(entry(page_handle, &other), "pi", None)
+            .unwrap();
+
+        let mut log = SessionLog::open(home.path(), "s").unwrap();
+        let before = std::fs::read(log.path()).unwrap();
+        let refused = log
+            .record_host_observation(entry(file_handle, &other), "pi", None)
+            .unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        assert!(refused.to_string().contains("content_hash"), "{refused}");
+        assert_eq!(
+            std::fs::read(log.path()).unwrap(),
+            before,
+            "nothing recorded"
+        );
+
+        log.record_host_observation(entry(file_handle, &file_hash), "pi", None)
+            .unwrap();
+        log.record_host_observation(entry(page_handle, &other), "pi", None)
+            .unwrap();
+        let records = SessionLog::read(log.path()).unwrap();
+        let entered: Vec<_> = records
+            .iter()
+            .filter(|record| record["event"] == "context_entered")
+            .map(|record| record["payload"]["representation_hash"].clone())
+            .collect();
+        assert_eq!(entered, vec![json!(other), json!(file_hash), json!(other)]);
     }
 
     /// The action arm's refusals, each against a session in which the same
