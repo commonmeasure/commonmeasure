@@ -93,7 +93,14 @@ authoritative technical definitions live in the contracts under
   invocation. Add-ons are processors. A processor is one kind of extension.
 - **Console** — the local web application served by `commonmeasure serve` on
   loopback, rendered from the evidence logs
-  ([`docs/CONSOLE.md`](CONSOLE.md)).
+  ([`docs/CONSOLE.md`](CONSOLE.md)). `commonmeasure console` names its
+  address and pages from the terminal.
+- **Finding** — one sentence of `commonmeasure doctor` or `status`, with its
+  **standing**: `ok`, `attention` (something for the operator), `unknown`
+  (could not be determined; never reported as either of the first two) or
+  `note` (a fact with nothing to act on). The standing is chosen by the code
+  that established the fact ([host integration
+  §Registration](contracts/host-integration.md#doctor)).
 - **Index** — the SQLite file the console derives from the evidence logs
   (`~/.commonmeasure/telemetry.db`). It can be deleted and rebuilt; the logs
   are authoritative.

@@ -53,6 +53,24 @@ compares with the `commonmeasure` on `PATH`.
 The console writes four things: the policy mode, a scope's denied hosts,
 the attribution rules, and the record of each comparison Compare runs.
 
+## From the command line
+
+```sh
+commonmeasure console                 # the address, whether a console answers, each page
+commonmeasure console open <page>     # open a page in the browser
+commonmeasure console --json          # the same as a document
+```
+
+`console` finds the console where `service install console` recorded it,
+or at `serve`'s default `127.0.0.1:4173` (`--listen` names another loopback
+address), asks it for its version, and lists the pages by address:
+`overview`, `record`, `agents`, `policy`, `sources`, `compare`, `budget`
+and `guide`. `open` hands the page's address to the desktop's opener and
+refuses, naming `serve`, where no console answers. `commonmeasure doctor`
+prints the same answer in its Console section, with the Policy page's
+address beside the policy findings, and marks a console serving another
+version than the binary as something to act on.
+
 ## Access
 
 Nothing in the console authenticates. It binds loopback and refuses any

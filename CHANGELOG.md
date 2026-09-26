@@ -6,6 +6,19 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.5 (unreleased)
+
+### Added
+
+- `commonmeasure console` names the operator console's address, as `service install console` recorded it or as `serve` binds by default, says whether a console answers there and which version, and lists each page's address; `commonmeasure console open <page>` opens one in the browser, and `--json` prints the same as a document. The policy's mode, denied hosts and attribution rules are edited in the console's Policy page, which `doctor` now names beside its policy findings ([the console](https://github.com/commonmeasure/commonmeasure/blob/main/docs/CONSOLE.md#from-the-command-line)).
+- `commonmeasure doctor --json` prints the report as a document, `commonmeasure-doctor/v1`: every finding with its standing, the hosts, the console and a summary ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#doctor)).
+- `--color auto|always|never` on every command, for the reports `doctor`, `status`, `credentials` and `console` print. `auto` colours a terminal only and honours `NO_COLOR`.
+
+### Changed
+
+- `commonmeasure doctor` prints one report in sections rather than a list of lines: the Edge home, the console, the relay, then each host. Every finding carries a standing chosen where the fact is established, marked `✓`, `!` (something to act on), `?` (could not be determined) or `·` (a fact), and the report ends with how many hosts are registered and how many findings need attention. In a terminal the marks are coloured and long findings wrap to the terminal's width; through a pipe each finding is one line with no escape codes, as before. The words of each finding are unchanged, except that whether the sessions directory is writable and whether the policy loads are printed once, under the Edge home, rather than under every host; `this binary:` and `operator home:` are now the `binary` and `home` rows under the heading. A console serving another version than the binary is marked as something to act on ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#doctor)).
+- `commonmeasure status` and `commonmeasure credentials` print with the same marks: the relay's egress account, the edge, the policy and the allowances in `status`, and each provider in `credentials`. The key columns and words are as they were.
+
 ## 0.4.4 (26 September 2026)
 
 ### Fixed

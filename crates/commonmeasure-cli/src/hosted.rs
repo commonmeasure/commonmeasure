@@ -43,6 +43,7 @@ use commonmeasure_harness::mcp::{
 };
 use commonmeasure_http::{Request, Response, Server};
 use commonmeasure_supply::credentials::{CredentialsStatus, ReleasedStore};
+use commonmeasure_types::{Finding, Standing};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -399,35 +400,46 @@ impl HomeLock {
 
 /// What `doctor` and `status` say about the service: whether the home is
 /// configured for it, for which origin and endpoints, and whether a service
-/// process holds the home now.
-pub(crate) fn service_line(home: &Path) -> String {
+/// process holds the home now. A home not configured for the service is a
+/// note, a configured service that holds the home is as it should be, one
+/// configured and not running needs the operator, and a configuration or
+/// lock that cannot be read is unknown.
+pub(crate) fn service_finding(home: &Path) -> Finding {
     use commonmeasure_harness::delivery::LockState;
     match ServiceConfig::read(home) {
-        Ok(None) => "hosted service: not configured (no hosted-service.json)".to_owned(),
-        Err(reason) => format!("hosted service: {reason}"),
-        Ok(Some(config)) => format!(
-            "hosted service: {} at {}, endpoints {}, every {}s{}",
-            match commonmeasure_harness::delivery::service_state(home) {
-                LockState::Running => "running (lock held)".to_owned(),
-                LockState::NotRunning => "configured, not running".to_owned(),
-                LockState::Unknown(reason) => {
-                    format!("configured, whether it is running cannot be read ({reason})")
+        Ok(None) => Finding::note("hosted service: not configured (no hosted-service.json)"),
+        Err(reason) => Finding::unknown(format!("hosted service: {reason}")),
+        Ok(Some(config)) => {
+            let (standing, state) = match commonmeasure_harness::delivery::service_state(home) {
+                LockState::Running => (Standing::Ok, "running (lock held)".to_owned()),
+                LockState::NotRunning => {
+                    (Standing::Attention, "configured, not running".to_owned())
                 }
-            },
-            config.origin,
-            config
-                .hosts
-                .iter()
-                .map(|host| format!("{ENDPOINT_PREFIX}{host}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            config.interval_seconds,
-            if config.supplier_custody {
-                format!("; {}", custody_standing(home, config.interval_seconds))
-            } else {
-                String::new()
+                LockState::Unknown(reason) => (
+                    Standing::Unknown,
+                    format!("configured, whether it is running cannot be read ({reason})"),
+                ),
+            };
+            Finding {
+                standing,
+                text: format!(
+                    "hosted service: {state} at {}, endpoints {}, every {}s{}",
+                    config.origin,
+                    config
+                        .hosts
+                        .iter()
+                        .map(|host| format!("{ENDPOINT_PREFIX}{host}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    config.interval_seconds,
+                    if config.supplier_custody {
+                        format!("; {}", custody_standing(home, config.interval_seconds))
+                    } else {
+                        String::new()
+                    }
+                ),
             }
-        ),
+        }
     }
 }
 

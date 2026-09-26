@@ -624,6 +624,8 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "commonmeasure-cli"
 version = "0.4.4"
 dependencies = [
+ "anstream",
+ "anstyle",
  "base64",
  "c2pa",
  "c2pa-text",

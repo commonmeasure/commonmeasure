@@ -20,6 +20,7 @@
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
+use commonmeasure_types::Finding;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -265,36 +266,44 @@ impl RelayState {
 /// receiver would otherwise name it twice. It is named by its origin alone
 /// ([`receipt_receiver_text`]).
 pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
+    last_delivery(home, now).text
+}
+
+/// The last accepted delivery from `receipts.json`, with its age and, where
+/// it went somewhere other than the configured receiver, where. No delivery
+/// yet is a note; a receipt that cannot be read or names no receiver is
+/// unknown, never reported as no delivery.
+pub fn last_delivery(home: &Path, now: chrono::DateTime<Utc>) -> Finding {
     let path = home.join("relay").join("receipts.json");
     let receipts: Receipts = match std::fs::read(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return "last delivery: none recorded".to_owned();
+            return Finding::note("last delivery: none recorded");
         }
         Err(error) => {
-            return format!(
+            return Finding::unknown(format!(
                 "last delivery: unknown, {} does not read: {error}",
                 path.display()
-            );
+            ));
         }
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(receipts) => receipts,
             Err(error) => {
-                return format!(
+                return Finding::unknown(format!(
                     "last delivery: unknown, {} does not parse: {error}",
                     path.display()
-                );
+                ));
             }
         },
     };
     let Some(at) = receipts.last_delivered_at else {
-        return "last delivery: none recorded".to_owned();
+        return Finding::note("last delivery: none recorded");
     };
     let Some(delivered_to) = receipts.delivered_to else {
-        return format!(
+        return Finding::unknown(format!(
             "last delivery: unknown, {} was written by commonmeasure 0.3.4 or earlier and names \
              no receiver; the next accepted delivery rewrites it",
             path.display()
-        );
+        ));
     };
     let configured = RelayConfig::load(home).ok().flatten();
     let to = if configured.is_some_and(|config| same_receiver(&config.receiver, &delivered_to)) {
@@ -303,11 +312,11 @@ pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
         format!(" to {}", receipt_receiver_text(&delivered_to))
     };
     match chrono::DateTime::parse_from_rfc3339(&at) {
-        Ok(delivered) => format!(
+        Ok(delivered) => Finding::ok(format!(
             "last delivery: {at}{to}, {} ago",
             age_text((now - delivered.with_timezone(&Utc)).num_seconds())
-        ),
-        Err(_) => format!("last delivery: {at}{to}, age unknown"),
+        )),
+        Err(_) => Finding::ok(format!("last delivery: {at}{to}, age unknown")),
     }
 }
 
@@ -661,24 +670,48 @@ fn queue_report(home: &Path, now: chrono::DateTime<Utc>) -> Result<QueueReport> 
     Ok(report)
 }
 
-/// Human-readable delivery standing shared by status, doctor and relay errors.
+/// Human-readable delivery standing shared by status, doctor and relay
+/// errors: the texts of [`egress_findings`], one per line.
 pub fn egress_text(report: &Value) -> String {
+    Finding::lines(&egress_findings(report))
+}
+
+/// The delivery standing of an egress report ([`egress_report`]) as
+/// findings. Dead batches, a relay error, a skipped session and a spool
+/// close that did not fold need the operator; a count the report could not
+/// establish is unknown, never read as zero; queued batches and a policy
+/// hold are the relay working as declared, so they are notes.
+pub fn egress_findings(report: &Value) -> Vec<Finding> {
     let count = |field: &str| {
         report[field]
             .as_u64()
             .map(|n| n.to_string())
             .unwrap_or_else(|| "unknown".into())
     };
-    let mut text = enrolment_error_line(report).unwrap_or_default();
-    if let Some(reason) = report["hub_refused"].as_str() {
-        text.push_str(&format!("hub URL refused: {reason}\n"));
+    let mut findings = Vec::new();
+    if let Some(error) = report["enrolment_error"].as_str() {
+        findings.push(Finding::unknown(format!(
+            "enrolment record unreadable: {error}"
+        )));
     }
-    text.push_str(&format!(
-        "relay batches: {} queued, {} dead, {} delivered; queued and dead are undelivered\n",
+    if let Some(reason) = report["hub_refused"].as_str() {
+        findings.push(Finding::attention(format!("hub URL refused: {reason}")));
+    }
+    let dead = report["dead"].as_u64();
+    let batches = format!(
+        "relay batches: {} queued, {} dead, {} delivered; queued and dead are undelivered",
         count("queued"),
         count("dead"),
         count("delivered_batches")
-    ));
+    );
+    findings.push(match dead {
+        Some(0) if report["queued"].is_u64() && report["delivered_batches"].is_u64() => {
+            Finding::ok(batches)
+        }
+        Some(0) => Finding::unknown(batches),
+        Some(_) => Finding::attention(batches),
+        None => Finding::unknown(batches),
+    });
     let age = report["oldest_queued_age_seconds"]
         .as_u64()
         .map(|n| format!("{n}s"))
@@ -689,8 +722,8 @@ pub fn egress_text(report: &Value) -> String {
                 "unknown".into()
             }
         });
-    text.push_str(&format!(
-        "oldest queued: {age}; next attempt: {}\n",
+    let queue = format!(
+        "oldest queued: {age}; next attempt: {}",
         report["next_attempt_at"]
             .as_str()
             .unwrap_or(if report["queued"].is_null() {
@@ -702,44 +735,53 @@ pub fn egress_text(report: &Value) -> String {
             } else {
                 "none"
             })
-    ));
+    );
+    findings.push(if report["queued"].is_null() {
+        Finding::unknown(queue)
+    } else {
+        Finding::note(queue)
+    });
     if let Some(reason) = report["hold_reason"].as_str() {
-        text.push_str(&format!(
-            "policy hold ({} batches): {reason}\n",
+        findings.push(Finding::note(format!(
+            "policy hold ({} batches): {reason}",
             count("held")
-        ));
+        )));
     }
     if let Some(error) = report["last_error"].as_str() {
-        text.push_str(&format!("last relay error: {error}\n"));
+        findings.push(Finding::attention(format!("last relay error: {error}")));
     }
     for session in report["skipped_sessions"].as_array().into_iter().flatten() {
         if let Ok(session) = serde_json::from_value::<SkippedSession>(session.clone()) {
-            text.push_str(&format!("{}\n", skipped_session_text(&session)));
+            findings.push(Finding::attention(skipped_session_text(&session)));
         }
     }
     if let Some(error) = report["close_error"].as_str() {
-        text.push_str(&format!(
+        findings.push(Finding::attention(format!(
             "last spool close did not fold the delivery journal: {error}; delivery state is \
-             intact and the next relay run retries\n"
-        ));
+             intact and the next relay run retries"
+        )));
     }
     if let Some(error) = report["close_error_unreadable"].as_str() {
-        text.push_str(&format!(
+        findings.push(Finding::unknown(format!(
             "relay/spool/outbound.close-error did not read ({error}), so whether the last spool \
              close folded the delivery journal is unknown; delivery state is intact and the \
-             file can be removed\n"
-        ));
+             file can be removed"
+        )));
     }
     if let Some(error) = report["unavailable"].as_str() {
-        text.push_str(&format!("relay state unavailable: {error}\n"));
+        findings.push(Finding::unknown(format!(
+            "relay state unavailable: {error}"
+        )));
     }
     if let Some(refused) = refused_spool_line(report) {
-        text.push_str(&refused);
+        findings.push(Finding::note(refused.trim_end_matches('\n')));
     }
-    if report["dead"].as_u64().is_some_and(|n| n > 0) {
-        text.push_str("requeue dead batches with `commonmeasure relay requeue`, then run `commonmeasure relay`\n");
+    if dead.is_some_and(|n| n > 0) {
+        findings.push(Finding::attention(
+            "requeue dead batches with `commonmeasure relay requeue`, then run `commonmeasure relay`",
+        ));
     }
-    text
+    findings
 }
 
 #[cfg(test)]

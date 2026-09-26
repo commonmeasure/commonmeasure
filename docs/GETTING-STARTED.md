@@ -314,13 +314,20 @@ The installer registers every host listed above.
 commonmeasure doctor claude
 ```
 
-`doctor` prints, for the host: which of the five hooks are registered and in
-which file, whether the MCP server is registered and its command, the binary
-each names and the version that binary reports when run, whether a plugin is
-installed beside the registration, whether the sessions directory can be
-written, and whether the policy file loads. A registration whose binary has
-gone is reported as not found, which is the one state in which every hook
-exits without recording and nothing in the session says so.
+`doctor` prints one report: the Edge home (whether the sessions directory
+can be written, whether the policy file loads), the console (whether one
+answers and where its Policy page is), the relay, and then the host: which
+of the five hooks are registered and in which file, whether the MCP server
+is registered and its command, the binary each names and the version that
+binary reports when run, and whether a plugin is installed beside the
+registration. Each finding is marked `✓`, `!` (something to act on), `?`
+(could not be determined) or `·` (a fact), and the report ends with what
+needs attention. A registration whose binary has gone is reported as not
+found and marked `!`, which is the one state in which every hook exits
+without recording and nothing in the session says so. `commonmeasure doctor`
+with no host reports every host; `--json` prints the same findings as a
+document for a script or a support thread; `--color never` drops the colour
+in a terminal.
 
 If every fetch is refused with a name that "resolves to a local or private
 address", `commonmeasure doctor --resolve <name>` looks the name up and says
@@ -666,6 +673,18 @@ to another loopback address; it binds nothing else without
 reload. The door-walkthrough session is under **Record**, with its two
 refusals as refused cards carrying the reasons quoted above. Each section
 is described in [The console](CONSOLE.md).
+
+```sh
+commonmeasure console               # where it is, whether it answers, each page's address
+commonmeasure console open policy   # open the Policy page in the browser
+```
+
+`console` looks for the console where `service install console` put it, or
+at `serve`'s default address, and says whether one answers there and which
+version. The policy's mode, a scope's denied hosts and the attribution rules
+are edited in the console's Policy page; `console open policy` opens it,
+and `doctor` names the same page in its Console section. Nothing here starts
+a console: where none answers, `open` refuses and names `serve`.
 
 ### Keep the console running (macOS)
 

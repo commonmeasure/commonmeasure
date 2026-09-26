@@ -1678,8 +1678,15 @@ fn doctor_text(home: &Path, hosts: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The finding whose text starts with `prefix`, without the indent and the
+/// standing mark `doctor` prints before it.
 fn line_of<'a>(text: &'a str, prefix: &str) -> &'a str {
     text.lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches(['✓', '!', '?', '·'])
+                .trim_start()
+        })
         .find(|line| line.starts_with(prefix))
         .unwrap_or_else(|| panic!("no {prefix:?} line in:\n{text}"))
 }

@@ -36,7 +36,7 @@ pub use enrolment::{
     ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, disconnect,
     refresh_directory_proof, refresh_directory_proof_if_due,
 };
-pub use state::{egress_report, enrolment_error_line, refused_spool_line};
+pub use state::{egress_findings, egress_report, enrolment_error_line, refused_spool_line};
 
 #[derive(Debug, Default)]
 pub struct RelayOptions {

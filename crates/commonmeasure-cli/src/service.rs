@@ -33,7 +33,7 @@ pub const LABEL: &str = "ai.commonmeasure.console";
 pub const RELAY_LABEL: &str = "ai.commonmeasure.relay";
 
 /// Where `serve` listens unless told otherwise.
-const DEFAULT_LISTEN: &str = "127.0.0.1:4173";
+pub(crate) const DEFAULT_LISTEN: &str = "127.0.0.1:4173";
 
 /// How long install waits for the previous process to release the port and
 /// for the new one to answer.
@@ -620,6 +620,16 @@ pub fn context() -> Result<Context, String> {
     })
 }
 
+/// The `--listen` the console service on this machine was installed with,
+/// read from its plist, or `None` where no service is installed, the plist
+/// is not in the form install writes, or this platform has no LaunchAgent.
+/// `commonmeasure console` and `doctor` look for the console here first.
+pub(crate) fn installed_listen() -> Option<String> {
+    let context = context().ok()?;
+    let text = std::fs::read_to_string(context.plist()).ok()?;
+    read_plist(&text).map(|installed| installed.listen)
+}
+
 /// The background relay's context: the console's, with its own label and
 /// log. In a debug build a `COMMONMEASURE_SERVICE_LABEL` override moves the
 /// relay's label with it, to `<override>.relay`, so a test that redirects
@@ -1165,7 +1175,7 @@ fn changed(path: &Path) -> Option<SystemTime> {
 
 /// What answered on the address.
 #[derive(Debug, PartialEq)]
-enum Answer {
+pub(crate) enum Answer {
     Nothing,
     /// A Common Measure console reporting its version and process.
     Console {
@@ -1177,7 +1187,7 @@ enum Answer {
     Unreported,
 }
 
-fn probe(address: SocketAddr) -> Answer {
+pub(crate) fn probe(address: SocketAddr) -> Answer {
     let timeout = Duration::from_secs(2);
     let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
         return Answer::Nothing;

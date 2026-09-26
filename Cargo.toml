@@ -26,6 +26,13 @@ chrono = { version = "0.4", features = ["serde"] }
 # transition, silently (`crates/commonmeasure-types/src/allowance.rs`).
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
+# The terminal styling the inspection commands print with
+# (`crates/commonmeasure-cli/src/report.rs`): `anstyle` names a colour or a
+# weight, `anstream` decides whether stdout takes it, from `--color`, the
+# terminal, `NO_COLOR` and `TERM`. Both are already in the tree through clap,
+# so no new crate enters it.
+anstyle = "1"
+anstream = "1"
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip` makes the parser correctly rounded, so the double a
 # document's decimal text names is the one every conforming reader gets.

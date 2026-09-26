@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use commonmeasure_harness::delivery::RELAY_LOCK_FILE;
+use commonmeasure_types::{Finding, Standing};
 use serde::{Deserialize, Serialize};
 
 /// The interval `service install relay` writes unless told otherwise: the
@@ -310,8 +311,8 @@ fn tick(home: &Path) {
 
 /// What `doctor` and `status` say about the background relay, with this
 /// user's relay LaunchAgent where one is installed.
-pub(crate) fn line(home: &Path) -> String {
-    line_for(
+pub(crate) fn finding(home: &Path) -> Finding {
+    finding_for(
         home,
         crate::service::relay_context()
             .ok()
@@ -319,51 +320,81 @@ pub(crate) fn line(home: &Path) -> String {
     )
 }
 
-/// [`line`], given the relay LaunchAgent on disk. A free lock with the agent
-/// installed for this home means the agent is not holding it: it was refused
-/// at start, stopped, or cannot run its binary, and the reason is in its log
-/// where it has written one, so "start it" would be the wrong remedy.
+/// [`finding`]'s words without the label, given the relay LaunchAgent on
+/// disk: what `service status` prints for the relay.
 pub(crate) fn line_for(home: &Path, agent: Option<crate::service::RelayAgent>) -> String {
+    finding_for(home, agent)
+        .text
+        .replacen("background relay: ", "", 1)
+}
+
+/// [`finding`], given the relay LaunchAgent on disk. A free lock with the
+/// agent installed for this home means the agent is not holding it: it was
+/// refused at start, stopped, or cannot run its binary, and the reason is in
+/// its log where it has written one, so "start it" would be the wrong
+/// remedy and the finding needs the operator. A loop holding the home is as
+/// it should be; one nobody installed, or one installed for another home, is
+/// a fact; a lock that cannot be read is unknown.
+pub(crate) fn finding_for(home: &Path, agent: Option<crate::service::RelayAgent>) -> Finding {
     use commonmeasure_harness::delivery::LockState;
-    match commonmeasure_harness::delivery::relay_loop_state(home) {
-        LockState::Running => format!(
-            "running (lock held{})",
-            Holder::read(home)
-                .map(|holder| format!(", {}", holder.describe()))
-                .unwrap_or_default()
-        ),
-        LockState::NotRunning => match agent {
-            Some(agent) if agent.may_serve(home) => format!(
-                "not running; installed ({}) but not holding the home; {}. `commonmeasure \
-                 service install relay` starts it again",
-                agent.plist.display(),
-                match &agent.log {
-                    Some(log) if log.exists() => format!("the reason is in {}", log.display()),
-                    Some(log) => format!("its log {} does not exist", log.display()),
-                    None => "the plist is not in the form install writes, so its log is not \
-                             known"
-                        .to_owned(),
-                }
-            ),
-            Some(agent) => format!(
-                "not running; the LaunchAgent {} relays {}, and `commonmeasure service install \
-                 relay` from this shell moves it to this home; or run `commonmeasure relay \
-                 --every {DEFAULT_EVERY_SECS}` under another service manager",
-                agent.plist.display(),
-                agent
-                    .home
-                    .as_deref()
-                    .map(Path::display)
-                    .map(|home| home.to_string())
+    let (standing, state) = match commonmeasure_harness::delivery::relay_loop_state(home) {
+        LockState::Running => (
+            Standing::Ok,
+            format!(
+                "running (lock held{})",
+                Holder::read(home)
+                    .map(|holder| format!(", {}", holder.describe()))
                     .unwrap_or_default()
             ),
-            None => format!(
-                "not running; start it with `commonmeasure service install relay` on macOS, or \
-                 run `commonmeasure relay --every {DEFAULT_EVERY_SECS}` under another service \
-                 manager"
+        ),
+        LockState::NotRunning => match agent {
+            Some(agent) if agent.may_serve(home) => (
+                Standing::Attention,
+                format!(
+                    "not running; installed ({}) but not holding the home; {}. `commonmeasure \
+                     service install relay` starts it again",
+                    agent.plist.display(),
+                    match &agent.log {
+                        Some(log) if log.exists() => format!("the reason is in {}", log.display()),
+                        Some(log) => format!("its log {} does not exist", log.display()),
+                        None => "the plist is not in the form install writes, so its log is not \
+                                 known"
+                            .to_owned(),
+                    }
+                ),
+            ),
+            Some(agent) => (
+                Standing::Note,
+                format!(
+                    "not running; the LaunchAgent {} relays {}, and `commonmeasure service \
+                     install relay` from this shell moves it to this home; or run `commonmeasure \
+                     relay --every {DEFAULT_EVERY_SECS}` under another service manager",
+                    agent.plist.display(),
+                    agent
+                        .home
+                        .as_deref()
+                        .map(Path::display)
+                        .map(|home| home.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
+            None => (
+                Standing::Note,
+                format!(
+                    "not running; start it with `commonmeasure service install relay` on macOS, \
+                     or run `commonmeasure relay --every {DEFAULT_EVERY_SECS}` under another \
+                     service manager"
+                ),
             ),
         },
-        LockState::Unknown(reason) => format!("whether one is running cannot be read ({reason})"),
+        LockState::Unknown(reason) => (
+            Standing::Unknown,
+            format!("whether one is running cannot be read ({reason})"),
+        ),
+    };
+    Finding {
+        standing,
+        text: format!("background relay: {state}"),
     }
 }
 
@@ -436,6 +467,11 @@ mod tests {
     use super::*;
     use crate::service::testing::settle;
     use std::time::Instant;
+
+    /// The words `status` prints for the background relay.
+    fn line(home: &Path) -> String {
+        finding(home).text.replacen("background relay: ", "", 1)
+    }
 
     fn with_receiver(home: &Path) {
         std::fs::write(
