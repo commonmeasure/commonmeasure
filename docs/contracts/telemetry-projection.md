@@ -713,28 +713,29 @@ For as long as it runs it holds `relay-loop.lock` in the home, created
 readable by its owner only, and writes its pid and interval into it. A
 second background relay on the same home keeps trying for a second, so a
 probe's momentary hold does not refuse it, and is then refused, naming the
-lock and, while that process is alive, the holder's pid and interval. The lock is apart from the spool's
-`relay/spool/delivery.lock`, which it takes only during a run, so a
-session-end run or a typed `commonmeasure relay` between its runs works as
-before; one that meets a run in progress loses the spool lock and leaves its
-work to the next run. The licence ruling, `status` and `doctor` read the
-lock ([session evidence §Source declarations](session-evidence.md#source-declarations)).
-`commonmeasure service install relay` runs it at login on macOS as the
-LaunchAgent `ai.commonmeasure.relay`, logging to `logs/relay.log` in the
-home. Its `KeepAlive` is `SuccessfulExit` false: launchd restarts the loop
-after an unsuccessful exit (an exit status other than 0, or a signal that
-kills it, such as a crash), and its `ThrottleInterval` of 300 seconds
-keeps it from starting more than once in five minutes, so a loop that
-crashes at every start runs a relay no more often than one on the default
-interval. Launchd counts from the last start, so a loop that ran for longer
-before it crashed starts again at once. It leaves the loop stopped
-after exit 0, which is SIGTERM or a refusal at start. A refused loop
-therefore stays stopped until `service install relay` runs again or the
-next login, including one refused for a cause that clears by itself: a
-home on a volume mounted after login has no `relay.json` yet, so the loop
-refuses for want of a receiver and stays stopped after the volume mounts.
-`doctor` names the state and the log. On other platforms `service` refuses and names
-the command to run under the platform's own service manager.
+lock and, while that process is alive, the holder's pid and interval. The
+lock is apart from the spool's `relay/spool/delivery.lock`, which it takes
+only during a run, so a session-end run or a typed `commonmeasure relay`
+between its runs works as before; one that meets a run in progress loses the
+spool lock and leaves its work to the next run. The licence ruling, `status`
+and `doctor` read the lock ([session evidence §Source
+declarations](session-evidence.md#source-declarations)). `commonmeasure
+service install relay` runs it at login on macOS as the LaunchAgent
+`ai.commonmeasure.relay`, logging to `logs/relay.log` in the home. Its
+`KeepAlive` is `SuccessfulExit` false: launchd restarts the loop after an
+unsuccessful exit (an exit status other than 0, or a signal that kills it,
+such as a crash), and its `ThrottleInterval` of 300 seconds keeps it from
+starting more than once in five minutes, so a loop that crashes at every
+start runs a relay no more often than one on the default interval. Launchd
+counts from the last start, so a loop that ran for longer before it crashed
+starts again at once. It leaves the loop stopped after exit 0, which is
+SIGTERM or a refusal at start. A refused loop therefore stays stopped until
+`service install relay` runs again or the next login, including one refused
+for a cause that clears by itself: a home on a volume mounted after login
+has no `relay.json` yet, so the loop refuses for want of a receiver and
+stays stopped after the volume mounts. `doctor` names the state and the log.
+On other platforms `service` refuses and names the command to run under the
+platform's own service manager.
 
 The edge sees no end to a Claude Desktop session. Each run relays such a
 session as far as its log reads, as the hosted service's interval relay

@@ -6,6 +6,13 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.4 (26 September 2026)
+
+### Fixed
+
+- A session start on a managed home renews the reporting approvals when their snapshot is missing, has expired or is past the midpoint of its validity, inside the managed policy refresh's three-second wait; a hub that does not answer delays the start by at most those three seconds and leaves the snapshot as it was. Up to and including 0.4.3 only a relay run, `enrol --sync` and MCP `context_enrol` renewed them, so on a home with no background relay the first session after the snapshot expired refused every source whose licence demands usage reporting until it ended ([directory enrolment](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/directory-enrolment.md#signed-reporting-approvals)).
+- A usage-reporting demand on a page the relay never reports, a local or private address or a URL under a prefix in `record_internal_prefixes`, is unmet, and the fetch is refused. Up to and including 0.4.3 such a demand could be ruled met and the page admitted while the relay withheld its events ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#source-declarations)).
+
 ## 0.4.3 (26 September 2026)
 
 **Upgrading:**

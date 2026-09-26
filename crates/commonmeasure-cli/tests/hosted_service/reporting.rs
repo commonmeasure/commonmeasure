@@ -432,12 +432,112 @@ const REPORTING_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
     </reporting>
   </license></content></rsl>"#;
 
+/// A publisher whose licence demands grounding telemetry reporting, on
+/// loopback.
+fn reporting_site() -> ServerHandle {
+    Server::bind("127.0.0.1:0")
+        .expect("bind")
+        .spawn(|request| match request.target.as_str() {
+            "/robots.txt" => {
+                Response::text(200, "License: /license.xml\nUser-agent: *\nAllow: /\n")
+            }
+            "/license.xml" => Response::new(200, REPORTING_LICENCE.as_bytes().to_vec()),
+            "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+            _ => Response::text(200, "the reported article"),
+        })
+        .expect("spawn")
+}
+
+/// `site`'s URL under a public name. The relay never projects a crossing of
+/// a loopback address, so a reporting demand there is never met; the debug
+/// binary resolves this name to loopback (`COMMONMEASURE_TEST_HOSTS`, set
+/// by [`StdioServer`]), and the hub's policy lets the fetch reach it.
+fn public(site: &ServerHandle) -> String {
+    site.url().replace("127.0.0.1", "publisher.test")
+}
+
+/// A Claude Code MCP server on stdio, as the host starts it: the real
+/// binary in the session's directory, initialised before it is asked
+/// anything.
+struct StdioServer {
+    child: Child,
+    stdin: std::process::ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
+    log: std::path::PathBuf,
+    /// From the spawn to the answer to `initialize`, which the server
+    /// gives only once the session has opened.
+    started_in: Duration,
+}
+
+impl StdioServer {
+    fn start(home: &Path, cwd: &Path, session: &str) -> Self {
+        let spawned = Instant::now();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["mcp", "--host", "claude-code", "--session", session])
+            .env("COMMONMEASURE_HOME", home)
+            .env("HOME", home)
+            .env("COMMONMEASURE_TEST_HOSTS", "publisher.test=127.0.0.1")
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the server starts");
+        let stdin = child.stdin.take().expect("stdin");
+        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+        let mut server = Self {
+            child,
+            stdin,
+            stdout,
+            log: home.join(format!("sessions/{session}.ndjson")),
+            started_in: Duration::ZERO,
+        };
+        server.ask(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                          "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                     "clientInfo": {"name": "claude-code", "version": "1"}}}));
+        server.started_in = spawned.elapsed();
+        server
+    }
+
+    fn ask(&mut self, request: Value) -> Value {
+        writeln!(self.stdin, "{request}").expect("write request");
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).expect("a response");
+        serde_json::from_str(&line).expect("one JSON object per line")
+    }
+
+    fn fetch(&mut self, id: u64, url: &str) -> Value {
+        self.ask(json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                        "params": {"name": "context_fetch", "arguments": {"url": url}}}))
+    }
+
+    /// The reporting ruling on the session's `index`th crossing.
+    fn reporting(&self, index: usize) -> Value {
+        commonmeasure_harness::SessionLog::read(&self.log)
+            .expect("session log")
+            .into_iter()
+            .filter(|record| {
+                record["event"]
+                    .as_str()
+                    .is_some_and(|event| event.starts_with("crossing_"))
+            })
+            .nth(index)
+            .expect("the crossing")["payload"]["declarations"]["reporting"]
+            .clone()
+    }
+
+    fn stop(mut self) {
+        drop(self.stdin);
+        assert!(self.child.wait().expect("the server exits").success());
+    }
+}
+
 /// Review P2-A, on a managed, directory-selected home. A Claude Code MCP
 /// server started while a signed approval cleared its directory rules a
 /// reporting demand met; once that approval expires, with the server still
 /// running, the next demand is refused, because the relay would withhold
-/// the crossing's events. The approval lives two seconds; the hub serves no
-/// renewal.
+/// the crossing's events. The approval lives three seconds; the hub serves
+/// no renewal.
 #[test]
 fn a_reporting_demand_is_refused_once_the_approval_the_server_started_under_expires() {
     let hub = Hub::start();
@@ -467,77 +567,247 @@ fn a_reporting_demand_is_refused_once_the_approval_the_server_started_under_expi
         "the approval clears the directory"
     );
 
-    let site = Server::bind("127.0.0.1:0")
-        .expect("bind")
-        .spawn(|request| match request.target.as_str() {
-            "/robots.txt" => {
-                Response::text(200, "License: /license.xml\nUser-agent: *\nAllow: /\n")
-            }
-            "/license.xml" => Response::new(200, REPORTING_LICENCE.as_bytes().to_vec()),
-            "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
-            _ => Response::text(200, "the reported article"),
-        })
-        .expect("spawn");
-    let mut server = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
-        .args(["mcp", "--host", "claude-code", "--session", "expiry"])
-        .env("COMMONMEASURE_HOME", home.path())
-        .env("HOME", home.path())
-        .current_dir(&cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("the server starts");
-    let mut stdin = server.stdin.take().expect("stdin");
-    let mut stdout = BufReader::new(server.stdout.take().expect("stdout"));
-    let mut ask = |request: Value| -> Value {
-        writeln!(stdin, "{request}").expect("write request");
-        let mut line = String::new();
-        stdout.read_line(&mut line).expect("a response");
-        serde_json::from_str(&line).expect("one JSON object per line")
-    };
-    ask(json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
-               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
-                          "clientInfo": {"name": "claude-code", "version": "1"}}}));
-    let mut fetch = |id: u64, page: &str| {
-        ask(json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-                   "params": {"name": "context_fetch",
-                              "arguments": {"url": format!("{}/{page}", site.url())}}}))
-    };
-    let reporting = |index: usize| {
-        commonmeasure_harness::SessionLog::read(&home.path().join("sessions/expiry.ndjson"))
-            .expect("session log")
-            .into_iter()
-            .filter(|record| {
-                record["event"]
-                    .as_str()
-                    .is_some_and(|event| event.starts_with("crossing_"))
-            })
-            .nth(index)
-            .expect("the crossing")["payload"]["declarations"]["reporting"]
-            .clone()
-    };
-
-    let approved = fetch(1, "approved");
+    let site = reporting_site();
+    let mut server = StdioServer::start(home.path(), &cwd, "expiry");
+    let approved = server.fetch(1, &format!("{}/approved", public(&site)));
     assert_eq!(approved["result"]["isError"], false, "{approved}");
-    assert_eq!(reporting(0)["met"], true, "{}", reporting(0));
+    assert_eq!(server.reporting(0)["met"], true, "{}", server.reporting(0));
 
     std::thread::sleep(
         expires.saturating_duration_since(Instant::now()) + Duration::from_millis(200),
     );
-    let expired = fetch(2, "expired");
+    let expired = server.fetch(2, &format!("{}/expired", public(&site)));
     assert_eq!(expired["result"]["isError"], true, "{expired}");
-    assert_eq!(reporting(1)["met"], false);
-    assert_eq!(reporting(1)["telemetry_egress_cleared"], false);
-    let reason = reporting(1)["reason"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
+    let ruling = server.reporting(1);
+    assert_eq!(ruling["met"], false);
+    assert_eq!(ruling["telemetry_egress_cleared"], false);
+    let reason = ruling["reason"].as_str().unwrap_or_default();
     assert!(
         reason.contains("as it stands now clears no telemetry egress"),
         "{reason}"
     );
+    server.stop();
+}
 
-    drop(stdin);
-    assert!(server.wait().expect("the server exits").success());
+/// A managed, directory-selected home with the hub's policy applied, whose
+/// only approval snapshot has expired: accepted while current, it lives two
+/// seconds. Returns the approval that clears the root, for the hub to
+/// renew.
+fn expired_approvals(hub: &Hub, home: &Path, root: &Path) -> Value {
+    let project = Registry::enrol(home, root, "Renewal test", true).expect("selection");
+    relay_ok(home);
+    let lifetime = Duration::from_secs(2);
+    let approved = json!([{"project_id": project.id, "binding": project.binding}]);
+    let short = signed_approvals(
+        hub,
+        home,
+        1,
+        approved.clone(),
+        chrono::Duration::from_std(lifetime).expect("duration"),
+    );
+    let expires = Instant::now() + lifetime;
+    commonmeasure_harness::directory::accept(home, &short).expect("valid signed snapshot");
+    std::thread::sleep(
+        expires.saturating_duration_since(Instant::now()) + Duration::from_millis(200),
+    );
+    approved
+}
+
+/// EGR-179. A home with no background relay whose approval snapshot expired
+/// meets a reporting demand in the next session: the session start renews
+/// the snapshot from the hub. A second start, under a snapshot early in its
+/// life, asks the hub nothing.
+#[test]
+fn a_session_started_after_the_approvals_expired_renews_them_and_meets_a_demand() {
+    let hub = Hub::start();
+    let home = tempfile::tempdir().expect("home");
+    let root = tempfile::tempdir().expect("root");
+    hub.enrol_managed(home.path());
+    let approved = expired_approvals(&hub, home.path(), root.path());
+    *hub.approvals.lock().expect("approvals") = Some(signed_approvals(
+        &hub,
+        home.path(),
+        2,
+        approved,
+        chrono::Duration::hours(1),
+    ));
+    let cwd = root.path().canonicalize().expect("canonical root");
+    let site = reporting_site();
+
+    let asked = hub.approval_requests.load(Ordering::SeqCst);
+    let mut server = StdioServer::start(home.path(), &cwd, "renewed");
+    assert_eq!(hub.approval_requests.load(Ordering::SeqCst), asked + 1);
+    let fetched = server.fetch(1, &format!("{}/renewed", public(&site)));
+    assert_eq!(fetched["result"]["isError"], false, "{fetched}");
+    assert_eq!(server.reporting(0)["met"], true, "{}", server.reporting(0));
+    server.stop();
+
+    let again = StdioServer::start(home.path(), &cwd, "current");
+    assert_eq!(
+        hub.approval_requests.load(Ordering::SeqCst),
+        asked + 1,
+        "a snapshot in the first half of its life is not renewed at a start"
+    );
+    again.stop();
+}
+
+/// EGR-179. With the hub answering neither the approvals nor the policy
+/// route, the renewal and the policy refresh together cost the start one
+/// session-start budget, not one each, and the session opens under the
+/// expired snapshot: the demand is refused as it was before the renewal
+/// existed. Breaks where the renewal waits a budget of its own after the
+/// policy refresh has spent the shared one.
+#[test]
+fn a_hub_that_does_not_answer_delays_the_start_by_the_budget_and_the_demand_is_refused() {
+    let hub = Hub::start();
+    let home = tempfile::tempdir().expect("home");
+    let root = tempfile::tempdir().expect("root");
+    hub.enrol_managed(home.path());
+    let approved = expired_approvals(&hub, home.path(), root.path());
+    *hub.approvals.lock().expect("approvals") = Some(signed_approvals(
+        &hub,
+        home.path(),
+        2,
+        approved,
+        chrono::Duration::hours(1),
+    ));
+    hub.approvals_stalled.store(true, Ordering::SeqCst);
+    hub.policy_stalled.store(true, Ordering::SeqCst);
+    let before = std::fs::read(home.path().join("reporting-approvals.json")).expect("snapshot");
+    let cwd = root.path().canonicalize().expect("canonical root");
+    let site = reporting_site();
+
+    let asked = hub.approval_requests.load(Ordering::SeqCst);
+    let mut server = StdioServer::start(home.path(), &cwd, "stalled");
+    assert_eq!(hub.approval_requests.load(Ordering::SeqCst), asked + 1);
+    let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+    assert!(
+        server.started_in < budget + Duration::from_secs(2),
+        "the start took {:?}",
+        server.started_in
+    );
+    let refused = server.fetch(1, &format!("{}/stalled", public(&site)));
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    let ruling = server.reporting(0);
+    assert_eq!(ruling["met"], false);
+    let reason = ruling["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("this session's policy scope clears no telemetry egress"),
+        "{reason}"
+    );
+    assert_eq!(
+        std::fs::read(home.path().join("reporting-approvals.json")).expect("snapshot"),
+        before,
+        "the snapshot is kept"
+    );
+    server.stop();
+}
+
+/// Hold `page`'s origin's `robots.txt`, which names a licence demanding
+/// grounding telemetry reporting, and that licence, current in the
+/// declaration cache, so a crossing is ruled on them with no request made.
+fn hold_reporting_declarations(home: &Path, page: &str) {
+    use commonmeasure_harness::discovery;
+    let now = chrono::Utc::now();
+    let licence = format!(
+        "{}/license.xml",
+        page.trim_end_matches(|c| c != '/').trim_end_matches('/')
+    );
+    let probe = |url: &str, body: &str| {
+        json!({"url": url, "fetched_at": now, "expires_at": now + chrono::Duration::hours(1),
+               "status": 200, "body": body})
+    };
+    let record: discovery::HostRecord = serde_json::from_value(json!({
+        "robots": probe(
+            &discovery::robots_url_of(page),
+            &format!("License: {licence}\nUser-agent: *\nAllow: /\n"),
+        ),
+        "licences": {licence.clone(): probe(&licence, REPORTING_LICENCE)},
+    }))
+    .expect("a host record");
+    discovery::DeclarationCache::open(home)
+        .save(&commonmeasure_harness::grounding::host_of(page), &record);
+}
+
+/// EGR-180 (review P3-1). A hosted tenant whose fetch meets a reporting
+/// demand after the operator's `deployment.json` stopped loading is told
+/// the file by its name in the home, never by the operator's path, and the
+/// ruling the crossing records names it the same way: the server names it
+/// by pace, as it names `policy.json` and `relay.json`, and does not rely
+/// on the transport's rewrite of the answer. The declarations are held, so
+/// the ruling is reached with no request; the demand is unmet, which
+/// refuses the crossing in every mode.
+#[test]
+fn a_deployment_file_that_stops_loading_is_named_to_a_tenant_by_no_path() {
+    let hub = Hub::start();
+    let home = tempfile::tempdir().expect("home");
+    let root = tempfile::tempdir().expect("root");
+    hub.enrol_managed(home.path());
+    let project =
+        Registry::enrol(home.path(), root.path(), "Hosted test", true).expect("selection");
+    relay_ok(home.path());
+    approve(
+        &hub,
+        home.path(),
+        1,
+        json!([{"project_id": project.id, "binding": project.binding}]),
+    );
+    configure(home.path(), root.path());
+    let page = "https://publisher.example/article";
+    hold_reporting_declarations(home.path(), page);
+    let service = Service::start(home.path());
+    let authorization = hub.bearer("user-1", "m365-copilot");
+    let session = service.open_session("m365-copilot", &authorization);
+    let status = service.call(
+        "m365-copilot",
+        &authorization,
+        &session,
+        1,
+        "context_status",
+        json!({}),
+    );
+    assert_eq!(
+        payload(&status)["policy"]["allow_telemetry_egress"],
+        true,
+        "{}",
+        text(&status)
+    );
+
+    std::fs::write(home.path().join("deployment.json"), "{").expect("break deployment.json");
+    let response = service.call(
+        "m365-copilot",
+        &authorization,
+        &session,
+        2,
+        "context_fetch",
+        json!({"url": page}),
+    );
+    let answer = text(&response);
+    assert!(
+        answer.contains("deployment.json is not a valid deployment"),
+        "{answer}"
+    );
+    let operator = home.path().display().to_string();
+    assert!(!answer.contains(&operator), "{answer}");
+    let session_log = std::fs::read_dir(home.path().join("sessions"))
+        .expect("sessions")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "ndjson")
+        })
+        .expect("the session log");
+    let refused = commonmeasure_harness::SessionLog::read(&session_log)
+        .expect("session log")
+        .into_iter()
+        .find(|record| record["event"] == "crossing_refused")
+        .expect("the refused crossing");
+    let reason = refused["payload"]["declarations"]["reporting"]["reason"]
+        .as_str()
+        .expect("a reason")
+        .to_owned();
+    assert!(
+        reason.starts_with("deployment.json is not a valid deployment"),
+        "{reason}"
+    );
 }

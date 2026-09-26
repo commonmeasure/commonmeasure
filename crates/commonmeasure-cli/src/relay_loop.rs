@@ -339,10 +339,7 @@ pub(crate) fn line_for(home: &Path, agent: Option<crate::service::RelayAgent>) -
                 agent.plist.display(),
                 match &agent.log {
                     Some(log) if log.exists() => format!("the reason is in {}", log.display()),
-                    Some(log) => format!(
-                        "it has not written its log {}, so it has not run since it was installed",
-                        log.display()
-                    ),
+                    Some(log) => format!("its log {} does not exist", log.display()),
                     None => "the plist is not in the form install writes, so its log is not \
                              known"
                         .to_owned(),
@@ -437,6 +434,7 @@ mod stop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service::testing::settle;
     use std::time::Instant;
 
     fn with_receiver(home: &Path) {
@@ -464,8 +462,15 @@ mod tests {
         );
         assert!(line(home.path()).starts_with("running (lock held, pid "));
         drop(first);
-        assert!(line(home.path()).starts_with("not running; "));
-        drop(LoopLock::take(home.path(), 30).expect("released with the first"));
+        let released = settle(
+            || line(home.path()),
+            |line| line.starts_with("not running; "),
+        );
+        assert!(released.starts_with("not running; "), "{released}");
+        drop(
+            settle(|| LoopLock::take(home.path(), 30), Result::is_ok)
+                .expect("released with the first"),
+        );
     }
 
     // Review P3-7: a probe's momentary hold (`lock_state` takes a free lock

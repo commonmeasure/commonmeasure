@@ -1534,16 +1534,16 @@ empty. `statements` and `licences` are those of the origin that answered.
 Where a hop is refused by host policy before its file is read, `robots`
 stays the last hop that was evaluated and its `requested_url` says which.
 
-What the operator's mode does with a disallowed `ai-input` statement, the
-use a mediated fetch makes of a page: `strict` refuses, before the request
-when the statement was known then and otherwise after it, in which case the
-bytes were fetched and are withheld from context, their hash on the refused
-crossing and `grounded` false; `observe` and `prefer` carry the crossing with
-the statement named in `breach`. A `robots.txt` `Disallow` for the selected
-group is not ruled on this way: it refuses in every mode (above). A licence whose AI-input permission is
-conditional on a payment, or on a token from a licence server, is a term this
-edge cannot meet without a settlement rail, and is ruled on the same way with
-the term named.
+What the operator's mode does with a disallowed `ai-input` statement, the use
+a mediated fetch makes of a page: `strict` refuses, before the request when
+the statement was known then and otherwise after it, in which case the bytes
+were fetched and are withheld from context, their hash on the refused crossing
+and `grounded` false; `observe` and `prefer` carry the crossing with the
+statement named in `breach`. A `robots.txt` `Disallow` for the selected group
+is not ruled on this way: it refuses in every mode (above). A licence whose
+AI-input permission is conditional on a payment, or on a token from a licence
+server, is a term this edge cannot meet without a settlement rail, and is
+ruled on the same way with the term named.
 
 A licence's reporting demands are ruled on where the source's own statements
 govern, whatever the combined AI-input preference. A `Content-Signal` in
@@ -1568,33 +1568,48 @@ the fetcher from the report its owner asks for.
 
 A licence's telemetry reporting demand is met when its profile is the Content
 Telemetry binding this runtime speaks, its conformance level is one this
-runtime emits (`retrieval` or `grounding`), and the session can deliver:
-the policy scope clears telemetry egress both in the policy the session
-started under and in `policy.json` as it stands at the ruling,
-`$COMMONMEASURE_HOME/relay.json`
-is one the relay loads and names a receiver that is not scoped to suppliers
-([telemetry projection §Supplier scope](telemetry-projection.md#supplier-scope):
-a fetched page names no supplier, so a scoped receiver never carries it, and
-an empty list is a scope), and automatic delivery is in force. A `relay.json`
-the relay refuses, a malformed `suppliers` list among its faults, leaves the
-demand unmet with the load error as the reason, because the relay sends
-nothing under it. `relay.json` is read at each ruling, not once when the MCP
-server starts, so a receiver removed or scoped to suppliers during a
-long-lived session (Claude Desktop keeps its server for the life of the app)
-leaves the next demand unmet. Egress clearance is read the same way,
-because the relay resolves it from the current policy and reporting
-approvals at each run: a scope's `allow_telemetry_egress` withdrawn, or a
-directory's reporting approval that has expired, leaves the next demand
-unmet, and a `policy.json` that does not load at the ruling leaves it unmet with the
-load error as the reason. A clearance granted after the server started
+runtime emits (`retrieval` or `grounding`), and the session can deliver: the
+relay would project a crossing of the page, so its URL is not a local or
+private address and is under no prefix in `record_internal_prefixes`, either
+the session's or that of `policy.json` as it stands at the ruling ([telemetry
+projection](telemetry-projection.md): the relay projects neither; a private
+address is reached only under `allow_private_hosts` or a prefix named in
+`record_internal_prefixes`, and under neither on a hosted edge in service
+mode, which holds the private-address floor), the policy scope clears
+telemetry egress both in the policy the session started under and in
+`policy.json` as it stands at the ruling, `$COMMONMEASURE_HOME/relay.json` is
+one the relay loads and names a receiver that is not scoped to suppliers
+([telemetry projection §Supplier
+scope](telemetry-projection.md#supplier-scope): a fetched page names no
+supplier, so a scoped receiver never carries it, and an empty list is a
+scope), and automatic delivery is in force. A `relay.json` the relay refuses,
+a malformed `suppliers` list among its faults, leaves the demand unmet with
+the load error as the reason, because the relay sends nothing under it.
+`relay.json` is read at each ruling, not once when the MCP server starts, so a
+receiver removed or scoped to suppliers during a long-lived session (Claude
+Desktop keeps its server for the life of the app) leaves the next demand
+unmet. Egress clearance is read the same way, because the relay resolves it
+from the current policy and reporting approvals at each run: a scope's
+`allow_telemetry_egress` withdrawn in `policy.json`, or a directory's
+reporting approval that has expired, leaves the next demand unmet, and a
+`policy.json` that does not load at the ruling leaves it unmet with the load
+error as the reason. On a managed home the ruling reads the policy and the
+approvals as last synced to the home: a withdrawal or a revocation made at the
+hub reaches it at the next sync, which a session start makes (the policy on
+each start, the approvals when their snapshot is due, [directory
+enrolment](directory-enrolment.md)). A relay run and `enrol --sync` sync
+both; `policy sync` syncs the policy only. The relay syncs before it projects, so a crossing admitted in
+between has its events withheld. A clearance granted after the server started
 does not widen that session; it applies from the next one. Automatic delivery
-means the events leave without anyone typing a command — the session-end
-relay ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)), or the hosted service's or the background
-relay's interval ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval)). The marker
-file `$COMMONMEASURE_HOME/relay/manual` switches it off, and a demand is
-then unmet however the rest is configured; the reason names the marker, so
-the operator reads what to remove. A profile this runtime does not recognise
-is an unmet demand.
+means the events leave without anyone typing a command — the session-end relay
+([telemetry projection §Relay at session
+end](telemetry-projection.md#relay-at-session-end)), or the hosted service's
+or the background relay's interval ([telemetry projection §Relay on an
+interval](telemetry-projection.md#relay-on-an-interval)). The marker file
+`$COMMONMEASURE_HOME/relay/manual` switches it off, and a demand is then unmet
+however the rest is configured; the reason names the marker, so the operator
+reads what to remove. A profile this runtime does not recognise is an unmet
+demand.
 
 Which sessions have automatic delivery is read from the session itself and
 the home's own state, never from host files under `$HOME`:

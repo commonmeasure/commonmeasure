@@ -56,6 +56,21 @@ fn converse(home: &Path, requests: &[Value]) -> Vec<Value> {
     converse_in(home, None, requests)
 }
 
+/// A name the ruling reads as public, which every MCP server this file
+/// starts resolves to loopback through the debug binary's
+/// `COMMONMEASURE_TEST_HOSTS` ([`TEST_HOSTS`]).
+const PUBLIC_NAME: &str = "publisher.test";
+const TEST_HOSTS: &str = "publisher.test=127.0.0.1";
+
+/// A publisher's URL under [`PUBLIC_NAME`] rather than the loopback address
+/// its server listens on. The relay never projects a crossing of a local or
+/// private address, so a reporting demand on one is never met; the policy's
+/// `allow_private_hosts` lets the fetch reach the loopback address the name
+/// resolves to.
+fn public(site: &ServerHandle) -> String {
+    site.url().replace("127.0.0.1", PUBLIC_NAME)
+}
+
 /// The same conversation, started from a chosen working directory — which is
 /// what a policy scope is resolved against.
 fn converse_in(home: &Path, cwd: Option<&Path>, requests: &[Value]) -> Vec<Value> {
@@ -81,7 +96,8 @@ fn converse_as_host(
     let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
     command
         .args(["mcp", "--host", host, "--session", "test-session"])
-        .env("COMMONMEASURE_HOME", home);
+        .env("COMMONMEASURE_HOME", home)
+        .env("COMMONMEASURE_TEST_HOSTS", TEST_HOSTS);
     if let Some(asserted) = asserted {
         command.env("COMMONMEASURE_PRINCIPAL", asserted);
     }
@@ -2257,7 +2273,10 @@ Allow: /
 
         let responses = converse(
             home.path(),
-            &[call("context_fetch", json!({"url": site.url("/linked")}))],
+            &[call(
+                "context_fetch",
+                json!({"url": site.url("/linked").replace("127.0.0.1", PUBLIC_NAME)}),
+            )],
         );
         assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
         let detail = error_text(&responses[0]);
@@ -2272,7 +2291,10 @@ Allow: /
         let payload = &recorded[0]["payload"];
         assert_eq!(recorded[0]["event"], "crossing_refused");
         assert_eq!(payload["grounded"], false);
-        assert_eq!(payload["licence"]["reference"], site.url("/license.xml"));
+        assert_eq!(
+            payload["licence"]["reference"],
+            site.url("/license.xml").replace("127.0.0.1", PUBLIC_NAME)
+        );
         assert_eq!(payload["declarations"]["effective"]["ai-input"], "allow");
         assert_eq!(
             payload["declarations"]["effective"]["train-ai"], "disallow",
@@ -4500,7 +4522,7 @@ mod reporting_demand {
             r#"{"policy_mode":"strict","allow_private_hosts":true,
                 "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
         );
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
 
         // Cleared, but no receiver is configured: nothing would be reported,
         // so the demand is not met and the record says which check failed.
@@ -4584,6 +4606,194 @@ mod reporting_demand {
         );
     }
 
+    /// EGR-175. A demand on a page whose crossing the relay would never
+    /// project is unmet whatever the scope clears, and refused before the
+    /// request: the loopback address itself, which `allow_private_hosts`
+    /// lets the fetch reach, and a public name under a prefix the policy
+    /// names in `record_internal_prefixes`. A page of the same publisher
+    /// outside the prefix is admitted in the same home.
+    #[test]
+    fn a_demand_on_a_page_the_relay_never_projects_is_refused() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cleared = workspace.path().join("reporting-cleared");
+        std::fs::create_dir_all(&cleared).unwrap();
+        write_policy(
+            home.path(),
+            &json!({"policy_mode": "strict", "allow_private_hosts": true,
+                    "record_internal_prefixes": [format!("{}/intranet/", public(&site))],
+                    "scopes": [{"match": "reporting-cleared", "engagement": "research",
+                                "allow_telemetry_egress": true}]})
+            .to_string(),
+        );
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+        )
+        .unwrap();
+        let responses = converse_in(
+            home.path(),
+            Some(&cleared),
+            &[
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/article", site.url())}),
+                ),
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/intranet/handbook", public(&site))}),
+                ),
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/article", public(&site))}),
+                ),
+            ],
+        );
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+        assert_eq!(responses[1]["result"]["isError"], true, "{responses:?}");
+        assert_eq!(responses[2]["result"]["isError"], false, "{responses:?}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the admitted page is requested"
+        );
+        let recorded = crossings(home.path());
+        let reason = |index: usize| {
+            let reporting = &recorded[index]["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], false, "{reporting}");
+            assert_eq!(reporting["telemetry_egress_cleared"], true, "{reporting}");
+            reporting["reason"].as_str().unwrap_or_default().to_owned()
+        };
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert!(
+            reason(0).contains("is a local or private address, whose events the relay never sends"),
+            "{}",
+            reason(0)
+        );
+        assert_eq!(recorded[1]["event"], "crossing_refused");
+        assert!(
+            reason(1).contains("names in \"record_internal_prefixes\""),
+            "{}",
+            reason(1)
+        );
+        assert_eq!(recorded[2]["event"], "crossing_mediated");
+        assert_eq!(
+            recorded[2]["payload"]["declarations"]["reporting"]["met"],
+            true
+        );
+    }
+
+    /// EGR-175, after the fetch. A public URL redirects to a page under a
+    /// prefix the policy names in `record_internal_prefixes`, and the
+    /// reporting demand is learned only from that page's `Link` header, so
+    /// the ruling comes after the request and is on the page the crossing
+    /// records: unmet, with the bytes withheld. The same redirect to a page
+    /// outside the prefix is admitted in the same home. Breaks where the
+    /// after-fetch ruling is on the URL asked for rather than the final one.
+    #[test]
+    fn a_demand_learned_from_a_redirected_page_is_ruled_on_that_page() {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&hits);
+        let site = Server::bind("127.0.0.1:0")
+            .expect("bind")
+            .spawn(move |request| match request.target.as_str() {
+                "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+                "/license.xml" => {
+                    let mut response = Response::new(200, REPORTING_LICENCE.as_bytes().to_vec());
+                    response.headers.set("Content-Type", "application/rsl+xml");
+                    response
+                }
+                "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+                "/moved-in" | "/moved-out" => {
+                    let to = match request.target.as_str() {
+                        "/moved-in" => "/intranet/report",
+                        _ => "/report",
+                    };
+                    let mut response = Response::new(302, Vec::new());
+                    response.headers.set("Location", to);
+                    response
+                }
+                _ => {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let mut response = Response::text(200, "the reported article");
+                    response.headers.set(
+                        "Link",
+                        "</license.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
+                    );
+                    response
+                }
+            })
+            .expect("spawn");
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let cleared = workspace.path().join("reporting-cleared");
+        std::fs::create_dir_all(&cleared).unwrap();
+        write_policy(
+            home.path(),
+            &json!({"policy_mode": "strict", "allow_private_hosts": true,
+                    "record_internal_prefixes": [format!("{}/intranet/", public(&site))],
+                    "scopes": [{"match": "reporting-cleared", "engagement": "research",
+                                "allow_telemetry_egress": true}]})
+            .to_string(),
+        );
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+        )
+        .unwrap();
+        let responses = converse_in(
+            home.path(),
+            Some(&cleared),
+            &[
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/moved-in", public(&site))}),
+                ),
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/moved-out", public(&site))}),
+                ),
+            ],
+        );
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+        assert!(
+            error_text(&responses[0]).contains("withheld from context"),
+            "{}",
+            error_text(&responses[0])
+        );
+        assert_eq!(responses[1]["result"]["isError"], false, "{responses:?}");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "both pages are requested: the demand is known only from them"
+        );
+        let recorded = crossings(home.path());
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert_eq!(
+            recorded[0]["payload"]["url"],
+            format!("{}/intranet/report", public(&site))
+        );
+        let unmet = &recorded[0]["payload"]["declarations"]["reporting"];
+        assert_eq!(unmet["met"], false, "{unmet}");
+        assert!(
+            unmet["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("names in \"record_internal_prefixes\""),
+            "{unmet}"
+        );
+        assert_eq!(recorded[1]["event"], "crossing_mediated");
+        assert_eq!(
+            recorded[1]["payload"]["url"],
+            format!("{}/report", public(&site))
+        );
+        assert_eq!(
+            recorded[1]["payload"]["declarations"]["reporting"]["met"],
+            true
+        );
+    }
+
     /// A demanded level the relay does not emit cannot be met whatever the
     /// scope clears, and a reporting demand binds in every mode, so observe
     /// refuses it as strict does (owner decision, 22 September 2026).
@@ -4609,7 +4819,7 @@ mod reporting_demand {
             Some(&cleared),
             &[call(
                 "context_fetch",
-                json!({"url": format!("{}/article", site.url())}),
+                json!({"url": format!("{}/article", public(&site))}),
             )],
         );
         assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
@@ -4644,7 +4854,7 @@ mod reporting_demand {
     #[test]
     fn an_audit_reporting_demand_is_unmet_and_refused_in_every_mode() {
         let (site, hits) = publisher(AUDIT_LICENCE);
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         for mode in ["strict", "observe", "prefer"] {
             let home = tempfile::tempdir().expect("tempdir");
             let workspace = tempfile::tempdir().expect("tempdir");
@@ -4703,7 +4913,7 @@ mod reporting_demand {
     #[test]
     fn the_manual_marker_leaves_a_telemetry_demand_unmet_and_refused_in_every_mode() {
         let (site, hits) = publisher(REPORTING_LICENCE);
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         for mode in ["strict", "observe", "prefer"] {
             for manual in [false, true] {
                 let home = tempfile::tempdir().expect("tempdir");
@@ -4812,7 +5022,7 @@ mod reporting_demand {
         }
         requests.push(call(
             "context_fetch",
-            json!({"url": format!("{}/article", site.url())}),
+            json!({"url": format!("{}/article", public(&site))}),
         ));
         let responses = converse_as_host(home.path(), Some(&cleared), None, host, &requests);
         (responses, crossings(home.path()))
@@ -4959,29 +5169,6 @@ mod reporting_demand {
             .collect()
     }
 
-    /// Append to the session log a copy of the last crossing the server
-    /// admitted, moved to the public host `news.example.com` under `page`
-    /// with an acquisition id of its own. The relay never projects a
-    /// crossing to a private address, and the test's origin is loopback, so
-    /// the admitted crossing itself cannot leave; its copy, in the shape the
-    /// server wrote, stands in for the same fetch from a public origin.
-    fn publicise_last_admitted(home: &Path, page: &str, n: u32) {
-        let log = home.join("sessions/test-session.ndjson");
-        let mut record = crossings(home)
-            .into_iter()
-            .rev()
-            .find(|record| record["event"] == "crossing_mediated")
-            .expect("an admitted crossing");
-        let payload = &mut record["payload"];
-        payload["url"] = json!(format!("https://news.example.com/{page}"));
-        payload["host_name"] = json!("news.example.com");
-        if let Some(id) = payload["acquisition_id"].as_str() {
-            payload["acquisition_id"] = json!(format!("{n:08x}{}", &id[8..]));
-        }
-        let mut file = std::fs::OpenOptions::new().append(true).open(log).unwrap();
-        writeln!(file, "{record}").unwrap();
-    }
-
     /// Wait up to 30 s for `done`; on a timeout the loop's `journal` is in
     /// the failure.
     fn wait_for(what: &str, journal: &Path, mut done: impl FnMut() -> bool) {
@@ -5002,9 +5189,8 @@ mod reporting_demand {
     /// reporting (today's behaviour, pinned); with `relay --every` holding
     /// the home the same session is admitted, and its events reach the
     /// loopback receiver on the loop's next tick with nobody running a
-    /// command. What reaches the receiver is the admitted record moved to a
-    /// public host ([`publicise_last_admitted`]), with the session's refused
-    /// count on its batch. The session keeps being written between ticks: a later
+    /// command, with the session's refused count on its batch. The session
+    /// keeps being written between ticks: a later
     /// fetch leaves on a later tick and no event is posted twice. SIGTERM
     /// stops the loop cleanly and releases the lock, and the next session is
     /// refused again.
@@ -5054,7 +5240,7 @@ mod reporting_demand {
                     )),
                     call(
                         "context_fetch",
-                        json!({"url": format!("{}/{page}", site.url())}),
+                        json!({"url": format!("{}/{page}", public(&site))}),
                     ),
                 ],
             )
@@ -5082,7 +5268,6 @@ mod reporting_demand {
             recorded[1]["payload"]["declarations"]["reporting"]["met"],
             true
         );
-        publicise_last_admitted(home.path(), "during", 1);
         // No command is run here: the loop's next tick delivers.
         wait_for("the first delivery", &journal, || {
             !posted_ids(&bodies).is_empty()
@@ -5099,20 +5284,21 @@ mod reporting_demand {
             types.iter().any(|kind| kind == "content_retrieved"),
             "{types:?}"
         );
+        let during = format!("{}/during", public(&site));
         assert!(
             bodies
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|body| body.to_string().contains("news.example.com/during")),
-            "the admitted session's crossing left"
+                .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+                .any(|event| event["type"] == "content_retrieved" && event["content_url"] == during),
+            "the admitted session's crossing left as {during}"
         );
 
         // The session is still being written: a later fetch leaves on a
         // later tick, and what left already is not posted again.
         let again = fetch("after");
         assert_eq!(again[1]["result"]["isError"], false, "{again:?}");
-        publicise_last_admitted(home.path(), "after", 2);
         wait_for("the second delivery", &journal, || {
             posted_ids(&bodies).len() > first.len()
         });
@@ -5185,6 +5371,7 @@ mod reporting_demand {
                 "test-session",
             ])
             .env("COMMONMEASURE_HOME", home.path())
+            .env("COMMONMEASURE_TEST_HOSTS", TEST_HOSTS)
             .current_dir(&cleared)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -5205,7 +5392,7 @@ mod reporting_demand {
         let mut fetch = |page: &str| {
             ask(call(
                 "context_fetch",
-                json!({"url": format!("{}/{page}", site.url())}),
+                json!({"url": format!("{}/{page}", public(&site))}),
             ))
         };
         let reporting = |index: usize| {
@@ -5265,6 +5452,7 @@ mod reporting_demand {
             let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
                 .args(["mcp", "--host", "claude-code", "--session", "test-session"])
                 .env("COMMONMEASURE_HOME", home)
+                .env("COMMONMEASURE_TEST_HOSTS", TEST_HOSTS)
                 .current_dir(cwd)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -5331,7 +5519,7 @@ mod reporting_demand {
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
-        let page = |name: &str| format!("{}/{name}", site.url());
+        let page = |name: &str| format!("{}/{name}", public(&site));
         let reporting = |index: usize| {
             crossings(home.path())[index]["payload"]["declarations"]["reporting"].clone()
         };
@@ -5473,7 +5661,7 @@ mod reporting_demand {
     #[test]
     fn a_disallow_in_robots_does_not_excuse_an_unmet_reporting_demand() {
         let (site, hits) = declaring_publisher(SIGNAL_DISALLOWS, REPORTING_LICENCE, &[]);
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         for mode in ["observe", "prefer"] {
             let (responses, recorded) = fetch_in_mode(&url, mode, true);
             assert_eq!(
@@ -5529,7 +5717,7 @@ mod reporting_demand {
                 ),
             ],
         );
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         for mode in ["observe", "prefer"] {
             let before = hits.load(std::sync::atomic::Ordering::SeqCst);
             let (responses, recorded) = fetch_in_mode(&url, mode, true);
@@ -5577,7 +5765,7 @@ mod reporting_demand {
     #[test]
     fn a_licence_without_permits_still_binds_its_reporting_demand() {
         let (site, _) = declaring_publisher(ROBOTS, UNLISTED_USAGE_LICENCE, &[]);
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         for mode in ["strict", "observe", "prefer"] {
             let (responses, recorded) = fetch_in_mode(&url, mode, true);
             assert_eq!(
@@ -5612,7 +5800,7 @@ mod reporting_demand {
     #[test]
     fn a_met_demand_beside_a_disallow_is_carried_with_the_breach_in_observe() {
         let (site, hits) = declaring_publisher(SIGNAL_DISALLOWS, REPORTING_LICENCE, &[]);
-        let url = format!("{}/article", site.url());
+        let url = format!("{}/article", public(&site));
         let (responses, recorded) = fetch_in_mode(&url, "observe", false);
         assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
         assert_eq!(payload(&responses[0])["content"], "the reported article");
@@ -6951,7 +7139,8 @@ mod absolute_licence_scope {
 /// alone. A key held in the receiver's credentials, its query or a
 /// tokenised path is in no part of the `context_fetch` result, the strict
 /// refusal or the source record. Driven through the binary against a
-/// loopback origin, with operator terms that require reporting and a scope
+/// loopback origin under a public name ([`public`]), with operator terms
+/// that require reporting and a scope
 /// that clears telemetry egress, so the relay configuration's error is
 /// what leaves the demand unmet.
 #[test]
@@ -6964,7 +7153,7 @@ fn a_refused_receiver_reaches_the_agent_by_its_origin_alone() {
             _ => Response::text(200, "Reported under the agreement."),
         })
         .expect("spawn");
-    let url = format!("{}/article", origin.url());
+    let url = format!("{}/article", public(&origin));
     for (receiver, fault, named) in [
         (
             "https://ops:ak_PLANTED@hub.example:8443/api/v1/telemetry",
@@ -6988,7 +7177,7 @@ fn a_refused_receiver_reaches_the_agent_by_its_origin_alone() {
             std::fs::create_dir_all(&work).expect("workspace");
             let policy = json!({
                 "policy_mode": mode, "allow_private_hosts": true,
-                "terms": [{"host": "127.0.0.1", "reference": "operator-agreement",
+                "terms": [{"host": PUBLIC_NAME, "reference": "operator-agreement",
                     "requires_reporting": true,
                     "assessment": {"basis": "agreement", "applicability": "applicable",
                         "version": "2026-09", "claimed_issuer": "Local publication",

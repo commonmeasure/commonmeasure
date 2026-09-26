@@ -380,7 +380,12 @@ pub fn accept(home: &Path, value: &Value) -> Result<(), String> {
 
 /// Exchange enrolment metadata with the connected hub. Never return credentials or
 /// include a canonical path in a request. Redirects are not followed.
-fn hub_request(home: &Path, path: &str, body: Option<Value>) -> Result<Value, String> {
+fn hub_request(
+    home: &Path,
+    path: &str,
+    body: Option<Value>,
+    budget: std::time::Duration,
+) -> Result<Value, String> {
     let edge = EnrolmentRecord::load(home)?
         .ok_or("not connected: run commonmeasure connect <named-hub> --token <token> --managed")?;
     if edge.is_revoked() {
@@ -400,7 +405,7 @@ fn hub_request(home: &Path, path: &str, body: Option<Value>) -> Result<Value, St
         None => commonmeasure_http::Request::get(path),
     };
     request.headers.set("X-API-Key", &key);
-    let response = commonmeasure_http::send(&url, request)
+    let response = crate::managed::send_within(&url, request, budget)
         .map_err(|_| "directory enrolment hub is unreachable".to_owned())?;
     if !(200..300).contains(&response.status) {
         return Err(format!(
@@ -419,6 +424,7 @@ pub fn request(home: &Path, project: &Project) -> Result<Value, String> {
         Some(
             json!({"project_id": project.id, "binding": project.binding, "name": project.name, "requested": project.reporting}),
         ),
+        crate::managed::DEFAULT_BUDGET,
     )
 }
 
@@ -426,11 +432,51 @@ pub fn request(home: &Path, project: &Project) -> Result<Value, String> {
 /// preserves the previous snapshot and its original expiry; 404 is never a
 /// revocation.
 pub fn sync(home: &Path) -> Result<(), String> {
+    sync_within(home, crate::managed::DEFAULT_BUDGET)
+}
+
+/// [`sync`] with the request, name resolution included, bounded by
+/// `budget`: the session-start form, where a host is waiting.
+pub fn sync_within(home: &Path, budget: std::time::Duration) -> Result<(), String> {
     if Registry::read(home)?.is_none() || !crate::managed::is_managed(home)? {
         return Ok(());
     }
-    let value = hub_request(home, "/api/v1/edge/reporting-approvals", None)?;
+    let value = hub_request(home, "/api/v1/edge/reporting-approvals", None, budget)?;
     accept(home, &value)
+}
+
+/// Whether a session start should ask the hub for reporting approvals: on a
+/// managed, directory-selected home whose snapshot is absent, does not
+/// verify, has expired or has passed the midpoint of its validity. Any
+/// other home makes no request. A snapshot in the first half of its life is
+/// left alone, so a start costs a hub request at most once per half-life,
+/// and a start that renews or finds nothing due opens under approvals
+/// current for at least half the hub's validity window from then. A session
+/// shorter than what remains keeps its clearance throughout; one that
+/// outlives it loses clearance at the next ruling after the snapshot
+/// expires, until a relay run or `enrol --sync` renews it. The cost is the
+/// withdrawal lag: on a home with no relay, a hub-side withdrawal reaches a
+/// session start up to half the window late. The relay renews on every run
+/// whatever this says.
+pub fn renewal_due(home: &Path, now: DateTime<Utc>) -> bool {
+    if !matches!(Registry::read(home), Ok(Some(_)))
+        || !crate::managed::is_managed(home).unwrap_or(false)
+    {
+        return false;
+    }
+    let Ok(Some(value)) = snapshot(home) else {
+        return true;
+    };
+    let time = |field: &str| {
+        value[field]
+            .as_str()
+            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+            .map(|time| time.with_timezone(&Utc))
+    };
+    match (time("issued_at"), time("expires_at")) {
+        (Some(issued), Some(expires)) => now >= issued + (expires - issued) / 2,
+        _ => true,
+    }
 }
 
 /// Shared CLI/MCP status reports local evidence independently from delivery.
@@ -873,5 +919,35 @@ mod tests {
             status(home.path(), &project.root).unwrap()["approvals"]["state"],
             "missing"
         );
+    }
+
+    /// EGR-179. A session start renews only a snapshot that is absent,
+    /// expired or past the midpoint of its validity, and only on a managed,
+    /// directory-selected home.
+    #[test]
+    fn a_renewal_is_due_only_for_a_missing_expired_or_half_spent_snapshot() {
+        let (home, key, project) = home();
+        let now = Utc::now();
+        assert!(renewal_due(home.path(), now), "absent");
+        let approvals = json!([{"project_id":project.id,"binding":project.binding}]);
+        accept(home.path(), &signed(&key, 1, approvals.clone(), false)).unwrap();
+        // Issued an hour ago for a day.
+        assert!(!renewal_due(home.path(), now), "early in its life");
+        assert!(
+            renewal_due(home.path(), now + chrono::Duration::hours(12)),
+            "past its midpoint"
+        );
+        std::fs::write(
+            home.path().join(FILE),
+            serde_json::to_vec(&signed(&key, 2, approvals, true)).unwrap(),
+        )
+        .unwrap();
+        assert!(renewal_due(home.path(), now), "expired");
+        std::fs::write(home.path().join(FILE), b"{}").unwrap();
+        assert!(renewal_due(home.path(), now), "does not verify");
+
+        std::fs::remove_file(home.path().join("directories.json")).unwrap();
+        std::fs::remove_file(home.path().join("directory-selection.json")).unwrap();
+        assert!(!renewal_due(home.path(), now), "no directory selection");
     }
 }

@@ -1740,7 +1740,10 @@ mod tests {
         let lock = HomeLock::take(home.path()).expect("taken");
         assert!(HomeLock::held(home.path()));
         drop(lock);
-        assert!(!HomeLock::held(home.path()));
+        assert!(!crate::service::testing::settle(
+            || HomeLock::held(home.path()),
+            |held| !held
+        ));
     }
 
     /// The home lock is created readable by its owner only, so another local
@@ -1759,7 +1762,10 @@ mod tests {
         );
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        drop(HomeLock::take(home.path()).expect("taken"));
+        drop(
+            crate::service::testing::settle(|| HomeLock::take(home.path()), Result::is_ok)
+                .expect("taken"),
+        );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o644

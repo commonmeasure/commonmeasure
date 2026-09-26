@@ -3403,7 +3403,10 @@ mod tests {
             "{both}"
         );
         drop(lock);
-        let hook = super::automatic_relay_line(home, true);
+        let hook = crate::service::testing::settle(
+            || super::automatic_relay_line(home, true),
+            |hook| hook.contains("no other local host sends the event"),
+        );
         assert!(
             hook.contains("no other local host sends the event"),
             "{hook}"
@@ -3451,7 +3454,10 @@ mod tests {
         );
         drop(service);
         drop(lock);
-        let off = super::automatic_relay_line(home, true);
+        let off = crate::service::testing::settle(
+            || super::automatic_relay_line(home, true),
+            |off| off.contains("start the background relay (`commonmeasure relay --every 300`"),
+        );
         assert!(
             off.contains("start the background relay (`commonmeasure relay --every 300`"),
             "{off}"

@@ -306,6 +306,17 @@ fn under_a_prefix(
     }
 }
 
+/// Whether a witnessed URL may leave the machine. The privacy floor holds
+/// unconditionally on egress: a crossing that entered the record because the
+/// operator named its prefix internal is exactly the crossing that must not
+/// be projected, so the named prefixes are an exclusion here, the inverse of
+/// the role they play at capture. The relay asks this of every crossing it
+/// projects, and the ruling on a reporting demand asks it of the page before
+/// the fetch, so a demand is met only where the relay would send the events.
+pub fn projectable(raw: &str, internal_prefixes: &[String]) -> bool {
+    recordable(raw) && !matches_internal_prefix(raw, internal_prefixes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

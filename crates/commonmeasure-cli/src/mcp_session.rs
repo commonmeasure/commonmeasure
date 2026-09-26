@@ -64,9 +64,14 @@ impl Transport {
 /// what the transport serves and whether it holds the private-address floor.
 ///
 /// In order: the directory proof is renewed when the enrolment record says it
-/// is due; managed policy is refreshed unless this session's log already
-/// carries a session-start hook's refresh, so the session runs under the
-/// revision the hub desires now; the policy is resolved once, and the log is
+/// is due, and the reporting approvals when their snapshot is
+/// ([`commonmeasure_harness::directory::renewal_due`]); managed policy is
+/// refreshed unless this session's log already carries a session-start
+/// hook's refresh, so the session runs under the revision the hub desires
+/// now. The three run side by side inside one
+/// [`SESSION_START_BUDGET`](commonmeasure_harness::managed::SESSION_START_BUDGET),
+/// so a hub that does not answer delays the start by that budget once. The
+/// policy is resolved once, and the log is
 /// stamped with the identity every crossing will record; the refresh and the
 /// enrolled edge's identity are recorded before any crossing can be, and on a
 /// local transport the host process that started the server is recorded
@@ -82,12 +87,14 @@ pub(crate) fn open(
 ) -> Result<McpServer, String> {
     let started = std::time::Instant::now();
     let directory_proof = crate::start_directory_proof_refresh(home);
+    let approvals = start_approvals_renewal(home);
     let policy_sync = (!SessionLog::holds_event(home, session_id, "policy_sync"))
         .then(|| {
             crate::sync_managed_policy(home, commonmeasure_harness::managed::SESSION_START_BUDGET)
         })
         .flatten();
     crate::finish_directory_proof_refresh(directory_proof, started);
+    finish_approvals_renewal(approvals, started);
     let document = PolicyDocument::read(home)?;
     let policy = match principal {
         Some(principal) => document.with_principal(principal),
@@ -173,4 +180,53 @@ pub(crate) fn open(
     } else {
         server
     })
+}
+
+/// Renew the reporting approvals on their own thread when the snapshot is
+/// due, beside the policy refresh and inside its budget. Only the relay and
+/// this start renew them, and the ruling on a licence's reporting demand
+/// reads the snapshot: a home without a background relay whose snapshot
+/// expired would otherwise refuse every demand for the whole session.
+/// `None` when nothing is due and no request is made.
+fn start_approvals_renewal(home: &Path) -> Option<std::sync::mpsc::Receiver<Result<(), String>>> {
+    if !commonmeasure_harness::directory::renewal_due(home, chrono::Utc::now()) {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let home = home.to_owned();
+    std::thread::spawn(move || {
+        let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+        let _ = tx.send(commonmeasure_harness::directory::sync_within(&home, budget));
+    });
+    Some(rx)
+}
+
+/// Wait for a renewal started at `started` until the session-start budget
+/// is spent. A failure or a renewal still running then leaves the snapshot
+/// as it was, and the session's policy is resolved under it. The write is
+/// atomic. A renewal that finishes later is read by the next ruling's
+/// current-policy half only: the clearance this session resolved at its
+/// start stays as the old snapshot left it, so a session opened under an
+/// expired snapshot still refuses every reporting demand. Not recorded:
+/// the words go to stderr, as the relay's do.
+fn finish_approvals_renewal(
+    renewal: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    started: std::time::Instant,
+) {
+    let Some(renewal) = renewal else {
+        return;
+    };
+    let budget = commonmeasure_harness::managed::SESSION_START_BUDGET;
+    match renewal.recv_timeout(budget.saturating_sub(started.elapsed())) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!(
+            "commonmeasure: reporting approval renewal failed; the cached approvals keep their \
+             original expiry: {error}"
+        ),
+        Err(_) => eprintln!(
+            "commonmeasure: reporting approval renewal did not finish within {} s; the cached \
+             approvals keep their original expiry",
+            budget.as_secs()
+        ),
+    }
 }

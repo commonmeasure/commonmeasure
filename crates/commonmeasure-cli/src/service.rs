@@ -51,16 +51,17 @@ pub enum ServiceCommand {
     /// process already listens on the address.
     ///
     /// `install relay` installs the background relay the same way: a
-    /// LaunchAgent at ~/Library/LaunchAgents/ai.commonmeasure.relay.plist
-    /// that runs `relay --every <seconds>` at login, restarts it if it
-    /// crashes (at most once in five minutes), and logs to logs/relay.log. A loop refused at start (no
-    /// receiver, relay.json unreadable) exits 0 and stays stopped until
-    /// installed again. It sends to the receiver in
-    /// relay.json with nobody running a command, which is what lets a host
-    /// with no session-end event (Claude Desktop) use a source whose licence
-    /// demands usage reporting, where relay.json names a receiver not scoped
-    /// to suppliers and the policy scope clears telemetry egress. Refuses without a receiver in relay.json, and
-    /// while a background relay started by hand holds the home.
+    /// LaunchAgent at ~/Library/LaunchAgents/ai.commonmeasure.relay.plist that
+    /// runs `relay --every <seconds>` at login, restarts it if it crashes (at
+    /// most once in five minutes), and logs to logs/relay.log. A loop refused
+    /// at start (no receiver, relay.json unreadable) exits 0 and stays stopped
+    /// until installed again. It sends to the receiver in relay.json with
+    /// nobody running a command, which is what lets a host with no session-end
+    /// event (Claude Desktop) use a source whose licence demands usage
+    /// reporting, where relay.json names a receiver not scoped to suppliers
+    /// and the policy scope clears telemetry egress. Refuses without a
+    /// receiver in relay.json, and while a background relay started by hand
+    /// holds the home.
     Install {
         service: ServiceName,
         /// Address the console listens on. Loopback only; the console only.
@@ -2058,6 +2059,23 @@ pub mod testing {
         });
     }
 
+    /// The first reading `read` gives that `settled` accepts, or the last
+    /// one after five seconds, for the caller to assert on. A lock a test
+    /// has dropped can read as held for a while after: another test in this
+    /// binary may fork it (`under_umask_022`) while the lock file is open,
+    /// by the holder or by a probe's momentary hold, and the child shares
+    /// that hold until it execs.
+    pub fn settle<T>(mut read: impl FnMut() -> T, settled: impl Fn(&T) -> bool) -> T {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let reading = read();
+            if settled(&reading) || Instant::now() >= deadline {
+                return reading;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// The context of a shell whose HOME is `home` and whose Edge home is
     /// the default one under it.
     pub fn context(home: &Path) -> Context {
@@ -3258,7 +3276,10 @@ mod tests {
             "\tstate = running\n\tpid = 77\n",
         );
         drop(commands);
-        let text = relay_status(&context, &loaded).unwrap();
+        let text = super::testing::settle(
+            || relay_status(&context, &loaded).unwrap(),
+            |text| text.contains("relaying   not running; "),
+        );
         assert!(
             text.contains(&format!("service    {RELAY_LABEL}: installed at"))
                 && text.contains("every      120s")
@@ -3337,12 +3358,13 @@ mod tests {
         std::fs::create_dir_all(&context.edge_home).unwrap();
         std::fs::write(context.plist(), relay_plist(&context, 300)).unwrap();
         // Review P3-D: no log yet, so no reason is claimed to be in one.
+        // EGR-180 (P3-3): nor is it said that the loop never ran, since a
+        // log can be moved or deleted after runs.
         let unwritten = crate::relay_loop::line_for(&context.edge_home, relay_agent(&context));
         assert!(
-            unwritten.contains(&format!(
-                "it has not written its log {}",
-                context.log.display()
-            )) && !unwritten.contains("the reason is in"),
+            unwritten.contains(&format!("its log {} does not exist", context.log.display()))
+                && !unwritten.contains("the reason is in")
+                && !unwritten.contains("has not run"),
             "{unwritten}"
         );
         std::fs::create_dir_all(context.log.parent().unwrap()).unwrap();

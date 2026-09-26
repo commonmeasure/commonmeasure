@@ -130,8 +130,27 @@ becomes an empty snapshot and never extends the saved expiry.
 `enrol --sync` refreshes source policy and reporting approvals. Enrolment
 submits requests and obtains the current snapshot. Relay refreshes the
 approvals before projection; if that fails, only the previously accepted,
-unexpired snapshot can authorise reporting. There is no push or background
-service. Source-policy expiry keeps its existing last-known-good semantics;
+unexpired snapshot can authorise reporting. An MCP session start, stdio or
+hosted, refreshes them before it resolves the session's policy when the
+snapshot is missing, does not verify, has expired or has passed the
+midpoint of its validity, and otherwise asks nothing. The request runs
+beside the start's managed policy refresh and inside the same three-second
+budget (`SESSION_START_BUDGET`, [policy envelope §Cadence and
+staleness](policy-envelope.md#cadence-and-staleness)); a hub that has not
+answered by then, or a refused snapshot, leaves the saved snapshot as it
+was, and the session starts under it. The outcome is not recorded in the
+session log; a failure is one line on stderr. A renewal that finishes after
+the budget changes no clearance the session resolved at its start: a session
+opened under an expired snapshot refuses every reporting demand until it
+ends. Between session starts, every relay run renews the approvals,
+`relay --every` and the hosted service's interval relay included; the hub
+pushes nothing. Because a start renews only past the midpoint, a withdrawal
+or revocation made at the hub reaches a session start on a home with no
+relay up to half the validity window late (12 hours of a 24-hour window); a
+relay run renews before it projects, so the events of a crossing admitted in
+that lag are withheld. A session that outlives the snapshot it started under
+loses egress clearance when the snapshot expires, until a relay run or
+`enrol --sync` renews it. Source-policy expiry keeps its existing last-known-good semantics;
 approval expiry removes egress authority while admission still applies the
 source policy.
 

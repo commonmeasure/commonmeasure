@@ -1006,7 +1006,7 @@ pub fn sync_within(
 /// like any other unreachable outcome. Errors name the policy URL by its
 /// origin, since it can carry credentials; the transport's own errors name
 /// only the host or the authority of a URL that has already parsed.
-fn send_within(
+pub(crate) fn send_within(
     url: &str,
     request: commonmeasure_http::Request,
     budget: Duration,

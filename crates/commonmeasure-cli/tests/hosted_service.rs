@@ -81,6 +81,14 @@ struct Hub {
     /// The signed reporting-approval snapshot the approvals route serves the
     /// enrolled edge; unset, the route answers `404`.
     approvals: Arc<Mutex<Option<Value>>>,
+    approval_requests: Arc<AtomicUsize>,
+    /// Set, the approvals route holds each request for ten seconds before
+    /// it answers: an injected fault standing for a hub that does not
+    /// answer.
+    approvals_stalled: Arc<AtomicBool>,
+    /// Set, the policy route holds each request for ten seconds before it
+    /// answers, as `approvals_stalled` does for the approvals route.
+    policy_stalled: Arc<AtomicBool>,
 }
 
 impl Hub {
@@ -107,6 +115,9 @@ impl Hub {
         let release_outage = Arc::new(AtomicBool::new(false));
         let delivery_outage = Arc::new(AtomicBool::new(false));
         let approvals = Arc::new(Mutex::new(None::<Value>));
+        let approval_requests = Arc::new(AtomicUsize::new(0));
+        let approvals_stalled = Arc::new(AtomicBool::new(false));
+        let policy_stalled = Arc::new(AtomicBool::new(false));
         let release_nonces = Mutex::new(std::collections::HashSet::new());
         let listener = Server::bind("127.0.0.1:0").expect("bind");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
@@ -125,9 +136,16 @@ impl Hub {
                     Arc::clone(&delivery_outage),
                 );
                 let served_approvals = Arc::clone(&approvals);
+                let (approval_requests, approvals_stalled) =
+                    (Arc::clone(&approval_requests), Arc::clone(&approvals_stalled));
+                let policy_stalled = Arc::clone(&policy_stalled);
                 let url = url.clone();
                 move |request| match request.target.as_str() {
                     "/api/v1/edge/reporting-approvals" => {
+                        approval_requests.fetch_add(1, Ordering::SeqCst);
+                        if approvals_stalled.load(Ordering::SeqCst) {
+                            std::thread::sleep(Duration::from_secs(10));
+                        }
                         match served_approvals.lock().expect("lock").as_ref() {
                             Some(snapshot) => Response::json(200, &snapshot.to_string()),
                             None => Response::json(404, r#"{"detail":"not found"}"#),
@@ -135,6 +153,9 @@ impl Hub {
                     }
                     "/api/v1/policy/desired" => {
                         policy_requests.fetch_add(1, Ordering::SeqCst);
+                        if policy_stalled.load(Ordering::SeqCst) {
+                            std::thread::sleep(Duration::from_secs(10));
+                        }
                         let authority = request.headers.get("Host").unwrap_or_default().to_owned();
                         match webbotauth::verify(
                             &request,
@@ -263,6 +284,9 @@ impl Hub {
             release_outage,
             delivery_outage,
             approvals,
+            approval_requests,
+            approvals_stalled,
+            policy_stalled,
         }
     }
 
@@ -837,9 +861,12 @@ fn the_service_relays_refreshes_policy_and_keys_and_sweeps_on_its_interval_with_
     wait_until("the key refresh", Duration::from_secs(10), || {
         hub.jwks_reads.load(Ordering::SeqCst) > reads
     });
-    assert!(
-        home.path().join("hosted-jwks.json").exists(),
-        "the refreshed keys are cached on disk"
+    // The hub counts a read before it answers, and the service writes the
+    // cache only once the answer is parsed, so the count can lead the file.
+    wait_until(
+        "the refreshed keys cached on disk",
+        Duration::from_secs(10),
+        || home.path().join("hosted-jwks.json").exists(),
     );
 
     // A token verifies against the refreshed cache with no further read.

@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_harness::declarations::MAX_CRAWL_DELAY;
+use commonmeasure_harness::grounding::projectable;
 use commonmeasure_types::canonical::canonical_json;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -327,16 +328,6 @@ fn wire_url(url: &str) -> String {
         }
         _ => url.to_owned(),
     }
-}
-
-/// Whether a witnessed URL may leave the machine. The privacy floor holds
-/// unconditionally on egress: a crossing that entered the record because the
-/// operator named its prefix internal is exactly the crossing that must not
-/// be projected, so the named prefixes are an exclusion here, the inverse of
-/// the role they play at capture.
-fn projectable(url: &str, internal_prefixes: &[String]) -> bool {
-    commonmeasure_harness::grounding::recordable(url)
-        && !commonmeasure_harness::grounding::matches_internal_prefix(url, internal_prefixes)
 }
 
 /// Whether an evidence record is a crossing this machine watched happen.

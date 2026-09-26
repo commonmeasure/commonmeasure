@@ -272,7 +272,34 @@ type Resolve = Box<dyn Fn(&str) -> Result<Vec<SocketAddr>, String> + Send + Sync
 /// A hop's name looked up in DNS, with the failure's whole chain as its
 /// detail.
 fn system_resolve(url: &str) -> Result<Vec<SocketAddr>, String> {
+    #[cfg(debug_assertions)]
+    if let Some(addresses) = test_hosts(url) {
+        return Ok(addresses);
+    }
     commonmeasure_http::resolve(url).map_err(|error| format!("{error:#}"))
+}
+
+/// Debug builds only: the answer `COMMONMEASURE_TEST_HOSTS` gives for the
+/// URL's host, as comma-separated `name=address` pairs whose address is a
+/// loopback literal. It lets a test of the built binary fetch a public name
+/// from a loopback server, as `mcp::tests` do through [`McpServer`]'s
+/// `resolve`: the ruling on a reporting demand refuses a local or private
+/// address, and no public name resolves to loopback on every test machine.
+/// Everything after the lookup is the production path, the private-address
+/// check of the resolved address included. A release build does not read
+/// the variable.
+#[cfg(debug_assertions)]
+fn test_hosts(url: &str) -> Option<Vec<SocketAddr>> {
+    let hosts = std::env::var("COMMONMEASURE_TEST_HOSTS").ok()?;
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default()?;
+    hosts.split(',').find_map(|pair| {
+        let (name, address) = pair.split_once('=')?;
+        let address: std::net::IpAddr = address.trim().parse().ok()?;
+        (name.trim().eq_ignore_ascii_case(host) && address.is_loopback())
+            .then(|| vec![SocketAddr::new(address, port)])
+    })
 }
 
 impl McpServer {
@@ -368,6 +395,18 @@ impl McpServer {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         }
+    }
+
+    /// `error`, a load error that may name any file under the operator
+    /// home, with each such path named as [`Self::path_named`] names it. A
+    /// policy load reads `deployment.json`, `directories.json` and the
+    /// approvals as well as `policy.json`, and its errors name whichever
+    /// failed.
+    fn home_named_in(&self, error: &str) -> String {
+        if self.pace.names_the_edge() {
+            return error.to_owned();
+        }
+        error.replace(&format!("{}/", self.home().display()), "")
     }
 
     /// The allowance gate's reasons with the ledger named as [`Self::path_named`]
@@ -888,7 +927,7 @@ impl McpServer {
             // The refusal keeps every breach known so far: the host's, and
             // what the declarations read so far carry (a `Content-Signal`
             // observe carries), as every other refusal path does.
-            let known = self.rule_on_declarations(&mut declarations);
+            let known = self.rule_on_declarations(url, &mut declarations);
             let mut facts = FetchFacts::refused(url, reason.clone());
             facts.breach = merge_breaches(
                 ruling.reason().map(str::to_owned),
@@ -967,7 +1006,7 @@ impl McpServer {
             authorised = Some((context, decision));
         }
 
-        let before = self.rule_on_declarations(&mut declarations);
+        let before = self.rule_on_declarations(url, &mut declarations);
         if let Some(reason) = first_refusal(&before) {
             let mut facts = FetchFacts::refused(url, reason.clone());
             // A refusal keeps the other breaches the same declarations
@@ -1093,7 +1132,7 @@ impl McpServer {
                 Some(&pacing),
                 self.policy.mode(),
             );
-            let rulings = self.rule_on_declarations(&mut hop);
+            let rulings = self.rule_on_declarations(hop_url, &mut hop);
             let mut refusal = first_refusal(&rulings).cloned();
             if refusal.is_none() && !discovery::take_page_turn(&mut hop, &pacing, Utc::now()) {
                 refusal = hop
@@ -1281,7 +1320,7 @@ impl McpServer {
             &|probe_url, redirects| self.probe(probe_url, &pacing, redirects),
             Some(&pacing),
         );
-        let after = self.rule_on_declarations(&mut declarations);
+        let after = self.rule_on_declarations(&final_url, &mut declarations);
         let licence = licence_of(&declarations);
 
         // A PDF, or another file, is never decoded as text. Its crossing
@@ -2108,8 +2147,10 @@ impl McpServer {
     ///
     /// Every ruling here follows the session's mode except the access rule
     /// and a licence's reporting demand, which refuse the crossing in every
-    /// mode ([`binding_breach`]).
-    fn rule_on_declarations(&self, declarations: &mut Declarations) -> Vec<Ruling> {
+    /// mode ([`binding_breach`]). `url` is the URL the declarations are
+    /// for, which the crossing records if it goes ahead: the one asked for,
+    /// a redirect hop, or the URL that answered.
+    fn rule_on_declarations(&self, url: &str, declarations: &mut Declarations) -> Vec<Ruling> {
         let mode = self.policy.mode();
         let mut rulings = Vec::new();
         let mut reporting = None;
@@ -2143,7 +2184,7 @@ impl McpServer {
             Governing::OperatorTerms => {
                 let terms = declarations.terms.as_ref();
                 if terms.is_some_and(|terms| terms.requires_reporting) {
-                    let ruling = self.reporting_ruling_for(None, None);
+                    let ruling = self.reporting_ruling_for(url, None, None);
                     if let Some(reason) = &ruling.reason {
                         rulings.push(breach(
                             mode,
@@ -2280,7 +2321,7 @@ impl McpServer {
                             ));
                             continue;
                         }
-                        let ruling = self.reporting_ruling(demand);
+                        let ruling = self.reporting_ruling(url, demand);
                         if let Some(reason) = &ruling.reason {
                             rulings.push(binding_breach(
                                 format!(
@@ -2325,6 +2366,7 @@ impl McpServer {
     /// unlicensed.
     fn reporting_ruling(
         &self,
+        url: &str,
         demand: &crate::declarations::RslReporting,
     ) -> crate::discovery::ReportingRuling {
         let level = demand
@@ -2332,7 +2374,8 @@ impl McpServer {
             .as_ref()
             .and_then(|config| config["conformance_level"].as_str())
             .map(str::to_owned);
-        let mut ruling = self.reporting_ruling_for(Some(demand.profile.clone()), level.clone());
+        let mut ruling =
+            self.reporting_ruling_for(url, Some(demand.profile.clone()), level.clone());
         if demand.profile != TELEMETRY_PROFILE {
             ruling.reason = Some(format!(
                 "this runtime reports under {TELEMETRY_PROFILE} only and does not recognise the \
@@ -2360,9 +2403,17 @@ impl McpServer {
         ruling
     }
 
-    /// The session's half of any reporting ruling: whether the scope clears
-    /// telemetry egress, a receiver is configured and delivery happens
-    /// without a person, with the receiver named in the record.
+    /// The session's half of any reporting ruling: whether the relay would
+    /// project a crossing of `url` at all, the scope clears telemetry
+    /// egress, a receiver is configured and delivery happens without a
+    /// person, with the receiver named in the record.
+    ///
+    /// The first check is the relay's own predicate
+    /// ([`grounding::projectable`]): a local or private address, or a URL
+    /// under an internal prefix, never leaves the machine, whatever the
+    /// scope clears. The prefixes are the session's, which stamp the
+    /// crossing `internal` at capture, and those of the policy as it stands
+    /// now, which the relay applies at each run.
     ///
     /// The third check is the owner decision of 22 September 2026: a demand
     /// is met only where the events will actually leave, so an operator who
@@ -2388,6 +2439,7 @@ impl McpServer {
     /// relay refuses to run on it.
     fn reporting_ruling_for(
         &self,
+        url: &str,
         profile: Option<String>,
         conformance_level: Option<String>,
     ) -> crate::discovery::ReportingRuling {
@@ -2403,7 +2455,25 @@ impl McpServer {
                 .as_ref()
                 .is_ok_and(SessionPolicy::allows_telemetry_egress);
         let policy = self.policy.source();
-        let reason = if !self.policy.allows_telemetry_egress() {
+        let internal: Vec<String> = self
+            .policy
+            .internal_prefixes()
+            .iter()
+            .chain(current.iter().flat_map(SessionPolicy::internal_prefixes))
+            .cloned()
+            .collect();
+        let reason = if !grounding::recordable(url) {
+            Some(format!(
+                "{url} is a local or private address, whose events the relay never sends, so \
+                 nothing would be reported"
+            ))
+        } else if !grounding::projectable(url, &internal) {
+            Some(format!(
+                "{url} is under a prefix {} names in \"record_internal_prefixes\", whose events \
+                 the relay never sends, so nothing would be reported",
+                self.path_named(policy)
+            ))
+        } else if !self.policy.allows_telemetry_egress() {
             Some(
                 "this session's policy scope clears no telemetry egress, so nothing would be \
                  reported"
@@ -2412,7 +2482,7 @@ impl McpServer {
         } else if let Err(error) = &current {
             Some(format!(
                 "{}, so nothing would be reported",
-                error.replace(&policy.display().to_string(), &self.path_named(policy))
+                self.home_named_in(error)
             ))
         } else if !cleared {
             Some(format!(
@@ -2424,10 +2494,9 @@ impl McpServer {
             // The relay refuses the whole file, so nothing leaves for the
             // receiver it names either. The load error names the file in
             // full; the caller is told it as the arms below tell it.
-            let relay = self.policy.source().with_file_name("relay.json");
             Some(format!(
                 "{}, so nothing would be reported",
-                error.replace(&relay.display().to_string(), &self.path_named(&relay))
+                self.home_named_in(error)
             ))
         } else if receiver.is_none() {
             Some(format!(
@@ -4624,7 +4693,7 @@ mod tests {
             .interval_relay();
             server.pace = pace;
             let reason = server
-                .reporting_ruling_for(None, None)
+                .reporting_ruling_for("https://publisher.example/article", None, None)
                 .reason
                 .expect("unmet");
             let named = if pace.names_the_edge() {
@@ -5639,9 +5708,11 @@ mod tests {
             }
         };
 
-        let relayed = open(true).reporting_ruling_for(None, None);
+        let relayed =
+            open(true).reporting_ruling_for("https://publisher.example/article", None, None);
         assert!(relayed.met, "{:?}", relayed.reason);
-        let unrelayed = open(false).reporting_ruling_for(None, None);
+        let unrelayed =
+            open(false).reporting_ruling_for("https://publisher.example/article", None, None);
         assert!(!unrelayed.met);
         let reason = unrelayed.reason.expect("a reason");
         assert!(
@@ -5656,10 +5727,94 @@ mod tests {
             r#"{"receiver":"https://receiver.example/v1/events","suppliers":["ozone"]}"#,
         )
         .expect("relay.json");
-        let scoped = open(true).reporting_ruling_for(None, None);
+        let scoped =
+            open(true).reporting_ruling_for("https://publisher.example/article", None, None);
         assert!(!scoped.met);
         let reason = scoped.reason.expect("a reason");
         assert!(reason.contains("scoped to suppliers (ozone)"), "{reason}");
+    }
+
+    /// EGR-175. The ruling asks the relay's own projectability test of the
+    /// page: a local or private address, or a URL under an internal prefix
+    /// the session started under or `policy.json` names now, leaves a
+    /// demand unmet however the scope clears egress. A prefix added after
+    /// the server started refuses from the next ruling, and one removed
+    /// since still refuses, because the crossing is stamped `internal` at
+    /// capture under the session's prefixes.
+    #[test]
+    fn a_reporting_demand_on_a_page_the_relay_never_projects_is_unmet() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let work = home.path().join("reporting-cleared");
+        std::fs::create_dir_all(&work).expect("workspace");
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"https://receiver.example/v1"}"#,
+        )
+        .expect("relay.json");
+        let policy = |prefixes: &str| {
+            std::fs::write(
+                home.path().join("policy.json"),
+                format!(
+                    r#"{{"policy_mode":"strict","allow_private_hosts":true,
+                        "record_internal_prefixes":[{prefixes}],
+                        "scopes":[{{"match":"reporting-cleared","engagement":"research",
+                                    "allow_telemetry_egress":true}}]}}"#
+                ),
+            )
+            .expect("policy");
+        };
+        let server = || {
+            let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
+            let log = SessionLog::open(home.path(), "test-session").expect("session log");
+            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+                path: home
+                    .path()
+                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+                loaded: None,
+            };
+            McpServer::new(
+                log,
+                loaded,
+                "claude-code",
+                work.to_str().map(str::to_owned),
+                credentials,
+            )
+        };
+        let public = "https://publisher.example/article";
+        let intranet = "https://publisher.example/intranet/handbook";
+        let unmet = |ruling: crate::discovery::ReportingRuling, expected: &str| {
+            assert!(!ruling.met);
+            let reason = ruling.reason.expect("a reason");
+            assert!(reason.contains(expected), "{reason}");
+        };
+
+        policy("");
+        let started_open = server();
+        assert!(started_open.reporting_ruling_for(public, None, None).met);
+        for private in ["http://10.0.0.5/report", "http://intranet.internal/report"] {
+            unmet(
+                started_open.reporting_ruling_for(private, None, None),
+                "is a local or private address, whose events the relay never sends",
+            );
+        }
+        policy(r#""https://publisher.example/intranet/""#);
+        unmet(
+            started_open.reporting_ruling_for(intranet, None, None),
+            "names in \"record_internal_prefixes\"",
+        );
+        assert!(started_open.reporting_ruling_for(public, None, None).met);
+
+        let started_internal = server();
+        policy("");
+        unmet(
+            started_internal.reporting_ruling_for(intranet, None, None),
+            "names in \"record_internal_prefixes\"",
+        );
+        assert!(
+            started_internal
+                .reporting_ruling_for(public, None, None)
+                .met
+        );
     }
 
     /// The harness reads `relay.json` with the relay's parser, so a supplier
@@ -5696,7 +5851,7 @@ mod tests {
                 credentials,
             )
             .interval_relay()
-            .reporting_ruling_for(None, None)
+            .reporting_ruling_for("https://publisher.example/article", None, None)
         };
 
         for (suppliers, expected) in crate::relay_config::SUPPLIER_TABLE {
@@ -5767,7 +5922,7 @@ mod tests {
                 credentials,
             )
             .interval_relay()
-            .reporting_ruling_for(None, None);
+            .reporting_ruling_for("https://publisher.example/article", None, None);
             assert!(!ruling.met, "{planted}");
             assert_eq!(ruling.receiver, None, "{planted}");
             let reason = ruling.reason.expect("a reason");

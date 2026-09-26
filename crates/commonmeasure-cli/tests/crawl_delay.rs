@@ -117,10 +117,16 @@ fn licensed_origin(robots: &'static str, licence: &'static str) -> Origin {
 }
 
 /// A [`licensed_origin`] that reads the host's turn under `home` as
-/// [`paced_origin`] does.
+/// [`paced_origin`] does, named [`PUBLIC_NAME`]: the relay never projects a
+/// crossing of a local or private address, so a reporting demand is met
+/// only on a public name. [`converse_in`] resolves the name to loopback.
 fn paced_licensed_origin(home: &Path, robots: &'static str, licence: &'static str) -> Origin {
-    serve("127.0.0.1", robots, None, Some(licence), Some(home))
+    serve(PUBLIC_NAME, robots, None, Some(licence), Some(home))
 }
+
+/// A name the ruling reads as public, which the debug binary resolves to
+/// loopback through `COMMONMEASURE_TEST_HOSTS`.
+const PUBLIC_NAME: &str = "publisher.test";
 
 fn serve(
     host: &'static str,
@@ -224,11 +230,15 @@ fn converse(home: &Path, requests: &[Value]) -> Vec<Value> {
 }
 
 /// As [`converse`], with the server started in `cwd`, which is what the
-/// policy's scopes match.
+/// policy's scopes match, and [`PUBLIC_NAME`] resolved to loopback.
 fn converse_in(home: &Path, cwd: &Path, requests: &[Value]) -> Vec<Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
         .args(["mcp", "--host", "claude-code", "--session", "test-session"])
         .env("COMMONMEASURE_HOME", home)
+        .env(
+            "COMMONMEASURE_TEST_HOSTS",
+            format!("{PUBLIC_NAME}=127.0.0.1"),
+        )
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

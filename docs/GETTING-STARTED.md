@@ -834,22 +834,22 @@ commonmeasure service uninstall relay
 `install relay` writes `~/Library/LaunchAgents/ai.commonmeasure.relay.plist`,
 which runs `commonmeasure relay --every 300` at login, logging to
 `logs/relay.log` in the Edge home, and waits until the loop holds the home.
-Launchd restarts the loop if it crashes, at most once in five minutes. A loop that finds no receiver in
-`relay.json`, or a `relay.json` that does not load, says so in the log,
-exits and stays stopped until you install it again; `status` and `doctor`
-then say the agent is installed but not holding the home, and name its log. `install relay` refuses
-when `relay.json` names no receiver, and when a background relay you
-started by hand already holds the home. `commonmeasure disconnect` removes
-`relay.json` and names `service uninstall relay` while the agent is
-installed. On
-Linux, run `commonmeasure relay --every 300` under your own service manager;
-`service` names a `systemd-run` command, whose unit is transient (not
-restarted, not started at login), as for the console above. While it runs, `status` and
-`doctor` show `background relay: running`, and a Claude Desktop session may
-use a source whose licence demands usage reporting, where its policy scope
-clears telemetry egress and `relay.json` names a receiver not scoped to
-suppliers. A second one on the same
-home is refused. Each run sends what a session-end run would send, no more.
+Launchd restarts the loop if it crashes, at most once in five minutes. A loop
+that finds no receiver in `relay.json`, or a `relay.json` that does not load,
+says so in the log, exits and stays stopped until you install it again;
+`status` and `doctor` then say the agent is installed but not holding the
+home, and name its log. `install relay` refuses when `relay.json` names no
+receiver, and when a background relay you started by hand already holds the
+home. `commonmeasure disconnect` removes `relay.json` and names `service
+uninstall relay` while the agent is installed. On Linux, run `commonmeasure
+relay --every 300` under your own service manager; `service` names a
+`systemd-run` command, whose unit is transient (not restarted, not started at
+login), as for the console above. While it runs, `status` and `doctor` show
+`background relay: running`, and a Claude Desktop session may use a source
+whose licence demands usage reporting, where its policy scope clears
+telemetry egress and `relay.json` names a receiver not scoped to suppliers. A
+second one on the same home is refused. Each run sends what a session-end run
+would send, no more.
 
 To review each run before it leaves, create the empty file
 `~/.commonmeasure/relay/manual`. Nothing then relays at a session end or on
