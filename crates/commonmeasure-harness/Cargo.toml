@@ -29,6 +29,7 @@ url.workspace = true
 uuid.workspace = true
 toml_edit.workspace = true
 quick-xml.workspace = true
+psl.workspace = true
 c2pa.workspace = true
 c2pa-text.workspace = true
 # The process table, for the host-process record and the liveness probe

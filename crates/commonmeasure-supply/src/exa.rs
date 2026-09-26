@@ -1,7 +1,7 @@
 //! Exa: open-web neural search with page contents.
 //!
-//! `/contents` is the `fetch` capability. Exa is the only provider in the set
-//! that reports its charge in currency.
+//! `/contents` is the `fetch` capability. The response reports an observed
+//! charge in currency.
 
 use commonmeasure_http::Request;
 use commonmeasure_types::{
@@ -189,6 +189,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
                         .to_owned(),
                 }),
             promoted: &["url", "title", "text", "publishedDate"],
+            ..Default::default()
         })
     }))
 }

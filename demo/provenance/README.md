@@ -76,8 +76,8 @@ Add this field beside the existing `training_mining` declaration in a job's
 "encypher": { "send_answer_and_source_record": true }
 ```
 
-This permits uploading every answered plan's answer and its source references,
-hashes, grades, run identifiers and output-use preferences to Encypher. Answers
+This permits uploading every answered plan's answer and its source references
+(with any userinfo removed), hashes, grades, run identifiers and output-use preferences to Encypher. Answers
 may contain source excerpts. The adapter requests no attribution indexing or
 manifest database storage; complete service retention remains unverified.
 

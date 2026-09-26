@@ -229,6 +229,7 @@ fn search_envelopes(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>
                 .map(str::to_owned),
             declared_date: declared_date(item, "search result"),
             promoted: &["url", "title", "text", "published_date"],
+            ..Default::default()
         })
     }))
 }
@@ -257,6 +258,7 @@ fn content_envelopes(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope
             // which a reviewer needs, and they are not a licence reference.
             declared_date: None,
             promoted: &["url", "text"],
+            ..Default::default()
         })
     }))
 }

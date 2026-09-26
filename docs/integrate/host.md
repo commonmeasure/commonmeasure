@@ -16,8 +16,10 @@ either or both. The formats are in
 terms such as crossing, host and edge are in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 
 You need `commonmeasure` 0.4.0 or later on `PATH`
-([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). Every command below
-was run against 0.4.0 on macOS with loopback servers standing in for the web.
+([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). The release download and
+`commonmeasure --version` were checked on 0.4.1 on macOS (Apple silicon). The integration commands below were run on 0.4.0
+with loopback servers standing in for the web; they were not rerun for
+0.4.1.
 
 ## 1. A host the binary already knows
 

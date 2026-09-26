@@ -147,6 +147,7 @@ fn extract_envelopes(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope
                 .map(str::to_owned),
             declared_date: None,
             promoted: &["url", "title", "raw_content"],
+            ..Default::default()
         })
     }))
 }
@@ -174,6 +175,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
             // provider's own relevance number is not comparable across
             // providers.
             promoted: &["url", "title", "content"],
+            ..Default::default()
         })
     }))
 }

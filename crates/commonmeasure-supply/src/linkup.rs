@@ -223,6 +223,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
             // a response field), so nothing is mapped that has never been seen.
             declared_date: None,
             promoted: &["url", "name", "content"],
+            ..Default::default()
         })
     }))
 }

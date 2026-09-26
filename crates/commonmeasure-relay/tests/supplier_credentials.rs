@@ -1652,3 +1652,30 @@ fn with_no_fetch_running_a_session_stops_using_the_release_and_records_why() {
     assert_no_value("a tool answer", &said);
     assert_no_value("the operator home", &everything_under(home.path()));
 }
+
+// Catches: a credential fetch made for an edge whose stored hub URL is
+// cleartext. The deployment's policy URL stays on loopback, so the fetch
+// would reach the double if the hub's URL were not checked.
+#[test]
+fn a_stored_cleartext_hub_fetches_nothing() {
+    let (home, double, mut handle, _key_id) = authorised_edge();
+    let port = handle
+        .url()
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .trim_end_matches('/')
+        .to_owned();
+    let mut record = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+    record.hub = format!("http://0.0.0.0:{port}");
+    record.store(home.path()).unwrap();
+    let store = store();
+    let error = client::fetch(home.path(), &store, Utc::now(), BUDGET).unwrap_err();
+    assert!(
+        error.contains("neither https nor http to a loopback"),
+        "{error}"
+    );
+    assert_eq!(asked(&double), 0);
+    assert!(store.names().is_empty());
+    handle.stop();
+}

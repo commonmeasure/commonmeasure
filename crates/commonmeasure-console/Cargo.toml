@@ -22,6 +22,7 @@ maud.workspace = true
 pulldown-cmark.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
+url.workspace = true
 # Portable result bundles; already locked through c2pa, with no compression backend.
 zip = { version = "8.6", default-features = false }
 

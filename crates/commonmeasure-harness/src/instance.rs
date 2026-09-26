@@ -37,7 +37,6 @@ use serde_json::{Value, json};
 
 use crate::identity::{
     Identity, LifecycleRequest, REGISTRATION_SKEW_ALLOWANCE_SECS, RegistrationSignature,
-    write_private,
 };
 
 /// The product token a lifecycle request carries.
@@ -649,11 +648,7 @@ pub const BINDING_REJECTED: &str = "binding_rejected";
 pub fn locked<T>(home: &Path, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     let path = directory(home).join(".lock");
     write_owner_only_directory(&path)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
+    let lock = crate::declaration::open_lock(&path)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
     lock.lock()
         .map_err(|error| format!("cannot lock {}: {error}", path.display()))?;
@@ -706,33 +701,17 @@ fn write_owner_only_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What every temporary name [`crate::declaration::replace_private`] stages
+/// through ends with, so a directory listing can pass over a crashed
+/// writer's leftover.
 const STAGING_SUFFIX: &str = ".tmp";
 
-/// Where `path` is staged before the rename: the whole file name, then a
-/// value no other writer has, then [`STAGING_SUFFIX`]. `Path::with_extension`
-/// would replace what follows the last dot, and session identifiers and
-/// idempotency keys may contain dots, so `by-session/a.b` and `by-session/a.c`
-/// would both stage through `a.tmp` and one writer could rename the other's
-/// bytes into place.
-fn staging_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_owned();
-    name.push(format!(
-        ".{}{STAGING_SUFFIX}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    path.with_file_name(name)
-}
-
 /// Write `bytes` to `path` readable by the owner only, creating its
-/// directory with owner-only access, through a temporary file and a rename.
+/// directory with owner-only access, through a temporary file of its own and
+/// a rename.
 pub fn write_owner_only(path: &Path, bytes: &[u8]) -> Result<(), String> {
     write_owner_only_directory(path)?;
-    let staged = staging_path(path);
-    write_private(&staged, bytes)?;
-    std::fs::rename(&staged, path).map_err(|error| {
-        let _ = std::fs::remove_file(&staged);
-        format!("cannot write {}: {error}", path.display())
-    })
+    crate::declaration::replace_private(path, bytes)
 }
 
 /// The purpose a registration signer's evidence and binding must name.
@@ -906,7 +885,8 @@ pub struct Call<'a> {
 }
 
 /// Send one lifecycle request signed under the registration profile with the
-/// enrolled key. `Err` is the hub not reached or the request not signable; an
+/// enrolled key. `Err` is the hub not reached, a hub URL nothing is sent to
+/// ([`crate::enrolment::hub_url_accepted`]) or the request not signable; an
 /// answer of any status is `Ok`.
 pub fn exchange(
     identity: &Identity,
@@ -915,6 +895,9 @@ pub fn exchange(
     now: DateTime<Utc>,
     budget: Duration,
 ) -> Result<Answer, String> {
+    // Every signed lifecycle call passes here, including the check before a
+    // mediated crossing, whose answer decides whether the work proceeds.
+    crate::enrolment::hub_url_accepted(hub)?;
     let Call {
         method,
         path,
@@ -1008,16 +991,8 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let pointers = home.path().join("instances/by-session");
         let (first, second) = (pointers.join("a.b"), pointers.join("a.c"));
-        // The name the two used to share.
+        // `Path::with_extension` would stage both through one name.
         assert_eq!(first.with_extension("tmp"), second.with_extension("tmp"));
-        for path in [&first, &second] {
-            let staged = staging_path(path);
-            let name = staged.file_name().unwrap().to_str().unwrap().to_owned();
-            let whole = path.file_name().unwrap().to_str().unwrap();
-            assert!(name.starts_with(&format!("{whole}.")), "{name}");
-            assert!(name.ends_with(STAGING_SUFFIX), "{name}");
-            assert_ne!(staged, staging_path(path), "one name per write");
-        }
 
         let writers: Vec<_> = [(first.clone(), "one"), (second.clone(), "two")]
             .into_iter()
@@ -1040,6 +1015,37 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, ["a.b", "a.c"]);
+    }
+
+    // EGR-130. Catches: a record or pointer written into an existing file in
+    // place, which keeps that file's wider mode; either written under the
+    // umask.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_and_its_pointer_replace_a_wider_file_with_an_owner_only_one() {
+        crate::test_umask::under_umask_022(
+            "instance::tests::a_record_and_its_pointer_replace_a_wider_file_with_an_owner_only_one",
+            a_record_and_its_pointer_replace_a_wider_file_with_an_owner_only_one_body,
+        );
+    }
+    #[cfg(unix)]
+    fn a_record_and_its_pointer_replace_a_wider_file_with_an_owner_only_one_body() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let written = record("i-1", Some("s-1"));
+        written.write(home.path()).unwrap();
+        let record_path = Retained::path(home.path(), "i-1").unwrap();
+        let pointer = session_pointer(home.path(), "s-1").unwrap();
+        for path in [&record_path, &pointer] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        written.write(home.path()).unwrap();
+
+        for path in [&record_path, &pointer] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+        }
     }
 
     // Catches: a writer that read the record before another appended to it
@@ -1159,5 +1165,27 @@ mod tests {
         );
         assert!(Retained::for_session(home.path(), "s.1").unwrap().is_none());
         assert!(Retained::read(home.path(), "i-1").unwrap().is_some());
+    }
+
+    /// `instances/.lock` is created readable by its owner only. One that
+    /// exists already keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_created_instances_lock_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let path = directory(home.path()).join(".lock");
+        locked(home.path(), || Ok(())).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        locked(home.path(), || Ok(())).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 }

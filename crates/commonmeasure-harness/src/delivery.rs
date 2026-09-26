@@ -80,19 +80,52 @@ const OTHER_CLIENT_PREFIXES: [&str; 1] = ["local-agent-mode-"];
 /// takes it (`commonmeasure hosted service`).
 pub const SERVICE_LOCK_FILE: &str = "hosted-service.lock";
 
-/// Whether a hosted service holds `home`'s lock now, and so relays every
-/// session in the home on its interval. Takes the lock for an instant when
+/// What a probe of `home`'s hosted-service lock found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceState {
+    /// A process holds the lock: a hosted service runs and relays every
+    /// session in the home on its interval.
+    Running,
+    /// No lock file, or one nobody holds: configured but stopped, or never
+    /// started.
+    NotRunning,
+    /// The lock file could not be opened or probed, so whether a service
+    /// holds it is not known. The reason names the file and the error. A
+    /// lock file a service created is readable by its owner only, so
+    /// another user probing the home gets this.
+    Unknown(String),
+}
+
+/// Probe `home`'s hosted-service lock. Takes the lock for an instant when
 /// nobody holds it, so a service starting in exactly that instant is refused
-/// once and is started again by its supervisor. A service configured but
-/// stopped holds nothing and reads as not running.
-pub fn service_running(home: &Path) -> bool {
-    let Ok(file) = std::fs::OpenOptions::new()
-        .read(true)
-        .open(home.join(SERVICE_LOCK_FILE))
-    else {
-        return false;
+/// once and is started again by its supervisor.
+pub fn service_state(home: &Path) -> ServiceState {
+    let path = home.join(SERVICE_LOCK_FILE);
+    let file = match std::fs::OpenOptions::new().read(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ServiceState::NotRunning;
+        }
+        Err(error) => {
+            return ServiceState::Unknown(format!("cannot open {}: {error}", path.display()));
+        }
     };
-    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    match file.try_lock() {
+        Ok(()) => ServiceState::NotRunning,
+        Err(std::fs::TryLockError::WouldBlock) => ServiceState::Running,
+        Err(std::fs::TryLockError::Error(error)) => {
+            ServiceState::Unknown(format!("cannot lock {}: {error}", path.display()))
+        }
+    }
+}
+
+/// Whether a hosted service is known to hold `home`'s lock now, and so
+/// relays every session in the home on its interval. A state that cannot be
+/// read counts as not running: a session is then treated as having no
+/// automatic delivery, so a licence that demands usage reporting is refused
+/// rather than waived.
+pub fn service_running(home: &Path) -> bool {
+    service_state(home) == ServiceState::Running
 }
 
 /// How a session's reports would leave without a person.
@@ -305,6 +338,32 @@ mod tests {
         std::fs::remove_file(manual_marker(home.path())).unwrap();
         assert!(!service_running(home.path()));
         assert!(codex.withheld_reason(home.path()).is_some());
+    }
+
+    /// A service lock this user cannot open: whether a service runs is not
+    /// known, and a session still fails closed, as with no service.
+    #[cfg(unix)]
+    #[test]
+    fn a_service_lock_that_cannot_be_opened_is_unknown_and_withholds() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let home = tempfile::tempdir().expect("tempdir");
+        if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+            return;
+        }
+        let path = home.path().join(SERVICE_LOCK_FILE);
+        let file = std::fs::File::create(&path).expect("lock file");
+        file.lock().expect("held as the service holds it");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let state = service_state(home.path());
+        let withheld =
+            session("codex", Some("codex-mcp-client"), false).withheld_reason(home.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let ServiceState::Unknown(reason) = state else {
+            panic!("{state:?}");
+        };
+        assert!(reason.contains(&path.display().to_string()), "{reason}");
+        assert!(withheld.is_some());
+        drop(file);
     }
 
     #[test]

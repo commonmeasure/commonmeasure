@@ -1090,27 +1090,78 @@ fn finish_usage(licence: &mut Option<RslLicence>, element: &str, kind: Option<St
 
 impl RslDocument {
     /// The `<content>` entry governing one page: the most specific matching
-    /// `url` (RSL section 4.9). A path pattern is matched against the page's
-    /// path under RFC 9309 rules; an absolute URL is matched as a prefix of
-    /// the page URL; an empty `url` names the scope the discovery mechanism
+    /// `url` (RSL sections 3.1.1 and 4.9). A path pattern is matched against
+    /// the page's path under RFC 9309 rules; an absolute URL is matched as a
+    /// prefix of the page URL, both in [`commonmeasure_types::canonical_url`]'s
+    /// form; an empty `url` names the scope the discovery mechanism
     /// established and matches with the least specificity.
+    ///
+    /// Specificity is the length of the path the entry constrains, as RFC
+    /// 9309 ranks rules: a path pattern's own length, and an absolute scope's
+    /// canonical path and query, since its host has already matched. Ranking
+    /// by the written length would let a broad scope spelled long, or any
+    /// absolute scope, outrank a narrower entry and its prohibition. An
+    /// absolute scope that does not parse ranks 0, with the empty `url`, as
+    /// the least specific: it matches the page as written, so `http://` would
+    /// otherwise outrank a valid narrower scope.
+    ///
+    /// At equal specificity an absolute scope governs over a relative entry.
+    /// Two absolute scopes of equal specificity name the same scope in
+    /// different spellings; the one matching the page as written governs,
+    /// then the one written longer. That is the order scopes had when they
+    /// were matched only as written and ranked by written length, so wherever
+    /// that matching reached either scope, the order of the two in the
+    /// document cannot change which governs. The last entry in the document
+    /// governs only between two absolute scopes of equal written length that
+    /// both match the page as written, which makes them the same string, or
+    /// that neither does; and between two relative entries, or two empty
+    /// `url`s, of equal length.
     pub fn content_for(&self, page_url: &str) -> Option<&RslContent> {
         let path = request_target(page_url);
+        let page = url::Url::parse(page_url)
+            .ok()
+            .map(|page| commonmeasure_types::canonical_url(&page));
         self.contents
             .iter()
             .filter_map(|content| {
                 let pattern = content.url.as_str();
+                let absolute = !pattern.is_empty() && !pattern.starts_with('/');
                 let matched = if pattern.is_empty() {
                     Some(0)
                 } else if pattern.starts_with('/') {
                     matches_pattern(pattern, &path).then_some(pattern.len())
                 } else {
-                    page_url.starts_with(pattern).then_some(pattern.len())
+                    within_absolute_scope(pattern, page.as_ref(), page_url)
                 };
-                matched.map(|length| (length, content))
+                // Written-form tie-breaks for absolute scopes; for a relative
+                // entry both are constant or its length.
+                let as_written = absolute && page_url.starts_with(pattern);
+                matched.map(|length| ((length, absolute, as_written, pattern.len()), content))
             })
-            .max_by_key(|(length, _)| *length)
+            .max_by_key(|(rank, _)| *rank)
             .map(|(_, content)| content)
+    }
+}
+
+/// The specificity of an absolute `<content>` scope the page is under, or
+/// `None` when it is not. A trailing dot, a change of host case, an explicit
+/// default port or credentials in the URL name the same resource, so none
+/// of them may take a page out of its licence and the licence's prohibitions
+/// and reporting demands out of the ruling. A parsed scope ranks by its
+/// canonical request target, the path and query it constrains; a scope that
+/// does not parse is compared as written and ranks 0, since its written
+/// length says nothing about the path it constrains.
+fn within_absolute_scope(pattern: &str, page: Option<&url::Url>, page_url: &str) -> Option<usize> {
+    match url::Url::parse(pattern) {
+        Ok(scope) => {
+            let scope = commonmeasure_types::canonical_url(&scope);
+            let within = match page {
+                Some(page) => page.as_str().starts_with(scope.as_str()),
+                None => page_url.starts_with(pattern),
+            };
+            within.then(|| request_target(scope.as_str()).len())
+        }
+        Err(_) => page_url.starts_with(pattern).then_some(0),
     }
 }
 
@@ -1751,6 +1802,263 @@ Content-Usage: train-ai=y
             Effective::Unknown,
             "ai-all covers the AI uses and says nothing about search"
         );
+    }
+
+    /// An absolute scope governs every spelling of a page under it, whichever
+    /// side carries the spelling, and nothing that names another resource.
+    #[test]
+    fn an_absolute_content_scope_matches_every_spelling_of_the_same_resource() {
+        let scoped = |scope: &str| {
+            parse_rsl(&format!(
+                r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="{scope}"><license>
+      <prohibits type="usage">ai-input</prohibits></license></content></rsl>"#
+            ))
+            .expect("parses")
+        };
+        for scope in [
+            "https://publisher.example/news/",
+            "https://publisher.example./news/",
+            "https://PUBLISHER.example/news/",
+            "https://publisher.example:443/news/",
+        ] {
+            let document = scoped(scope);
+            for page in [
+                "https://publisher.example/news/1",
+                "https://publisher.example./news/1",
+                "https://Publisher.Example/news/1",
+                "https://publisher.example:443/news/1",
+                "HTTPS://PUBLISHER.EXAMPLE.:443/news/1",
+            ] {
+                assert_eq!(
+                    document
+                        .content_for(page)
+                        .map(|content| content.url.as_str()),
+                    Some(scope),
+                    "{scope} governs {page}"
+                );
+            }
+            for elsewhere in [
+                "http://publisher.example/news/1",
+                "https://publisher.example:8443/news/1",
+                "https://publisher.example/News/1",
+                "https://publisher.example.evil.test/news/1",
+                "https://publisher.example/sport/1",
+            ] {
+                assert!(
+                    document.content_for(elsewhere).is_none(),
+                    "{scope} does not govern {elsewhere}"
+                );
+            }
+        }
+        let document = scoped("http://publisher.example:80/");
+        assert!(document.content_for("http://publisher.example/x").is_some());
+        assert!(
+            document
+                .content_for("https://publisher.example/x")
+                .is_none()
+        );
+    }
+
+    /// The `url` of the entry governing `page` in a licence of `(url, rule)`
+    /// entries, each permitting or prohibiting AI input.
+    fn governing(entries: &[(&str, &str)], page: &str) -> Option<String> {
+        let contents: String = entries
+            .iter()
+            .map(|(url, rule)| {
+                format!(
+                    r#"<content url="{url}"><license><{rule} type="usage">ai-input</{rule}></license></content>"#
+                )
+            })
+            .collect();
+        parse_rsl(&format!(
+            r#"<rsl xmlns="https://rslstandard.org/rsl">{contents}</rsl>"#
+        ))
+        .expect("parses")
+        .content_for(page)
+        .map(|content| content.url.clone())
+    }
+
+    /// Entries rank by the path they constrain, whatever the spelling of the
+    /// host in front of it: a narrower scope governs under a broad one
+    /// written longer (`https://PUBLISHER.example.:443/` is 31 characters,
+    /// `https://publisher.example/n/` 28), and a relative entry governs under
+    /// an absolute scope that constrains a shorter path.
+    #[test]
+    fn the_entry_constraining_the_longer_path_governs_whatever_its_spelling() {
+        let broad = ("https://PUBLISHER.example.:443/", "permits");
+        let narrow = ("https://publisher.example/n/", "prohibits");
+        for entries in [[broad, narrow], [narrow, broad]] {
+            assert_eq!(
+                governing(&entries, "https://publisher.example/n/1").as_deref(),
+                Some(narrow.0),
+                "{entries:?}"
+            );
+            assert_eq!(
+                governing(&entries, "https://publisher.example/x").as_deref(),
+                Some(broad.0),
+                "{entries:?}"
+            );
+        }
+        let site = ("https://publisher.example/", "permits");
+        let secret = ("/news/secret/", "prohibits");
+        for entries in [[site, secret], [secret, site]] {
+            assert_eq!(
+                governing(&entries, "https://publisher.example/news/secret/1").as_deref(),
+                Some(secret.0),
+                "{entries:?}"
+            );
+        }
+        // An empty `url` governs only where nothing else matches.
+        let unscoped = ("", "prohibits");
+        assert_eq!(
+            governing(&[site, unscoped], "https://publisher.example/a").as_deref(),
+            Some(site.0)
+        );
+    }
+
+    /// An absolute scope and a relative entry constraining the same path rank
+    /// equally by length. The absolute scope governs in either document
+    /// order, so which of opposite rules applies does not depend on the order
+    /// (RSL 3.1.1).
+    #[test]
+    fn an_absolute_scope_governs_a_relative_entry_on_the_same_path_in_either_order() {
+        for (absolute, relative) in [
+            (
+                ("https://publisher.example/n/", "prohibits"),
+                ("/n/", "permits"),
+            ),
+            (
+                ("https://publisher.example/n/", "permits"),
+                ("/n/", "prohibits"),
+            ),
+            (
+                ("https://publisher.example/", "prohibits"),
+                ("/", "permits"),
+            ),
+        ] {
+            for entries in [[absolute, relative], [relative, absolute]] {
+                assert_eq!(
+                    governing(&entries, "https://publisher.example/n/1").as_deref(),
+                    Some(absolute.0),
+                    "{entries:?}"
+                );
+            }
+        }
+    }
+
+    /// Two spellings of one absolute scope are equally specific. The one
+    /// matching the page as written governs, then the one written longer, in
+    /// either document order, so a permit written after a prohibition of the
+    /// same scope does not admit the page.
+    #[test]
+    fn two_spellings_of_one_absolute_scope_rank_as_written_in_either_order() {
+        for (prohibition, permit, page) in [
+            // Both match as written; the longer spelling governs.
+            (
+                "https://publisher.example/",
+                "https://publisher.example",
+                "https://publisher.example/n/1",
+            ),
+            // Only the prohibition matches as written.
+            (
+                "https://publisher.example/n/",
+                "HTTPS://PUBLISHER.EXAMPLE./n/",
+                "https://publisher.example/n/1",
+            ),
+            // An explicit default port on the scopes and the page.
+            (
+                "https://publisher.example:443/",
+                "https://publisher.example:443",
+                "https://publisher.example:443/n/1",
+            ),
+        ] {
+            let (prohibits, permits) = ((prohibition, "prohibits"), (permit, "permits"));
+            for entries in [[prohibits, permits], [permits, prohibits]] {
+                assert_eq!(
+                    governing(&entries, page).as_deref(),
+                    Some(prohibition),
+                    "{entries:?}"
+                );
+            }
+        }
+    }
+
+    /// Where the ranking leaves two entries equal, the later governs: two
+    /// relative entries of one length, and two absolute scopes of one written
+    /// length that neither matches the page as written. Only the order with
+    /// the prohibition last is pinned. Refusal there is also the outcome a
+    /// conforming evaluation of tied entries gives, so this holds when one
+    /// replaces document order.
+    #[test]
+    fn a_prohibition_written_after_an_equally_ranked_permit_governs() {
+        for (permit, prohibition) in [
+            ("/n", "/*"),
+            (
+                "HTTPS://PUBLISHER.EXAMPLE./n/",
+                "https://publisher.example./n/",
+            ),
+        ] {
+            assert_eq!(
+                governing(
+                    &[(permit, "permits"), (prohibition, "prohibits")],
+                    "https://publisher.example/n/1"
+                )
+                .as_deref(),
+                Some(prohibition)
+            );
+        }
+    }
+
+    /// An absolute scope that does not parse is matched as written, so
+    /// `http://` is under every `http` page; it ranks as the least specific
+    /// and cannot outrank a valid narrower scope.
+    #[test]
+    fn an_absolute_scope_that_does_not_parse_ranks_below_a_valid_one() {
+        let malformed = ("http://", "permits");
+        let valid = ("http://publisher.example/n/", "prohibits");
+        for entries in [[malformed, valid], [valid, malformed]] {
+            assert_eq!(
+                governing(&entries, "http://publisher.example/n/1").as_deref(),
+                Some(valid.0),
+                "{entries:?}"
+            );
+            assert_eq!(
+                governing(&entries, "http://publisher.example/x").as_deref(),
+                Some(malformed.0),
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// A scope that does not parse and an empty `url` both rank 0. The scope
+    /// governs in either document order, as it did when it ranked by its
+    /// written length.
+    #[test]
+    fn an_absolute_scope_that_does_not_parse_governs_over_an_empty_url_in_either_order() {
+        let malformed = ("https://", "prohibits");
+        let unscoped = ("", "permits");
+        for entries in [[malformed, unscoped], [unscoped, malformed]] {
+            assert_eq!(
+                governing(&entries, "https://publisher.example/n/1").as_deref(),
+                Some(malformed.0),
+                "{entries:?}"
+            );
+        }
+    }
+
+    /// The query is part of the path an absolute scope constrains, as it is
+    /// of the request target a relative entry is matched against.
+    #[test]
+    fn an_absolute_scope_ranks_by_its_query_as_well_as_its_path() {
+        let queried = ("https://publisher.example/news?x=1", "prohibits");
+        let relative = ("/news?x", "permits");
+        for entries in [[queried, relative], [relative, queried]] {
+            assert_eq!(
+                governing(&entries, "https://publisher.example/news?x=1").as_deref(),
+                Some(queried.0),
+                "{entries:?}"
+            );
+        }
     }
 
     /// The shape a national newspaper publishes: AI training and AI input

@@ -149,7 +149,14 @@ fn origin_of(url: &str) -> Result<Origin> {
 /// different answer to arrive in.
 pub fn resolve(url: &str) -> Result<Vec<SocketAddr>> {
     let origin = origin_of(url)?;
-    let addresses: Vec<SocketAddr> = (origin.host.as_str(), origin.port)
+    // The URL spells an IPv6 literal in brackets; the resolver takes the
+    // bare address and reads a bracketed one as a name to look up.
+    let host = origin
+        .host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(&origin.host);
+    let addresses: Vec<SocketAddr> = (host, origin.port)
         .to_socket_addrs()
         .with_context(|| format!("resolve {}", origin.host))?
         .collect();
@@ -304,6 +311,32 @@ mod tests {
     /// its own, so where a name points can be judged before a socket exists.
     /// `localhost.` is the shape of the problem in miniature — a spelling no
     /// private-host rule matches, pointing at the loopback interface.
+    /// An IPv6 literal resolves to itself without a lookup, and a request
+    /// to one reaches a listener there.
+    #[test]
+    fn a_bracketed_ipv6_literal_resolves_and_is_reached() {
+        let addresses = resolve("http://[::1]:8080/x").expect("[::1] resolves");
+        assert_eq!(addresses, vec!["[::1]:8080".parse::<SocketAddr>().unwrap()]);
+        // A machine without IPv6 loopback cannot bind; the resolution above
+        // is what the change is about.
+        let Ok(listener) = TcpListener::bind("[::1]:0") else {
+            return;
+        };
+        let url = format!("http://{}/x", listener.local_addr().expect("addr"));
+        let answering = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .expect("answer");
+        });
+        let response = send_with_timeout(&url, Request::get("/"), Duration::from_secs(5))
+            .expect("the loopback listener answers");
+        assert_eq!(response.status, 204);
+        answering.join().expect("the listener thread");
+    }
+
     #[test]
     fn resolution_reports_the_addresses_a_name_actually_reaches() {
         let addresses = resolve("http://localhost.:47700/x").expect("localhost. resolves");

@@ -23,12 +23,12 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::config::RelayConfig;
+use crate::config::{RelayConfig, receiver_origin, same_receiver};
 use crate::spool::{RefusedSpool, Spool};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -48,6 +48,14 @@ pub struct Receipts {
     pub last_delivered_at: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
+}
+
+/// Replace one relay state file whole, readable by its owner only, because
+/// the files hold session and agent ids, session log paths, the receiver URL
+/// and its last error. The temporary is the writer's own, so a leftover
+/// `<name>.json.tmp` is neither reused nor removed.
+fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    commonmeasure_harness::declaration::replace_private(path, bytes).map_err(anyhow::Error::msg)
 }
 
 /// One session the relay skipped because its log did not read, as the
@@ -112,17 +120,8 @@ impl RelayState {
             return Ok(());
         }
         agents.insert(session, agent.to_owned());
-        let tmp = self.agents_path.with_extension("json.tmp");
-        let mut file = File::create(&tmp).context("create session-agents tmp")?;
-        file.write_all(&serde_json::to_vec_pretty(&agents).context("serialise session agents")?)?;
-        file.sync_all().context("fsync session agents")?;
-        drop(file);
-        std::fs::rename(&tmp, &self.agents_path).context("rename session agents into place")?;
-        #[cfg(unix)]
-        File::open(self.agents_path.parent().context("relay state directory")?)?
-            .sync_all()
-            .context("fsync relay state directory")?;
-        Ok(())
+        let encoded = serde_json::to_vec_pretty(&agents).context("serialise session agents")?;
+        replace_private(&self.agents_path, &encoded).context("write session-agents.json")
     }
 
     /// The highest refused count a receiver has accepted for each wire
@@ -142,14 +141,8 @@ impl RelayState {
         let mut known = self.refused_delivered()?;
         let entry = known.entry(session).or_default();
         *entry = (*entry).max(refused);
-        let tmp = self.refused_path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(&known).context("serialise refused-delivered")?,
-        )
-        .context("write refused-delivered tmp")?;
-        std::fs::rename(&tmp, &self.refused_path).context("rename refused-delivered into place")?;
-        Ok(())
+        let encoded = serde_json::to_vec_pretty(&known).context("serialise refused-delivered")?;
+        replace_private(&self.refused_path, &encoded).context("write refused-delivered.json")
     }
 
     /// Every event id a receiver has acknowledged, ever.
@@ -227,14 +220,8 @@ impl RelayState {
             };
         }
         sessions.sort_by(|a, b| a.session.cmp(&b.session));
-        let tmp = self.skipped_path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(&sessions).context("serialise skipped sessions")?,
-        )
-        .context("write skipped-sessions tmp")?;
-        std::fs::rename(&tmp, &self.skipped_path).context("rename skipped-sessions into place")?;
-        Ok(())
+        let encoded = serde_json::to_vec_pretty(&sessions).context("serialise skipped sessions")?;
+        replace_private(&self.skipped_path, &encoded).context("write skipped-sessions.json")
     }
 
     pub fn receipts(&self) -> Receipts {
@@ -244,16 +231,10 @@ impl RelayState {
             .unwrap_or_default()
     }
 
-    /// Replace the receipts atomically (write-then-rename).
+    /// Replace the receipts atomically.
     pub fn write_receipts(&self, receipts: &Receipts) -> Result<()> {
-        let tmp = self.receipts_path.with_extension("json.tmp");
-        std::fs::write(
-            &tmp,
-            serde_json::to_vec_pretty(receipts).context("serialise receipts")?,
-        )
-        .context("write receipts tmp")?;
-        std::fs::rename(&tmp, &self.receipts_path).context("rename receipts into place")?;
-        Ok(())
+        let encoded = serde_json::to_vec_pretty(receipts).context("serialise receipts")?;
+        replace_private(&self.receipts_path, &encoded).context("write receipts.json")
     }
 
     pub fn record_success(&self, receiver: &str) -> Result<()> {
@@ -281,7 +262,8 @@ impl RelayState {
 /// The receiver is named only where it is not the one `relay.json` names,
 /// which the caller has already printed: a delivery made under `--receiver`
 /// went somewhere else and the line has to say so, and one to the configured
-/// receiver would otherwise name it twice.
+/// receiver would otherwise name it twice. It is named by its origin alone
+/// ([`receipt_receiver_text`]).
 pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
     let path = home.join("relay").join("receipts.json");
     let receipts: Receipts = match std::fs::read(&path) {
@@ -314,14 +296,11 @@ pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
             path.display()
         );
     };
-    let configured = RelayConfig::load(home)
-        .ok()
-        .flatten()
-        .map(|config| config.receiver);
-    let to = if configured.as_deref() == Some(delivered_to.as_str()) {
+    let configured = RelayConfig::load(home).ok().flatten();
+    let to = if configured.is_some_and(|config| same_receiver(&config.receiver, &delivered_to)) {
         String::new()
     } else {
-        format!(" to {delivered_to}")
+        format!(" to {}", receipt_receiver_text(&delivered_to))
     };
     match chrono::DateTime::parse_from_rfc3339(&at) {
         Ok(delivered) => format!(
@@ -329,6 +308,33 @@ pub fn last_delivery_text(home: &Path, now: chrono::DateTime<Utc>) -> String {
             age_text((now - delivered.with_timezone(&Utc)).num_seconds())
         ),
         Err(_) => format!("last delivery: {at}{to}, age unknown"),
+    }
+}
+
+/// How status names a receiver a receipt records: by its origin
+/// ([`receiver_origin`]), or as "an earlier receiver" where it has none.
+/// Receipts written by 0.4.1 and earlier hold the receiver as it was
+/// configured, and that release accepted a key in its credentials or query.
+/// The relay now refuses such a `relay.json`, and the receipt stands until
+/// the next accepted delivery.
+fn receipt_receiver_text(receiver: &str) -> String {
+    receiver_origin(receiver).unwrap_or_else(|| "an earlier receiver".to_owned())
+}
+
+/// A recorded delivery error as status shows it. The transport's one error
+/// that quotes its URL, `parse url <url>: <reason>`, is reduced to the
+/// reason, since the URL is a receiver that did not parse and no part of it
+/// can be told apart from a key: 0.4.1 posted to such a `relay.json`
+/// receiver and recorded the text, and a `--receiver` value that does not
+/// parse still records it. The `url` crate's reasons are fixed strings with
+/// no `: ` in them.
+fn delivery_error_text(error: &str) -> String {
+    match error
+        .strip_prefix("parse url ")
+        .and_then(|rest| rest.rsplit_once(": "))
+    {
+        Some((_, reason)) => format!("the receiver is not a URL: {reason}"),
+        None => error.to_owned(),
     }
 }
 
@@ -383,7 +389,8 @@ pub fn egress_report(home: &Path) -> Value {
         .as_ref()
         .ok()
         .and_then(|q| q.last_error.clone())
-        .or_else(|| receipts.last_error.clone());
+        .or_else(|| receipts.last_error.clone())
+        .map(|error| delivery_error_text(&error));
     let receiver = configured.as_ref().map(|config| config.receiver.clone());
     let detail = if let Some(error) = state_error.as_ref().or(config_error.as_ref()) {
         format!("{error}; nothing is sent until it parses.")
@@ -405,10 +412,10 @@ pub fn egress_report(home: &Path) -> Value {
                     detail.push_str(&format!(
                         " {delivered} events were delivered to {} when a receiver was named \
                          explicitly.",
-                        receipts
-                            .delivered_to
-                            .as_deref()
-                            .unwrap_or("an earlier receiver")
+                        receipts.delivered_to.as_deref().map_or_else(
+                            || "an earlier receiver".to_owned(),
+                            receipt_receiver_text
+                        )
                     ));
                 }
                 detail
@@ -436,10 +443,13 @@ pub fn egress_report(home: &Path) -> Value {
     };
 
     // The enrolled key, so the panel names the identity this edge presents
-    // beside where its evidence goes. Null for an edge that is not enrolled.
-    let enrolment = commonmeasure_harness::EnrolmentRecord::load(home)
-        .ok()
-        .flatten();
+    // beside where its evidence goes. Null for an edge that is not enrolled,
+    // and for one whose record does not read: `enrolment_error` then says
+    // why, since that edge's enrolment is unknown rather than absent.
+    let (enrolment, enrolment_error) = match commonmeasure_harness::EnrolmentRecord::load(home) {
+        Ok(record) => (record, None),
+        Err(error) => (None, Some(error)),
+    };
 
     let queue = queue.ok();
     json!({
@@ -468,7 +478,29 @@ pub fn egress_report(home: &Path) -> Value {
         "detail": detail,
         "key_id": enrolment.as_ref().map(|record| record.key_id.clone()),
         "key_standing": enrolment.as_ref().map(|record| record.standing()),
+        // A stored hub URL nothing is sent to: the relay refuses before it
+        // spools, so the queue counts above cannot show it.
+        "hub_refused": enrolment.as_ref().and_then(|record| record.hub_refused()),
+        "enrolment_error": enrolment_error,
     })
+}
+
+/// The `enrolment record unreadable:` line `status` and `doctor` print for an
+/// egress report ([`egress_report`]), newline included, or `None` when the
+/// record read or is absent. The console states it in the same words.
+pub fn enrolment_error_line(report: &Value) -> Option<String> {
+    report["enrolment_error"]
+        .as_str()
+        .map(|error| format!("enrolment record unreadable: {error}\n"))
+}
+
+/// The `refused spool:` line `status` and `doctor` print for an egress
+/// report ([`egress_report`]), newline included, or `None` when the report
+/// carries no refused spool. The console states it in the same words.
+pub fn refused_spool_line(report: &Value) -> Option<String> {
+    serde_json::from_value::<RefusedSpool>(report["refused_spool"].clone())
+        .ok()
+        .map(|refused| refused_spool_text(&refused))
 }
 
 /// What a refused spool still owes, as far as its current parts show. A
@@ -637,12 +669,16 @@ pub fn egress_text(report: &Value) -> String {
             .map(|n| n.to_string())
             .unwrap_or_else(|| "unknown".into())
     };
-    let mut text = format!(
+    let mut text = enrolment_error_line(report).unwrap_or_default();
+    if let Some(reason) = report["hub_refused"].as_str() {
+        text.push_str(&format!("hub URL refused: {reason}\n"));
+    }
+    text.push_str(&format!(
         "relay batches: {} queued, {} dead, {} delivered; queued and dead are undelivered\n",
         count("queued"),
         count("dead"),
         count("delivered_batches")
-    );
+    ));
     let age = report["oldest_queued_age_seconds"]
         .as_u64()
         .map(|n| format!("{n}s"))
@@ -697,8 +733,8 @@ pub fn egress_text(report: &Value) -> String {
     if let Some(error) = report["unavailable"].as_str() {
         text.push_str(&format!("relay state unavailable: {error}\n"));
     }
-    if let Ok(refused) = serde_json::from_value::<RefusedSpool>(report["refused_spool"].clone()) {
-        text.push_str(&refused_spool_text(&refused));
+    if let Some(refused) = refused_spool_line(report) {
+        text.push_str(&refused);
     }
     if report["dead"].as_u64().is_some_and(|n| n > 0) {
         text.push_str("requeue dead batches with `commonmeasure relay requeue`, then run `commonmeasure relay`\n");
@@ -714,6 +750,156 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(text)
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    /// EGR-131. Catches: a state file staged through the fixed
+    /// `<name>.json.tmp`, which a wider leftover of that name passes its mode
+    /// to, and which two writers share; a state file written under the umask.
+    #[cfg(unix)]
+    #[test]
+    fn state_files_are_owner_only_and_never_staged_through_a_leftover() {
+        under_umask_022(
+            "state::tests::state_files_are_owner_only_and_never_staged_through_a_leftover",
+            state_files_are_owner_only_and_never_staged_through_a_leftover_body,
+        );
+    }
+
+    /// Runs `body` in a child of this test binary whose umask is 022, set
+    /// between fork and exec, and asserts that the child ran the one test
+    /// `name` and passed. An owner-only assertion passes whatever mode the
+    /// writer asks for under a umask that already masks 066, such as 077.
+    #[cfg(unix)]
+    fn under_umask_022(name: &str, body: impl FnOnce()) {
+        use std::os::unix::process::CommandExt as _;
+        const CHILD: &str = "COMMONMEASURE_TEST_UMASK_CHILD";
+        if std::env::var_os(CHILD).is_some_and(|test| test == name) {
+            body();
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", name, "--test-threads=1"])
+            .env(CHILD, name);
+        // SAFETY: `umask` is async-signal-safe and changes only the child's
+        // own process state, between fork and exec.
+        unsafe {
+            child.pre_exec(|| {
+                libc::umask(0o022);
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}{stderr}");
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "the child did not run exactly one test: {stdout}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn state_files_are_owner_only_and_never_staged_through_a_leftover_body() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let state = RelayState::open(home.path()).unwrap();
+        let names = [
+            "session-agents.json",
+            "refused-delivered.json",
+            "skipped-sessions.json",
+            "receipts.json",
+        ];
+        let relay = home.path().join("relay");
+        for name in names {
+            let leftover = relay.join(name).with_extension("json.tmp");
+            std::fs::write(&leftover, b"left by an older writer").unwrap();
+            std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let session = Uuid::new_v4();
+        state.pin_session_agent(session, "agent").unwrap();
+        state.record_refused_delivered(session, 1).unwrap();
+        let skipped = crate::UnreadableSession {
+            session: "s-1".to_owned(),
+            path: relay.join("s-1.jsonl"),
+            cause: anyhow::anyhow!("unreadable"),
+            batches_held: 0,
+        };
+        state
+            .record_skipped_sessions(None, &[skipped], Utc::now())
+            .unwrap();
+        state.record_success("http://127.0.0.1:9").unwrap();
+
+        for name in names {
+            let mode = std::fs::metadata(relay.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{name}");
+            let leftover = relay.join(name).with_extension("json.tmp");
+            assert_eq!(
+                std::fs::read(&leftover).unwrap(),
+                b"left by an older writer",
+                "{name}: the leftover is neither reused nor removed"
+            );
+        }
+    }
+
+    /// An enrolment record that exists but does not read is carried as an
+    /// error, not dropped as though the edge were unenrolled.
+    #[test]
+    fn an_unreadable_enrolment_record_is_reported_with_its_error() {
+        let home = tempfile::tempdir().unwrap();
+        let report = egress_report(home.path());
+        assert!(report["enrolment_error"].is_null(), "{report}");
+        assert!(!egress_text(&report).contains("enrolment record"));
+
+        std::fs::write(home.path().join("enrolment.json"), "{not json").unwrap();
+        let report = egress_report(home.path());
+        assert!(report["key_id"].is_null(), "{report}");
+        let error = report["enrolment_error"].as_str().unwrap();
+        assert!(error.contains("is not a valid enrolment record"), "{error}");
+        assert!(
+            egress_text(&report).starts_with(&format!("enrolment record unreadable: {error}\n")),
+            "{}",
+            egress_text(&report)
+        );
+    }
+
+    /// A hand-edited record's value never reaches `enrolment_error`: serde
+    /// quotes a value of the wrong type, and a stored hub URL can carry
+    /// credentials. The error states the category, line and column only.
+    #[test]
+    fn an_unreadable_enrolment_record_quotes_no_value() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("enrolment.json");
+        for (content, category) in [
+            (
+                "{\n  \"hub\": \"https://hub.example\",\n  \"organization\": \"https://user:ak_PLANTED@hub.example\"\n}",
+                "a data error at line 3, column 55",
+            ),
+            (
+                "{\"hub\": \"https://user:ak_PLANTED@hub.example\" x}",
+                "a syntax error at line 1, column 47",
+            ),
+            (
+                "{\"hub\": \"https://user:ak_PLANTED@hub.",
+                "an end-of-file error at line 1, column 37",
+            ),
+        ] {
+            std::fs::write(&path, content).unwrap();
+            let error = egress_report(home.path())["enrolment_error"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                error,
+                format!(
+                    "{} is not a valid enrolment record: {category}",
+                    path.display()
+                )
+            );
+            assert!(!error.contains("ak_PLANTED"), "{error}");
+        }
     }
 
     #[test]
@@ -760,7 +946,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             last_delivery_text(home.path(), now),
-            "last delivery: 2026-09-16T10:00:00.000Z to https://other.example/ingest, 6d 2h ago"
+            "last delivery: 2026-09-16T10:00:00.000Z to https://other.example, 6d 2h ago"
         );
         // A later failure to another receiver moves `receiver` and leaves
         // the accepted delivery and its receiver where they were.
@@ -780,5 +966,158 @@ mod tests {
         );
         assert_eq!(age_text(250), "4m 10s");
         assert_eq!(age_text(-5), "0s");
+    }
+
+    /// A receipt as 0.4.1 wrote it: the receiver as configured, which that
+    /// release accepted with a key in its credentials or query.
+    fn write_receipt(home: &Path, delivered_to: &str) {
+        std::fs::create_dir_all(home.join("relay")).unwrap();
+        std::fs::write(
+            home.join("relay/receipts.json"),
+            json!({
+                "receiver": delivered_to,
+                "delivered_to": delivered_to,
+                "last_delivered_at": "2026-09-20T10:00:00.000Z",
+                "last_error": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    /// The relay now refuses the `relay.json` such a receipt came from, and
+    /// the receipt stands until the next accepted delivery, which a refused
+    /// or removed file never makes. Status names its receiver by origin
+    /// whether the file is refused, corrected as the 0.4.2 Upgrading note
+    /// says, or removed, and not at all where the corrected file reaches the
+    /// same endpoint.
+    #[test]
+    fn a_receipt_names_its_receiver_by_its_origin_alone() {
+        let now = at("2026-09-25T12:00:00Z");
+        let corrected =
+            json!({"receiver": "https://hub.example/api/v1/telemetry", "api_key": "ak_PLANTED"})
+                .to_string();
+        for delivered_to in [
+            "https://ops:ak_PLANTED@hub.example/api/v1/telemetry",
+            "https://hub.example/api/v1/telemetry?api_key=ak_PLANTED",
+        ] {
+            let refused = json!({"receiver": delivered_to}).to_string();
+            for (case, relay_json) in [
+                ("refused", Some(&refused)),
+                ("corrected", Some(&corrected)),
+                ("absent", None),
+            ] {
+                let home = tempfile::tempdir().unwrap();
+                write_receipt(home.path(), delivered_to);
+                RelayState::open(home.path())
+                    .unwrap()
+                    .record_delivered(&[Uuid::new_v4()])
+                    .unwrap();
+                if let Some(relay_json) = relay_json {
+                    std::fs::write(home.path().join("relay.json"), relay_json).unwrap();
+                }
+                let line = last_delivery_text(home.path(), now);
+                let report = egress_report(home.path());
+                let shown = format!("{line}\n{report}\n{}", egress_text(&report));
+                assert!(
+                    !shown.contains("ak_PLANTED"),
+                    "{delivered_to} {case}: {shown}"
+                );
+                // Credentials are never sent, so the corrected file reaches
+                // the endpoint the receipt records; a query is part of it.
+                if case == "corrected" && delivered_to.contains('@') {
+                    assert_eq!(line, "last delivery: 2026-09-20T10:00:00.000Z, 5d 2h ago");
+                } else {
+                    assert_eq!(
+                        line,
+                        "last delivery: 2026-09-20T10:00:00.000Z to https://hub.example, 5d 2h ago",
+                        "{delivered_to} {case}"
+                    );
+                }
+                if case == "absent" {
+                    assert!(
+                        report["detail"].as_str().unwrap().contains(
+                            "1 events were delivered to https://hub.example when a receiver was \
+                             named explicitly"
+                        ),
+                        "{report}"
+                    );
+                }
+            }
+        }
+
+        // A receiver with no origin is named by no part of itself.
+        let home = tempfile::tempdir().unwrap();
+        write_receipt(home.path(), "hub.example/t?api_key=ak_PLANTED");
+        RelayState::open(home.path())
+            .unwrap()
+            .record_delivered(&[Uuid::new_v4()])
+            .unwrap();
+        assert_eq!(
+            last_delivery_text(home.path(), now),
+            "last delivery: 2026-09-20T10:00:00.000Z to an earlier receiver, 5d 2h ago"
+        );
+        assert!(
+            egress_report(home.path())["detail"]
+                .as_str()
+                .unwrap()
+                .contains("1 events were delivered to an earlier receiver when")
+        );
+    }
+
+    /// 0.4.1 posted to a `relay.json` receiver that did not parse and
+    /// recorded the transport's error, which quotes the URL.
+    #[test]
+    fn a_recorded_error_that_quotes_a_receiver_is_shown_without_it() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("relay")).unwrap();
+        std::fs::write(
+            home.path().join("relay/receipts.json"),
+            json!({
+                "receiver": "hub.example/t?api_key=ak_PLANTED",
+                "last_error": "parse url hub.example/t?api_key=ak_PLANTED/events: relative URL \
+                               without a base",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let report = egress_report(home.path());
+        assert_eq!(
+            report["last_error"],
+            "the receiver is not a URL: relative URL without a base"
+        );
+        assert!(!egress_text(&report).contains("ak_PLANTED"));
+        assert_eq!(
+            delivery_error_text("receiver answered 503: busy"),
+            "receiver answered 503: busy"
+        );
+    }
+
+    /// The error the relay records is the real transport's, so its form is
+    /// pinned here, where it is consumed: a receiver that does not parse,
+    /// including one with `: ` in it, is shown by the reason alone. None of
+    /// these reaches the network; each fails at the parse.
+    #[test]
+    fn the_transports_error_for_a_receiver_that_does_not_parse_is_shown_without_it() {
+        for receiver in [
+            "hub.example/t?api_key=ak_PLANTED",
+            "hub.example/t?note=a: ak_PLANTED",
+            "hub.example/t?note=a: b: ak_PLANTED",
+            "https://ops:ak_PLANTED@[zz]/t",
+            "https://ops:ak_PLANTED@hub.example:99999/t",
+            "ak_PLANTED:opaque",
+        ] {
+            let error = crate::client::deliver(receiver, Some("ak_PLANTED"), &json!({}))
+                .err()
+                .expect("a receiver that does not parse is not delivered to");
+            let recorded = format!("{error:#}");
+            assert!(recorded.contains("ak_PLANTED"), "{receiver}: {recorded}");
+            let shown = delivery_error_text(&recorded);
+            assert!(
+                shown.starts_with("the receiver is not a URL: "),
+                "{receiver}: {shown}"
+            );
+            assert!(!shown.contains("ak_PLANTED"), "{receiver}: {shown}");
+        }
     }
 }

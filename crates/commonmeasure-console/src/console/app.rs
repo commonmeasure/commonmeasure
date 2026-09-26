@@ -421,15 +421,31 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
                             dd {
                                 @match (key_id, key_standing) {
                                     (Some(key_id), Some(standing)) => {
-                                        span class="mono" { (key_id) } ", " (standing) "."
+                                        span class="mono" { (key_id) } ", "
+                                        @match refused_standing_words(standing) {
+                                            Some(words) => { (words) " (" span class="mono" { (standing) } ")." }
+                                            None => { (standing) "." }
+                                        }
+                                    }
+                                    _ if egress["enrolment_error"].is_string() => {
+                                        "Unknown: the enrolment record could not be read."
                                     }
                                     _ => { "Not enrolled with a hub: no edge key." }
                                 }
                             }
                         }
                     }
+                    @if let Some(line) = commonmeasure_relay::enrolment_error_line(&egress) {
+                        p class="callout" { (line.trim_end()) "." }
+                    }
+                    @if let Some(reason) = egress["hub_refused"].as_str() {
+                        p class="callout" { "Hub URL refused: " (reason) "." }
+                    }
                     @if let Some(error) = egress["unavailable"].as_str() {
                         p class="callout" { "Delivery state unavailable: " (error) }
+                    }
+                    @if let Some(line) = commonmeasure_relay::refused_spool_line(&egress) {
+                        p class="callout" { (line.trim_end()) "." }
                     }
                     @if let Some(error) = egress["close_error"].as_str() {
                         p class="callout" {
@@ -790,10 +806,26 @@ fn crossing_card(record: &Value, records: &[Value]) -> Markup {
 
 /// The record's own fields on a crossing, as labelled rows, each present only
 /// when the record carries it (`docs/contracts/session-evidence.md` §Crossing).
-/// The labels are the words the product site uses for the same two hashes.
+/// On a mediated fetch `content_hash` is the whole extracted text, and a fetch
+/// result may have carried only the part `delivered` names, shown beside it.
+/// On an observed crossing it is the text the host's tool returned into
+/// context, and on a reconstructed one the transcript's copy of that; neither
+/// saw a body, so neither is labelled as extracted. A search result is
+/// mediated but names its `supplier`: its hash is the supplier's, of text the
+/// edge received without fetching a page. The label follows the recorded
+/// `mode`, which a refused crossing carries as well as its event.
 fn record_fields(payload: &Value) -> Markup {
     let retrieved = payload.get("retrieved_hash").and_then(Value::as_str);
     let content = payload.get("content_hash").and_then(Value::as_str);
+    let supplied = payload.get("supplier").is_some_and(Value::is_string);
+    let content_label = match payload.get("mode").and_then(Value::as_str) {
+        _ if supplied => "text supplied",
+        Some("mediated") => "text extracted",
+        Some("observed") => "text in context",
+        Some("reconstructed") => "text in transcript",
+        _ => "content hash",
+    };
+    let delivered = delivered_part(payload);
     let status = payload.get("http_status").and_then(Value::as_u64);
     let identity = identity_of(payload);
     html! {
@@ -803,7 +835,12 @@ fn record_fields(payload: &Value) -> Markup {
                     div { dt { "bytes received" } dd class="mono" { (hash) } }
                 }
                 @if let Some(hash) = content {
-                    div { dt { "text read" } dd class="mono" { (hash) } }
+                    div { dt { (content_label) } dd class="mono" { (hash) } }
+                }
+                @if let Some((hash, start, end, total)) = &delivered {
+                    div { dt { "part delivered" } dd {
+                        span class="mono" { (hash) } " " (start) "–" (end) " of " (total) " characters"
+                    } }
                 }
                 @if let Some(status) = status {
                     div { dt { "status" } dd class="mono" { (status) } }
@@ -814,6 +851,20 @@ fn record_fields(payload: &Value) -> Markup {
             }
         }
     }
+}
+
+/// The `delivered` part's hash and its range in characters, where the record
+/// carries all four.
+fn delivered_part(payload: &Value) -> Option<(&str, u64, u64, u64)> {
+    let delivered = payload.get("delivered")?;
+    let offset = delivered["offset"].as_u64()?;
+    let chars = delivered["chars"].as_u64()?;
+    Some((
+        delivered["hash"].as_str()?,
+        offset,
+        offset.checked_add(chars)?,
+        delivered["total_chars"].as_u64()?,
+    ))
 }
 
 /// Structured evidence stays in its recorded shape. Missing fields produce no
@@ -854,7 +905,7 @@ fn crossing_evidence(crossing: &Value, records: &[Value]) -> Markup {
         dl class="cx-fields" {
             @for (key, label) in [("declarations", "Source declarations"), ("named_by", "Named by"),
                 ("content_telemetry_id", "Content-Telemetry-ID"), ("allowance", "Allowance"),
-                ("breach", "Policy breach"), ("failure", "Transport failure")] {
+                ("breach", "Policy breach"), ("failure", "Failure")] {
                 @if let Some(value) = payload.get(key).filter(|v| !v.is_null()) {
                     div { dt { (label) } dd { (evidence_value(value)) } }
                 }
@@ -884,15 +935,21 @@ pub fn budget_page(budget: &Value, read: ReadFrom<'_>) -> String {
             h2 { "Recorded footprint by engagement" }
             p class="callout" { (str_of(budget["acquisition_charge"].get("reason"), "")) }
             @for row in budget["engagements"].as_array().into_iter().flatten() {
+                @let reconstructed = row["reconstructed"].as_u64().is_some_and(|count| count > 0);
                 div class="card" {
                     h3 { (str_of(row.get("engagement"), "")) }
                     dl class="cx-fields" {
                         @for (key, label) in [("witnessed", "Witnessed crossings"), ("reconstructed", "Reconstructed crossings"),
-                            ("refused", "Refused crossings"), ("estimated_tokens", "Estimated tokens"),
+                            ("refused", "Refused crossings"), ("estimated_tokens", "Estimated tokens, witnessed"),
                             ("token_basis", "Token basis"), ("estimated_tokens_by_basis", "Estimates by basis"),
                             ("total_withheld", "Why the total is withheld"), ("crossings_without_estimate", "Crossings without an estimate"),
+                            ("reconstructed_estimated_tokens", "Estimated tokens, reconstructed (not added to witnessed)"),
+                            ("reconstructed_token_basis", "Reconstructed token basis"),
+                            ("reconstructed_estimated_tokens_by_basis", "Reconstructed estimates by basis"),
+                            ("reconstructed_total_withheld", "Why the reconstructed total is withheld"),
+                            ("reconstructed_crossings_without_estimate", "Reconstructed crossings without an estimate"),
                             ("declared_cap", "Declared acquisition cap (not a periodic allowance)")] {
-                            @if let Some(value) = row.get(key) {
+                            @if let Some(value) = row.get(key).filter(|_| reconstructed || !key.starts_with("reconstructed_")) {
                                 div { dt { (label) } dd { (evidence_value(value)) } }
                             }
                         }
@@ -1484,6 +1541,7 @@ fn source_row(provider: &Value) -> Markup {
 fn provider_title(name: &str) -> &str {
     match name {
         "internal" => "Internal corpus",
+        "dataville" => "Dataville",
         "exa" => "Exa",
         "firecrawl" => "Firecrawl",
         "tavily" => "Tavily",
@@ -1504,6 +1562,7 @@ fn provider_title(name: &str) -> &str {
 
 fn provider_description(name: &str) -> &str {
     match name {
+        "dataville" => "One Wikipedia or arXiv record per search",
         "exa" => "Web search and page contents",
         "firecrawl" => "Scrape a known URL to clean content",
         "parallel" => "Objective-led search and extract",
@@ -1681,6 +1740,24 @@ fn engagements_of(row: &Value) -> String {
 
 pub(super) fn str_of<'a>(value: Option<&'a Value>, fallback: &'a str) -> &'a str {
     value.and_then(Value::as_str).unwrap_or(fallback)
+}
+
+/// The key standings under which the edge sends its enrolled hub nothing,
+/// in words, from the fault's own reason. `cleartext_hub` also covers an
+/// https URL that does not parse and other schemes, so the words state the
+/// rule rather than calling the URL cleartext. The egress report and the
+/// session's `edge_identity` carry the remedy beside them in `hub_refused`.
+pub(super) fn refused_standing_words(standing: &str) -> Option<String> {
+    use commonmeasure_harness::enrolment::HubUrlFault;
+    let fault = match standing {
+        "cleartext_hub" => HubUrlFault::Cleartext,
+        "unusable_hub_url" => HubUrlFault::CarriesParts,
+        _ => return None,
+    };
+    Some(format!(
+        "nothing is sent to the hub: its URL {}",
+        fault.reason()
+    ))
 }
 
 pub(super) fn u(value: Option<&Value>) -> u64 {
@@ -1877,6 +1954,157 @@ mod tests {
         );
         assert!(!unread.contains("Skipped sessions"), "{unread}");
         assert!(unread.contains("Delivery state unavailable: parse skipped-sessions.json"));
+    }
+
+    /// A stored hub URL nothing is sent to: the callout carries the relay's
+    /// reason, which holds the remedy, and the key row names the standing in
+    /// words with the token `status --json` gives beside them.
+    #[test]
+    fn the_hub_card_states_a_refused_hub_url_with_its_reason_and_remedy() {
+        let reason = "the enrolled hub URL at http://hub.example is neither https nor http to a \
+                      loopback origin, so nothing is sent to it: relay <and> the rest are refused. \
+                      Run `commonmeasure disconnect`, then run `commonmeasure connect` with an \
+                      https hub";
+        for (standing, words) in [
+            (
+                "cleartext_hub",
+                "nothing is sent to the hub: its URL is neither https nor http to a loopback \
+                 origin",
+            ),
+            (
+                "unusable_hub_url",
+                "nothing is sent to the hub: its URL carries credentials, a query or a fragment",
+            ),
+        ] {
+            let page = overview_page(
+                &json!({"egress": {"key_id": "k-1", "key_standing": standing,
+                                   "hub_refused": reason}}),
+                &json!([]),
+                READ,
+            );
+            assert!(
+                page.contains(&format!(
+                    "<span class=\"mono\">k-1</span>, {words} (<span class=\"mono\">{standing}</span>)."
+                )),
+                "{page}"
+            );
+            let escaped = reason.replace('<', "&lt;").replace('>', "&gt;");
+            assert!(
+                page.contains(&format!(
+                    "<p class=\"callout\">Hub URL refused: {escaped}.</p>"
+                )),
+                "{page}"
+            );
+            assert!(!page.contains("<and>"), "{page}");
+        }
+
+        let enrolled = overview_page(&status(), &json!([]), READ);
+        assert!(!enrolled.contains("Hub URL refused"), "{enrolled}");
+        assert!(enrolled.contains("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k</span>, enrolled."));
+    }
+
+    /// The egress report the relay builds for a home holding `enrolment`
+    /// as its `enrolment.json`.
+    fn egress_for(enrolment: &str) -> Value {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("enrolment.json"), enrolment).unwrap();
+        commonmeasure_relay::egress_report(home.path())
+    }
+
+    /// An enrolment record that exists but does not read leaves the edge's
+    /// enrolment unknown; Overview says so with the error, as `status` and
+    /// `doctor` do, and does not call the edge unenrolled.
+    #[test]
+    fn an_unreadable_enrolment_record_is_stated_not_read_as_unenrolled() {
+        let egress = egress_for("{not json");
+        let page = overview_page(&json!({ "egress": egress }), &json!([]), READ);
+        assert!(!page.contains("Not enrolled"), "{page}");
+        let line = commonmeasure_relay::enrolment_error_line(&egress).unwrap();
+        assert!(line.contains("is not a valid enrolment record"), "{line}");
+        assert!(
+            page.contains(&format!(
+                "<p class=\"callout\">{}.</p>",
+                html! { (line.trim_end()) }.into_string()
+            )),
+            "{page}"
+        );
+    }
+
+    /// `cleartext_hub` is every URL `connect`'s transport rule refuses,
+    /// including an https URL that does not parse, so the key row states
+    /// the rule rather than calling the URL cleartext.
+    #[test]
+    fn an_unparseable_https_hub_is_not_called_cleartext() {
+        let egress = egress_for(
+            &json!({"hub": "https://hub example.com",
+                    "organization": {"id": "org-1", "name": "Org"}, "name": "laptop",
+                    "key_id": "k-1",
+                    "identity": {"origin": "https://hub.example", "bot_page": "https://hub.example/bot"},
+                    "enrolled_at": "2026-09-06T00:00:00.000Z"})
+            .to_string(),
+        );
+        assert_eq!(egress["key_standing"], "cleartext_hub");
+        let page = overview_page(&json!({ "egress": egress }), &json!([]), READ);
+        assert!(!page.contains("is cleartext"), "{page}");
+        assert!(
+            page.contains(
+                "<span class=\"mono\">k-1</span>, nothing is sent to the hub: its URL is \
+                 neither https nor http to a loopback origin"
+            ),
+            "{page}"
+        );
+    }
+
+    /// A refused spool is stated in the sentence `status` and `doctor`
+    /// print, and an incomplete count reads as unknown, never as zero.
+    #[test]
+    fn the_hub_card_states_what_a_refused_spool_still_owes() {
+        // The page and the line the relay gives `status` and `doctor` for
+        // the same report; the relay owns the wording.
+        let page = |refused: Value| {
+            let egress = json!({"unavailable": "spool written by 0.3.4 or earlier",
+                                "refused_spool": refused});
+            let line = commonmeasure_relay::refused_spool_line(&egress)
+                .map(|line| html! { (line.trim_end()) }.into_string());
+            (
+                overview_page(&json!({ "egress": egress }), &json!([]), READ),
+                line,
+            )
+        };
+        let states_line = |(page, line): &(String, Option<String>)| {
+            let line = line.as_deref().unwrap();
+            assert!(
+                page.contains(&format!("<p class=\"callout\">{line}.</p>")),
+                "{page}"
+            );
+        };
+        let complete = page(json!({"outstanding": 0, "unknown": 0, "unindexed": 0}));
+        assert!(
+            complete
+                .0
+                .contains("Delivery state unavailable: spool written by 0.3.4 or earlier"),
+            "{}",
+            complete.0
+        );
+        states_line(&complete);
+
+        let owed = page(json!({"outstanding": 2, "unknown": 1, "unindexed": 0}));
+        states_line(&owed);
+
+        let incomplete = page(json!({"outstanding": 0, "unknown": 0, "unindexed": 0,
+                                     "incomplete": "line 3 <is> damaged"}));
+        states_line(&incomplete);
+        // An incomplete count reads as unknown, never as zero, and the
+        // relay's reason is escaped.
+        let said = incomplete.1.as_deref().unwrap();
+        assert!(said.contains("unknown"), "{said}");
+        assert!(said.contains("&lt;is&gt;"), "{said}");
+        assert!(!incomplete.0.contains("<is>"), "{}", incomplete.0);
+        assert!(!incomplete.0.contains("0 batches"), "{}", incomplete.0);
+
+        let (absent, line) = page(Value::Null);
+        assert_eq!(line, None);
+        assert!(!absent.contains("refused spool"), "{absent}");
     }
 
     #[test]
@@ -2185,7 +2413,7 @@ mod tests {
         let records = json!([
             {"event": "turn_started", "payload": {"privacy_level": "minimal"}},
             {"event": "turn_completed", "payload": {"privacy_level": "minimal"}},
-            {"event": "unreadable", "raw": "{not json"}
+            {"event": "unreadable", "line": 3, "bytes": 9}
         ]);
         let detail = session_detail("local-7f3c1a2b", &records);
         assert!(
@@ -2304,13 +2532,18 @@ mod tests {
 
     /// The card shows the hashes and status the record carries and nothing
     /// the record lacks: a mediated fetch carries both hashes, the status and
-    /// the identity; an observed crossing carries a content hash alone.
+    /// the identity; an observed crossing carries a content hash alone. The
+    /// content hash is labelled by the crossing's recorded `mode`: extracted
+    /// text on a mediated fetch, the tool's result on an observed crossing
+    /// and the transcript's copy on a reconstructed one.
     #[test]
     fn a_crossing_card_shows_the_fields_the_record_carries_and_no_others() {
         let mediated = json!([{"event": "crossing_mediated", "payload": {
-            "url": "http://127.0.0.1:9/index.html", "host_name": "127.0.0.1",
+            "mode": "mediated", "url": "http://127.0.0.1:9/index.html", "host_name": "127.0.0.1",
             "grounded": true, "licence": {"state": "unknown"}, "http_status": 200,
             "retrieved_hash": "sha256:aaaa", "content_hash": "sha256:bbbb",
+            "delivered": {"offset": 60000, "chars": 10000, "total_chars": 70000,
+                          "hash": "sha256:dddd"},
             "identity": {"user_agent": "CommonMeasureBot/0.3.0", "unsigned": "no enrolment record"}}}]);
         let detail = session_detail("local-1", &mediated);
         assert!(
@@ -2318,7 +2551,14 @@ mod tests {
             "{detail}"
         );
         assert!(
-            detail.contains("<dt>text read</dt><dd class=\"mono\">sha256:bbbb</dd>"),
+            detail.contains("<dt>text extracted</dt><dd class=\"mono\">sha256:bbbb</dd>"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains(
+                "<dt>part delivered</dt><dd><span class=\"mono\">sha256:dddd</span> \
+                 60000–70000 of 70000 characters</dd>"
+            ),
             "{detail}"
         );
         assert!(
@@ -2330,20 +2570,94 @@ mod tests {
             "{detail}"
         );
 
+        assert!(!detail.contains("text in context"), "{detail}");
+
         let observed = json!([{"event": "crossing_observed", "payload": {
-            "url": "https://www.gov.uk/x", "host_name": "www.gov.uk",
+            "mode": "observed", "url": "https://www.gov.uk/x", "host_name": "www.gov.uk",
             "grounded": true, "licence": {"state": "unknown"}, "content_hash": "sha256:cccc"}}]);
         let detail = session_detail("s-1", &observed);
         assert!(
-            detail.contains("<dt>text read</dt><dd class=\"mono\">sha256:cccc</dd>"),
+            detail.contains("<dt>text in context</dt><dd class=\"mono\">sha256:cccc</dd>"),
             "{detail}"
         );
+        assert!(!detail.contains("text extracted"), "{detail}");
         assert!(!detail.contains("bytes received"), "{detail}");
+        assert!(!detail.contains("part delivered"), "{detail}");
         assert!(!detail.contains("<dt>status</dt>"), "{detail}");
         assert!(!detail.contains("<dt>identity</dt>"), "{detail}");
         assert!(
             !detail.contains("unknown</dd>"),
             "an absent field is absent, never unknown"
         );
+
+        let reconstructed = json!([{"event": "crossing_reconstructed", "payload": {
+            "mode": "reconstructed", "url": "https://www.gov.uk/y", "host_name": "www.gov.uk",
+            "grounded": true, "licence": {"state": "unknown"}, "content_hash": "sha256:eeee"}}]);
+        let detail = session_detail("s-2", &reconstructed);
+        assert!(
+            detail.contains("<dt>text in transcript</dt><dd class=\"mono\">sha256:eeee</dd>"),
+            "{detail}"
+        );
+        assert!(!detail.contains("text extracted"), "{detail}");
+        assert!(!detail.contains("text in context"), "{detail}");
+
+        // A search result is mediated, but its hash is the supplier's: no
+        // body reached the edge, so nothing was extracted.
+        let searched = json!([{"event": "crossing_mediated", "payload": {
+            "mode": "mediated", "url": "https://supplier.example/doc", "host_name": "supplier.example",
+            "grounded": true, "licence": {"state": "unknown"}, "supplier": "linkup",
+            "content_hash": "sha256:dddd"}}]);
+        let detail = session_detail("s-3", &searched);
+        assert!(
+            detail.contains("<dt>text supplied</dt><dd class=\"mono\">sha256:dddd</dd>"),
+            "{detail}"
+        );
+        assert!(!detail.contains("text extracted"), "{detail}");
+
+        // A screen refusal is mediated too: the edge extracted the text it
+        // then withheld.
+        let refused = json!([{"event": "crossing_refused", "payload": {
+            "mode": "mediated", "url": "http://127.0.0.1:9/z", "host_name": "127.0.0.1",
+            "grounded": false, "licence": {"state": "unknown"}, "refusal": "screened",
+            "retrieved_hash": "sha256:ffff", "content_hash": "sha256:9999"}}]);
+        let detail = session_detail("local-2", &refused);
+        assert!(
+            detail.contains("<dt>text extracted</dt><dd class=\"mono\">sha256:9999</dd>"),
+            "{detail}"
+        );
+    }
+
+    /// The reconstructed figure is its own labelled row beside the witnessed
+    /// one, and is shown only for an engagement with reconstructed crossings.
+    #[test]
+    fn the_budget_page_shows_reconstructed_tokens_apart_from_witnessed() {
+        let budget = json!({
+            "engagements": [
+                {"engagement": "imported", "witnessed": 0, "reconstructed": 2, "refused": 0,
+                 "estimated_tokens": null, "reconstructed_estimated_tokens": 30,
+                 "reconstructed_token_basis": "characters/4"},
+                {"engagement": "live", "witnessed": 1, "reconstructed": 0, "refused": 0,
+                 "estimated_tokens": 250, "reconstructed_estimated_tokens": null}
+            ],
+            "acquisition_charge": {"recorded": false, "reason": ""},
+            "allowances": {}
+        });
+        let page = budget_page(&budget, READ);
+        let (imported, live) = page.split_once("<h3>live</h3>").expect("two cards");
+        assert!(
+            imported.contains(
+                "<dt>Estimated tokens, reconstructed (not added to witnessed)</dt><dd>30</dd>"
+            ),
+            "{imported}"
+        );
+        assert!(
+            imported.contains("<dt>Estimated tokens, witnessed</dt><dd>absent</dd>"),
+            "{imported}"
+        );
+        assert!(
+            live.contains("<dt>Estimated tokens, witnessed</dt><dd>250</dd>"),
+            "{live}"
+        );
+        assert!(!live.contains("reconstructed (not added"), "{live}");
     }
 }

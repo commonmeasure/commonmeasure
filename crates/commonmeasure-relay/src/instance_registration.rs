@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use commonmeasure_harness::EnrolmentRecord;
+use commonmeasure_harness::enrolment::at_hub_origin;
 use commonmeasure_harness::identity::Identity;
 use commonmeasure_harness::instance::{
     Answer, BINDING_REJECTED, Call, Expected, Operation, Retained, Work, directory, exchange,
@@ -118,6 +119,7 @@ fn edge(home: &Path) -> Result<Edge, String> {
             EnrolmentRecord::path(home).display()
         ));
     };
+    commonmeasure_harness::enrolment::hub_url_accepted(&record.hub)?;
     let identity = Identity::load(home)?;
     if let Some(reason) = identity.presented().unsigned {
         return Err(format!("{reason}. Nothing was sent."));
@@ -331,12 +333,19 @@ impl Attempt {
                 // The kept body names the first hub's delegation and carries
                 // its policy envelope; another hub can only refuse it, for a
                 // reason that says nothing about the key.
+                // Both hubs by origin alone: the kept one can be a URL 0.4.1's
+                // `connect` stored with credentials in it.
                 if kept.hub != hub {
+                    let (was, now) = (at_hub_origin(&kept.hub), at_hub_origin(hub));
+                    let was = if was == now {
+                        format!("another URL of the hub{was}")
+                    } else {
+                        format!("the hub{was}")
+                    };
                     return Err(format!(
-                        "idempotency key {idempotency_key} was used for a request to {}, and \
-                         this edge is now enrolled with {hub}; choose another key. Nothing was \
-                         sent.",
-                        kept.hub
+                        "idempotency key {idempotency_key} was used for a request to {was}, and \
+                         this edge is now enrolled with the hub{now}; choose another key. \
+                         Nothing was sent."
                     ));
                 }
                 Ok(kept)

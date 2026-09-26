@@ -2,7 +2,7 @@
 # Install the prebuilt `commonmeasure` binary for this platform from a public
 # release of the product repository, github.com/commonmeasure/commonmeasure:
 #
-#   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR]
+#   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR] [--update]
 #
 # A release holds one binary per supported platform, the plugin archive and
 # SHA256SUMS over every asset. The installer picks the binary for this
@@ -11,21 +11,26 @@
 # the release's version. Without --tag it installs the latest release.
 # --dir chooses where the binary goes; the default is ~/.local/bin. --plugin
 # also downloads and verifies the plugin archive, unpacks it into DIR and
-# prints the commands that install it into Claude Code.
+# prints the commands that install it into Claude Code. --update leaves out
+# the first-install next steps; `commonmeasure update` runs this script, as
+# embedded in the binary, with it.
 #
 # The release is public, so no account, token or GitHub client is needed:
 # every download is an anonymous request to the release's download URL.
 # COMMONMEASURE_RELEASE_URL replaces the release location with another origin
 # that serves the same asset names under the same URL shape, for a mirror or
-# a test; it defaults to the public repository's releases.
+# a test; it defaults to the public repository's releases. A release build of
+# `commonmeasure update` sets it to the public repository's releases whatever
+# the environment holds.
 #
 # What it does not do, and says when it matters: it does not edit shell
 # profiles (when the install directory is not on PATH it prints the line to
 # add), it does not build from source, and it does not install on a platform
 # the release has no binary for; then it names the binaries the release holds.
 #
-# Exit status: 0 installed; 1 a download failed verification, or the installed
-# binary did not report the release version, and nothing was left in place;
+# Exit status: 0 installed; 1 a download failed verification, or the downloaded
+# binary did not report the release version, and the binary already in place
+# (if any) was left as it was;
 # 2 the installer cannot proceed on this machine, and the message names why.
 set -eu
 
@@ -33,9 +38,10 @@ releases=${COMMONMEASURE_RELEASE_URL:-https://github.com/commonmeasure/commonmea
 tag=""
 dir="$HOME/.local/bin"
 plugin=""
+update=""
 
 usage() {
-  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR]"
+  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update]"
 }
 
 while [ $# -gt 0 ]; do
@@ -43,6 +49,7 @@ while [ $# -gt 0 ]; do
     --tag)    tag=$2; shift 2 ;;
     --dir)    dir=$2; shift 2 ;;
     --plugin) plugin=$2; shift 2 ;;
+    --update) update=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "commonmeasure installer: unknown argument $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -127,22 +134,22 @@ verify() {
 fetch "$asset"
 verify "$asset"
 
+# The version is checked before the binary is placed, so a failure leaves the
+# binary already installed where it was.
+chmod +x "$tmp/$asset"
+reported=$("$tmp/$asset" --version 2>/dev/null) \
+  || fail "the $asset in release $tag does not run on this machine; nothing was installed"
+[ "$reported" = "commonmeasure $version" ] \
+  || fail "the downloaded binary reports '$reported' but the release is $tag; nothing was installed"
+
 mkdir -p "$dir" || cannot "create $dir"
 target="$dir/commonmeasure"
 case "$asset" in *.exe) target="$target.exe" ;; esac
-chmod +x "$tmp/$asset"
 # Moving over a running binary replaces the name and leaves the running inode
-# alone, where copying over it fails.
-mv "$tmp/$asset" "$target"
-
-reported=$("$target" --version 2>/dev/null) || {
-  rm -f "$target"
-  fail "$target does not run on this machine and was removed"
-}
-[ "$reported" = "commonmeasure $version" ] || {
-  rm -f "$target"
-  fail "the installed binary reports '$reported' but the release is $tag; it was removed"
-}
+# alone, where copying over it fails. `mv` across file systems copies first,
+# so the staged copy sits beside the target and the final step is a rename.
+cp "$tmp/$asset" "$target.new.$$" && mv "$target.new.$$" "$target" \
+  || { rm -f "$target.new.$$"; cannot "write $target"; }
 echo "installed $target: $reported, checksum verified"
 case ":$PATH:" in
   *":$dir:"*) ;;
@@ -162,4 +169,4 @@ if [ -n "$plugin" ]; then
   echo "  cd \"$plugin/commonmeasure-plugin\" && claude plugin marketplace add ./ && claude plugin install commonmeasure@commonmeasure"
 fi
 
-echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine."
+[ -n "$update" ] || echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine."

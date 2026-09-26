@@ -254,17 +254,43 @@ impl Store {
     }
 
     /// Every record of one session, in log order, or `None` for a session the
-    /// index has never seen.
+    /// index has never seen. An `edge_identity` record's `hub` and a
+    /// `policy_sync` record's `policy_url` are reduced to their origin, as
+    /// every other reader of them does, and a `policy_sync` reason that can
+    /// quote a URL with credentials is withheld ([`served_sync_reason`]).
     pub fn session_records(&self, session_id: &str) -> Result<Option<Value>> {
         let mut statement = self.connection.prepare(
-            "SELECT record FROM records WHERE session_id = ?1 ORDER BY source_path, line",
+            "SELECT line, record FROM records WHERE session_id = ?1 ORDER BY source_path, line",
         )?;
         let records: Vec<Value> = statement
-            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .query_map(params![session_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
             .filter_map(std::result::Result::ok)
-            .map(|line| {
-                serde_json::from_str(&line)
-                    .unwrap_or_else(|_| json!({"event": "unreadable", "raw": line}))
+            .map(|(number, line)| {
+                let mut record: Value =
+                    serde_json::from_str(&line).unwrap_or_else(|_| unreadable_line(number, &line));
+                // The records stay as the log holds them but for the hub an
+                // `edge_identity` names and a `policy_sync` record's policy
+                // URL. The first can hold the whole stored hub URL, and
+                // 0.4.1 built the second from it, so both can carry the
+                // credentials 0.4.1's `connect` stored. Output names a hub
+                // by its origin, as `disconnect` does for the policy URL.
+                let field = match record["event"].as_str() {
+                    Some("edge_identity") => Some("hub"),
+                    Some("policy_sync") => Some("policy_url"),
+                    _ => None,
+                };
+                if record["event"] == "policy_sync" && record["payload"].get("reason").is_some() {
+                    record["payload"]["reason"] = served_sync_reason(&record["payload"]);
+                }
+                if let Some(field) = field.filter(|field| record["payload"].get(field).is_some()) {
+                    record["payload"][field] =
+                        commonmeasure_harness::enrolment::recorded_hub_origin(
+                            &record["payload"][field],
+                        );
+                }
+                record
             })
             .collect();
         Ok((!records.is_empty()).then_some(Value::Array(records)))
@@ -328,10 +354,11 @@ impl Store {
     /// Which prefixes are declared right now is the policy projection's answer,
     /// not this store's.
     ///
-    /// Beside the grade counts, each row carries the context footprint in the
-    /// basis its own crossings recorded, with the crossings that admitted
-    /// bytes and recorded no estimate counted beside the figure — the same
-    /// lower-bound discipline the session rollup holds — and the first and
+    /// Beside the grade counts, each row carries the context footprint of its
+    /// witnessed crossings in the basis they recorded, with the reconstructed
+    /// figure beside it and never added to it, each with its crossings that
+    /// admitted bytes and recorded no estimate counted beside the figure — the
+    /// same lower-bound discipline the session rollup holds — and the first and
     /// last time the path was crossed, which is the "over time" half of the
     /// question this view answers.
     pub fn internal_use(
@@ -569,6 +596,19 @@ impl Store {
     }
 }
 
+/// A line this console could not parse, as it is served: its 1-based line
+/// number in the log, its length in bytes as the console holds it, without
+/// the line ending (where the line is not valid UTF-8 this can differ from
+/// its length in the log), and none of its text. A torn `edge_identity` or
+/// `policy_sync` line can hold a hub or policy URL with credentials, and the
+/// field-wise reduction of parsed records cannot reach a line that is not
+/// JSON. A URL parser finds userinfo in more spellings than a scrub can list
+/// (no `//` after a special scheme, a tab inside the scheme), so no part of
+/// the line is served. The log and the index keep the line as written.
+fn unreadable_line(number: i64, line: &str) -> Value {
+    json!({"event": "unreadable", "line": number, "bytes": line.len()})
+}
+
 /// The recorded crossings as a forecast reads them (`Store::crossing_facts`).
 #[derive(Debug, Clone)]
 pub struct CrossingFacts {
@@ -723,11 +763,16 @@ impl SessionRollup {
             "unreadable": self.unreadable,
             "grounded_witnessed": self.grounded_witnessed,
             "grounded_reconstructed": self.grounded_reconstructed,
-            "estimated_tokens": self.footprint.total(),
-            "token_basis": self.footprint.basis(),
-            "estimated_tokens_by_basis": self.footprint.by_basis,
-            "total_withheld": self.footprint.withheld(),
-            "crossings_without_estimate": self.footprint.crossings_without_estimate,
+            "estimated_tokens": self.footprint.witnessed.total(),
+            "token_basis": self.footprint.witnessed.basis(),
+            "estimated_tokens_by_basis": self.footprint.witnessed.by_basis,
+            "total_withheld": self.footprint.witnessed.withheld(),
+            "crossings_without_estimate": self.footprint.witnessed.crossings_without_estimate,
+            "reconstructed_estimated_tokens": self.footprint.reconstructed.total(),
+            "reconstructed_token_basis": self.footprint.reconstructed.basis(),
+            "reconstructed_estimated_tokens_by_basis": self.footprint.reconstructed.by_basis,
+            "reconstructed_total_withheld": self.footprint.reconstructed.withheld(),
+            "reconstructed_crossings_without_estimate": self.footprint.reconstructed.crossings_without_estimate,
             "first": self.first.map(|stamp| stamp.to_rfc3339()),
             "last": self.last.map(|stamp| stamp.to_rfc3339()),
             "top_hosts": hosts
@@ -782,11 +827,16 @@ impl EngagementBudget {
             "witnessed": self.witnessed,
             "reconstructed": self.reconstructed,
             "refused": self.refused,
-            "estimated_tokens": self.footprint.total(),
-            "token_basis": self.footprint.basis(),
-            "estimated_tokens_by_basis": self.footprint.by_basis,
-            "total_withheld": self.footprint.withheld(),
-            "crossings_without_estimate": self.footprint.crossings_without_estimate,
+            "estimated_tokens": self.footprint.witnessed.total(),
+            "token_basis": self.footprint.witnessed.basis(),
+            "estimated_tokens_by_basis": self.footprint.witnessed.by_basis,
+            "total_withheld": self.footprint.witnessed.withheld(),
+            "crossings_without_estimate": self.footprint.witnessed.crossings_without_estimate,
+            "reconstructed_estimated_tokens": self.footprint.reconstructed.total(),
+            "reconstructed_token_basis": self.footprint.reconstructed.basis(),
+            "reconstructed_estimated_tokens_by_basis": self.footprint.reconstructed.by_basis,
+            "reconstructed_total_withheld": self.footprint.reconstructed.withheld(),
+            "reconstructed_crossings_without_estimate": self.footprint.reconstructed.crossings_without_estimate,
             "last": self.last.map(|stamp| stamp.to_rfc3339()),
             "top_hosts": hosts
                 .into_iter()
@@ -856,18 +906,59 @@ impl InternalRollup {
             "grounded_witnessed": self.grounded_witnessed,
             "grounded_reconstructed": self.grounded_reconstructed,
             "sessions": self.sessions.len(),
-            "estimated_tokens": self.footprint.total(),
-            "token_basis": self.footprint.basis(),
-            "estimated_tokens_by_basis": self.footprint.by_basis,
-            "total_withheld": self.footprint.withheld(),
-            "crossings_without_estimate": self.footprint.crossings_without_estimate,
+            "estimated_tokens": self.footprint.witnessed.total(),
+            "token_basis": self.footprint.witnessed.basis(),
+            "estimated_tokens_by_basis": self.footprint.witnessed.by_basis,
+            "total_withheld": self.footprint.witnessed.withheld(),
+            "crossings_without_estimate": self.footprint.witnessed.crossings_without_estimate,
+            "reconstructed_estimated_tokens": self.footprint.reconstructed.total(),
+            "reconstructed_token_basis": self.footprint.reconstructed.basis(),
+            "reconstructed_estimated_tokens_by_basis": self.footprint.reconstructed.by_basis,
+            "reconstructed_total_withheld": self.footprint.reconstructed.withheld(),
+            "reconstructed_crossings_without_estimate": self.footprint.reconstructed.crossings_without_estimate,
             "first_seen": self.first_seen.map(|stamp| stamp.to_rfc3339()),
             "last_seen": self.last_seen.map(|stamp| stamp.to_rfc3339()),
         })
     }
 }
 
-/// A context footprint folded from crossings, kept per `token_basis`.
+/// A context footprint folded from crossings: the witnessed figure, and the
+/// reconstructed one beside it.
+///
+/// The footprint is what was witnessed entering context, so it sums observed
+/// and mediated crossings alone. A reconstructed crossing's hash
+/// and estimate are claims about the transcript, not about what entered the
+/// model's context (`docs/contracts/session-evidence.md` §Crossing), and
+/// witnessed and reconstructed evidence are never totalled together. Its
+/// tokens are kept as their own figure, so a session made only of imported
+/// crossings still shows a measure. For a session with a context snapshot,
+/// `commonmeasure session` states the same witnessed figure.
+#[derive(Default)]
+struct Footprint {
+    witnessed: Tally,
+    reconstructed: Tally,
+}
+
+impl Footprint {
+    fn absorb(&mut self, event: &str, payload: &Value) {
+        // A refused crossing may have fetched the page and record the
+        // estimate of the text its declarations or a screen then withheld,
+        // but that text never reached the model, so it counts neither as
+        // tokens nor as a missing estimate.
+        match grade_of(event) {
+            Some(Grade::Witnessed) => self.witnessed.absorb(payload),
+            Some(Grade::Reconstructed) => self.reconstructed.absorb(payload),
+            Some(Grade::Refused) | None => {}
+        }
+    }
+
+    fn fold(&mut self, other: &Footprint) {
+        self.witnessed.fold(&other.witnessed);
+        self.reconstructed.fold(&other.reconstructed);
+    }
+}
+
+/// One grade's token estimates, kept per `token_basis`.
 ///
 /// Estimates on different bases are never added together: a `characters/4`
 /// figure plus a tokeniser's count is not a number. `estimated_tokens_by_basis`
@@ -878,8 +969,10 @@ impl InternalRollup {
 /// why in a field rather than left to guess. With none — nothing recorded an
 /// estimate — `estimated_tokens` and `token_basis` are both `null` and
 /// nothing is withheld: there is no figure, which is not a figure of zero.
+/// The reconstructed tally is served under the same names with a
+/// `reconstructed_` prefix.
 #[derive(Default)]
-struct Footprint {
+struct Tally {
     by_basis: BTreeMap<String, u64>,
     /// Crossings that admitted bytes and recorded no estimate. Each figure
     /// is a lower bound by exactly these, and the reader is told so rather
@@ -890,30 +983,22 @@ struct Footprint {
 /// The `total_withheld` value when more than one basis is present.
 const MIXED_BASES: &str = "mixed_bases";
 
-impl Footprint {
-    fn absorb(&mut self, event: &str, payload: &Value) {
+impl Tally {
+    fn absorb(&mut self, payload: &Value) {
         match payload["estimated_tokens"].as_u64() {
             Some(tokens) => {
                 let basis = payload["token_basis"].as_str().unwrap_or("unknown");
                 *self.by_basis.entry(basis.to_owned()).or_default() += tokens;
             }
             // A crossing that put bytes in context and recorded no estimate is
-            // what makes a figure a lower bound rather than a total. A refused
-            // crossing fetched nothing, so it has no footprint to be missing.
-            None => {
-                if matches!(
-                    grade_of(event),
-                    Some(Grade::Witnessed | Grade::Reconstructed)
-                ) {
-                    self.crossings_without_estimate += 1;
-                }
-            }
+            // what makes a figure a lower bound rather than a total.
+            None => self.crossings_without_estimate += 1,
         }
     }
 
-    /// Folds another footprint in, basis by basis. A footprint that counted
-    /// nothing carries no basis, so folding it cannot turn one basis into two.
-    fn fold(&mut self, other: &Footprint) {
+    /// Folds another tally in, basis by basis. A tally that counted nothing
+    /// carries no basis, so folding it cannot turn one basis into two.
+    fn fold(&mut self, other: &Tally) {
         for (basis, tokens) in &other.by_basis {
             *self.by_basis.entry(basis.clone()).or_default() += tokens;
         }
@@ -923,7 +1008,7 @@ impl Footprint {
     /// The combined figure: a sum only while there is one basis to sum on.
     ///
     /// `None` where nothing carried an estimate, and `None` across bases. A
-    /// footprint that measured nothing must not serve `0`: unmeasured and
+    /// tally that measured nothing must not serve `0`: unmeasured and
     /// measured-zero are different facts (`docs/FAIL-POLICY.md` §7).
     fn total(&self) -> Option<u64> {
         match self.by_basis.len() {
@@ -1082,6 +1167,56 @@ impl Store {
     }
 }
 
+/// What the console serves in place of a withheld `policy_sync` reason.
+const WITHHELD_SYNC_REASON: &str = "withheld: the reason can quote a URL with credentials; the \
+     session log keeps it, and `commonmeasure policy sync` reports the current one";
+
+/// A `policy_sync` record's `reason` as the console serves it. 0.4.2 and
+/// earlier quoted the policy URL whole in some reasons (a name-resolution
+/// timeout, a refused `policy_url`), and a policy URL can carry credentials.
+/// The reason is free text, and reducing a URL inside it would need a
+/// scanner that knows every spelling the parser accepts
+/// (`https:/user:key@host` among them), so a reason that could quote one is
+/// withheld whole, judged by character tests and the record's `policy_url`:
+///
+/// - an `@` in the reason or the `policy_url`: userinfo cannot be written
+///   without one;
+/// - a `policy_url` that carries a query, or that `url::Url::parse` (the
+///   parser the harness fetches with) refuses: a timeout quoted the URL, and
+///   a key can sit in a query or in text the parser does not read as a host;
+/// - a reason that holds the record's `policy_url` verbatim, where that URL
+///   is more than its origin (a path other than `/`, a query or a
+///   fragment): a timeout quoted the URL whole, and a key can sit in any of
+///   those parts. A current timeout quotes only the origin, so it is served,
+///   and so is one for a `policy_url` that is only its origin;
+/// - a `"` in the reason of an `unavailable` record: a refused `policy_url`
+///   is recorded with a null `policy_url`, and the old refusal quoted the
+///   value as `policy_url "…"`. The current refusal quotes nothing, and an
+///   `unavailable` reason that quotes something quotes the content of the
+///   deployment file, `enrolment.json` or `managed/state.json`, as a serde
+///   error does with a value it could not read.
+///
+/// The session log keeps the reason as written.
+fn served_sync_reason(payload: &Value) -> Value {
+    let reason = payload["reason"].as_str().unwrap_or_default();
+    let policy_url = payload["policy_url"].as_str();
+    let quotes_the_url = reason.contains('@')
+        || policy_url.is_some_and(|policy_url| {
+            policy_url.contains('@')
+                || url::Url::parse(policy_url).map_or(true, |url| {
+                    url.query().is_some()
+                        || (reason.contains(policy_url)
+                            && (url.path() != "/" || url.fragment().is_some()))
+                })
+        })
+        || (payload["outcome"] == "unavailable" && reason.contains('"'));
+    if quotes_the_url {
+        json!(WITHHELD_SYNC_REASON)
+    } else {
+        payload["reason"].clone()
+    }
+}
+
 /// Events a session start writes before any work. A log holding nothing else
 /// is configured and never seen working (§Host process). `nudge_issued` is
 /// in the set because the session-start hook writes it beside the others.
@@ -1237,7 +1372,7 @@ impl LogFacts {
                         "outcome": payload["outcome"],
                         "revision": payload["revision"],
                         "digest": payload["digest"],
-                        "reason": payload["reason"],
+                        "reason": served_sync_reason(payload),
                         "applied": payload["applied"],
                         "stale_since": payload["stale_since"],
                         "timestamp": payload["timestamp"],
@@ -1247,11 +1382,14 @@ impl LogFacts {
             "edge_identity" => {
                 if self.edge_identity.is_none() {
                     self.edge_identity = Some(json!({
-                        "hub": payload["hub"],
+                        // A record can hold the whole stored URL, which
+                        // can carry credentials.
+                        "hub": commonmeasure_harness::enrolment::recorded_hub_origin(&payload["hub"]),
                         "key_id": payload["key_id"],
                         "standing": payload["standing"],
                         "revoked_at": payload["revoked_at"],
                         "revocation": payload["revocation"],
+                        "hub_refused": payload["hub_refused"],
                         "listed_until": payload["listed_until"],
                         "unlisted": payload["unlisted"],
                     }));
@@ -1542,5 +1680,80 @@ impl HostSession {
                 .map(|(id, facts)| facts.into_json(&id))
                 .collect::<Vec<_>>(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unreadable_line as served;
+
+    #[test]
+    fn an_unreadable_line_is_served_as_its_number_and_length_alone() {
+        let line =
+            r#"{"seq":9,"event":"edge_identity","payload":{"hub":"https://op:k@hub.example","k"#;
+        let record = served(12, line);
+        let keys: Vec<&str> = record
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys.len(), 3, "{record}");
+        assert_eq!(record["event"], "unreadable");
+        assert_eq!(record["line"], 12);
+        assert_eq!(record["bytes"], 79);
+    }
+
+    /// Every shape a review found served with a credential in it. A URL
+    /// parser reads userinfo from each: after `://` with extra slashes or
+    /// escapes, after a special scheme with no `//` at all, in any case,
+    /// and with a tab inside the scheme. The secret is planted in each and
+    /// looked for in what is served.
+    #[test]
+    fn a_planted_secret_is_not_served_in_any_shape() {
+        let hubs = [
+            "https:///op:ak_PLANTED@hub.example",
+            "https:////op:ak_PLANTED@hub.example",
+            r"https://\\/op:ak_PLANTED@hub.example",
+            r"https:///\\op:ak_PLANTED@hub.example",
+            r#"https://\"op:ak_PLANTED@hub.example"#,
+            "https:/op:ak_PLANTED@hub.example",
+            "https:op:ak_PLANTED@hub.example",
+            "HTTPS:/op:ak_PLANTED@hub.example",
+            r"https:\\op:ak_PLANTED@hub.example",
+            r"ht\ttps:/op:ak_PLANTED@hub.example",
+            "https://op:s3cr'et_ak_PLANTED@hub.example",
+            "https://op:s3cr et_ak_PLANTED@hub.example",
+            r#"https://op:s3cr\"et_ak_PLANTED@hub.example"#,
+            r"https://op:s3cr\tet_ak_PLANTED@hub.example",
+            "https://op:s3cr<et_ak_PLANTED@hub.example",
+            "https://op:s3cr`et_ak_PLANTED@hub.example",
+        ];
+        let mut lines: Vec<String> = hubs
+            .iter()
+            .map(|hub| {
+                format!(
+                    r#"{{"seq":9,"event":"edge_identity","payload":{{"hub":"{hub}","key_id":"k-"#
+                )
+            })
+            .collect();
+        lines.extend(
+            [
+                r#"{"cmd":"git remote add a https://a.example https://op:ak_PLANTED@b.example/x","#,
+                r#"{"out":"https://a.example\nhttps://op:ak_PLANTED@b.example/x","#,
+                r#"{"out":"<https://a.example><https://op:ak_PLANTED@b.example/x>","#,
+                "torn: see https://a.example and https://op:ak_PLANTED@b.example/x",
+                "torn: see https://a.example,https://op:ak_PLANTED@b.example/x",
+                r#"{"a":"https://docs.example/x","hub":"https://op:ak_PLANTED@hub.example""#,
+            ]
+            .map(str::to_owned),
+        );
+        let served: Vec<(&str, String)> = lines
+            .iter()
+            .enumerate()
+            .map(|(at, line)| (line.as_str(), served(at as i64 + 1, line).to_string()))
+            .filter(|(_, served)| served.contains("PLANTED") || served.contains("op:"))
+            .collect();
+        assert!(served.is_empty(), "{served:#?}");
     }
 }

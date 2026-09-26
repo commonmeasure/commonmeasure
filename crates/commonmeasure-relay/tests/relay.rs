@@ -737,6 +737,281 @@ fn a_capture_time_internal_crossing_stays_home_after_the_prefix_is_removed() {
     receiver.stop();
 }
 
+/// The observed crossings the real capture path writes for one `WebFetch`
+/// made in the egress-enabled scope, as the session lines the relay reads.
+fn captured_lines(session: &str, url: &str, internal_prefixes: &[String]) -> Vec<String> {
+    commonmeasure_harness::capture(
+        &commonmeasure_harness::HookInput {
+            session_id: Some(session.into()),
+            cwd: Some("/work/personal".into()),
+            hook_event_name: Some("PostToolUse".into()),
+            tool_name: Some("WebFetch".into()),
+            tool_input: json!({"url": url}),
+            tool_response: json!({"result": "page text"}),
+            ..Default::default()
+        },
+        commonmeasure_harness::HostSurface::ClaudeCode,
+        internal_prefixes,
+    )
+    .iter()
+    .map(|crossing| {
+        json!({
+            "seq": 0,
+            "timestamp": "2026-08-02T10:00:00.000Z",
+            "event": "crossing_observed",
+            "payload": crossing.to_record(),
+        })
+        .to_string()
+    })
+    .collect()
+}
+
+/// Relays `lines` from a home whose `policy.json` names `internal_prefixes`
+/// to a real receiver, and returns each URL its events named, once.
+fn relayed_urls(session: &str, internal_prefixes: &[String], lines: &[String]) -> Vec<String> {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("policy.json"),
+        json!({
+            "record_internal_prefixes": internal_prefixes,
+            "scopes": [{"match": "/work/personal", "engagement": "personal",
+                        "allow_telemetry_egress": true}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    write_session(home.path(), session, lines);
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    receiver.stop();
+    let bodies = bodies.lock().unwrap();
+    bodies
+        .iter()
+        .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+        .filter_map(|event| event["content_url"].as_str().map(str::to_owned))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// A public page relayed beside the crossing under test, so a relay that
+/// sent nothing at all cannot pass for one that held the private crossing
+/// back.
+const PUBLIC_PAGE: &str = "https://www.gov.uk/x";
+
+/// A `.internal` or `localhost` name written with a fully qualified name's
+/// trailing dot, or with more than one, is the same private name. Capture
+/// keeps it out of the record and the relay keeps a record of it at home, as
+/// for the dotless spelling.
+#[test]
+fn a_dotted_private_name_is_kept_home_as_the_dotless_one_is() {
+    for url in [
+        "https://host.internal/a",
+        "https://host.internal./a",
+        "http://localhost./a",
+        "http://build.LOCAL./a",
+        "https://host.internal../a",
+        "http://localhost../a",
+    ] {
+        assert!(
+            captured_lines("s-dotted-private", url, &[]).is_empty(),
+            "capture records nothing for {url}"
+        );
+        // A record of the same URL in the session log, however it got there.
+        let lines = [
+            crossing_in_cwd(
+                "crossing_observed",
+                "s-dotted-private",
+                url,
+                true,
+                "/work/personal",
+            ),
+            crossing_in_cwd(
+                "crossing_observed",
+                "s-dotted-private",
+                PUBLIC_PAGE,
+                true,
+                "/work/personal",
+            ),
+        ];
+        assert_eq!(
+            relayed_urls("s-dotted-private", &[], &lines),
+            [PUBLIC_PAGE],
+            "{url} stays home"
+        );
+    }
+}
+
+/// A named internal prefix covers every spelling of a page under it,
+/// credentials in the URL included, and the operator's prefix is a spelling
+/// too. Capture marks the crossing internal, and the relay keeps it home, by
+/// the marker and, for a record without the marker, by the prefix.
+#[test]
+fn a_dotted_spelling_under_an_internal_prefix_is_internal_and_stays_home() {
+    let dotless = "https://intranet.example.com/private/".to_owned();
+    let dotted = "https://intranet.example.com./private/".to_owned();
+    for (prefix, url) in [
+        (&dotless, "https://intranet.example.com/private/handbook"),
+        (&dotless, "https://intranet.example.com./private/handbook"),
+        (
+            &dotless,
+            "HTTPS://INTRANET.EXAMPLE.COM.:443/private/handbook",
+        ),
+        (&dotless, "https://u@intranet.example.com/private/handbook"),
+        (
+            &dotless,
+            "https://u:p@intranet.example.com./private/handbook",
+        ),
+        (&dotted, "https://intranet.example.com/private/handbook"),
+    ] {
+        let prefixes = std::slice::from_ref(prefix);
+        let captured = captured_lines("s-dotted-internal", url, prefixes);
+        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
+        let record: Value = serde_json::from_str(&captured[0]).unwrap();
+        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
+
+        let public = crossing_in_cwd(
+            "crossing_observed",
+            "s-dotted-internal",
+            PUBLIC_PAGE,
+            true,
+            "/work/personal",
+        );
+        let marked = [captured[0].clone(), public.clone()];
+        assert_eq!(
+            relayed_urls("s-dotted-internal", prefixes, &marked),
+            [PUBLIC_PAGE],
+            "{url} captured under {prefix} stays home"
+        );
+        // A record from before the marker existed: the prefix alone holds it.
+        let unmarked = [
+            crossing_in_cwd(
+                "crossing_observed",
+                "s-dotted-internal",
+                url,
+                true,
+                "/work/personal",
+            ),
+            public,
+        ];
+        assert_eq!(
+            relayed_urls("s-dotted-internal", prefixes, &unmarked),
+            [PUBLIC_PAGE],
+            "{url} recorded without the marker stays home under {prefix}"
+        );
+    }
+}
+
+/// A licence declared relatively is resolved against the page's URL, so a
+/// page URL carrying credentials gives a licence URL carrying them. The
+/// receiver gets both URLs without them.
+#[test]
+fn credentials_in_a_page_url_reach_the_receiver_in_neither_url() {
+    let mut record: Value = serde_json::from_str(&crossing_line(
+        "crossing_mediated",
+        "s-credentials",
+        "http://u:p@publisher.example/story",
+        true,
+    ))
+    .unwrap();
+    record["payload"]["licence"] = json!({
+        "state": "declared",
+        "reference": "http://u:p@publisher.example/license.xml",
+    });
+    record["payload"]["http_status"] = json!(200);
+    let home = tempfile::tempdir().unwrap();
+    write_session(home.path(), "s-credentials", &[record.to_string()]);
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    receiver.stop();
+    let bodies = bodies.lock().unwrap();
+    let events: Vec<Value> = bodies
+        .iter()
+        .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert!(!events.is_empty(), "the crossing is relayed");
+    for event in &events {
+        assert_eq!(event["content_url"], "http://publisher.example/story");
+        assert_eq!(event["license_ref"], "http://publisher.example/license.xml");
+    }
+    let sent = serde_json::to_string(&*bodies).unwrap();
+    assert!(!sent.contains("u:p@"), "{sent}");
+}
+
+/// A batch spooled before projection stripped the licence reference still
+/// holds the credentials, and is delivered from the spool as queued. The
+/// batch is spooled through a receiver that refuses it, and its queued
+/// reference is then written back in the form 0.4.1 queued it. The next
+/// delivery sends the reference without them.
+#[test]
+fn a_licence_reference_spooled_with_credentials_is_sent_without_them() {
+    let mut record: Value = serde_json::from_str(&crossing_line(
+        "crossing_mediated",
+        "s-spooled-credentials",
+        "http://u:p@publisher.example/story",
+        true,
+    ))
+    .unwrap();
+    record["payload"]["licence"] = json!({
+        "state": "declared",
+        "reference": "http://u:p@publisher.example/license.xml",
+    });
+    record["payload"]["http_status"] = json!(200);
+    let home = tempfile::tempdir().unwrap();
+    write_session(home.path(), "s-spooled-credentials", &[record.to_string()]);
+    let refused = Arc::new(Mutex::new(vec!["publisher.example"]));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = refusing_receiver(refused.clone(), bodies.clone());
+    let options = commonmeasure_relay::RelayOptions {
+        receiver: Some(receiver.url()),
+        ..Default::default()
+    };
+    commonmeasure_relay::relay(home.path(), &options).expect_err("the receiver answers 503");
+
+    let queue = home.path().join("relay/spool/outbound.ndjson");
+    let queued = std::fs::read_to_string(&queue).unwrap();
+    assert!(!queued.contains("u:p@"), "projection queues no credentials");
+    let as_before = queued.replace(
+        "http://publisher.example/license.xml",
+        "http://u:p@publisher.example/license.xml",
+    );
+    assert_ne!(as_before, queued, "the queued batch holds the reference");
+    std::fs::write(&queue, as_before).unwrap();
+
+    refused.lock().unwrap().clear();
+    relay_after_backoff(home.path(), &options).expect("delivered");
+    receiver.stop();
+    let bodies = bodies.lock().unwrap();
+    let references: Vec<Value> = bodies
+        .iter()
+        .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+        .map(|event| event["license_ref"].clone())
+        .collect();
+    assert!(!references.is_empty(), "the spooled batch is delivered");
+    assert!(
+        references
+            .iter()
+            .all(|reference| reference == "http://publisher.example/license.xml"),
+        "{references:?}"
+    );
+}
+
 #[test]
 fn a_relay_killed_before_acknowledging_redelivers_the_same_event_ids() {
     let home = tempfile::tempdir().unwrap();
@@ -1436,6 +1711,520 @@ fn a_supplied_result_names_its_supplier_at_the_receiver_and_a_fetch_does_not() {
             ("https://host.example/fetched".to_owned(), None),
         ],
         "the supplier is named on the supplied result alone"
+    );
+}
+
+/// A session with something of everything a scope decides on: a turn
+/// boundary, a result `ozone` served (and grounded), a result `exa` served, the
+/// operator's own fetch, and a refused crossing.
+fn write_mixed_supplier_session(home: &Path, session: &str) {
+    let supplied = |url: &str, supplier: &str, grounded: bool| {
+        let mut record: Value =
+            serde_json::from_str(&crossing_line("crossing_mediated", session, url, grounded))
+                .unwrap();
+        record["payload"]["supplier"] = json!(supplier);
+        record.to_string()
+    };
+    write_session(
+        home,
+        session,
+        &[
+            turn_line("turn_started", Some("t1"), Some("/work/personal")),
+            supplied("https://host.example/ozone", "ozone", true),
+            supplied("https://host.example/exa", "exa", false),
+            crossing_line(
+                "crossing_mediated",
+                session,
+                "https://host.example/fetched",
+                true,
+            ),
+            crossing_line(
+                "crossing_refused",
+                session,
+                "https://host.example/refused",
+                false,
+            ),
+        ],
+    );
+}
+
+fn relay_json(home: &Path, receiver: &str, suppliers: Option<&[&str]>) {
+    let mut config = json!({"receiver": receiver, "api_key": "key"});
+    if let Some(suppliers) = suppliers {
+        config["suppliers"] = json!(suppliers);
+    }
+    std::fs::write(home.join("relay.json"), config.to_string()).unwrap();
+}
+
+/// An event's type and the supplier it names, if any.
+type SuppliedEvent = (String, Option<String>);
+
+/// (event type, supplier) for every event the receiver was sent, and whether
+/// any body carried a refused count.
+fn received(bodies: &Mutex<Vec<Value>>) -> (Vec<SuppliedEvent>, bool) {
+    let field = commonmeasure_relay::project::SUPPLIER_FIELD;
+    let bodies = bodies.lock().unwrap();
+    let events = bodies
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap())
+        .map(|event| {
+            (
+                event["type"].as_str().unwrap().to_owned(),
+                event["data"][field].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    let refused = bodies.iter().any(|body| body.get("refused").is_some());
+    (events, refused)
+}
+
+/// A receiver scoped to `ozone` in relay.json is sent ozone's retrieval and
+/// grounding and nothing else: no turn boundary, no other supplier's result,
+/// no fetch of the operator's own, and no refused field at all, where an
+/// unscoped receiver of the same session is told the count.
+#[test]
+fn a_scoped_receiver_gets_its_suppliers_events_and_no_refused_count() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    relay_json(home.path(), &receiver.url(), Some(&["ozone"]));
+
+    let report =
+        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+            .expect("relay");
+    receiver.stop();
+
+    let (events, refused) = received(&bodies);
+    let ozone = Some("ozone".to_owned());
+    assert_eq!(
+        events,
+        vec![
+            ("content_retrieved".to_owned(), ozone.clone()),
+            ("content_grounded".to_owned(), ozone),
+        ]
+    );
+    assert!(!refused, "a scoped receiver is told nothing about refusals");
+    assert_eq!(report.refused_reported, 0);
+}
+
+/// Without `suppliers`, the configured receiver takes every cleared event and
+/// the session's refused count, as before the option existed.
+#[test]
+fn an_unscoped_receiver_gets_every_cleared_event_and_the_refused_count() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    relay_json(home.path(), &receiver.url(), None);
+
+    commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+        .expect("relay");
+    receiver.stop();
+
+    let (events, refused) = received(&bodies);
+    let types: Vec<&str> = events.iter().map(|(kind, _)| kind.as_str()).collect();
+    assert_eq!(
+        types,
+        [
+            "turn_started",
+            "content_retrieved",
+            "content_grounded",
+            "content_retrieved",
+            "content_retrieved",
+            "content_grounded",
+        ]
+    );
+    assert!(refused);
+    assert_eq!(bodies.lock().unwrap()[0]["refused"], json!(1));
+}
+
+/// The scope belongs to the receiver relay.json names: a `--receiver`
+/// override to another receiver is sent the whole cleared session.
+#[test]
+fn a_receiver_override_is_not_scoped_by_the_configured_suppliers() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    relay_json(home.path(), "http://127.0.0.1:9/unused", Some(&["ozone"]));
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    receiver.stop();
+
+    let (events, refused) = received(&bodies);
+    assert_eq!(events.len(), 6, "the override takes every cleared event");
+    assert!(refused);
+}
+
+/// The spool is shared by every receiver the relay is pointed at. A batch
+/// queued unscoped under an override that failed, and delivered later to the
+/// scoped configured receiver, is narrowed at the send: the supplier still
+/// sees only its own events and no refused count.
+#[test]
+fn a_batch_spooled_unscoped_is_narrowed_before_it_reaches_a_scoped_receiver() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let failing = fixed_answer_receiver(503, "text/plain", "try later");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut scoped = accepting_receiver(bodies.clone());
+    relay_json(home.path(), &scoped.url(), Some(&["ozone"]));
+
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(failing.url()),
+            ..Default::default()
+        },
+    )
+    .expect_err("the override refuses the batch, which stays spooled");
+
+    // Past the retry deadline the failed attempt set.
+    let later = chrono::Utc::now() + chrono::Duration::days(1);
+    commonmeasure_relay::relay_with_clock(
+        home.path(),
+        &commonmeasure_relay::RelayOptions::default(),
+        &|| later,
+    )
+    .expect("relay");
+    scoped.stop();
+
+    let (events, refused) = received(&bodies);
+    assert!(!events.is_empty());
+    assert!(
+        events
+            .iter()
+            .all(|(_, supplier)| supplier.as_deref() == Some("ozone")),
+        "only ozone's events leave for ozone: {events:?}"
+    );
+    assert!(!refused);
+
+    // The events narrowed out were not recorded delivered, so an unscoped
+    // receiver is sent them from the session log, with the count.
+    let rest = Arc::new(Mutex::new(Vec::new()));
+    let mut unscoped = accepting_receiver(rest.clone());
+    relay_json(home.path(), &unscoped.url(), None);
+    commonmeasure_relay::relay_with_clock(
+        home.path(),
+        &commonmeasure_relay::RelayOptions::default(),
+        &|| later,
+    )
+    .expect("relay");
+    unscoped.stop();
+    let (events, refused) = received(&rest);
+    assert_eq!(events.len(), 4, "{events:?}");
+    assert!(
+        events
+            .iter()
+            .all(|(_, supplier)| supplier.as_deref() != Some("ozone")),
+        "{events:?}"
+    );
+    assert!(refused);
+}
+
+/// Configured and overridden receiver URLs that differ by a trailing slash
+/// (`/telemetry/` and `/telemetry`) post to one endpoint,
+/// `/telemetry/events`, so the configured scope applies to the override.
+/// Session s1 is spooled unscoped first, under an override to another
+/// receiver that fails; s2 is projected in the run that delivers. The scoped
+/// receiver gets exactly each session's ozone retrieval and grounding, and no
+/// body carries `refused`.
+#[test]
+fn an_override_spelling_the_configured_receiver_differently_keeps_its_scope() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let failing = fixed_answer_receiver(503, "text/plain", "try later");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut scoped = accepting_receiver(bodies.clone());
+    relay_json(
+        home.path(),
+        &format!("{}/telemetry/", scoped.url()),
+        Some(&["ozone"]),
+    );
+
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(failing.url()),
+            ..Default::default()
+        },
+    )
+    .expect_err("the other receiver refuses the batch, which stays spooled");
+    write_mixed_supplier_session(home.path(), "s2");
+
+    let later = chrono::Utc::now() + chrono::Duration::days(1);
+    let report = commonmeasure_relay::relay_with_clock(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(format!("{}/telemetry", scoped.url())),
+            ..Default::default()
+        },
+        &|| later,
+    )
+    .expect("relay");
+    scoped.stop();
+
+    let bodies = bodies.lock().unwrap();
+    let ozone = |kind: &str| (kind.to_owned(), Some("ozone".to_owned()));
+    let mut by_session: Vec<(String, Vec<SuppliedEvent>)> = bodies
+        .iter()
+        .map(|body| {
+            let events = body["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|event| {
+                    (
+                        event["type"].as_str().unwrap().to_owned(),
+                        event["data"][commonmeasure_relay::project::SUPPLIER_FIELD]
+                            .as_str()
+                            .map(str::to_owned),
+                    )
+                })
+                .collect();
+            (body["session_id"].as_str().unwrap().to_owned(), events)
+        })
+        .collect();
+    by_session.sort();
+    assert_eq!(by_session.len(), 2, "one batch per session: {by_session:?}");
+    for (_, events) in &by_session {
+        assert_eq!(
+            events,
+            &vec![ozone("content_retrieved"), ozone("content_grounded")]
+        );
+    }
+    assert!(
+        bodies.iter().all(|body| body.get("refused").is_none()),
+        "no refused count reaches a scoped receiver: {bodies:?}"
+    );
+    assert_eq!(report.refused_reported, 0);
+}
+
+/// An override naming the configured host with its trailing root dot
+/// (`localhost.` for `localhost`) resolves to the same loopback receiver,
+/// so the configured scope applies: ozone's retrieval and grounding, no
+/// `refused`.
+#[test]
+fn an_override_with_a_trailing_dot_on_the_host_keeps_the_scope() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut scoped = accepting_receiver(bodies.clone());
+    let port = url::Url::parse(&scoped.url()).unwrap().port().unwrap();
+    relay_json(
+        home.path(),
+        &format!("http://localhost:{port}/telemetry"),
+        Some(&["ozone"]),
+    );
+
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(format!("http://localhost.:{port}/telemetry")),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    scoped.stop();
+
+    let (events, refused) = received(&bodies);
+    let ozone = Some("ozone".to_owned());
+    assert_eq!(
+        events,
+        vec![
+            ("content_retrieved".to_owned(), ozone.clone()),
+            ("content_grounded".to_owned(), ozone),
+        ]
+    );
+    assert!(!refused);
+}
+
+/// The relay reads `suppliers` with the harness's parser. A string, an
+/// object and a mixed-type array are each refused before anything is
+/// projected or sent.
+#[test]
+fn a_supplier_list_that_does_not_parse_refuses_the_run_and_sends_nothing() {
+    for suppliers in [json!("ozone"), json!({"ozone": true}), json!(["ozone", 1])] {
+        let home = tempfile::tempdir().unwrap();
+        write_mixed_supplier_session(home.path(), "s1");
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let mut receiver = accepting_receiver(bodies.clone());
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver": receiver.url(), "suppliers": suppliers}).to_string(),
+        )
+        .unwrap();
+
+        let error =
+            commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+                .expect_err("a malformed supplier list is refused");
+        receiver.stop();
+        let text = format!("{error:#}");
+        assert!(text.contains("not a valid relay config"), "{text}");
+        assert!(text.contains("invalid type"), "{text}");
+        assert!(bodies.lock().unwrap().is_empty(), "{suppliers}");
+        assert!(!home.path().join("relay").exists(), "{suppliers}");
+    }
+}
+
+/// `"suppliers": null` is an absent list: the receiver takes every cleared
+/// event and the refused count. An empty list is scoped to no supplier: the
+/// receiver is sent nothing and nothing is queued or recorded delivered, so
+/// once the list is removed the same session is projected and sent whole.
+#[test]
+fn a_null_supplier_list_is_unscoped_and_an_empty_one_takes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url(), "suppliers": null}).to_string(),
+    )
+    .unwrap();
+    commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+        .expect("relay");
+    let (events, refused) = received(&bodies);
+    assert_eq!(events.len(), 6, "{events:?}");
+    assert!(refused);
+
+    let home = tempfile::tempdir().unwrap();
+    write_mixed_supplier_session(home.path(), "s1");
+    bodies.lock().unwrap().clear();
+    relay_json(home.path(), &receiver.url(), Some(&[]));
+    let report =
+        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+            .expect("relay");
+    assert!(bodies.lock().unwrap().is_empty());
+    assert_eq!((report.batches_delivered, report.batches_queued), (0, 0));
+    assert!(burned_ids(home.path()).is_empty());
+
+    relay_json(home.path(), &receiver.url(), None);
+    commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+        .expect("relay");
+    receiver.stop();
+    let (events, refused) = received(&bodies);
+    assert_eq!(events.len(), 6, "{events:?}");
+    assert!(refused);
+}
+
+/// Under a directory selection the recheck before delivery rewrites a
+/// queued batch's `refused` from an unscoped projection of its origin log,
+/// so the supplier scope must be applied after it. A cleared session in the
+/// selected directory with an ozone result and a refusal is spooled unscoped
+/// under a failing override, then delivered to the scoped configured
+/// receiver: the received JSON has ozone's events and no `refused` member.
+#[test]
+fn a_scope_is_applied_after_the_directory_recheck_rewrites_the_refused_count() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    std::fs::write(
+        home.join("policy.json"),
+        json!({"policy_mode": "observe", "scopes": []}).to_string(),
+    )
+    .unwrap();
+    commonmeasure_harness::directory::Registry::enrol(&home, &root, "Project", true).unwrap();
+    let cwd = root.to_str().unwrap();
+    let mut supplied: Value = serde_json::from_str(&crossing_in_cwd(
+        "crossing_mediated",
+        "s1",
+        "https://host.example/ozone",
+        true,
+        cwd,
+    ))
+    .unwrap();
+    supplied["payload"]["supplier"] = json!("ozone");
+    write_session(
+        &home,
+        "s1",
+        &[
+            supplied.to_string(),
+            crossing_in_cwd(
+                "crossing_mediated",
+                "s1",
+                "https://host.example/fetched",
+                true,
+                cwd,
+            ),
+            crossing_in_cwd(
+                "crossing_refused",
+                "s1",
+                "https://host.example/refused",
+                false,
+                cwd,
+            ),
+        ],
+    );
+    let failing = fixed_answer_receiver(503, "text/plain", "try later");
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut scoped = accepting_receiver(bodies.clone());
+    relay_json(&home, &scoped.url(), Some(&["ozone"]));
+
+    commonmeasure_relay::relay(
+        &home,
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(failing.url()),
+            ..Default::default()
+        },
+    )
+    .expect_err("the other receiver refuses the batch, which stays spooled");
+    let spooled = commonmeasure_relay::spool::Spool::read_only(&home)
+        .pending()
+        .unwrap();
+    assert_eq!(spooled.len(), 1);
+    assert!(spooled[0].1.directory_selection);
+    assert_eq!(
+        spooled[0].1.document["refused"],
+        json!(1),
+        "queued unscoped"
+    );
+
+    let later = chrono::Utc::now() + chrono::Duration::days(1);
+    commonmeasure_relay::relay_with_clock(
+        &home,
+        &commonmeasure_relay::RelayOptions::default(),
+        &|| later,
+    )
+    .expect("relay");
+    scoped.stop();
+
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 1, "{bodies:?}");
+    let body = bodies[0].as_object().unwrap();
+    assert!(
+        !body.contains_key("refused"),
+        "the recheck's count reached a scoped receiver: {body:?}"
+    );
+    let events: Vec<(&str, &str)> = body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| {
+            (
+                event["type"].as_str().unwrap(),
+                event["data"][commonmeasure_relay::project::SUPPLIER_FIELD]
+                    .as_str()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("content_retrieved", "ozone"),
+            ("content_grounded", "ozone")
+        ]
     );
 }
 
@@ -2729,6 +3518,147 @@ fn the_standing_check_uses_the_hubs_key_whatever_receiver_is_named() {
     }
 }
 
+/// An enrolled home whose hub, `hub_url`, receives the deliveries too, with
+/// one session to deliver and the record as `revocation_learnt_at` leaves
+/// it: `Some` is a refusal learnt from a 401 at that time.
+fn enrolled_home(hub_url: &str, revocation_learnt_at: Option<&str>) -> tempfile::TempDir {
+    use commonmeasure_harness::enrolment::{
+        EnrolledIdentity, EnrolledOrganization, EnrolmentRecord,
+    };
+    let home = tempfile::tempdir().unwrap();
+    write_session(
+        home.path(),
+        "s1",
+        &[crossing_line(
+            "crossing_mediated",
+            "s1",
+            "https://host.example/page",
+            true,
+        )],
+    );
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": format!("{hub_url}/api/v1/telemetry"), "api_key": "hub-key"})
+            .to_string(),
+    )
+    .unwrap();
+    EnrolmentRecord {
+        hub: hub_url.to_owned(),
+        organization: EnrolledOrganization {
+            id: "org-1".to_owned(),
+            name: "Org".to_owned(),
+        },
+        name: "laptop".to_owned(),
+        key_id: "key-1".to_owned(),
+        identity: EnrolledIdentity {
+            origin: "https://hub.example".to_owned(),
+            bot_page: "https://hub.example/bot".to_owned(),
+            contact: None,
+        },
+        enrolled_at: "2026-09-18T00:00:00.000Z".to_owned(),
+        revoked_at: None,
+        revocation: revocation_learnt_at.map(|_| "hub: refused".to_owned()),
+        revocation_learnt_at: revocation_learnt_at.map(str::to_owned),
+    }
+    .store(home.path())
+    .unwrap();
+    home
+}
+
+/// Another process's hold on `enrolment.lock`, as a local user who can open
+/// the file would take it.
+fn hold_enrolment_lock(home: &Path) -> std::fs::File {
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .open(home.join("enrolment.lock"))
+        .unwrap();
+    held.lock().unwrap();
+    held
+}
+
+/// EGR-134. A relay run on an enrolled edge asks the hub for the key's
+/// standing while it holds the spool. Where the hub says the key stands and
+/// the record holds no refusal, there is nothing to write, so the run takes
+/// no `enrolment.lock` and delivers while another process holds it.
+///
+/// Catches: the standing check taking `enrolment.lock` before it has read
+/// whether there is anything to withdraw.
+#[test]
+fn a_standing_key_is_delivered_for_while_another_process_holds_the_enrolment_lock() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut hub = key_recording_server(seen.clone(), "key-1");
+    let hub_url = hub.url().trim_end_matches('/').to_owned();
+    let home = enrolled_home(&hub_url, None);
+    let held = hold_enrolment_lock(home.path());
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let path = home.path().to_owned();
+    std::thread::spawn(move || {
+        sent.send(commonmeasure_relay::relay(&path, &Default::default()))
+            .ok();
+    });
+    let report = received
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the relay run waited on enrolment.lock")
+        .unwrap();
+    drop(held);
+    hub.stop();
+
+    assert!(
+        matches!(
+            report.standing,
+            Some(commonmeasure_relay::Standing::Enrolled { .. })
+        ),
+        "{:?}",
+        report.standing
+    );
+    assert!(report.events_delivered > 0, "{report:?}");
+}
+
+/// The other side of the same rule: a refusal learnt from a 401 is withdrawn
+/// by the hub's answer that the key stands, and that write waits for
+/// `enrolment.lock`, re-reading the record under it.
+///
+/// Catches: the withdrawal written without the lock.
+#[test]
+fn a_refusal_on_record_is_withdrawn_under_the_enrolment_lock() {
+    use commonmeasure_harness::enrolment::EnrolmentRecord;
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut hub = key_recording_server(seen.clone(), "key-1");
+    let hub_url = hub.url().trim_end_matches('/').to_owned();
+    let home = enrolled_home(&hub_url, Some("2026-09-25T08:00:00.000Z"));
+    let before = std::fs::read(EnrolmentRecord::path(home.path())).unwrap();
+    let held = hold_enrolment_lock(home.path());
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let path = home.path().to_owned();
+    std::thread::spawn(move || {
+        sent.send(commonmeasure_relay::relay(&path, &Default::default()))
+            .ok();
+    });
+    assert!(
+        received
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "the run finished while another process held enrolment.lock"
+    );
+    assert_eq!(
+        std::fs::read(EnrolmentRecord::path(home.path())).unwrap(),
+        before,
+        "the record was written while another process held enrolment.lock"
+    );
+    drop(held);
+    received
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the run finished once the lock was free")
+        .unwrap();
+    hub.stop();
+
+    let stored = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+    assert!(!stored.is_revoked(), "{stored:?}");
+}
+
 /// EGR-07. `relay.json` re-pointed by hand at another receiver, with that
 /// receiver's key, on an edge still enrolled with its hub. The hosted
 /// cadence's proof refresh and `disconnect` both ask the hub under the
@@ -2893,6 +3823,26 @@ fn a_manifest_record_is_never_projected() {
         },
     })
     .to_string();
+    // A probe `robots.txt` refused: the outcome 0.4.2 added projects no more
+    // than any other.
+    let refused_line = json!({
+        "seq": 2,
+        "timestamp": "2026-08-02T10:00:01.000Z",
+        "event": "manifest_resolved",
+        "payload": {
+            "session_id": "s-manifest-only",
+            "host": "refused.example",
+            "timestamp": "2026-08-02T10:00:01.000Z",
+            "cache": "not_asked",
+            "fetched_at": "2026-08-02T10:00:01.000Z",
+            "expires_at": "2026-08-02T10:10:01.000Z",
+            "probes": [{"url": "https://refused.example/.well-known/content-telemetry.json",
+                        "refused_by": "robots.txt"}],
+            "outcome": "refused",
+            "reason": "https://refused.example/robots.txt disallows CommonMeasureBot",
+        },
+    })
+    .to_string();
     write_session(
         home.path(),
         "s-manifest",
@@ -2906,7 +3856,11 @@ fn a_manifest_record_is_never_projected() {
             ),
         ],
     );
-    write_session(home.path(), "s-manifest-only", &[manifest_line]);
+    write_session(
+        home.path(),
+        "s-manifest-only",
+        &[manifest_line, refused_line],
+    );
 
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let receiver = accepting_receiver(Arc::clone(&bodies));
@@ -2930,6 +3884,7 @@ fn a_manifest_record_is_never_projected() {
         !delivered[0].to_string().contains("well-known"),
         "no manifest probe reaches the receiver"
     );
+    assert!(!delivered[0].to_string().contains("refused.example"));
 }
 
 /// Terms naming institution identifiers require `access_context` on the

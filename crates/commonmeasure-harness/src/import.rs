@@ -144,12 +144,7 @@ impl Store {
     pub fn open(home: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(home)?;
         let path = home.join("import.lock");
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)?;
+        let lock = crate::declaration::open_lock(&path)?;
         let expires = Instant::now() + IMPORT_WAIT;
         loop {
             match lock.try_lock() {
@@ -326,6 +321,7 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
             |url: &str, hash: Option<String>, tokens: Option<u64>, grounded: bool| Crossing {
                 session_id: session_id.clone(),
                 timestamp: call.timestamp,
+                requested_at: None,
                 mode: CrossingMode::Reconstructed,
                 host: HostSurface::ClaudeCode.id().to_owned(),
                 client: None,
@@ -344,6 +340,7 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
                 content_hash: hash,
                 retrieved_hash: None,
                 estimated_tokens: tokens,
+                delivered: None,
                 grounded,
                 licence: LicenceState::Unknown,
                 refusal: None,
@@ -615,5 +612,28 @@ mod tests {
             .expect("pi is a known host");
         let reason = pi.importable.expect_err("pi is not importable");
         assert!(reason.contains("no web tools of its own"), "{reason}");
+    }
+
+    /// The import lock is created readable by its owner only, so another
+    /// local user who can reach the home cannot open it to hold it and
+    /// refuse every import. One that exists already keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_created_import_lock_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let path = home.path().join("import.lock");
+        drop(Store::open(home.path()).expect("opened"));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(Store::open(home.path()).expect("opened"));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 }

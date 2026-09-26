@@ -23,8 +23,9 @@ as well (Keenable, Nimble, SERPdive, TinyFish, TollBit and You.com declare
 else; Redpine, a licensed supplier bought by quote then confirm, declares
 `search` and `quote`; Ozone Live, retrieval over a licensed publisher corpus
 with no quote gate, declares `search` and `fetch` (its per-result `licensed`
-boolean names no licence, so it declares no `licensed`); and the local skill
-adapter declares `invoke` and nothing else. `licensed`, `report`
+boolean names no licence, so it declares no `licensed`); Dataville declares
+`search` alone, returning one Wikipedia or arXiv record per request; and the
+local skill adapter declares `invoke` and nothing else. `licensed`, `report`
 and `corroborate` are vocabulary no adapter declares. A corpus query is not
 a web search, and running somebody's program is neither; no adapter declares
 another adapter's capability.
@@ -122,10 +123,10 @@ claim. The record keeps the two apart for each argument.
 
 The consequences for the rest of this contract:
 
-- **Licence.** A skill *can* declare a `license`, machine-readably, where no
-  open-web content provider does. It licenses the procedure. What may be done
-  with the output is stated nowhere, so the envelope's licence is
-  `unknown` and the declaration is recorded as the skill's, namespaced.
+- **Licence.** A skill *can* declare a `license`, machine-readably. It
+  licenses the procedure. What may be done with the output is stated
+  nowhere, so the envelope's licence is `unknown` and the declaration is
+  recorded as the skill's, namespaced.
 - **Date.** Nothing published a produced result, so nothing dated it.
   Freshness does not apply to skill supply, and a freshness-weighted
   objective abstains over a skill plan rather than scoring it.
@@ -191,6 +192,22 @@ envelope with no
 declared date is undated: its date is unknown, not stale, and it is never
 dated from a filesystem timestamp, a cache header or a clock.
 
+Dataville selects `wiki` for `en.wikipedia.org` and `arxiv` for `arxiv.org`,
+using the first mapped host in the job's order. With no hosts it selects
+`wiki`; with only unmapped hosts it refuses before making a request. Its
+`maximum_search_results` is one. It maps the canonical URL from
+`data.metadata.url` for Wikipedia and `data.metadata.abs_url` for arXiv;
+without that URL there is no envelope. `data.last_updated` carries update-time
+provenance (Wikipedia revision time, not publication time). Metadata and
+stale-copy notices stay in native metadata. When `data.attribution.license.url`
+is present, the envelope records it as a supplier-declared licence reference;
+Dataville's declaration about upstream content does not establish the operator's
+permitted uses, and the adapter declares no `licensed` capability. Its charge
+is observed USD from `usage.request_cost`, unknown when absent, regardless of
+the published rate. An anonymous-tier response fails even on HTTP 200 because
+the configured key was not accepted. Wikipedia-only URL lookup does not fulfil
+the general `fetch` capability and is not wired.
+
 ## Writing an adapter
 
 An adapter is one Rust module in `crates/commonmeasure-supply/src/` implementing the
@@ -202,7 +219,7 @@ overrides only the methods for those capabilities (`search`, `query`,
 header and never in a command line, a URL or an artefact. Registration is
 three edits in the same file: the name in `IMPLEMENTED_PROVIDERS`, the
 credential variable in `required_variable`, and the constructor arm in
-`supplier_from_environment`. The declared capability list also appears in
+`remote_adapter`. The declared capability list also appears in
 `declared_provider_ref`, which plan validation and the mediated status tool
 read. An adapter's verification state (below) is `spec-verified` at most
 until the response bytes of a dated live call are captured and kept as
@@ -238,7 +255,9 @@ one operation is not inherited by another. `live-verified` here means a test
 serves the recorded response of a dated authenticated call to the real
 supplier, or a hosted edge made the call
 ([`docs/contracts/supplier-credentials.md`](supplier-credentials.md) §Status). The
-recorded responses are not published; the tests that read them run where
+recorded responses are not published, except Dataville's, which its test
+carries inline with body and abstract text elided and their original lengths
+recorded; the tests that read the others run where
 `COMMONMEASURE_PRIVATE_EVIDENCE` is set (`CONTRIBUTING.md`). Where no test
 reads a live call, the state is `fixture-tested`: the adapter's parser and
 request construction are exercised over the supplier's documented shapes
@@ -247,6 +266,7 @@ through the real transport and a loopback origin. No adapter is
 
 | Adapter | Capability | State | Evidence |
 |---|---|---|---|
+| Dataville | `search` | `live-verified`; `fixture-tested` against the recordings | `crates/commonmeasure-supply/tests/dataville_spec.rs` carries elided authenticated Wikipedia and arXiv responses recorded on 25 September 2026 inline and serves them through the production transport. The charge is observed USD; no full run replay is claimed. |
 | Exa | `search` | `live-verified`, `replay-tested` | `crates/commonmeasure-supply/tests/recorded_replay.rs` serves the recorded call; `crates/commonmeasure-cli/tests/replay_contract.rs` replays it through a run of `demo/jobs/eu-ai-act-replay.json`; a hosted edge searched with a key the hub released. The charge is observed. |
 | Exa | `fetch` | `live-verified`; `fixture-tested` against the recording | `recorded_replay.rs` serves the recorded `/contents` call; no run replays it |
 | Firecrawl | `search` | `live-verified`, `replay-tested` | `recorded_replay.rs`; `replay_contract.rs` over `demo/jobs/eu-ai-act-replay.json` |

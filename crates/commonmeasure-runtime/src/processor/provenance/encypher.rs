@@ -1,5 +1,12 @@
 //! Optional Encypher text signing. A job authorises disclosure explicitly;
 //! returned credentials are checked locally before any label is published.
+//!
+//! The request carries each source reference with any userinfo removed
+//! ([`without_userinfo`]), in the ingredient assertions and in the source
+//! record, so the credential Encypher signs and returns names them that way
+//! too. The run's own record keeps every reference as it was recorded: the
+//! invocation's inputs and its `manifest_definition` are unchanged. The
+//! answer, labelled and manifest references are not sent.
 
 use super::*;
 use commonmeasure_http::Request;
@@ -15,7 +22,8 @@ custom source record, CAWG training-mining and individually indexed standard inp
 ingredient assertions; created action \
 with trainedAlgorithmicMedia; independently require trusted C2PA/CAWG validation, unchanged \
 NFC text, exact source record and training preferences, matching ingredient hashes, grades \
-and relationships, and the declared creation action. Failure publishes no label. Provider \
+and relationships, and the declared creation action. Source references are sent and checked \
+without their userinfo; the local record keeps them as recorded. Failure publishes no label. Provider \
 certificate establishes claim signer only. Record request/response hashes, HTTP status, \
 trust bundle digest and raw credential artefacts; do not log bodies or credentials. \
 Provider cost and complete retention remain unknown. No fallback to local signing.";
@@ -24,8 +32,8 @@ Provider cost and complete retention remain unknown. No fallback to local signin
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disclosure {
-    /// Includes source references, hashes, grades, run identifiers and output
-    /// preferences. Prompts and source bodies are not sent by the adapter.
+    /// Includes source references without their userinfo, hashes, grades, run
+    /// identifiers and output preferences. Prompts and source bodies are not sent by the adapter.
     pub send_answer_and_source_record: bool,
 }
 
@@ -107,7 +115,7 @@ impl SigningConfig {
 
 static MANIFEST: LazyLock<ProcessorManifest> = LazyLock::new(|| {
     let mut manifest = super::manifest().clone();
-    manifest.version = "2";
+    manifest.version = "3";
     manifest.configuration_digest = sha256_digest(RULES.as_bytes());
     manifest.permissions.network = true;
     manifest.limits = "one HTTP exchange; 30-second connect/write/read budget excluding host DNS; 32 MiB response ceiling; no redirects or retries";
@@ -267,6 +275,20 @@ fn exchange(input: &Input, detail: &mut Value) -> Result<Label, &'static str> {
     }
     validate_trust_bundle(&config.trust_anchors)
         .map_err(|_| "the signing trust bundle is malformed")?;
+    // Everything below, the request and the readback checks alike, sees the
+    // sources as they leave the machine.
+    let sent: Vec<Source> = input
+        .sources
+        .iter()
+        .map(|source| Source {
+            reference: without_userinfo(&source.reference).into_owned(),
+            ..source.clone()
+        })
+        .collect();
+    let input = &Input {
+        sources: &sent,
+        ..*input
+    };
     let body = request_body(input)?;
     let bytes = serde_json::to_vec(&body).map_err(|_| "cannot encode signing request")?;
     if bytes.len() > 2 * 1024 * 1024 {

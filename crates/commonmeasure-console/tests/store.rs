@@ -839,6 +839,9 @@ fn internal_use_folds_stamped_crossings_and_leaves_public_traffic_out() {
         true,
         r#","cwd":"/home/op/code/ozone""#,
     );
+    // Refused after the fetch: it records the estimate of the text a screen
+    // withheld, which never entered context.
+    let internal_refused = r#"{"seq":4,"timestamp":"2026-08-01T12:00:00.000Z","event":"crossing_refused","payload":{"session_id":"s","timestamp":"2026-08-01T12:00:00Z","mode":"mediated","host":"claude-code","cwd":"/home/op/code/ozone","url":"https://rag.corp.internal/kb/leave","host_name":"rag.corp.internal","internal":true,"grounded":false,"refusal":"screened","estimated_tokens":500,"token_basis":"characters/4","licence":{"state":"unknown"}}}"#.to_owned();
     let other_engagement = r#"{"seq":3,"timestamp":"2026-08-03T09:00:00.000Z","event":"crossing_mediated","payload":{"session_id":"s","timestamp":"2026-08-03T09:00:00Z","mode":"mediated","host":"claude-code","cwd":"/home/op/code/acme","url":"file:///corp/kb/handbook","host_name":"","internal":true,"grounded":true,"licence":{"state":"unknown"}}}"#.to_owned();
     write_session(
         &sessions,
@@ -846,6 +849,7 @@ fn internal_use_folds_stamped_crossings_and_leaves_public_traffic_out() {
         &[
             internal_observed,
             internal_reconstructed,
+            internal_refused,
             public,
             other_engagement,
         ],
@@ -872,18 +876,24 @@ fn internal_use_folds_stamped_crossings_and_leaves_public_traffic_out() {
         "a public crossing appeared in the internal-use view"
     );
 
-    // Trailing slash folded; grades apart; footprint a lower bound with the
-    // estimate-less crossing counted beside it; both ends of the span held.
+    // Trailing slash folded; grades apart; each footprint a lower bound with
+    // its own estimate-less crossings counted beside it; both ends of the
+    // span held.
     let rag = rows
         .iter()
         .find(|row| row["url"] == "https://rag.corp.internal/kb/leave")
         .expect("the folded internal path");
     assert_eq!(rag["witnessed"], 1);
     assert_eq!(rag["reconstructed"], 1);
+    assert_eq!(rag["refused"], 1);
     assert_eq!(rag["grounded_witnessed"], 1);
-    assert_eq!(rag["estimated_tokens"], 100);
+    assert_eq!(rag["estimated_tokens"], 100, "the refused text is left out");
     assert_eq!(rag["token_basis"], "characters/4");
-    assert_eq!(rag["crossings_without_estimate"], 1);
+    // The estimate-less crossing is the reconstructed one: it lowers the
+    // reconstructed figure's bound, never the witnessed one.
+    assert_eq!(rag["crossings_without_estimate"], 0);
+    assert_eq!(rag["reconstructed_estimated_tokens"], Value::Null);
+    assert_eq!(rag["reconstructed_crossings_without_estimate"], 1);
     assert_eq!(rag["engagements"], serde_json::json!(["ozone"]));
     assert!(
         rag["first_seen"]
@@ -984,6 +994,106 @@ fn a_footprint_is_never_summed_across_bases() {
         ozone["estimated_tokens_by_basis"],
         serde_json::json!({"characters/4": 107, "cl100k_base": 40})
     );
+}
+
+/// Witnessed and reconstructed crossings of one internal path, some with an
+/// estimate and some without. The session, engagement and internal-use rows
+/// each serve the witnessed figure alone under the plain names and the
+/// reconstructed figure under the `reconstructed_` names. The two
+/// estimate-less counts differ, so a field served from the other tally shows.
+#[test]
+fn every_footprint_row_keeps_the_reconstructed_figure_out_of_the_witnessed_one() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    let url = "https://rag.corp.internal/kb/leave";
+    let stamp = r#","cwd":"/home/op/code/ozone","internal":true"#;
+    let estimate = r#","estimated_tokens":ESTIMATE,"token_basis":"characters/4""#;
+    let reconstructed = r#","derived_from":"t.jsonl""#;
+    write_session(
+        &sessions,
+        "s-1",
+        &[
+            crossing(
+                "crossing_observed",
+                "observed",
+                url,
+                true,
+                &format!("{stamp}{}", estimate.replace("ESTIMATE", "100")),
+            ),
+            crossing("crossing_mediated", "mediated", url, true, stamp),
+            crossing(
+                "crossing_reconstructed",
+                "reconstructed",
+                url,
+                true,
+                &format!(
+                    "{stamp}{reconstructed}{}",
+                    estimate.replace("ESTIMATE", "30")
+                ),
+            ),
+            crossing(
+                "crossing_reconstructed",
+                "reconstructed",
+                url,
+                false,
+                &format!("{stamp}{reconstructed}"),
+            ),
+            crossing(
+                "crossing_reconstructed",
+                "reconstructed",
+                url,
+                false,
+                &format!("{stamp}{reconstructed}"),
+            ),
+        ],
+    );
+    std::fs::write(
+        home.path().join("attribution.json"),
+        r#"{"rules": [{"match": "code/ozone", "engagement": "ozone"}]}"#,
+    )
+    .unwrap();
+
+    let mut store = Store::open(&home.path().join("telemetry.db")).unwrap();
+    store.ingest_sessions(&sessions).unwrap();
+    let attribution = Attribution::load(home.path()).unwrap();
+
+    let sessions = store.sessions(&attribution, None).unwrap();
+    let budgets = store.engagement_budgets(&attribution).unwrap();
+    let internal = store.internal_use(10, &attribution, None).unwrap();
+    let rows = [
+        ("session", &sessions.as_array().unwrap()[0]),
+        (
+            "engagement",
+            budgets
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["engagement"] == "ozone")
+                .expect("the ozone budget"),
+        ),
+        ("internal-use", &internal.as_array().unwrap()[0]),
+    ];
+    for (name, row) in rows {
+        assert_eq!(row["estimated_tokens"], 100, "{name}: witnessed alone");
+        assert_eq!(row["token_basis"], "characters/4", "{name}");
+        assert_eq!(
+            row["estimated_tokens_by_basis"],
+            serde_json::json!({"characters/4": 100}),
+            "{name}: witnessed alone"
+        );
+        assert_eq!(row["crossings_without_estimate"], 1, "{name}: witnessed");
+        assert_eq!(row["reconstructed_estimated_tokens"], 30, "{name}");
+        assert_eq!(row["reconstructed_token_basis"], "characters/4", "{name}");
+        assert_eq!(
+            row["reconstructed_estimated_tokens_by_basis"],
+            serde_json::json!({"characters/4": 30}),
+            "{name}"
+        );
+        assert_eq!(
+            row["reconstructed_crossings_without_estimate"], 2,
+            "{name}: reconstructed"
+        );
+    }
 }
 
 /// A session whose crossings carried no token estimate serves no figure. Zero
@@ -1104,4 +1214,125 @@ fn crossing_facts_count_the_records_they_cannot_judge() {
     assert_eq!(facts.facts[0].grade, "witnessed");
     assert_eq!(facts.facts[1].grade, "reconstructed");
     assert_eq!(facts.facts[0].principal, None);
+}
+
+/// The session projection keeps the `hub_refused` an `edge_identity` record
+/// carries, and has none for a record from an edge that wrote none.
+#[test]
+fn the_edge_identity_projection_keeps_a_hub_refusal() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    let identity = |session: &str, extra: &str| {
+        format!(
+            r#"{{"seq":1,"timestamp":"2026-08-01T10:00:00.000Z","event":"edge_identity","payload":{{"session_id":"{session}","host":"claude-code","timestamp":"2026-08-01T10:00:00.000Z","hub":"http://hub.example","key_id":"k-1","standing":"cleartext_hub","revoked_at":null,"revocation":null{extra}}}}}"#
+        )
+    };
+    write_session(
+        &sessions,
+        "s-refused",
+        &[identity(
+            "s-refused",
+            r#","hub_refused":"the enrolled hub URL is cleartext""#,
+        )],
+    );
+    write_session(&sessions, "s-older", &[identity("s-older", "")]);
+    let mut store = Store::open(&home.path().join("telemetry.db")).unwrap();
+    store.ingest_sessions(&sessions).unwrap();
+    let projected = store.host_sessions().unwrap();
+    let identity_of = |id: &str| {
+        projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["logs"][0]["session_id"] == id)
+            .map(|session| session["edge_identity"].clone())
+            .unwrap()
+    };
+    assert_eq!(
+        identity_of("s-refused")["hub_refused"],
+        "the enrolled hub URL is cleartext"
+    );
+    assert_eq!(identity_of("s-refused")["standing"], "cleartext_hub");
+    assert!(identity_of("s-older")["hub_refused"].is_null());
+}
+
+/// A session record can hold the stored hub URL whole, and a home 0.4.1
+/// enrolled can hold it with credentials. The log is not rewritten;
+/// every projection of it names the hub by its origin alone.
+#[test]
+fn an_old_edge_identity_record_reads_back_as_the_hubs_origin_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    write_session(
+        &sessions,
+        "s-old",
+        &[r#"{"seq":1,"timestamp":"2026-08-01T10:00:00.000Z","event":"edge_identity","payload":{"session_id":"s-old","host":"claude-code","timestamp":"2026-08-01T10:00:00.000Z","hub":"https://user:ak_PLANTED@hub.example/","key_id":"k-1","standing":"enrolled","revoked_at":null,"revocation":null}}"#.to_owned()],
+    );
+    let mut store = Store::open(&home.path().join("telemetry.db")).unwrap();
+    store.ingest_sessions(&sessions).unwrap();
+
+    let projected = store.host_sessions().unwrap();
+    assert!(!projected.to_string().contains("ak_PLANTED"), "{projected}");
+    assert_eq!(projected[0]["edge_identity"]["hub"], "https://hub.example");
+
+    let records = store.session_records("s-old").unwrap().unwrap();
+    assert!(!records.to_string().contains("ak_PLANTED"), "{records}");
+    assert_eq!(records[0]["payload"]["hub"], "https://hub.example");
+    assert_eq!(records[0]["payload"]["key_id"], "k-1");
+}
+
+/// 0.4.1 built a `policy_sync` record's `policy_url` from the stored hub
+/// URL, so it can hold the same credentials. The session records API names
+/// that hub by its origin; a record with no policy URL keeps its null.
+#[test]
+fn an_old_policy_sync_record_reads_back_as_the_hubs_origin_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    write_session(
+        &sessions,
+        "s-old",
+        &[
+            r#"{"seq":1,"timestamp":"2026-08-01T10:00:00.000Z","event":"policy_sync","payload":{"session_id":"s-old","timestamp":"2026-08-01T10:00:00.000Z","trigger":"session_start","policy_url":"https://user:ak_PLANTED@hub.example/api/v1/policy","outcome":"already_applied","revision":3,"digest":"sha256:ab","reason":null,"applied":null,"stale_since":null}}"#.to_owned(),
+            r#"{"seq":2,"timestamp":"2026-08-01T10:00:01.000Z","event":"policy_sync","payload":{"session_id":"s-old","timestamp":"2026-08-01T10:00:01.000Z","trigger":"session_start","policy_url":null,"outcome":"unavailable","revision":null,"digest":null,"reason":"hub URL refused","applied":null,"stale_since":null}}"#.to_owned(),
+        ],
+    );
+    let mut store = Store::open(&home.path().join("telemetry.db")).unwrap();
+    store.ingest_sessions(&sessions).unwrap();
+
+    let records = store.session_records("s-old").unwrap().unwrap();
+    assert!(!records.to_string().contains("ak_PLANTED"), "{records}");
+    assert_eq!(records[0]["payload"]["policy_url"], "https://hub.example");
+    assert_eq!(records[0]["payload"]["revision"], 3);
+    assert!(records[1]["payload"]["policy_url"].is_null(), "{records}");
+}
+
+/// An unreadable line is served as its line number in its log and its
+/// length in bytes as the console holds it, without the line ending, with
+/// none of its text. Where the line is not valid UTF-8 this can differ from
+/// its length in the log. The number counts the empty line the ingest skips,
+/// so it is the line's number in the log, not its position among records.
+#[test]
+fn an_unreadable_line_is_served_as_its_number_and_length() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    let good = crossing(
+        "crossing_observed",
+        "observed",
+        "https://a.example/1",
+        true,
+        "",
+    );
+    let mut log = good.clone().into_bytes();
+    log.extend_from_slice(b"\n\n{\"hub\":\"https:/op:ak_PLANTED@h\xff\r\n");
+    write_session_bytes(&sessions, "s-1", &log);
+    let mut store = Store::open(&home.path().join("telemetry.db")).unwrap();
+    store.ingest_sessions(&sessions).unwrap();
+
+    let records = store.session_records("s-1").unwrap().unwrap();
+    assert_eq!(records[0]["payload"]["url"], "https://a.example/1");
+    assert_eq!(
+        records[1],
+        serde_json::json!({"event": "unreadable", "line": 3, "bytes": 33}),
+        "{records}"
+    );
 }

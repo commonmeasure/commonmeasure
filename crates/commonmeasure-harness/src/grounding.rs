@@ -97,12 +97,42 @@ fn ends_with_own_tool(name: &str) -> bool {
 /// The host a URL names, or empty when it names none.
 ///
 /// URL semantics live here, so every path that records a crossing reads the
-/// host the same way.
+/// host the same way. The host is in the form admission compares against
+/// ([`commonmeasure_types::normalised_host`]): lower case, IDNA-encoded,
+/// with a fully qualified name's trailing dot removed, because
+/// `example.com.` reaches the host `example.com` does. Kept, the dot would
+/// let `https://denied.example./` past a rule naming `denied.example`, and
+/// give one host two cache entries.
 pub fn host_of(url: &str) -> String {
     url::Url::parse(url)
         .ok()
-        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .and_then(|parsed| {
+            parsed
+                .host_str()
+                .map(|host| host.trim_end_matches('.').to_owned())
+        })
         .unwrap_or_default()
+}
+
+/// `url` with a domain host's trailing dot removed, as [`host_of`] reads the
+/// host, for a request this edge makes on its own account (`robots.txt`, the
+/// manifest): `a.example.com.` and `a.example.com` then send the same
+/// requests and share one cache entry. An address, or a URL that does not
+/// parse, is returned as written.
+pub fn without_trailing_dot(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return url.to_owned();
+    };
+    let trimmed = match parsed.host() {
+        Some(url::Host::Domain(host)) if host.ends_with('.') => {
+            host.trim_end_matches('.').to_owned()
+        }
+        _ => return parsed.to_string(),
+    };
+    if trimmed.is_empty() || parsed.set_host(Some(&trimmed)).is_err() {
+        return url.to_owned();
+    }
+    parsed.to_string()
 }
 
 /// The text a tool result put into model context.
@@ -223,19 +253,22 @@ pub fn recordable_under(raw: &str, internal_prefixes: &[String]) -> bool {
 ///
 /// Judged on the parsed URL rather than the spelling that arrived, for the
 /// same reason the privacy floor judges parsed addresses: `https://host:443/p`,
-/// `HTTPS://HOST/p` and `https://host/./p` are one page under three spellings,
-/// and a verbatim comparison stamps two of them public. That is not a missed
-/// record but an egress decision — the `internal` marking is what keeps a
-/// named corpus on the operator's machine — so the spelling must not be able
-/// to change the answer. Both sides are normalised, because the operator's
+/// `HTTPS://HOST/p`, `https://host./p` and `https://host/./p` are one page
+/// under four spellings, and a verbatim comparison stamps three of them
+/// public. That is not a missed record but an egress decision — the
+/// `internal` marking is what keeps a named corpus on the operator's machine
+/// — so the spelling must not be able to change the answer. Both sides are
+/// normalised ([`commonmeasure_types::canonical_url`]), because the operator's
 /// prefix is a spelling too.
 pub fn matches_internal_prefix(raw: &str, internal_prefixes: &[String]) -> bool {
     let Ok(parsed) = url::Url::parse(raw) else {
         return false;
     };
+    let parsed = commonmeasure_types::canonical_url(&parsed);
     internal_prefixes
         .iter()
         .filter_map(|prefix| url::Url::parse(prefix).ok())
+        .map(|prefix| commonmeasure_types::canonical_url(&prefix))
         .any(|prefix| parsed.as_str().starts_with(prefix.as_str()))
 }
 
@@ -243,6 +276,14 @@ pub fn matches_internal_prefix(raw: &str, internal_prefixes: &[String]) -> bool 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_host_is_read_without_a_fully_qualified_names_trailing_dot() {
+        assert_eq!(host_of("https://A.Example.COM./x"), "a.example.com");
+        assert_eq!(host_of("https://a.example.com/x"), "a.example.com");
+        assert_eq!(host_of("http://127.0.0.1:8/x"), "127.0.0.1");
+        assert_eq!(host_of("not a url"), "");
+    }
 
     #[test]
     fn webfetch_hashes_the_text_that_entered_context_not_the_wrapper() {
@@ -319,6 +360,9 @@ mod tests {
             // An IPv4 private address does not turn public by being written
             // as an IPv6-mapped address.
             "http://[::ffff:192.168.1.4]/x",
+            // A fully qualified name is the name without its trailing dot.
+            "http://localhost./x",
+            "https://build.internal./x",
         ] {
             assert!(!recordable(private), "{private} should not be recordable");
         }
@@ -398,6 +442,8 @@ mod tests {
             "HTTPS://INTRANET.EXAMPLE.COM/private/handbook",
             "https://intranet.example.com/./private/handbook",
             "https://intranet.example.com/other/../private/handbook",
+            "https://intranet.example.com./private/handbook",
+            "HTTPS://INTRANET.EXAMPLE.COM.:443/private/handbook",
         ] {
             assert!(
                 matches_internal_prefix(spelling, &prefixes),
@@ -406,11 +452,18 @@ mod tests {
         }
         // The prefix is a spelling too, and normalising one side only would
         // leave the same gap facing the other way.
-        let spelled = vec!["HTTPS://Intranet.Example.com:443/private/".to_owned()];
-        assert!(matches_internal_prefix(
-            "https://intranet.example.com/private/handbook",
-            &spelled
-        ));
+        for written in [
+            "HTTPS://Intranet.Example.com:443/private/",
+            "https://intranet.example.com./private/",
+        ] {
+            assert!(
+                matches_internal_prefix(
+                    "https://intranet.example.com/private/handbook",
+                    &[written.to_owned()]
+                ),
+                "{written}"
+            );
+        }
     }
 
     /// Normalisation must not widen the prefix. A dot segment cannot climb out
@@ -423,6 +476,8 @@ mod tests {
             "https://intranet.example.com/private/../public/handbook",
             "https://intranet.example.com:8443/private/handbook",
             "HTTPS://INTRANET.EXAMPLE.COM.EVIL.TEST/private/handbook",
+            "https://intranet.example.com.evil.test./private/handbook",
+            "https://intranet.example.com.:8443/private/handbook",
             "http://intranet.example.com/private/handbook",
         ] {
             assert!(

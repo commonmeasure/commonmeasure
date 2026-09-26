@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use commonmeasure_harness::EnrolmentRecord;
-use commonmeasure_harness::mcp::{McpServer, Served};
+use commonmeasure_harness::mcp::{McpServer, SUPPLIER_FIELDS, Served};
 use commonmeasure_http::{Request, Response, Server};
 use commonmeasure_supply::credentials::{CredentialsStatus, ReleasedStore};
 use serde::{Deserialize, Serialize};
@@ -370,12 +370,7 @@ impl HomeLock {
 
     fn take(home: &Path) -> Result<Self, String> {
         let path = Self::path(home);
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
+        let file = commonmeasure_runtime::declaration::open_lock(&path)
             .map_err(|error| format!("cannot open the lock {}: {error}", path.display()))?;
         match file.try_lock() {
             Ok(()) => Ok(Self { _file: file }),
@@ -390,9 +385,11 @@ impl HomeLock {
         }
     }
 
-    /// Whether a service currently holds the home's lock. The licence
-    /// ruling reads the same probe, since a running service relays every
-    /// session in the home ([`commonmeasure_harness::delivery::service_running`]).
+    /// Whether a service currently holds the home's lock. `status`,
+    /// `doctor` and the licence ruling read the probe itself
+    /// ([`commonmeasure_harness::delivery::service_state`]), which also
+    /// says when the lock cannot be read.
+    #[cfg(test)]
     pub(crate) fn held(home: &Path) -> bool {
         commonmeasure_harness::delivery::service_running(home)
     }
@@ -402,15 +399,18 @@ impl HomeLock {
 /// configured for it, for which origin and endpoints, and whether a service
 /// process holds the home now.
 pub(crate) fn service_line(home: &Path) -> String {
+    use commonmeasure_harness::delivery::ServiceState;
     match ServiceConfig::read(home) {
         Ok(None) => "hosted service: not configured (no hosted-service.json)".to_owned(),
         Err(reason) => format!("hosted service: {reason}"),
         Ok(Some(config)) => format!(
             "hosted service: {} at {}, endpoints {}, every {}s{}",
-            if HomeLock::held(home) {
-                "running (lock held)"
-            } else {
-                "configured, not running"
+            match commonmeasure_harness::delivery::service_state(home) {
+                ServiceState::Running => "running (lock held)".to_owned(),
+                ServiceState::NotRunning => "configured, not running".to_owned(),
+                ServiceState::Unknown(reason) => {
+                    format!("configured, whether it is running cannot be read ({reason})")
+                }
             },
             config.origin,
             config
@@ -485,6 +485,8 @@ struct HostedEdge {
     /// is automatic delivery for every session's reporting demands.
     interval_relay: bool,
     session_directory: Option<String>,
+    /// The operator home's path in each form a served string may carry it.
+    home_named: HomeNamed,
     sessions: Mutex<HashMap<String, Arc<Mutex<HostedSession>>>>,
 }
 
@@ -514,6 +516,7 @@ impl HostedEdge {
         credentials: CredentialsStatus,
     ) -> Result<Self, String> {
         let enrolment = require_enrolled(home)?;
+        commonmeasure_harness::enrolment::hub_url_accepted(&enrolment.hub)?;
         let origin = canonical_origin(&options.origin)
             .map_err(|reason| format!("origin {:?}: {reason}", options.origin))?;
         let allowed_origins = options
@@ -558,6 +561,7 @@ impl HostedEdge {
                 .service
                 .as_ref()
                 .and_then(|service| service.session_directory.clone()),
+            home_named: HomeNamed::new(home),
             sessions: Mutex::new(HashMap::new()),
         })
     }
@@ -700,7 +704,16 @@ impl HostedEdge {
         }
     }
 
+    /// Every answer this transport gives a tenant leaves through here, so
+    /// that no operator path reaches one whichever producer wrote it: the
+    /// tools and the server name the operator's files relative to the home
+    /// by pace, and this rewrite backs them for an interpolated `{error}`
+    /// they did not anticipate.
     fn handle(&self, request: Request) -> Response {
+        self.home_named.response(self.route(request))
+    }
+
+    fn route(&self, request: Request) -> Response {
         let path = request.target.split('?').next().unwrap_or_default();
         if let Some(resource) = path.strip_prefix(RESOURCE_METADATA_PREFIX) {
             return match self.host_word(resource) {
@@ -722,13 +735,16 @@ impl HostedEdge {
             Ok(bearer) => bearer,
             Err(refusal) => return refusal,
         };
+        // The version sent is not quoted back, as a tool name is not
+        // (`McpServer`): the rewrite in `handle` would confirm a guessed home
+        // put in it.
         if let Some(version) = request.headers.get(PROTOCOL_HEADER)
             && !HOSTED_SERVED.serves_protocol(version)
         {
             return error_response(
                 400,
                 &format!(
-                    "{PROTOCOL_HEADER} {version} is not served; this edge serves {}",
+                    "{PROTOCOL_HEADER} is not a revision this edge serves; it serves {}",
                     HOSTED_SERVED.protocols.join(", ")
                 ),
             );
@@ -778,21 +794,28 @@ impl HostedEdge {
     /// server: an `Origin` that is present and not this edge's own, nor one
     /// the operator listed, is refused. A request with no `Origin` is a
     /// server-to-server client and passes.
+    ///
+    /// This runs before the token is read, so the refusal quotes only a
+    /// canonical origin, which has no path. Quoting the header as sent would
+    /// let anyone who can reach the endpoint put a guessed home in it and
+    /// see whether the rewrite in [`Self::handle`] shortens it.
     fn origin_allowed(&self, request: &Request) -> Result<(), String> {
         let Some(presented) = request.headers.get("Origin") else {
             return Ok(());
         };
-        let refusal = || {
+        let canonical = canonical_origin(presented).map_err(|_| {
             format!(
-                "Origin {presented:?} is not this edge's origin {} and is not an allowed origin",
+                "the Origin header is not an origin: this edge's origin is {}",
                 self.origin
             )
-        };
-        let canonical = canonical_origin(presented).map_err(|_| refusal())?;
+        })?;
         if canonical == self.origin || self.allowed_origins.contains(&canonical) {
             Ok(())
         } else {
-            Err(refusal())
+            Err(format!(
+                "Origin {canonical} is not this edge's origin {} and is not an allowed origin",
+                self.origin
+            ))
         }
     }
 
@@ -892,6 +915,9 @@ impl HostedEdge {
             ) {
                 Ok(server) => server,
                 Err(reason) => {
+                    // The journal keeps the reason whole; `handle` names the
+                    // operator's files in the answer relative to the home.
+                    eprintln!("commonmeasure: session {session_id} could not be opened: {reason}");
                     return error_response(
                         500,
                         &format!("the session could not be opened: {reason}"),
@@ -1111,6 +1137,202 @@ fn method_not_allowed(allow: &str) -> Response {
     response
 }
 
+/// The operator home as a served string may carry it, and the rewrite that
+/// names it relative to itself. A tenant can act on neither the operator's
+/// file system nor its store, and the full path tells it how the operator's
+/// machine is laid out (`docs/contracts/session-evidence.md`, the hosted
+/// paragraph under §Source declarations).
+///
+/// The home is matched as given and as the file system resolves it, since a
+/// producer may have built a path from either; each with trailing
+/// separators trimmed, so `COMMONMEASURE_HOME=/srv/cm/` matches
+/// `/srv/cm/policy.json`. A path under the home becomes the path relative to
+/// it, as the tools name one; the home alone becomes `.`.
+struct HomeNamed {
+    /// Longest first: on macOS the resolved `/private/var/…` contains the
+    /// given `/var/…`, and the shorter form must not match inside the longer.
+    forms: Vec<String>,
+}
+
+impl HomeNamed {
+    fn new(home: &Path) -> Self {
+        let trimmed = |path: &Path| {
+            let text = path.display().to_string();
+            let kept = text.trim_end_matches(['/', std::path::MAIN_SEPARATOR]);
+            // A home of `/` alone trims to nothing and would match every
+            // absolute path; it is left out rather than rewriting them all.
+            (!kept.is_empty()).then(|| kept.to_owned())
+        };
+        let mut forms: Vec<String> = [Some(home.to_owned()), std::fs::canonicalize(home).ok()]
+            .iter()
+            .flatten()
+            .filter_map(|form| trimmed(form))
+            .collect();
+        forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
+        forms.dedup();
+        Self { forms }
+    }
+
+    /// `response` with the home rewritten in every string of its JSON body
+    /// and in every header value. A body that is not JSON, or JSON that does
+    /// not parse, is not served, since it could not be checked; every answer
+    /// the edge builds is JSON.
+    ///
+    /// A tool result's payload is JSON text inside a string. It is parsed
+    /// and walked, so a path after an escaped newline is matched. In a
+    /// result whose `isError` is `false` the fields in [`SUPPLIER_FIELDS`]
+    /// are left as the supplier sent them; a tool error is the edge's own
+    /// words and is rewritten whole.
+    /// Its compact re-serialisation is the text `tool_result` wrote, so
+    /// nothing else in it changes. Payload text that does not parse is
+    /// rewritten as text.
+    fn response(&self, mut response: Response) -> Response {
+        let is_json = response
+            .headers
+            .get("Content-Type")
+            .is_some_and(|kind| kind.starts_with("application/json"));
+        if !response.body.is_empty() {
+            let parsed = is_json
+                .then(|| serde_json::from_slice::<Value>(&response.body).ok())
+                .flatten();
+            let Some(mut body) = parsed else {
+                return error_response(500, "the answer could not be prepared");
+            };
+            self.value(&mut body, &mut Vec::new(), &[TOOL_PAYLOAD]);
+            let kept = if body.pointer("/result/isError") == Some(&Value::Bool(false)) {
+                SUPPLIER_FIELDS
+            } else {
+                &[]
+            };
+            if let Some(Value::Array(items)) = body.pointer_mut("/result/content") {
+                for item in items {
+                    if let Some(Value::String(text)) = item.get_mut("text") {
+                        *text = self.payload(text, kept);
+                    }
+                }
+            }
+            response.body = body.to_string().into_bytes();
+        }
+        let mut headers = commonmeasure_http::Headers::new();
+        for (name, value) in response.headers.iter() {
+            headers.append(name, &self.text(value));
+        }
+        response.headers = headers;
+        response
+    }
+
+    /// A tool result's payload text, walked as JSON when it parses, with
+    /// the values at `kept` left as they are.
+    fn payload(&self, text: &str, kept: &[&str]) -> String {
+        match serde_json::from_str::<Value>(text) {
+            Ok(mut payload) => {
+                self.value(&mut payload, &mut Vec::new(), kept);
+                payload.to_string()
+            }
+            Err(_) => self.text(text),
+        }
+    }
+
+    /// Rewrite every string in `value`, object keys included, except the
+    /// values at the pointers in `kept` (`*` standing for any array
+    /// element). `at` is the pointer to `value`, one segment per entry.
+    /// Every kept value is a string: a supplier field is text, and the
+    /// payload the answer carries is walked by [`Self::payload`]. An array
+    /// or object at a kept pointer is walked, so an operator structure put
+    /// there by mistake is still checked.
+    fn value(&self, value: &mut Value, at: &mut Vec<String>, kept: &[&str]) {
+        if value.is_string() && kept.iter().any(|pointer| points_at(pointer, at)) {
+            return;
+        }
+        match value {
+            Value::String(text) => *text = self.text(text),
+            Value::Array(items) => {
+                for item in items {
+                    at.push("*".to_owned());
+                    self.value(item, at, kept);
+                    at.pop();
+                }
+            }
+            Value::Object(map) => {
+                *map = std::mem::take(map)
+                    .into_iter()
+                    .map(|(key, mut item)| {
+                        at.push(key.clone());
+                        self.value(&mut item, at, kept);
+                        at.pop();
+                        (self.text(&key), item)
+                    })
+                    .collect();
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+
+    fn text(&self, text: &str) -> String {
+        self.forms
+            .iter()
+            .fold(text.to_owned(), |text, form| relative_to(&text, form))
+    }
+}
+
+/// Where a JSON-RPC answer carries a tool result's payload text. The walk of
+/// the answer leaves it to [`HomeNamed::payload`].
+const TOOL_PAYLOAD: &str = "/result/content/*/text";
+
+/// Whether `pointer` (segments after `/`, `*` for any array element) names
+/// the value at `at`. Supplier fields hold no `/` or `~` in their names, so
+/// no JSON pointer escapes arise.
+fn points_at(pointer: &str, at: &[String]) -> bool {
+    let segments: Vec<&str> = pointer.split('/').skip(1).collect();
+    segments.len() == at.len() && segments.iter().zip(at).all(|(segment, at)| segment == at)
+}
+
+/// `text` with each occurrence of `home` that stands as a path named relative
+/// to it: `<home>/x` becomes `x` and `<home>` alone `.`. An occurrence that
+/// continues a longer name on either side (`/srv/cm2`, `/data/srv/cm`) is
+/// another path and is kept.
+fn relative_to(text: &str, home: &str) -> String {
+    let separator = |c: char| c == '/' || c == std::path::MAIN_SEPARATOR;
+    let continues = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.') || separator(c);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(home) {
+        let before = rest[..at].chars().next_back();
+        let after = &rest[at + home.len()..];
+        let mut following = after.chars();
+        let next = following.next();
+        let ends_name = match next {
+            None => true,
+            // A sentence may end on the home: `.` followed by a space or
+            // the end is punctuation, `.` followed by a name is not.
+            Some('.') => following.next().is_none_or(|c| !continues(c)),
+            Some(c) => separator(c) || !continues(c),
+        };
+        if before.is_some_and(continues) || !ends_name {
+            let skip = at + home.chars().next().map_or(1, char::len_utf8);
+            out.push_str(&rest[..skip]);
+            rest = &rest[skip..];
+            continue;
+        }
+        out.push_str(&rest[..at]);
+        match next {
+            Some(c) if separator(c) => {
+                let under = after.trim_start_matches(separator);
+                if under.is_empty() || under.starts_with(|c: char| !continues(c)) {
+                    out.push('.');
+                }
+                rest = under;
+            }
+            _ => {
+                out.push('.');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A refusal reason inside a quoted-string header value: RFC 9110 allows no
 /// bare quote or backslash there, and no control characters.
 fn quoted_string_safe(reason: &str) -> String {
@@ -1219,6 +1441,256 @@ mod tests {
     }
 
     #[test]
+    fn a_path_under_the_home_is_named_relative_to_it_and_no_other_is_touched() {
+        let cases = [
+            (
+                "cannot read /srv/cm/policy.json: denied",
+                "cannot read policy.json: denied",
+            ),
+            (
+                "/srv/cm//allowance/ledger.ndjson line 1",
+                "allowance/ledger.ndjson line 1",
+            ),
+            ("create /srv/cm: denied", "create .: denied"),
+            ("create /srv/cm/: denied", "create .: denied"),
+            ("the home is /srv/cm.", "the home is .."),
+            ("/srv/cm2/policy.json", "/srv/cm2/policy.json"),
+            ("/srv/cm.bak/policy.json", "/srv/cm.bak/policy.json"),
+            ("/data/srv/cm/policy.json", "/data/srv/cm/policy.json"),
+            ("https://hub.test/srv/cm/x", "https://hub.test/srv/cm/x"),
+            ("a /srv/cm/a and /srv/cm/b", "a a and b"),
+        ];
+        for (given, named) in cases {
+            assert_eq!(relative_to(given, "/srv/cm"), named, "{given}");
+        }
+    }
+
+    #[test]
+    fn the_home_is_matched_as_given_with_a_trailing_slash_and_as_resolved() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let given = format!("{}/", home.path().display());
+        let resolved = home.path().canonicalize().expect("resolves");
+        let named = HomeNamed::new(Path::new(&given));
+        let served = json!({
+            "error": format!("{given}policy.json is not a valid policy"),
+            "result": {"content": [{"text": json!({
+                "breach": format!("{}/allowance/ledger.ndjson line 1", resolved.display()),
+            }).to_string()}]},
+        });
+        let mut response = json_response(500, &served);
+        response.headers.set(
+            "WWW-Authenticate",
+            &format!("Bearer error_description=\"{given}hosted-tokens.json\""),
+        );
+        let response = named.response(response);
+        let body = String::from_utf8(response.body).expect("utf8");
+        for form in [
+            home.path().display().to_string(),
+            resolved.display().to_string(),
+        ] {
+            assert!(!body.contains(&form), "{body}");
+        }
+        assert!(
+            body.contains("\"policy.json is not a valid policy\""),
+            "{body}"
+        );
+        assert!(body.contains("allowance/ledger.ndjson line 1"), "{body}");
+        assert_eq!(
+            response.headers.get("WWW-Authenticate"),
+            Some("Bearer error_description=\"hosted-tokens.json\"")
+        );
+    }
+
+    /// A tool result as `tool_result` writes it: the payload's compact JSON
+    /// text inside a JSON-RPC answer.
+    fn tool_answer(payload: &Value) -> Response {
+        json_response(
+            200,
+            &json!({"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false,
+            }}),
+        )
+    }
+
+    fn served_payload(response: &Response) -> Value {
+        let body: Value = serde_json::from_slice(&response.body).expect("JSON");
+        serde_json::from_str(body["result"]["content"][0]["text"].as_str().expect("text"))
+            .expect("the payload is JSON")
+    }
+
+    /// Supplier content and URLs are served as received, so the page keeps
+    /// its hash and a URL still names the page; the operator's own words in
+    /// the same payload are named relative to the home, a path after a
+    /// newline included (review F1, F5).
+    #[test]
+    fn supplier_fields_are_served_as_received_and_operator_words_are_rewritten() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let page = "config: /srv/cm/policy.json\nhome: /srv/cm\n";
+        let url = "https://publisher.test/page?p=/srv/cm/x";
+        let next = format!("More text follows: call context_fetch with url {url} and offset 9");
+        let robots = json!({
+            "requested_url": url,
+            "robots_url": "https://publisher.test/srv/cm/robots.txt",
+            "final_url": "https://publisher.test/srv/cm/robots.txt?p=/srv/cm/y",
+            "explanation": format!("robots.txt allows {url}"),
+        });
+        let fetched = json!({
+            "url": url,
+            "breach": "ledger could not be consulted:\n/srv/cm/allowance/ledger.ndjson line 1",
+            "policy": "Admitted under /srv/cm/policy.json",
+            "declarations": {"robots": robots},
+            "content": page,
+            "next": next,
+        });
+        let served = served_payload(&named.response(tool_answer(&fetched)));
+        assert_eq!(served["content"], page);
+        assert_eq!(served["url"], url);
+        assert_eq!(served["next"], next.as_str());
+        for field in ["requested_url", "robots_url", "final_url"] {
+            assert_eq!(
+                served["declarations"]["robots"][field], robots[field],
+                "{field}"
+            );
+        }
+        assert_eq!(
+            served["declarations"]["robots"]["explanation"],
+            "robots.txt allows https://publisher.test/page?p=x"
+        );
+        assert_eq!(
+            served["breach"],
+            "ledger could not be consulted:\nallowance/ledger.ndjson line 1"
+        );
+        assert_eq!(served["policy"], "Admitted under policy.json");
+
+        let searched = json!({
+            "provider": "internal",
+            "results": [{
+                "url": "https://publisher.test/srv/cm/x?p=/srv/cm/y",
+                "title": "Notes on /srv/cm",
+                "text": "The home is /srv/cm/policy.json.",
+                "content_hash": "sha256:00",
+            }],
+            "refusals": [{"url": "https://publisher.test/?p=/srv/cm/z", "reason": "refused: /srv/cm/policy.json"}],
+            "recorded_in": "/srv/cm/sessions/s.ndjson",
+        });
+        let served = served_payload(&named.response(tool_answer(&searched)));
+        assert_eq!(served["results"], searched["results"]);
+        assert_eq!(served["refusals"][0]["url"], searched["refusals"][0]["url"]);
+        assert_eq!(served["refusals"][0]["reason"], "refused: policy.json");
+        assert_eq!(served["recorded_in"], "sessions/s.ndjson");
+    }
+
+    /// A tool error is the edge's own words, so it gets no supplier-field
+    /// exemption: a home at `/url` in an `isError: true` payload is
+    /// rewritten (review G5).
+    #[test]
+    fn an_error_payload_is_rewritten_whole() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let answer = json_response(
+            200,
+            &json!({"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": json!({
+                    "error": "cannot read /srv/cm/policy.json",
+                    "url": "/srv/cm/x",
+                }).to_string()}],
+                "isError": true,
+            }}),
+        );
+        let served = served_payload(&named.response(answer));
+        assert_eq!(served["url"], "x");
+        assert_eq!(served["error"], "cannot read policy.json");
+    }
+
+    /// A supplier field is exempt by its exact pointer, and only as a
+    /// string: a key that extends one's name, as `content_note` extends
+    /// `content`, and an object at a supplier pointer are the operator's
+    /// and are rewritten (review G6).
+    #[test]
+    fn only_the_exact_supplier_pointers_are_served_as_received() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let served = served_payload(&named.response(tool_answer(&json!({
+            "content": "/srv/cm/a",
+            "content_note": "/srv/cm/b",
+            "next_step": "/srv/cm/c",
+            "declarations": {"robots": {"requested_url": "/srv/cm/d"}},
+            "results": [{"url": "/srv/cm/e", "url_note": "/srv/cm/f"}],
+            "url": {"note": "/srv/cm/g"},
+        }))));
+        assert_eq!(served["url"]["note"], "g");
+        assert_eq!(served["content"], "/srv/cm/a");
+        assert_eq!(served["content_note"], "b");
+        assert_eq!(served["next_step"], "c");
+        assert_eq!(
+            served["declarations"]["robots"]["requested_url"],
+            "/srv/cm/d"
+        );
+        assert_eq!(served["results"][0]["url"], "/srv/cm/e");
+        assert_eq!(served["results"][0]["url_note"], "f");
+    }
+
+    /// The walk re-serialises the payload compactly, which is what
+    /// `tool_result` wrote, so an answer naming no home is served byte for
+    /// byte: key order, escapes, non-ASCII text and numbers kept.
+    #[test]
+    fn a_tool_result_that_names_no_home_is_served_byte_for_byte() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let payload = json!({
+            "url": "https://publisher.test/a?b=c&d=%2F",
+            "content_hash": "sha256:abc",
+            "estimated_tokens": 12,
+            "ratio": 0.1 + 0.2,
+            "declarations": {"z": null, "a": [true, false]},
+            "content": "quote \" backslash \\ tab \t line \u{2028} café ☕ \u{1}",
+            "truncated": false,
+        });
+        let answer = tool_answer(&payload);
+        let sent = answer.body.clone();
+        assert_eq!(named.response(answer).body, sent);
+    }
+
+    /// A payload that is not JSON is still checked, as text.
+    #[test]
+    fn a_tool_text_that_is_not_json_is_rewritten_as_text() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let answer = json_response(
+            200,
+            &json!({"jsonrpc": "2.0", "id": 1, "result": {
+                "content": [{"type": "text", "text": "cannot read /srv/cm/policy.json"}],
+            }}),
+        );
+        let body: Value = serde_json::from_slice(&named.response(answer).body).expect("JSON");
+        assert_eq!(
+            body["result"]["content"][0]["text"],
+            "cannot read policy.json"
+        );
+    }
+
+    /// Every answer the edge builds is JSON. A body that is not, with any
+    /// content type or none, could not be checked and is refused with the
+    /// fixed 500 an unparseable JSON body gets (review F6).
+    #[test]
+    fn a_body_that_is_not_json_is_refused() {
+        let named = HomeNamed::new(Path::new("/srv/cm"));
+        let mut untyped = Response::new(200, b"/srv/cm/policy.json".to_vec());
+        untyped.headers = commonmeasure_http::Headers::new();
+        for response in [
+            Response::text(200, "cannot read /srv/cm/policy.json"),
+            untyped,
+        ] {
+            let refused = named.response(response);
+            assert_eq!(refused.status, 500);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&refused.body).expect("JSON"),
+                json!({"error": "the answer could not be prepared"})
+            );
+        }
+        let empty = named.response(Response::new(202, Vec::new()));
+        assert_eq!(empty.status, 202);
+        assert!(empty.body.is_empty());
+    }
+
+    #[test]
     fn the_home_lock_is_held_by_one_holder() {
         let home = tempfile::tempdir().expect("tempdir");
         assert!(!HomeLock::held(home.path()));
@@ -1226,5 +1698,28 @@ mod tests {
         assert!(HomeLock::held(home.path()));
         drop(lock);
         assert!(!HomeLock::held(home.path()));
+    }
+
+    /// The home lock is created readable by its owner only, so another local
+    /// user who can reach the home cannot open it to hold it and keep the
+    /// service from starting. One that exists already keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_created_home_lock_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let path = HomeLock::path(home.path());
+        drop(HomeLock::take(home.path()).expect("taken"));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(HomeLock::take(home.path()).expect("taken"));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 }

@@ -22,5 +22,5 @@ mod serve;
 mod store;
 
 pub use attribution::{Attribution, UNATTRIBUTED};
-pub use serve::{LivenessProbe, SearchRunner, ServeOptions, serve, start};
+pub use serve::{LivenessProbe, SearchRunner, ServeOptions, exposed_addresses, serve, start};
 pub use store::{CrossingFact, CrossingFacts, IngestReport, Store};

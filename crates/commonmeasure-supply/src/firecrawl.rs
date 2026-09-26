@@ -199,6 +199,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
             // publication date here.
             declared_date: None,
             promoted: &["url", "title", "description"],
+            ..Default::default()
         })
     }))
 }

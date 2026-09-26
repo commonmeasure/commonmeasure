@@ -207,6 +207,7 @@ fn fetch_envelopes(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>,
                         .to_owned(),
                 }),
             promoted: &["url", "title", "full_content", "excerpts", "publish_date"],
+            ..Default::default()
         })
     }))
 }
@@ -255,6 +256,7 @@ fn envelopes_from(
                         .to_owned(),
                 }),
             promoted: &["url", "title", "excerpts", "publish_date"],
+            ..Default::default()
         })
     }))
 }

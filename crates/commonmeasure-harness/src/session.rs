@@ -61,7 +61,20 @@ pub struct ClientIdentity {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Crossing {
     pub session_id: String,
+    /// When the record was written: after the response, and after any probe
+    /// the crossing made once the page answered. Never the send time.
     pub timestamp: DateTime<Utc>,
+    /// When the mediated fetch handed its page request to the transport,
+    /// after any `Crawl-delay` or back-off wait, taken at the send and not
+    /// derived from `timestamp`. Taken before connect, TLS and the write, so
+    /// present where the origin received nothing. Where a redirect was
+    /// followed it is the request to `redirects[0].requested_url`; later
+    /// hops are not recorded. Absent where no page request was handed over
+    /// (a refusal or a stop before the request), on every other kind of
+    /// crossing, and on records written before the field existed; a reader
+    /// never presents `timestamp` as the send time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at: Option<DateTime<Utc>>,
     pub mode: CrossingMode,
     /// `claude-code`, `codex`, or whichever host observed it.
     pub host: String,
@@ -108,8 +121,10 @@ pub struct Crossing {
     pub internal: bool,
     /// Present when the bytes entered the model's context and this runtime saw
     /// them. Absent for a search result, where only a title and snippet did.
-    /// On a mediated fetch it covers the text delivered or withheld, which
-    /// for an HTML page is the extracted text and not the markup.
+    /// On a mediated fetch it covers the whole text extracted from the body,
+    /// delivered or withheld, which for an HTML page is the readable text and
+    /// not the markup. A result carries at most a part of that text;
+    /// `delivered` names the part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
     /// SHA-256 over the response body as the origin served it, on a mediated
@@ -119,11 +134,18 @@ pub struct Crossing {
     /// the transform-stage
     /// invocation recorded before the crossing carries both and ties them.
     /// Never projected onto the Content Telemetry wire: what a receiver
-    /// learns is the hash of what entered context, as before.
+    /// learns is `content_hash`, the hash of the whole extracted text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieved_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_tokens: Option<u64>,
+    /// The part of the extracted text a mediated fetch handed the host, on a
+    /// crossing that returned text. `content_hash` describes the whole
+    /// extracted body and `estimated_tokens` this part; `delivered` names the
+    /// slice the result carried. The edge knows what it handed the host, not
+    /// what the host kept, stored or excerpted from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered: Option<Delivered>,
     /// True only for tools whose result put page text into context.
     pub grounded: bool,
     /// `unknown` unless a supplier declared a machine-readable licence. No
@@ -226,6 +248,22 @@ pub struct Crossing {
     /// allowance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance: Option<Value>,
+}
+
+/// The slice of a fetched body one `context_fetch` result carried.
+///
+/// Offsets and counts are in Unicode scalar values of the extracted text, the
+/// unit `content_range` in the tool result uses; a slice never splits one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delivered {
+    /// Characters of the extracted text before the slice.
+    pub offset: u64,
+    /// Characters in the slice.
+    pub chars: u64,
+    /// Characters in the whole extracted text.
+    pub total_chars: u64,
+    /// SHA-256 over the UTF-8 bytes of the slice, in the `sha256:` form.
+    pub hash: String,
 }
 
 impl Crossing {
@@ -699,8 +737,11 @@ impl SessionLog {
         .then(Uuid::new_v4);
         // Search deliveries have no HTTP status and no returned handle. They
         // retain their existing crossing semantics outside fetch observations.
+        // An answer this edge could not record returned no page, so there is
+        // nothing for the host to observe.
         if self.host_observations
             && crossing.mode == CrossingMode::Mediated
+            && crossing.failure.is_none()
             && crossing.http_status.is_some()
         {
             record["context_observation"] = json!("host_required");
@@ -859,11 +900,12 @@ impl SessionLog {
     }
 
     /// The identity this edge runs under, recorded at session start from the
-    /// enrolment record: the hub, the key id the hub assigned, and the
-    /// key's standing (`enrolled`, or `revoked` with when and by which side).
-    /// A session recorded after a revocation was learnt names the revoked
-    /// key id and says so, so a reader can tell which sessions ran under a
-    /// key publishers still honoured. Not written for an edge that is not
+    /// enrolment record: the hub by its origin alone, the key id the hub assigned, and the
+    /// key's standing (`enrolled`, `revoked` with when and by which side, or
+    /// `cleartext_hub` with `hub_refused` saying what is refused and the
+    /// remedy). A session recorded after a revocation was learnt names the
+    /// revoked key id and says so, so a reader can tell which sessions ran
+    /// under a key publishers still honoured. Not written for an edge that is not
     /// enrolled: absence means no network identity, not an unknown one.
     ///
     /// The record also says whether the hub's key directory lists the key,
@@ -871,6 +913,11 @@ impl SessionLog {
     /// reason. A signed request under a key the directory does not list
     /// verifies nowhere, so a standing key alone does not say that a
     /// publisher could verify this session's requests.
+    ///
+    /// `hub` is null where the stored URL has no origin to name (it does not
+    /// parse, or its scheme has no host-based origin); `hub_refused` then
+    /// says why nothing is sent to it. The stored URL itself is never written: 0.4.1's
+    /// `connect` stored hub URLs with credentials in them.
     pub fn record_edge_identity(
         &mut self,
         host: &str,
@@ -882,12 +929,15 @@ impl SessionLog {
             "session_id": self.session_id,
             "host": host,
             "timestamp": now.to_rfc3339_opts(SecondsFormat::Millis, true),
-            "hub": enrolment.hub,
+            "hub": crate::relay_config::receiver_origin(&enrolment.hub),
             "key_id": enrolment.key_id,
             "standing": enrolment.standing(),
             "revoked_at": enrolment.revoked_at,
             "revocation": enrolment.revocation,
         });
+        if let Some(reason) = enrolment.hub_refused() {
+            record["hub_refused"] = json!(reason);
+        }
         match listing {
             crate::enrolment::Listing::ListedUntil(until) => {
                 record["listed_until"] = json!(crate::enrolment::timestamp(*until));
@@ -1219,6 +1269,71 @@ mod tests {
         assert!(summary.display().contains("host-observed"));
     }
 
+    fn enrolled_at(hub: &str) -> crate::enrolment::EnrolmentRecord {
+        serde_json::from_value(json!({
+            "hub": hub,
+            "organization": {"id": "org-1", "name": "Org"},
+            "name": "laptop",
+            "key_id": "key-1",
+            "identity": {"origin": "https://hub.example", "bot_page": "https://hub.example/bot"},
+            "enrolled_at": "2026-09-06T00:00:00.000Z",
+        }))
+        .unwrap()
+    }
+
+    /// The identity record as `record_edge_identity` wrote it, with the
+    /// log's whole text.
+    fn edge_identity_written(hub: &str) -> (Value, String) {
+        let home = tempfile::tempdir().unwrap();
+        let mut log = SessionLog::open(home.path(), "s").unwrap();
+        log.record_edge_identity(
+            "pi",
+            &enrolled_at(hub),
+            &crate::enrolment::Listing::Unlisted("no proof held".to_owned()),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        let record = SessionLog::read(log.path())
+            .unwrap()
+            .into_iter()
+            .find(|record| record["event"] == "edge_identity")
+            .unwrap();
+        (record["payload"].clone(), text)
+    }
+
+    /// 0.4.1's `connect` stored hub URLs with credentials in them; the
+    /// session record names the hub by its origin alone.
+    #[test]
+    fn a_session_record_names_a_credentialed_hub_by_its_origin_alone() {
+        let (payload, text) = edge_identity_written("https://user:ak_PLANTED@hub.example/");
+        assert!(!text.contains("ak_PLANTED"), "{text}");
+        assert_eq!(payload["hub"], "https://hub.example");
+        assert_eq!(payload["standing"], "unusable_hub_url");
+    }
+
+    /// A stored hub with no origin to name is recorded as null, with
+    /// `hub_refused` saying why nothing is sent to it; no part of the raw
+    /// string is written.
+    #[test]
+    fn a_stored_hub_with_no_origin_is_recorded_as_null_beside_its_refusal() {
+        for hub in [
+            "https://ak_PLANTED@hub example.com/",
+            "foo://ak_PLANTED@hub.example/",
+            "ak_PLANTED",
+        ] {
+            let (payload, text) = edge_identity_written(hub);
+            assert!(!text.contains("ak_PLANTED"), "{hub}: {text}");
+            assert!(payload["hub"].is_null(), "{hub}: {payload}");
+            assert_eq!(payload["standing"], "cleartext_hub", "{hub}");
+            assert!(payload["hub_refused"].is_string(), "{hub}: {payload}");
+        }
+        // A scheme other than http and https that has an origin is named by it.
+        let (payload, text) = edge_identity_written("ftp://ak_PLANTED@hub.example/");
+        assert!(!text.contains("ak_PLANTED"), "{text}");
+        assert_eq!(payload["hub"], "ftp://hub.example");
+        assert_eq!(payload["standing"], "cleartext_hub");
+    }
+
     fn crossing(event: &str, grounded: bool) -> Value {
         json!({"event": event, "payload": {"grounded": grounded}})
     }
@@ -1325,5 +1440,24 @@ mod tests {
         let summary = summarise(&Vec::new());
         assert_eq!(summary, SessionSummary::default());
         assert_eq!(summary.named_not_read(), 0);
+    }
+
+    // Catches: a reader that requires the send time, or a writer that fills
+    // it in, on a mediated crossing written by 0.4.2, which has none.
+    #[test]
+    fn a_crossing_written_before_the_send_time_reads_without_one() {
+        let written = json!({
+            "session_id": "s", "timestamp": "2026-09-20T10:00:00.250Z", "mode": "mediated",
+            "host": "claude-code", "url": "https://publisher.example/page",
+            "host_name": "publisher.example", "http_status": 200,
+            "content_hash": format!("sha256:{}", "a".repeat(64)),
+            "grounded": true, "licence": {"state": "unknown"},
+            "principal": "os-user:test", "authentication_basis": "os_user"
+        });
+        let crossing: Crossing = serde_json::from_value(written.clone()).expect("0.4.2 reads");
+        assert_eq!(crossing.requested_at, None);
+        assert_eq!(crossing.to_record(), written);
+        let summary = summarise(&[json!({"event": "crossing_mediated", "payload": written})]);
+        assert_eq!((summary.records, summary.mediated), (1, 1));
     }
 }

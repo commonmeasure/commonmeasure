@@ -444,6 +444,16 @@ impl Pacing {
         self.probe_within(url, now, spendable - reserve)
     }
 
+    /// Take the turn of a redirect target inside a probe, from what the probe
+    /// itself was given: what the probe keeps back for the requests after it
+    /// is kept back from the target's turn too, so a probe that took only a
+    /// free turn follows a redirect only where the target's host is clear
+    /// now.
+    pub fn probe_hop(&self, url: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+        let budget = self.spendable().saturating_sub(self.probe_reserve.get());
+        self.probe_within(url, now, budget)
+    }
+
     /// How long a request to `host` would wait now, under the delay read for
     /// it this call, without taking a turn or writing anything. Zero where
     /// no delay paces the host. Read without the lock: it is an estimate for
@@ -635,9 +645,21 @@ impl CrawlDelayStore {
         }
     }
 
+    /// A file operation's cause as a message may give it. The runtime's
+    /// lock and write errors name the file by its full path; a hosted tenant
+    /// is given the path under the store directory's name, `crawl-delay`.
+    fn cause(&self, cause: &str, pace: Pace) -> String {
+        if pace.names_the_edge() {
+            cause.to_owned()
+        } else {
+            cause.replace(&self.dir.display().to_string(), "crawl-delay")
+        }
+    }
+
     /// The remedy a refusal names when the turn cannot be kept. The store is
     /// fail-closed: with no turn there is no pace, and no page is fetched.
     fn remedy(&self, detail: &str, pace: Pace) -> String {
+        let detail = self.cause(detail, pace);
         if pace.names_the_edge() {
             return format!(
                 "{detail}. The time of the last request to each host is kept under {}; make the \
@@ -650,6 +672,21 @@ impl CrawlDelayStore {
             "{detail}. The time of the last request to each host is kept on the edge that serves \
              this session; its operator can make that store writable or clear it, and the fetch \
              goes through"
+        )
+    }
+
+    /// The remedy for a host's lock file that exists and cannot be opened.
+    fn lock_file_remedy(&self, cause: &str, pace: Pace) -> String {
+        let cause = self.cause(cause, pace);
+        if pace.names_the_edge() {
+            return format!(
+                "{cause}; {}, and the fetch goes through",
+                crate::declaration::LOCK_FILE_REMEDY
+            );
+        }
+        format!(
+            "{cause}. The time of the last request to each host is kept on the edge that serves \
+             this session; its operator can repair that lock file, and the fetch goes through"
         )
     }
 
@@ -678,14 +715,15 @@ impl CrawlDelayStore {
         let lock_path = self.path_for(&ruling.host, "lock");
         // The editor's words ("no edit was made") are about a declaration
         // being edited; here the turn is what was not taken.
+        // A busy lock is not the store's fault, and an unopenable lock file
+        // is fixed on that file, so each names its own remedy (EGR-119).
         let _lock = crate::declaration::lock(&lock_path).map_err(|refused| match refused {
-            crate::declaration::LockRefused::Busy(_) => self.remedy(
-                &format!(
-                    "another server on this edge held {} while this request waited for its turn",
-                    Self::named(&lock_path, pace)
-                ),
-                pace,
+            crate::declaration::LockRefused::Busy(_) => format!(
+                "another server on this edge held {} while this request waited for its turn; \
+                 a later request takes its turn once that server lets go",
+                Self::named(&lock_path, pace)
             ),
+            crate::declaration::LockRefused::LockFile(cause) => self.lock_file_remedy(&cause, pace),
             crate::declaration::LockRefused::Failed(reason) => self.remedy(&reason, pace),
         })?;
         let path = self.path_for(&ruling.host, "json");
@@ -761,8 +799,14 @@ impl CrawlDelayStore {
             None => now,
             Some(next) => {
                 let wait = (next - now).to_std().unwrap_or_default();
-                ruling.wait_ms = Some(millis(wait));
-                if wait > budget {
+                // Rounded up: the sleep is `wait_ms`, and a part millisecond
+                // dropped would send the request before its turn.
+                let part = !wait.subsec_nanos().is_multiple_of(1_000_000);
+                let wait_ms = millis(wait).saturating_add(u64::from(part));
+                ruling.wait_ms = Some(wait_ms);
+                // Checked on the value slept, so a wait that fits keeps
+                // `wait_ms` within `budget_ms`.
+                if Duration::from_millis(wait_ms) > budget {
                     ruling.outcome = DelayOutcome::Refused;
                     ruling.next_at = Some(next);
                     // The corrupt record, where there was one, is left for a
@@ -911,6 +955,40 @@ mod tests {
                 .outcome,
             DelayOutcome::Clear
         );
+    }
+
+    #[test]
+    fn a_wait_with_a_part_millisecond_left_is_rounded_up() {
+        // The sleep is `wait_ms`, so a wait rounded down would send before
+        // the turn. Asked 0.6 ms into a millisecond, 1 499.4 ms remain:
+        // truncating and rounding to nearest both give 1 499.
+        let home = tempfile::tempdir().unwrap();
+        let store = CrawlDelayStore::open(home.path());
+        let start = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+        let delay = Duration::from_secs(2);
+        store.take_turn(HOST, delay, WAIT_BUDGET, start, Pace::Own);
+        let later = start + chrono::Duration::microseconds(500_600);
+        let second = store.take_turn(HOST, delay, WAIT_BUDGET, later, Pace::Own);
+        assert_eq!(second.outcome, DelayOutcome::Waited);
+        assert_eq!(wait_ms(&second), 1_500);
+    }
+
+    #[test]
+    fn a_wait_that_rounds_up_past_the_budget_is_refused() {
+        // The sleep is the rounded-up `wait_ms`, so the budget is checked
+        // against that: 1 499.4 ms fits a budget of 1 499.5 ms, but the
+        // 1 500 ms slept does not.
+        let home = tempfile::tempdir().unwrap();
+        let store = CrawlDelayStore::open(home.path());
+        let start = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
+        let delay = Duration::from_secs(2);
+        store.take_turn(HOST, delay, WAIT_BUDGET, start, Pace::Own);
+        let later = start + chrono::Duration::microseconds(500_600);
+        let budget = Duration::from_micros(1_499_500);
+        let second = store.take_turn(HOST, delay, budget, later, Pace::Own);
+        assert_eq!(second.outcome, DelayOutcome::Refused);
+        assert_eq!(wait_ms(&second), 1_500);
+        assert_eq!(second.budget_ms, 1_499);
     }
 
     #[test]
@@ -1197,6 +1275,33 @@ mod tests {
         assert!(!recovered.contains("T"), "an instant is named: {recovered}");
     }
 
+    /// A lock file that cannot be opened: the runtime's cause names its
+    /// full path, which a hosted tenant is given under the directory's name.
+    #[cfg(unix)]
+    #[test]
+    fn a_hosted_lock_fault_names_no_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+        for pace in [Pace::Own, Pace::Hosted] {
+            let home = tempfile::tempdir().unwrap();
+            let store = CrawlDelayStore::open(home.path());
+            std::fs::create_dir_all(store.dir()).unwrap();
+            std::fs::set_permissions(store.dir(), std::fs::Permissions::from_mode(0o555)).unwrap();
+            let ruling =
+                store.take_turn(HOST, Duration::from_secs(2), WAIT_BUDGET, Utc::now(), pace);
+            std::fs::set_permissions(store.dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let reason = ruling.unavailable.expect("a reason");
+            assert!(reason.contains("open lock"), "{reason}");
+            let home_path = home.path().display().to_string();
+            assert_eq!(reason.contains(&home_path), pace == Pace::Own, "{reason}");
+            if pace == Pace::Hosted {
+                assert!(
+                    reason.contains(&format!("open lock crawl-delay/{HOST}.lock")),
+                    "{reason}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_whole_call_ceiling_is_under_the_hosts_own_tool_call_timeout() {
         // The stdio host measured for this ends a call at 300 seconds, and a
@@ -1352,5 +1457,68 @@ mod tests {
         assert_eq!(seconds(1_500), "1.5");
         assert_eq!(seconds(250), "0.25");
         assert_eq!(seconds(60_000), "60");
+    }
+
+    /// EGR-119. A turn refused because another server held the host's lock
+    /// says so and names the lock; a turn refused because the lock file
+    /// exists and cannot be opened says what to do with that file. Neither
+    /// asks for a writable home, which would not help.
+    #[cfg(unix)]
+    #[test]
+    fn a_busy_lock_and_an_unopenable_lock_file_each_name_their_own_remedy() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let home = tempfile::tempdir().unwrap();
+        let store = CrawlDelayStore::open(home.path());
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let lock_path = store.path_for(HOST, "lock");
+
+        let held = crate::declaration::lock(&lock_path).unwrap();
+        let busy = store
+            .take_turn(
+                HOST,
+                Duration::from_secs(2),
+                WAIT_BUDGET,
+                Utc::now(),
+                Pace::Own,
+            )
+            .unavailable
+            .expect("a busy lock refuses the turn");
+        drop(held);
+        assert!(
+            busy.contains(&format!(
+                "another server on this edge held {}",
+                lock_path.display()
+            )),
+            "{busy}"
+        );
+        assert!(!busy.contains("writable"), "{busy}");
+
+        if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+            return;
+        }
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unopenable = store
+            .take_turn(
+                HOST,
+                Duration::from_secs(2),
+                WAIT_BUDGET,
+                Utc::now(),
+                Pace::Own,
+            )
+            .unavailable
+            .expect("a lock file that cannot be opened refuses the turn");
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            unopenable.contains(&lock_path.display().to_string()),
+            "{unopenable}"
+        );
+        assert!(
+            unopenable.contains("make that lock file readable and writable by this user"),
+            "{unopenable}"
+        );
+        assert!(
+            !unopenable.contains("make the operator home writable"),
+            "{unopenable}"
+        );
     }
 }

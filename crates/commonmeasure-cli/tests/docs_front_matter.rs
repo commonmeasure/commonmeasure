@@ -59,10 +59,6 @@ const EXEMPT: &[(&str, &str)] = &[
         "packaged verbatim as the declarative agent's instructions",
     ),
     (
-        "design-tokens/README.md",
-        "vendored from the website release; must stay byte-identical",
-    ),
-    (
         "demo/corpus/",
         "fixture documents a job reads as source content",
     ),

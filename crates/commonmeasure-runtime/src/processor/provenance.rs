@@ -1084,7 +1084,8 @@ pub fn record_from_summary(summary: &Value, plan_id: &str) -> Result<Value, Stri
 
 /// Field-by-field comparison of a label's source record with the record a
 /// summary implies: every top-level field that differs, by name, and every
-/// source position whose reference, hash or grade differs.
+/// source position whose reference, hash or grade differs. A reference that
+/// differs only in its userinfo is not a difference.
 pub fn record_differences(label: &Value, summary: &Value) -> Vec<String> {
     let mut differences = Vec::new();
     for field in ["run_id", "plan_id", "run_manifest_hash", "answer_hash"] {
@@ -1106,7 +1107,22 @@ pub fn record_differences(label: &Value, summary: &Value) -> Vec<String> {
         ));
     }
     for (position, (ours, theirs)) in labelled.iter().zip(implied).enumerate() {
-        for field in ["reference", "content_hash", "grade"] {
+        // An Encypher label carries each reference as it left the machine,
+        // with its userinfo removed, while the summary keeps it as recorded.
+        // Credentials do not name a different resource, so they are not a
+        // difference.
+        let reference = |source: &Value| {
+            source["reference"]
+                .as_str()
+                .map(|reference| without_userinfo(reference).into_owned())
+        };
+        if reference(ours) != reference(theirs) {
+            differences.push(format!(
+                "sources[{position}].reference: the label carries {}, the summary implies {}",
+                ours["reference"], theirs["reference"]
+            ));
+        }
+        for field in ["content_hash", "grade"] {
             if ours[field] != theirs[field] {
                 differences.push(format!(
                     "sources[{position}].{field}: the label carries {}, the summary implies {}",
@@ -1116,6 +1132,75 @@ pub fn record_differences(label: &Value, summary: &Value) -> Vec<String> {
         }
     }
     differences
+}
+
+/// A source reference as it may leave the machine: any userinfo removed and
+/// every other byte as recorded. Operator manifest and supplier URLs can
+/// carry credentials (`https://user:secret@host/path`); they authenticate a
+/// fetch and are not part of the source's identity. Nothing else changes,
+/// with no case folding and no port or path normalisation, so the reference
+/// still reads as the one in the run's own record.
+///
+/// Userinfo is what a URL parser reads as userinfo, so `http:\\u:p@h/` loses
+/// its credentials and `http://h\@evil.example/` keeps its host `h`. The
+/// userinfo is cut out of the text when the result parses to the URL the
+/// parser gives with the userinfo cleared; otherwise the parser's
+/// serialisation is used. A value that does not parse but has a
+/// `scheme://user@host` authority, such as one with an out-of-range port,
+/// has its userinfo cut out of the text. Any other value is returned as it
+/// is.
+fn without_userinfo(reference: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    match url::Url::parse(reference) {
+        Ok(url) if url.username().is_empty() && url.password().is_none() => {
+            Cow::Borrowed(reference)
+        }
+        Ok(mut url) => {
+            // Both setters refuse only a URL that cannot carry credentials,
+            // and this one carries them.
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            match authority_without_userinfo(reference) {
+                Some(text) if url::Url::parse(&text).is_ok_and(|parsed| parsed == url) => {
+                    Cow::Owned(text)
+                }
+                _ => Cow::Owned(url.into()),
+            }
+        }
+        Err(_) => {
+            authority_without_userinfo(reference).map_or(Cow::Borrowed(reference), Cow::Owned)
+        }
+    }
+}
+
+/// `value` with the userinfo of its authority cut out, when it has a scheme
+/// followed by slashes and an authority containing `@`. The authority ends at
+/// the first `/`, `\`, `?` or `#`; its userinfo ends at the last `@` in it.
+fn authority_without_userinfo(value: &str) -> Option<String> {
+    let colon = value.find(':')?;
+    let scheme = &value[..colon];
+    let is_scheme = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !is_scheme {
+        return None;
+    }
+    let after_scheme = &value[colon + 1..];
+    let authority = after_scheme.trim_start_matches(['/', '\\']);
+    if authority.len() == after_scheme.len() {
+        return None;
+    }
+    let authority_start = value.len() - authority.len();
+    let authority_end = authority
+        .find(['/', '\\', '?', '#'])
+        .unwrap_or(authority.len());
+    let at = authority[..authority_end].rfind('@')?;
+    Some(format!(
+        "{}{}",
+        &value[..authority_start],
+        &authority[at + 1..]
+    ))
 }
 
 #[cfg(test)]
@@ -1265,6 +1350,68 @@ mod tests {
         );
         assert!(differences.iter().any(|d| d.starts_with("answer_hash")));
         assert!(record_from_summary(&implied, "absent").is_err());
+    }
+
+    #[test]
+    fn userinfo_is_removed_as_a_url_parser_reads_it() {
+        for (raw, expected) in [
+            ("https://token@a.example/x", "https://a.example/x"),
+            ("https://:p@a.example/x", "https://a.example/x"),
+            // The last `@` in the authority ends the userinfo.
+            ("https://u@v:p@a.example/x", "https://a.example/x"),
+            (
+                "https://u:p@a.example:8443/x#f@g",
+                "https://a.example:8443/x#f@g",
+            ),
+            // A special scheme reads a backslash or a single slash as the
+            // start of the authority; the text keeps them.
+            (r"http:\\u:p@h/l.xml", r"http:\\h/l.xml"),
+            ("https:/u:p@h/l.xml", "https:/h/l.xml"),
+            // A backslash before an `@` ends a special scheme's host, so
+            // there is no userinfo to remove.
+            (
+                r"http://h\@evil.example/l.xml",
+                r"http://h\@evil.example/l.xml",
+            ),
+            ("terms://legal@acme/contract-7", "terms://acme/contract-7"),
+            // Where the text alone finds no userinfo, the parser's
+            // serialisation is used: in a non-special scheme a backslash does
+            // not end the authority, so `a\b` is userinfo.
+            (r"TERMS://a\b@Acme/c", "terms://Acme/c"),
+            (
+                "/license.xml?next=http://u:p@h/",
+                "/license.xml?next=http://u:p@h/",
+            ),
+            ("https://@a.example/x", "https://@a.example/x"),
+            ("not a url", "not a url"),
+        ] {
+            assert_eq!(without_userinfo(raw), expected, "sending {raw}");
+        }
+    }
+
+    #[test]
+    fn a_label_naming_a_reference_without_its_userinfo_matches_the_summary() {
+        let summary = json!({
+            "run": {"id": "run-1", "manifest_hash": "sha256:manifest"},
+            "plans": [{
+                "id": "internal-only",
+                "answer": "The cap rose.",
+                "processors": [{
+                    "stage": "transform",
+                    "outputs": [
+                        {"reference": "https://u:p@a.example/m.json", "content_hash": "sha256:aa"}
+                    ]
+                }]
+            }]
+        });
+        let implied = record_from_summary(&summary, "internal-only").unwrap();
+        let mut label = implied.clone();
+        label["sources"][0]["reference"] = json!("https://a.example/m.json");
+        assert!(record_differences(&label, &implied).is_empty());
+        label["sources"][0]["reference"] = json!("https://b.example/m.json");
+        let differences = record_differences(&label, &implied);
+        assert_eq!(differences.len(), 1);
+        assert!(differences[0].starts_with("sources[0].reference"));
     }
 
     #[test]

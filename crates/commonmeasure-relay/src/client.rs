@@ -34,7 +34,7 @@ pub fn deliver(receiver: &str, api_key: Option<&str>, document: &Value) -> Resul
     if let Some(key) = api_key {
         request.headers.set("X-API-Key", key);
     }
-    let url = format!("{}/events", receiver.trim_end_matches('/'));
+    let url = crate::config::events_url(receiver);
     let response = commonmeasure_http::send(&url, request)?;
     let answer = serde_json::from_slice::<Value>(&response.body).ok();
     if !(200..300).contains(&response.status) {

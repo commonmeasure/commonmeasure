@@ -330,7 +330,10 @@ fn hold_stale_copy(home: &Path, site: &Origin, days_ago: i64) {
     });
     std::fs::create_dir_all(home.join("declarations")).expect("cache");
     std::fs::write(
-        home.join("declarations/127.0.0.1.json"),
+        home.join(format!(
+            "declarations/{}.json",
+            commonmeasure_harness::discovery::origin_key(&site.url("/"))
+        )),
         serde_json::to_vec(&record).expect("a record"),
     )
     .expect("the cached declarations");
@@ -488,7 +491,11 @@ fn a_429_or_503_is_ruled_by_the_stale_copy_held_in_every_mode() {
             }
             // A failure never overwrites the answer it could not replace.
             let cached: Value = serde_json::from_slice(
-                &std::fs::read(home.path().join("declarations/127.0.0.1.json")).unwrap(),
+                &std::fs::read(home.path().join(format!(
+                    "declarations/{}.json",
+                    commonmeasure_harness::discovery::origin_key(&site.url("/"))
+                )))
+                .unwrap(),
             )
             .unwrap();
             assert_eq!(

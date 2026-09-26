@@ -21,7 +21,7 @@ use chrono::{DateTime, Duration, Utc};
 use maud::{Markup, html};
 use serde_json::{Value, json};
 
-use super::app::{ReadFrom, Section, fact, shell, str_of, topbar, u, when};
+use super::app::{ReadFrom, Section, fact, refused_standing_words, shell, str_of, topbar, u, when};
 use super::form::encode_component;
 
 /// Answers whether the process `(pid, started_at)` is in the process table
@@ -469,6 +469,20 @@ fn session_attention(session: &Value, now: DateTime<Utc>) -> Vec<Value> {
                 str_of(identity.get("revoked_at"), "unknown")
             ),
             "Enrol again with `commonmeasure enrol`; requests signed with a revoked key verify nowhere.",
+        ));
+    }
+    // As with a revoked key, nothing from this edge reaches the hub.
+    if let Some(reason) = identity["hub_refused"].as_str() {
+        items.push(item(
+            "edge_identity",
+            Some(primary),
+            "The session ran with a hub URL this edge refuses; nothing is sent to the hub"
+                .to_owned(),
+            format!(
+                "edge_identity record: {}: {reason}",
+                str_of(identity.get("standing"), "standing not recorded")
+            ),
+            "Follow the remedy in the record; `commonmeasure status` states it too.",
         ));
     }
     if let Some(reason) = identity["unlisted"].as_str() {
@@ -999,12 +1013,26 @@ fn reporting_block(session: &Value) -> Markup {
     html! {
         dl class="cx-fields" {
             @if identity.is_object() {
-                (field("Hub", str_of(identity.get("hub"), "not recorded")))
-                (field("Key", &format!(
-                    "{} ({})",
-                    str_of(identity.get("key_id"), "not recorded"),
-                    str_of(identity.get("standing"), "standing not recorded"),
-                )))
+                // Null beside `hub_refused` where the stored URL has no
+                // origin to name.
+                (field("Hub", str_of(identity.get("hub"), if identity["hub_refused"].is_string() {
+                    "none: the stored URL does not parse or has no web origin"
+                } else {
+                    "not recorded"
+                })))
+                @let standing = str_of(identity.get("standing"), "standing not recorded");
+                div {
+                    dt { "Key" }
+                    dd {
+                        (str_of(identity.get("key_id"), "not recorded")) " ("
+                        @match refused_standing_words(standing) {
+                            Some(words) => { (words) ", " span class="mono" { (standing) } }
+                            None => { (standing) }
+                        }
+                        ")"
+                    }
+                }
+                @if let Some(reason) = identity["hub_refused"].as_str() { (field("Hub URL refused", reason)) }
                 @if let Some(until) = identity["listed_until"].as_str() { (field("Directory listing until", until)) }
                 @if let Some(reason) = identity["unlisted"].as_str() { (field("Directory listing", &format!("unlisted: {reason}"))) }
             } @else {
@@ -1115,6 +1143,100 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert!(!listed(false, Some(true), early), "under an hour old");
+    }
+
+    /// A refused hub URL raises an Attention item as a revoked key does, for
+    /// either standing, and none is raised for a record without
+    /// `hub_refused`.
+    #[test]
+    fn a_refused_hub_url_is_an_attention_item() {
+        let now = DateTime::parse_from_rfc3339("2026-09-17T02:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let items = |identity: Value| {
+            let mut session = session(true, true, false);
+            session["edge_identity"] = identity;
+            session_attention(&session, now)
+                .into_iter()
+                .filter(|item| item["kind"] == "edge_identity")
+                .collect::<Vec<_>>()
+        };
+        for standing in ["cleartext_hub", "unusable_hub_url"] {
+            let raised = items(json!({
+                "hub": null, "key_id": "k-1", "standing": standing,
+                "hub_refused": "the enrolled hub URL is refused. Run `commonmeasure disconnect`",
+            }));
+            assert_eq!(raised.len(), 1, "{standing}: {raised:?}");
+            assert_eq!(raised[0]["session_id"], "s-1");
+            assert_eq!(
+                raised[0]["evidence"],
+                format!(
+                    "edge_identity record: {standing}: the enrolled hub URL is refused. \
+                     Run `commonmeasure disconnect`"
+                )
+            );
+            assert!(
+                raised[0]["summary"]
+                    .as_str()
+                    .unwrap()
+                    .contains("nothing is sent to the hub"),
+                "{raised:?}"
+            );
+        }
+        let enrolled = items(json!({"hub": "https://hub.example", "key_id": "k-1",
+                                    "standing": "enrolled"}));
+        assert!(enrolled.is_empty(), "{enrolled:?}");
+    }
+
+    /// The Reporting block states a hub refusal the session's `edge_identity`
+    /// recorded, with the standing in words as Overview gives it. A record
+    /// from an edge that wrote no `hub_refused` renders as before.
+    #[test]
+    fn the_reporting_block_states_a_refused_hub_url_the_session_recorded() {
+        let page = |identity: Value| {
+            let mut session = session(true, true, false);
+            session["logs"] = json!([{"session_id": "s-1"}]);
+            session["edge_identity"] = identity;
+            fragment(&json!({"sessions": [session]}), "s-1")
+        };
+        let refused = page(json!({
+            "hub": "http://hub.example", "key_id": "k-1", "standing": "cleartext_hub",
+            "hub_refused": "the enrolled hub URL at http://hub.example <is> cleartext, so \
+                            nothing is sent to it. Run `commonmeasure disconnect`",
+        }));
+        assert!(
+            refused.contains(
+                "<dt>Key</dt><dd>k-1 (nothing is sent to the hub: its URL is neither https nor \
+                 http to a loopback origin, <span class=\"mono\">cleartext_hub</span>)</dd>"
+            ),
+            "{refused}"
+        );
+        assert!(
+            refused.contains(
+                "<dt>Hub URL refused</dt><dd>the enrolled hub URL at http://hub.example &lt;is&gt; \
+                 cleartext, so nothing is sent to it. Run `commonmeasure disconnect`</dd>"
+            ),
+            "{refused}"
+        );
+
+        let originless = page(json!({
+            "hub": null, "key_id": "k-1", "standing": "cleartext_hub",
+            "hub_refused": "the enrolled hub URL is neither https nor http to a loopback origin",
+        }));
+        assert!(
+            originless.contains(
+                "<dt>Hub</dt><dd>none: the stored URL does not parse or has no web origin</dd>"
+            ),
+            "{originless}"
+        );
+
+        let older = page(json!({"hub": "https://hub.example", "key_id": "k-1",
+                                "standing": "enrolled"}));
+        assert!(
+            older.contains("<dt>Key</dt><dd>k-1 (enrolled)</dd>"),
+            "{older}"
+        );
+        assert!(!older.contains("Hub URL refused"), "{older}");
     }
 
     #[test]

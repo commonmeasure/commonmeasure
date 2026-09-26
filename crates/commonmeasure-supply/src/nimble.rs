@@ -188,6 +188,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
             // measurement the freshness evaluator exists to refuse.
             declared_date: None,
             promoted,
+            ..Default::default()
         })
     }))
 }

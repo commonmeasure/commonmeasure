@@ -305,32 +305,43 @@ fn require_https(field: &str, value: &str) -> Result<(), String> {
     }
 }
 
-/// The manifest URL for a page: the well-known path at the page's origin.
+/// The manifest URL for a page: the well-known path at the page's origin,
+/// with a domain host's trailing dot removed.
 pub fn well_known_url(page_url: &str) -> Option<String> {
-    let mut parsed = url::Url::parse(page_url).ok()?;
+    let mut parsed = url::Url::parse(&crate::grounding::without_trailing_dot(page_url)).ok()?;
     parsed.set_path(WELL_KNOWN_PATH);
     parsed.set_query(None);
     parsed.set_fragment(None);
     Some(parsed.to_string())
 }
 
-/// The apex to try when a subdomain answers 404: the host with its first
-/// label removed, while at least two labels remain. Without a public suffix
-/// list this is one step up and no more; the record names the URL tried.
+/// The manifest URL at the registrable domain of `manifest_url`'s host,
+/// where that is not the host itself: the host's public suffix under the
+/// Public Suffix List, ICANN and private sections, and the one label before
+/// it. The list is compiled into the binary, so no request leaves the edge
+/// to learn it.
+///
+/// `a.b.example.com` gives `example.com`, and `www.bbc.co.uk` gives
+/// `bbc.co.uk`. `bbc.co.uk`, `x.pages.dev` and `user.github.io` are
+/// registrable domains already and give none, so no request reaches a
+/// registry such as `co.uk` or `pages.dev`. An address or a single-label
+/// host gives none. A trailing dot is removed before the lookup.
+///
+/// A manifest at the registrable domain may claim the hosts beneath it
+/// (standard section 8.6), so it is asked once after a 404 at the host.
+/// Nothing between the two is asked: a manifest at an intermediate host is
+/// not found for the hosts below it.
 pub fn apex_url(manifest_url: &str) -> Option<String> {
     let mut parsed = url::Url::parse(manifest_url).ok()?;
-    let host = parsed.host_str()?.to_owned();
-    if parsed
-        .host()
-        .is_some_and(|host| !matches!(host, url::Host::Domain(_)))
-    {
+    let host = match parsed.host() {
+        Some(url::Host::Domain(host)) => host.trim_end_matches('.').to_owned(),
+        _ => return None,
+    };
+    let registrable = psl::domain_str(&host)?;
+    if registrable == host {
         return None;
     }
-    let (_, parent) = host.split_once('.')?;
-    if !parent.contains('.') {
-        return None;
-    }
-    parsed.set_host(Some(parent)).ok()?;
+    parsed.set_host(Some(registrable)).ok()?;
     Some(parsed.to_string())
 }
 
@@ -339,22 +350,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_well_known_url_is_at_the_origin_and_the_apex_is_one_label_up() {
+    fn the_well_known_url_is_at_the_origin_without_a_trailing_dot() {
         assert_eq!(
             well_known_url("https://news.example.com/a/b?q").as_deref(),
             Some("https://news.example.com/.well-known/content-telemetry.json")
         );
         assert_eq!(
-            apex_url("https://news.example.com/.well-known/content-telemetry.json").as_deref(),
-            Some("https://example.com/.well-known/content-telemetry.json")
+            well_known_url("https://news.example.com.:8443/a").as_deref(),
+            Some("https://news.example.com:8443/.well-known/content-telemetry.json")
         );
-        assert!(
-            apex_url("https://example.com/.well-known/content-telemetry.json").is_none(),
-            "a two-label host has no apex above it this reader will try"
-        );
-        assert!(
-            apex_url("http://127.0.0.1:8/.well-known/content-telemetry.json").is_none(),
-            "an address has no apex"
+    }
+
+    /// The apex is the registrable domain under the Public Suffix List, ICANN
+    /// and private sections, asked only where it is not the host itself.
+    #[test]
+    fn the_apex_is_the_registrable_domain_and_never_a_public_suffix() {
+        let apex = |host: &str| {
+            apex_url(&format!("https://{host}{WELL_KNOWN_PATH}"))
+                .map(|url| crate::grounding::host_of(&url))
+        };
+        for (host, expected) in [
+            ("news.example.com", Some("example.com")),
+            ("a.b.example.com", Some("example.com")),
+            ("a.b.example.com.", Some("example.com")),
+            ("www.bbc.co.uk", Some("bbc.co.uk")),
+            ("a.b.example.test", Some("example.test")),
+            ("news.example.localhost", Some("example.localhost")),
+            ("example.com", None),
+            ("bbc.co.uk", None),
+            ("co.uk", None),
+            ("x.pages.dev", None),
+            ("user.github.io", None),
+            ("pages.dev", None),
+            ("localhost", None),
+            ("127.0.0.1", None),
+            ("[::1]", None),
+        ] {
+            assert_eq!(apex(host).as_deref(), expected, "{host}");
+        }
+        assert_eq!(
+            apex_url("http://a.b.example.test:8080/.well-known/content-telemetry.json").as_deref(),
+            Some("http://example.test:8080/.well-known/content-telemetry.json"),
+            "scheme, port and path are kept"
         );
     }
 

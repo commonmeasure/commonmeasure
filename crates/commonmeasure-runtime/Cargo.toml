@@ -24,3 +24,7 @@ unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# The umask test sets the umask in a child process it spawns.
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true

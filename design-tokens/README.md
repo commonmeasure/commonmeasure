@@ -1,3 +1,8 @@
+---
+domain: shared
+audience: contributor
+---
+
 # Common Measure design tokens
 
 The website repository owns `design-tokens/tokens.json`. Its versioned release

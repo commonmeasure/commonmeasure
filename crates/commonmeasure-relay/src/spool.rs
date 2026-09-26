@@ -319,12 +319,7 @@ impl Spool {
         Self::read_only(home).refuse_pre_0_3_5()?;
         let dir = home.join("relay").join("spool");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(dir.join("delivery.lock"))?;
+        let lock = commonmeasure_harness::declaration::open_lock(&dir.join("delivery.lock"))?;
         lock.try_lock()
             .context("another relay or requeue owns the spool")?;
         let mut spool = Self::read_only(home);
@@ -3089,6 +3084,29 @@ mod tests {
                 .unwrap()
                 .get("delivered_subset")
                 .is_none()
+        );
+    }
+
+    /// The spool's lock is created readable by its owner only, so another
+    /// local user who can reach the home cannot open it to hold it and stop
+    /// every relay. One that exists already keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_created_delivery_lock_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("relay/spool/delivery.lock");
+        drop(Spool::open(home.path()).unwrap());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(Spool::open(home.path()).unwrap());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
         );
     }
 }

@@ -2486,6 +2486,26 @@ mod tests {
         assert!(!policy.admit_host("https://www.gov.uk/x").is_refusal());
     }
 
+    /// `tracker.example.` is the host `tracker.example` is, so a denial of one
+    /// refuses the other, and an allowance of one admits the other.
+    #[test]
+    fn a_trailing_dot_names_the_same_host_to_admission() {
+        let denied = policy(
+            r#"{"policy_mode":"strict",
+                "constraints":[{"kind":"denied_source_host","host":"tracker.example"}]}"#,
+        );
+        assert!(
+            denied
+                .admit_host("https://tracker.example./beacon")
+                .is_refusal()
+        );
+        let allowed = policy(
+            r#"{"policy_mode":"strict",
+                "constraints":[{"kind":"allowed_source_host","host":"www.gov.uk"}]}"#,
+        );
+        assert!(!allowed.admit_host("https://www.gov.uk./x").is_refusal());
+    }
+
     #[test]
     fn a_strict_allowlist_refuses_everything_it_does_not_name() {
         let policy = policy(

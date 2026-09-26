@@ -19,7 +19,9 @@ pub fn is_private(url: &url::Url) -> bool {
     match url.host() {
         None => true,
         Some(url::Host::Domain(domain)) => {
-            let domain = domain.to_lowercase();
+            // The host as admission reads it: `host.internal.` is the name
+            // `host.internal` is, and read as written it would be public.
+            let domain = crate::normalised_host(domain);
             domain == "localhost"
                 || domain.ends_with(".localhost")
                 || domain.ends_with(".local")
@@ -68,12 +70,17 @@ mod tests {
             "http://[::ffff:192.168.0.1]/",
             "file:///home/op/notes.md",
             "http://rag.corp.internal/kb",
+            "https://host.internal./a",
+            "http://LOCALHOST.:3000/x",
+            "http://printer.local../",
             "not a url",
         ] {
             assert!(is_private_address(private), "{private}");
         }
         for public in [
             "https://www.gov.uk/",
+            "https://www.gov.uk./",
+            "https://internal.example./",
             "http://10.example.com/",
             "https://8.8.8.8/",
         ] {

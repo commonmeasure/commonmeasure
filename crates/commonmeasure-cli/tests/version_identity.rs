@@ -1,9 +1,11 @@
 //! One version identity: the workspace manifest is the source, the binary
-//! reports it, and the plugin manifest carries the same string.
+//! reports it, and the plugin and browser extension manifests carry the same
+//! string.
 //!
-//! The plugin manifest is a committed JSON file Claude Code reads, so it
-//! cannot take its version from the build. This test is what binds it to the
-//! workspace; the release job runs it before building anything.
+//! Each manifest is a committed JSON file its host reads (Claude Code, the
+//! browser), so neither can take its version from the build. These tests are
+//! what bind them to the workspace; the release workflow's version job runs
+//! this whole file before building anything.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,6 +30,18 @@ fn the_plugin_manifest_carries_the_workspace_version() {
         json["version"].as_str(),
         Some(WORKSPACE_VERSION),
         "plugin/.claude-plugin/plugin.json must carry the workspace version from Cargo.toml"
+    );
+}
+
+#[test]
+fn the_browser_manifest_carries_the_workspace_version() {
+    let manifest = repo_root().join("browser/manifest.json");
+    let text = std::fs::read_to_string(&manifest).expect("manifest.json is readable");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("manifest.json parses");
+    assert_eq!(
+        json["version"].as_str(),
+        Some(WORKSPACE_VERSION),
+        "browser/manifest.json must carry the workspace version from Cargo.toml"
     );
 }
 

@@ -391,6 +391,7 @@ pub fn fetch_with_clock(
             EnrolmentRecord::path(home).display()
         ));
     };
+    commonmeasure_harness::enrolment::hub_url_accepted(&enrolment.hub)?;
     let Deployment::Managed { policy_url, .. } = Deployment::read(home)? else {
         return Err(format!(
             "deployment mode is local: supplier credentials are released to a managed hosted \

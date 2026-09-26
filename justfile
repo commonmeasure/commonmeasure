@@ -171,9 +171,9 @@ skills-example: fixtures
     COMMONMEASURE_SKILL_CATALOGUE=demo/skills/catalogue.json COMMONMEASURE_INTERNAL_CORPUS=demo/corpus cargo run -p commonmeasure-cli -- run demo/jobs/skill-publishable.json --live --output {{evidence}}/output/skills
     cargo run -p commonmeasure-cli -- inspect {{evidence}}/output/skills
 
-# Live provider comparison to the gitignored live directory (sources .env; billable; gateway)
+# Live provider comparison to the gitignored live directory (sources .env if present; billable; gateway)
 run-live:
-    set -a; . ./.env; set +a; cargo run -p commonmeasure-cli -- run demo/jobs/energy-price-cap.json --live --output target/demo/live
+    if [ -f .env ]; then set -a; . ./.env; set +a; fi; cargo run -p commonmeasure-cli -- run demo/jobs/energy-price-cap.json --live --output target/demo/live
     cargo run -p commonmeasure-cli -- inspect target/demo/live
 
 # Print the run dossier (docs/contracts/run-output.md)
@@ -193,7 +193,7 @@ serve:
 serve-tailnet:
     cargo run -p commonmeasure-cli -- serve --listen "$(tailscale ip -4):4173" --allow-remote
 
-# Start the reference TensorZero sidecar (sources .env; see demo/gateway/tensorzero/README.md)
+# Start the reference TensorZero sidecar (OPENAI_API_KEY from the environment or .env; see demo/gateway/tensorzero/README.md)
 gateway-up:
     #!/usr/bin/env sh
     set -e
@@ -202,7 +202,9 @@ gateway-up:
     # hand a model gateway every supplier credential the file holds; `:z`
     # relabels the mount for SELinux, which podman needs and docker accepts.
     umask 077
-    grep '^OPENAI_API_KEY=' .env > .env.gateway
+    key="${OPENAI_API_KEY:-$(sed -n 's/^OPENAI_API_KEY=//p' .env 2>/dev/null)}"
+    [ -n "$key" ] || { echo "gateway-up needs OPENAI_API_KEY in the environment or .env" >&2; exit 1; }
+    printf 'OPENAI_API_KEY=%s\n' "$key" > .env.gateway
     "$engine" run --name commonmeasure-tensorzero --detach --env-file "$PWD/.env.gateway" --publish 127.0.0.1:3000:3000 --volume "$PWD/demo/gateway/tensorzero:/app/config:ro,z" tensorzero/gateway@sha256:c939db4f27e41aa3a37a87909430a0c8f898f9c952f402dcbdc17e1708597bcb --config-file /app/config/tensorzero.toml
 
 gateway-down:

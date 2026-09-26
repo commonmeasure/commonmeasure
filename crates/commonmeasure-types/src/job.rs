@@ -212,7 +212,7 @@ impl HostPattern {
 
 /// The operator's spelling of a host, reduced to the form an envelope's host
 /// arrives in: `Url::host_str` of `https://{entry}/`, lowercased,
-/// IDNA-encoded, one trailing dot removed. Both sides of every host
+/// IDNA-encoded, trailing dots removed. Both sides of every host
 /// comparison, in admission and in a pattern, go through this one function,
 /// so "the same host" has one definition. An entry the parser rejects is
 /// compared as written, lowercased, because losing a denial to a typo is the
@@ -220,6 +220,32 @@ impl HostPattern {
 /// instead ([`HostPattern::parse`]).
 pub fn normalised_host(entry: &str) -> String {
     parsed_host(entry).unwrap_or_else(|| entry.trim().to_lowercase())
+}
+
+/// `url` with a domain host in [`normalised_host`]'s form, for comparing
+/// whole URLs or URL prefixes. For http and https the parser has already
+/// lowered the host's case, IDNA-encoded it and dropped the scheme's default
+/// port; this also removes a fully qualified name's trailing dots, because
+/// `https://example.com./a` is the resource `https://example.com/a` is. It
+/// clears a username and password: credentials authenticate a request and
+/// do not name a different resource, so `https://u:p@example.com/a` is
+/// `https://example.com/a` too. An address host is left as parsed. The
+/// scheme, any other port, the path and the query are kept, since each names
+/// a different resource.
+pub fn canonical_url(url: &url::Url) -> url::Url {
+    let mut canonical = url.clone();
+    // Both setters refuse only a URL that cannot carry credentials, which
+    // then has none to clear.
+    let _ = canonical.set_username("");
+    let _ = canonical.set_password(None);
+    if let Some(url::Host::Domain(domain)) = url.host() {
+        let host = normalised_host(domain);
+        // A host the setter refuses leaves the URL as parsed.
+        if host != domain && !host.is_empty() {
+            let _ = canonical.set_host(Some(&host));
+        }
+    }
+    canonical
 }
 
 /// The host `entry` names, when it names one.

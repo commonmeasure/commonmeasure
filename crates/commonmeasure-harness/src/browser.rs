@@ -117,6 +117,7 @@ pub fn capture(
         .map(|url| Crossing {
             session_id: session_id.to_owned(),
             timestamp: Utc::now(),
+            requested_at: None,
             mode: CrossingMode::Observed,
             host: surface.id().to_owned(),
             client: None,
@@ -131,6 +132,7 @@ pub fn capture(
             content_hash: None,
             retrieved_hash: None,
             estimated_tokens: None,
+            delivered: None,
             grounded: false,
             // No surface reports rights, and being shown a source is not
             // permission.

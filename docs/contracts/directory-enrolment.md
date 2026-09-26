@@ -186,13 +186,20 @@ spool may have filled the field in
 directory selection requires revalidation of every batch.
 Deleting consent files is not an opt-out operation; use `enrol --remove`.
 
-Status shows the canonical directory, edge and organisation, applied source
+Status shows the canonical directory, edge and organisation (`edge.hub` by
+its origin alone, as [enrolment](enrolment.md#the-exchange) says), applied source
 policy/revision, the reporting-approval snapshot's state, revision, digest and
 expiry (`approvals`), reporting clearance, receiver, and whether witnessed
 evidence exists locally. Reporting clearance is one of `not_enrolled`,
-`local_only`, `receiver_missing`, `permitted`, `policy_refused`,
-`policy_withheld`, `managed_policy_unapplied`, `approval_expired`,
-`approval_unavailable` and `approval_pending`. This is separate from delivery.
+`local_only`, `relay_config_invalid`, `receiver_missing`, `permitted`,
+`policy_refused`, `policy_withheld`, `managed_policy_unapplied`,
+`approval_expired`, `approval_unavailable` and `approval_pending`. This is
+separate from delivery. `relay.json` is read with the relay's parser: when
+the relay would refuse it, status names no receiver, reports
+`relay_config_invalid` with the load error in `relay_config_error`, and still
+reports the policy's own clearance under `policy`. The error names the
+receiver by its origin alone
+([telemetry projection §One receiver](telemetry-projection.md#one-receiver)).
 `relay --dry-run` reports eligible projection, and `relay` reports accepted
 batches/events; a permitted private retrieval still produces zero eligible
 wire events. No successful setup message implies a delivered first batch.

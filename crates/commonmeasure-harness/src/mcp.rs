@@ -14,7 +14,7 @@ use std::io::{BufRead, Write};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use commonmeasure_http::{Request, Response};
 use commonmeasure_runtime::allowance::{AllowanceContext, GateDecision, Reservation};
 use commonmeasure_runtime::policy::Ruling;
@@ -32,7 +32,7 @@ use crate::discovery::{self, DeclarationCache, Declarations, Governing, Manifest
 use crate::grounding;
 use crate::identity::{Identity, PresentedIdentity, SigningIdentity};
 use crate::policy::SessionPolicy;
-use crate::session::{Crossing, CrossingMode, SessionLog};
+use crate::session::{Crossing, CrossingMode, Delivered, SessionLog};
 
 /// The protocol revisions this server serves, oldest first. A tools-only
 /// stdio server behaves the same under each, with two exceptions this file
@@ -56,6 +56,16 @@ const BATCHING_PROTOCOL_VERSION: &str = "2025-03-26";
 pub fn negotiate_protocol(requested: Option<&str>) -> &'static str {
     Served::default().negotiate(requested)
 }
+
+/// The characters of extracted text one `context_fetch` result carries when
+/// the caller names no `max_chars`: about 15,000 tokens at `characters/4`,
+/// which with the result's other fields stays under the 25,000-token limit
+/// Claude Code sets on one MCP tool result by default.
+pub const FETCH_DEFAULT_CHARS: u64 = 60_000;
+
+/// The most characters one `context_fetch` result carries whatever the
+/// caller asks. A larger `max_chars` is clamped to this.
+pub const FETCH_MAX_CHARS: u64 = 200_000;
 
 /// The tools this server can dispatch, in the order `tools/list` presents
 /// them.
@@ -228,10 +238,17 @@ pub struct McpServer {
     /// The prompt records read so far from this session's log, advanced at
     /// each fetch rather than re-read from the start.
     prompts: crate::session::PromptCursor,
-    /// The receiver named in `<home>/relay.json` when the server started, or
-    /// none. A reporting demand is met only where reports can leave, and the
-    /// relay reads the same file.
-    receiver: Option<String>,
+    /// The `content_hash` of the last text `context_fetch` delivered for
+    /// each URL asked for and each final URL reached, so a later part can say
+    /// the page changed between parts. Hashes only: no body is kept between
+    /// calls.
+    delivered_hashes: std::collections::HashMap<String, String>,
+    /// `<home>/relay.json` as it stood when the server started, read by the
+    /// relay's own parser: none when absent, the load error when the relay
+    /// would refuse it. A reporting demand is met only where reports can
+    /// leave, so a file the relay refuses, or a receiver scoped to suppliers
+    /// (a fetched page names none), leaves the demand unmet.
+    relay: Result<Option<crate::relay_config::RelayConfig>, String>,
     /// The transport runs an interval relay over this home (the hosted
     /// service), so reports leave without a person whatever the host word
     /// ([`crate::delivery::SessionDelivery`]).
@@ -246,7 +263,21 @@ pub struct McpServer {
     /// ([`hub_authorities`]), empty for an edge with no enrolment. No
     /// mediated request is made to one of them.
     hub_authorities: Vec<HubAuthority>,
+    /// Where a mediated fetch's names are looked up:
+    /// [`commonmeasure_http::resolve`], or in a test a given DNS answer, so
+    /// that the check of the resolved address is exercised without a DNS or
+    /// `/etc/hosts` change.
+    resolve: Resolve,
     evidence_error: Option<String>,
+}
+
+/// How a hop's name becomes the addresses it is sent to, or why it did not.
+type Resolve = Box<dyn Fn(&str) -> Result<Vec<SocketAddr>, String> + Send + Sync>;
+
+/// A hop's name looked up in DNS, with the failure's whole chain as its
+/// detail.
+fn system_resolve(url: &str) -> Result<Vec<SocketAddr>, String> {
+    commonmeasure_http::resolve(url).map_err(|error| format!("{error:#}"))
 }
 
 impl McpServer {
@@ -307,10 +338,12 @@ impl McpServer {
             crawl_delay: CrawlDelayStore::open(&home),
             pace: crate::crawl_delay::Pace::Own,
             prompts: crate::session::PromptCursor::default(),
-            receiver: configured_receiver(&home),
+            delivered_hashes: std::collections::HashMap::new(),
+            relay: crate::relay_config::RelayConfig::load(&home),
             interval_relay: false,
             identity,
             hub_authorities,
+            resolve: Box::new(system_resolve),
             evidence_error: None,
         }
     }
@@ -323,6 +356,81 @@ impl McpServer {
             .source()
             .parent()
             .unwrap_or_else(|| std::path::Path::new(""))
+    }
+
+    /// `path`, a file under the operator home, as this server's caller may be
+    /// told it: in full on an own edge, and relative to the home on a hosted
+    /// one, whose tenant can act on neither the operator's file system nor
+    /// its store (`docs/contracts/session-evidence.md`, the hosted
+    /// paragraph under §Source declarations).
+    fn path_named(&self, path: &std::path::Path) -> String {
+        if self.pace.names_the_edge() {
+            return path.display().to_string();
+        }
+        match path.strip_prefix(self.home()) {
+            Ok(relative) => relative.display().to_string(),
+            _ => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The allowance gate's reasons with the ledger named as [`Self::path_named`]
+    /// names it. The runtime names the ledger in full for the operator's own
+    /// commands; a ruling here reaches the result's `breach` and
+    /// `allowance.reason`, and a refusal's text.
+    fn name_the_ledger(&self, home: &std::path::Path, decision: &mut GateDecision) {
+        if self.pace.names_the_edge() {
+            return;
+        }
+        let ledger = commonmeasure_runtime::allowance::Ledger::in_home(home).file();
+        if let Some(
+            commonmeasure_runtime::policy::Ruling::Refused { reason, .. }
+            | commonmeasure_runtime::policy::Ruling::AllowedWithBreach { reason, .. },
+        ) = &mut decision.ruling
+        {
+            *reason = self.ledger_named(&ledger, reason);
+        }
+        if let Some(reason) = decision.record["reason"].as_str() {
+            decision.record["reason"] = json!(self.ledger_named(&ledger, reason));
+        }
+    }
+
+    /// `text` with `ledger` named as [`Self::path_named`] names it.
+    fn ledger_named(&self, ledger: &std::path::Path, text: &str) -> String {
+        text.replace(&ledger.display().to_string(), &self.path_named(ledger))
+    }
+
+    /// Every string in a settlement or release record with `ledger` named as
+    /// [`Self::ledger_named`] names it, as the gate's reasons are.
+    fn name_the_ledger_in(&self, ledger: &std::path::Path, value: &mut Value) {
+        match value {
+            Value::String(text) => *text = self.ledger_named(ledger, text),
+            Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| self.name_the_ledger_in(ledger, item)),
+            Value::Object(map) => map
+                .values_mut()
+                .for_each(|item| self.name_the_ledger_in(ledger, item)),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+
+    /// This session's record as its caller may be told it:
+    /// `sessions/<id>.ndjson` on a hosted edge.
+    fn record_named(&self) -> String {
+        self.path_named(self.session.path())
+    }
+
+    /// The operator's policy as a refusal names it: by its file on an own
+    /// edge, and by no path on a hosted one.
+    fn policy_named(&self) -> String {
+        if self.pace.names_the_edge() {
+            format!("operator policy in {}", self.policy.source().display())
+        } else {
+            "the operator's policy".to_owned()
+        }
     }
 
     /// Restrict what this server advertises, dispatches and negotiates to
@@ -495,7 +603,9 @@ impl McpServer {
                     ),
                 }
             }
-            _ => error_response(id, -32601, &format!("method {method} not found")),
+            // Not quoted: over the hosted transport an echo would let a
+            // tenant confirm a guessed operator home through the rewrite.
+            _ => error_response(id, -32601, "method not found"),
         }
     }
 
@@ -603,7 +713,7 @@ impl McpServer {
                 format!(
                     "unavailable: could not record credentials_loaded to {}: {error}. \
                      Nothing was fetched.",
-                    self.session.path().display()
+                    self.record_named()
                 )
             })
     }
@@ -618,13 +728,22 @@ impl McpServer {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        // The name is not quoted back: a hosted edge names its home relative
+        // to itself in every answer, so a quoted name holding a guessed home
+        // would come back shortened and confirm the guess.
+        let unknown = || {
+            Err(format!(
+                "unknown tool; the tools are {}",
+                self.served.tools.join(", ")
+            ))
+        };
         let result = match name.as_str() {
-            tool if !self.served.tools.contains(&tool) => Err(format!("unknown tool {tool}")),
+            tool if !self.served.tools.contains(&tool) => unknown(),
             "context_fetch" => self.tool_fetch(&arguments),
             "context_search" => self.tool_search(&arguments),
             "context_status" => Ok(self.tool_status()),
             "context_enrol" => self.tool_enrol(&arguments),
-            other => Err(format!("unknown tool {other}")),
+            _ => unknown(),
         };
         // A tool failure is a tool result, not a protocol error: the host's
         // model needs to read it and decide what to do.
@@ -649,6 +768,7 @@ impl McpServer {
             .get("url")
             .and_then(Value::as_str)
             .ok_or("url is required")?;
+        let window = FetchWindow::from_arguments(arguments)?;
         if !self.policy.mediates_address(url) {
             if self.policy.holds_private_floor() {
                 return Err(
@@ -661,7 +781,11 @@ impl McpServer {
                 "Common Measure does not mediate local or private addresses. Name this one's prefix \
                  in \"record_internal_prefixes\", or set \"allow_private_hosts\": true, in {} if \
                  it should be governed.",
-                self.policy.source().display()
+                if self.pace.names_the_edge() {
+                    self.policy.source().display().to_string()
+                } else {
+                    "the operator's policy".to_owned()
+                }
             ));
         }
 
@@ -682,9 +806,8 @@ impl McpServer {
             facts.named_by = named_by;
             self.record(facts);
             return Err(format!(
-                "refused before the crossing: {reason} \
-                 (operator policy in {})",
-                self.policy.source().display()
+                "refused before the crossing: {reason} ({})",
+                self.policy_named()
             ));
         }
 
@@ -705,7 +828,7 @@ impl McpServer {
             &self.declarations,
             url,
             Utc::now(),
-            &|probe_url| self.probe(probe_url, &pacing),
+            &|probe_url, redirects| self.probe(probe_url, &pacing, redirects),
             Some(&pacing),
             self.policy.mode(),
         );
@@ -735,7 +858,7 @@ impl McpServer {
             url,
             terms.as_ref(),
             Utc::now(),
-            &|probe_url| self.probe(probe_url, &pacing),
+            &|probe_url, redirects| self.probe(probe_url, &pacing, redirects),
             Some(&pacing),
         );
         // A crossing refused on its licence's turn (licence-then-page did not
@@ -762,7 +885,7 @@ impl McpServer {
             self.record(facts);
             return Err(format!(
                 "refused before the crossing: {reason} The refusal is recorded in {}.",
-                self.session.path().display()
+                self.record_named()
             ));
         }
         // Pre-authorisation, before any other ruling on the licence. A
@@ -794,7 +917,7 @@ impl McpServer {
                     "unavailable: the policy source {} has no parent directory, so the \
                      allowance ledger cannot be located and the declared allowance cannot be \
                      enforced. No fetch was attempted.",
-                    self.policy.source().display()
+                    self.path_named(self.policy.source())
                 ));
             };
             let context = AllowanceContext::new(
@@ -808,6 +931,7 @@ impl McpServer {
                 Utc::now(),
                 &format!("session {} fetch {url}", self.session.session_id()),
             );
+            self.name_the_ledger(&home, &mut decision);
             decision.record["quoted_by"] = json!("the licence read before the request");
             if let Some(ruling) = &decision.ruling {
                 if ruling.is_refusal() {
@@ -819,8 +943,8 @@ impl McpServer {
                     facts.named_by = named_by;
                     self.record(facts);
                     return Err(format!(
-                        "refused before the crossing: {reason} (operator policy in {})",
-                        self.policy.source().display()
+                        "refused before the crossing: {reason} ({})",
+                        self.policy_named()
                     ));
                 }
                 allowance_breach = ruling.reason().map(str::to_owned);
@@ -844,12 +968,15 @@ impl McpServer {
             facts.named_by = named_by;
             facts.allowance =
                 self.release_authorisation(authorised, "the fetch was refused before the request");
-            let refused_by = self.refused_by(facts.declarations.as_ref(), url, reason);
+            let refused_by = self
+                .refused_by(facts.declarations.as_ref(), url, reason)
+                .map(|by| format!("{by}; "))
+                .unwrap_or_default();
             self.record(facts);
             return Err(format!(
-                "refused before the crossing: {reason} ({refused_by}; the source's declarations \
+                "refused before the crossing: {reason} ({refused_by}the source's declarations \
                  are recorded in {})",
-                self.session.path().display()
+                self.record_named()
             ));
         }
 
@@ -880,7 +1007,7 @@ impl McpServer {
             self.record(facts);
             return Err(format!(
                 "refused before the crossing: {reason} The refusal is recorded in {}.",
-                self.session.path().display()
+                self.record_named()
             ));
         }
 
@@ -947,7 +1074,7 @@ impl McpServer {
                 hop_url,
                 terms.as_ref(),
                 Utc::now(),
-                &|probe_url| self.probe(probe_url, &pacing),
+                &|probe_url, redirects| self.probe(probe_url, &pacing, redirects),
                 Some(&pacing),
                 self.policy.mode(),
             );
@@ -971,7 +1098,8 @@ impl McpServer {
         // No request of the chain is given longer than what is left of the
         // call's time limit, so the call ends inside it rather than at the
         // host's own timeout, which the caller cannot read.
-        let followed = follow(
+        let requested_at = std::cell::Cell::new(None);
+        let followed = follow_resolving(
             url,
             request,
             &|| {
@@ -982,14 +1110,23 @@ impl McpServer {
             self.identity.signer(),
             &allowed,
             &reaches,
+            &self.resolve,
             &on_hop,
             &pacing,
+            &std::cell::Cell::new(false),
+            &requested_at,
         );
         // The record names the last hop that was evaluated and keeps every
         // earlier hop's evaluation beside it; a breach carried on any hop
         // stays on the record.
         let (mut declarations, earlier, before) =
             fold_hops((declarations, before), hops.into_inner());
+        // An answer this edge could not record in its back-off store is
+        // still the host's answer, and its status is a known measurement.
+        let answered_status = match &followed {
+            Err(FetchFailure::Unrecorded { status, .. }) => Some(*status),
+            _ => None,
+        };
         let (final_url, response) = match followed {
             Ok(reached) => reached,
             // A refused hop is enforcement, and enforcement is on the record:
@@ -1022,32 +1159,28 @@ impl McpServer {
                 facts.named_by = named_by;
                 facts.content_telemetry_id = content_telemetry_id;
                 facts.identity = Some(presented.clone());
+                facts.requested_at = requested_at.get();
                 facts.allowance =
                     self.release_authorisation(authorised, "a redirect hop was refused");
                 let refused_by = self.refused_by(facts.declarations.as_ref(), &refused, &reason);
                 self.record(facts);
-                let hop = if refused == url {
-                    String::new()
+                let hop = (refused != url).then(|| format!("a redirect to {refused}"));
+                let context = [hop, refused_by]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(if context.is_empty() {
+                    format!("refused before the crossing: {reason}")
                 } else {
-                    format!("a redirect to {refused}; ")
-                };
-                // The hub's origin is closed by the runtime, so the policy
-                // file is not where an operator would look to change it.
-                if reason == HUB_ORIGIN_REFUSAL {
-                    let hop = hop.trim_end_matches("; ");
-                    return Err(if hop.is_empty() {
-                        format!("refused before the crossing: {reason}")
-                    } else {
-                        format!("refused before the crossing: {reason} ({hop})")
-                    });
-                }
-                return Err(format!(
-                    "refused before the crossing: {reason} ({hop}{refused_by})"
-                ));
+                    format!("refused before the crossing: {reason} ({context})")
+                });
             }
-            // Nothing answered, but the request left the machine, or this
-            // edge stopped short of sending it. An unrecorded attempt would
-            // make the log claim the agent never reached for this.
+            // Nothing answered, but the request left the machine; or this
+            // edge stopped short of sending it; or the host answered and this
+            // edge could not record the answer, which keeps its status. An
+            // unrecorded attempt would make the log claim the agent never
+            // reached for this.
             Err(
                 FetchFailure::Failed {
                     url: attempted,
@@ -1056,9 +1189,15 @@ impl McpServer {
                 | FetchFailure::NotSent {
                     url: attempted,
                     detail,
+                }
+                | FetchFailure::Unrecorded {
+                    url: attempted,
+                    detail,
+                    ..
                 },
             ) => {
                 let mut facts = FetchFacts::carried(&attempted);
+                facts.http_status = answered_status;
                 facts.breach = merge_breaches(
                     self.breach_at(url, &attempted, &ruling),
                     breaches_of(&earlier).as_deref(),
@@ -1071,6 +1210,7 @@ impl McpServer {
                 facts.named_by = named_by;
                 facts.content_telemetry_id = content_telemetry_id;
                 facts.identity = Some(presented.clone());
+                facts.requested_at = requested_at.get();
                 facts.allowance =
                     self.release_authorisation(authorised, "the fetch failed before any receipt");
                 self.record(facts);
@@ -1096,6 +1236,7 @@ impl McpServer {
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
             facts.identity = Some(presented.clone());
+            facts.requested_at = requested_at.get();
             facts.challenge = challenge.clone();
             facts.allowance = allowance_record;
             self.record(facts);
@@ -1109,7 +1250,7 @@ impl McpServer {
                     "{final_url} refused the request: {challenge} Operator policy allowed the \
                      crossing and no content was retrieved; the attempt and the identity \
                      presented are recorded in {}.",
-                    self.session.path().display()
+                    self.record_named()
                 ),
                 None => format!("{final_url} answered {}", response.status),
             });
@@ -1122,7 +1263,7 @@ impl McpServer {
             &final_url,
             &response,
             Utc::now(),
-            &|probe_url| self.probe(probe_url, &pacing),
+            &|probe_url, redirects| self.probe(probe_url, &pacing, redirects),
             Some(&pacing),
         );
         let after = self.rule_on_declarations(&mut declarations);
@@ -1152,7 +1293,12 @@ impl McpServer {
         let text = extraction.text;
         let hash = extraction.content_hash;
         let retrieved_hash = extraction.retrieved_hash;
-        let tokens = grounding::estimate_tokens(&text);
+        // The hash covers the whole extracted text, which the extraction
+        // record ties to `retrieved_hash`; the estimate counts only the part
+        // a result carries, since every reader of it sums what entered
+        // context.
+        let part = window.slice(&text);
+        let tokens = grounding::estimate_tokens(part.text);
 
         // A statement the response carried can disallow the use the fetch
         // was for, and a reporting demand this session cannot meet refuses
@@ -1174,12 +1320,39 @@ impl McpServer {
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
             facts.identity = Some(presented.clone());
+            facts.requested_at = requested_at.get();
             facts.allowance = allowance_record.clone();
             self.record(facts);
             return Err(format!(
                 "withheld from context: {reason} The bytes were fetched and are not returned; \
                  the statement and its source are recorded in {}.",
-                self.session.path().display()
+                self.record_named()
+            ));
+        }
+
+        // A part that starts at or past the end of the text carries nothing.
+        // Its length was unknown until the body was in hand, so the request
+        // happened and is recorded, withheld as a refusal is: nothing entered
+        // context, so nothing is grounded.
+        if let Some(reason) = part.past_end() {
+            let mut facts = FetchFacts::refused(&final_url, reason.clone());
+            facts.http_status = Some(response.status);
+            facts.content_hash = Some(hash);
+            facts.retrieved_hash = Some(retrieved_hash);
+            facts.estimated_tokens = Some(tokens);
+            facts.breach = merge_breaches(host_breach, breaches_of(&after).as_deref());
+            facts.licence = licence;
+            declarations.backoff = pacing.backoff_events();
+            facts.declarations = Some(declarations);
+            facts.named_by = named_by;
+            facts.content_telemetry_id = content_telemetry_id;
+            facts.identity = Some(presented.clone());
+            facts.requested_at = requested_at.get();
+            facts.allowance = allowance_record.clone();
+            self.record(facts);
+            return Err(format!(
+                "{reason} The page was fetched and its hash is on the record in {}.",
+                self.record_named()
             ));
         }
 
@@ -1230,6 +1403,7 @@ impl McpServer {
             facts.named_by = named_by;
             facts.content_telemetry_id = content_telemetry_id;
             facts.identity = Some(presented.clone());
+            facts.requested_at = requested_at.get();
             facts.allowance = allowance_record.clone();
             self.record(facts);
             // The page was fetched: the request left the machine and the
@@ -1239,7 +1413,7 @@ impl McpServer {
             return Err(format!(
                 "refused before the content entered the context: {reason} The page was \
                  fetched and its hash is on the record; the finding is recorded in {}.",
-                self.session.path().display()
+                self.record_named()
             ));
         }
         let breach = merge_breaches(declared_breach, pii.reason());
@@ -1264,6 +1438,7 @@ impl McpServer {
         facts.content_hash = Some(hash.clone());
         facts.retrieved_hash = Some(retrieved_hash.clone());
         facts.estimated_tokens = Some(tokens);
+        facts.delivered = Some(part.delivered());
         facts.grounded = true;
         facts.breach = breach.clone();
         facts.licence = licence.clone();
@@ -1273,10 +1448,31 @@ impl McpServer {
         facts.named_by = named_by;
         facts.content_telemetry_id = content_telemetry_id;
         facts.identity = Some(presented.clone());
+        facts.requested_at = requested_at.get();
         facts.allowance = allowance_record.clone();
         self.record(facts);
 
         let acquisition_id = self.session.acquisition_handle()?;
+        // Compared only for a later part: a first part after a change is a
+        // fresh read, and says nothing about a page read earlier.
+        // Kept under the final URL too, because the result hands the model
+        // that URL and it may ask for the next part by it. Where both keys
+        // hold a hash, the asked URL's wins: `next` names that URL, so its
+        // key follows the read the model is continuing, and the final URL's
+        // may hold a later read of the same page under another name.
+        let previous_hash = self.delivered_hashes.insert(url.to_owned(), hash.clone());
+        let previous_hash = if final_url == url {
+            previous_hash
+        } else {
+            let at_final_url = self
+                .delivered_hashes
+                .insert(final_url.clone(), hash.clone());
+            previous_hash.or(at_final_url)
+        };
+        let changed = (window.offset > 0)
+            .then_some(previous_hash)
+            .flatten()
+            .filter(|previous| *previous != hash);
         let mut result = json!({
             "url": final_url,
             "content_hash": hash,
@@ -1294,9 +1490,28 @@ impl McpServer {
             "named_by": named_by,
             "content_telemetry_id": content_telemetry_id,
             "allowance": allowance_record,
-            "recorded_in": self.session.path().display().to_string(),
-            "content": text,
+            "recorded_in": self.record_named(),
+            "content_range": {
+                "offset": part.offset,
+                "chars": part.chars,
+                "total_chars": part.total_chars,
+            },
+            "truncated": part.truncated(),
+            "content": part.text,
         });
+        if part.truncated() {
+            result["next"] = json!(format!(
+                "More text follows: call context_fetch with url {url} and offset {} for the next \
+                 part. Each part is a new request to the site.",
+                part.offset + part.chars
+            ));
+        }
+        if let Some(previous) = changed {
+            result["changed"] = json!(format!(
+                "The page changed since the previous part was fetched: its content_hash was \
+                 {previous} and is now {hash}, so this part may not continue the earlier text."
+            ));
+        }
         if let Some(handle) = acquisition_id {
             result["acquisition_id"] = json!(handle);
         }
@@ -1352,9 +1567,10 @@ impl McpServer {
     ) -> Option<u64> {
         let resolution = discovery::resolve_manifest(
             &self.manifests,
+            &self.declarations,
             page_url,
             Utc::now(),
-            &|probe_url| self.probe(probe_url, pacing),
+            &|probe_url, redirects| self.probe(probe_url, pacing, redirects),
             Some(pacing),
             turn,
         )?;
@@ -1379,11 +1595,21 @@ impl McpServer {
     /// so a probe in flight never carries the call past it. A probe that
     /// limit ended early, or left no time for, or that could not be signed,
     /// is [`CutShort`](discovery::ProbeFailure::CutShort): the failure is
-    /// this edge's, and the host is not held to have failed.
+    /// this edge's, and the host is not held to have failed. A redirect to a
+    /// host in back-off is declined, as the host's answer, and kept for the
+    /// failure age like any declined redirect.
+    ///
+    /// With [`Ruled`](discovery::Redirects::Ruled) each redirect target is
+    /// ruled against `robots.txt` at its own origin before it is requested,
+    /// as a page's redirect is; a target those rules refuse is
+    /// [`RobotsRefused`](discovery::ProbeFailure::RobotsRefused). A target
+    /// they allow takes its host's `Crawl-delay` turn from what the probe
+    /// was given; a turn that does not fit declines the redirect.
     fn probe(
         &self,
         url: &str,
         pacing: &crate::crawl_delay::Pacing,
+        redirects: discovery::Redirects,
     ) -> Result<(String, Response), discovery::ProbeFailure> {
         use discovery::ProbeFailure::{CutShort, NotSent, RedirectDeclined, Unreachable};
         if !self.policy.mediates_address(url) {
@@ -1421,6 +1647,63 @@ impl McpServer {
         // Whether the last request was given less than a whole probe's
         // budget because the call's time limit was nearer.
         let shortened = std::cell::Cell::new(false);
+        // Why a redirect target was not requested, where `on_hop` stopped it.
+        // Only `on_hop` sets it, and `on_hop` runs only on a redirect.
+        let hop_stop: RefCell<Option<discovery::ProbeFailure>> = RefCell::new(None);
+        // Whether a request of the chain was sent and answered, so whether a
+        // failure came after a redirect. The failing URL cannot tell: a
+        // redirect may lead back to the URL first asked for.
+        let answered = std::cell::Cell::new(false);
+        let on_hop = |hop: &str| -> Result<(), String> {
+            if redirects == discovery::Redirects::Followed {
+                return Ok(());
+            }
+            let not_requested = |reason: &str| {
+                format!("{url} redirected to {hop}, which was not requested: {reason}")
+            };
+            let stop = match discovery::rule_probe(
+                &self.declarations,
+                hop,
+                Utc::now(),
+                &|probe_url, redirects| self.probe(probe_url, pacing, redirects),
+                Some(pacing),
+            ) {
+                discovery::ProbeRuling::Refused { reason, expires_at } => {
+                    Some(discovery::ProbeFailure::RobotsRefused {
+                        url: hop.to_owned(),
+                        reason: not_requested(&reason),
+                        expires_at,
+                    })
+                }
+                discovery::ProbeRuling::Unread(reason) => Some(CutShort {
+                    reason: not_requested(&reason),
+                    sent: true,
+                }),
+                // The target is a further request to its host, so it takes
+                // that host's turn, as a page's redirect does, from what the
+                // probe itself was given: a probe that leaves the page its
+                // wait leaves it for the redirect too. A turn that does not
+                // fit declines the redirect, as a target in back-off is
+                // declined, and the answer is kept for the failure age.
+                discovery::ProbeRuling::Allowed => match pacing.probe_hop(hop, Utc::now()) {
+                    Ok(_) => None,
+                    Err(reason) => Some(RedirectDeclined {
+                        reason: format!(
+                            "{url} redirected to {hop}, which this edge does not follow: {reason}"
+                        ),
+                        target: hop.to_owned(),
+                    }),
+                },
+            };
+            match stop {
+                None => Ok(()),
+                Some(stop) => {
+                    let reason = stop.reason().to_owned();
+                    *hop_stop.borrow_mut() = Some(stop);
+                    Err(reason)
+                }
+            }
+        };
         follow(
             url,
             request,
@@ -1434,19 +1717,35 @@ impl McpServer {
             self.identity.signer(),
             &allowed,
             &reaches,
-            &|_| Ok(()),
+            &on_hop,
             pacing,
+            &answered,
+            &std::cell::Cell::new(None),
         )
         .map_err(|failure| match failure {
+            FetchFailure::Refused { .. } if hop_stop.borrow().is_some() => {
+                hop_stop.take().expect("checked above")
+            }
+            FetchFailure::Backoff { reason, .. } if !answered.get() => {
+                discovery::ProbeFailure::Backoff(reason)
+            }
+            // The host answered with a redirect to a host in back-off. That is
+            // the host's answer, and it is kept for the failure age: dropped at
+            // once, it would be asked again on every crossing while the
+            // back-off lasts.
             FetchFailure::Backoff {
                 url: target,
                 reason,
-            } if target == url => discovery::ProbeFailure::Backoff(reason),
-            FetchFailure::Backoff { reason, .. } => CutShort(reason),
+            } => RedirectDeclined {
+                reason: format!(
+                    "{url} redirected to {target}, which this edge does not follow: {reason}"
+                ),
+                target,
+            },
             FetchFailure::Refused {
                 url: target,
                 reason,
-            } if target != url => RedirectDeclined {
+            } if answered.get() => RedirectDeclined {
                 reason: format!(
                     "{url} redirected to {target}, which this edge does not follow: {reason}"
                 ),
@@ -1458,17 +1757,28 @@ impl McpServer {
             FetchFailure::Refused { url, reason } => {
                 NotSent(format!("{url} is refused by policy: {reason}"))
             }
-            FetchFailure::NotSent { detail, .. } => CutShort(detail),
+            // Not sent itself; a request before it in the chain may have been.
+            FetchFailure::NotSent { detail, .. } => CutShort {
+                reason: detail,
+                sent: answered.get(),
+            },
+            FetchFailure::Unrecorded { detail, .. } => CutShort {
+                reason: detail,
+                sent: true,
+            },
             // A request given less than a whole probe's budget that fails
             // with the call's time used up was ended by this call, not by
             // the host: a host that would have answered within
             // `PROBE_TIMEOUT` is not recorded as unreachable.
             FetchFailure::Failed { url, detail } if shortened.get() && pacing.over_ceiling() => {
-                CutShort(format!(
-                    "{url} was given only what was left of this call's time limit and did not \
-                     answer within it ({detail}): {}",
-                    pacing.ceiling_reason()
-                ))
+                CutShort {
+                    reason: format!(
+                        "{url} was given only what was left of this call's time limit and did \
+                         not answer within it ({detail}): {}",
+                        pacing.ceiling_reason()
+                    ),
+                    sent: true,
+                }
             }
             FetchFailure::Failed { url, detail } => Unreachable(format!("{url}: {detail}")),
         })
@@ -1480,52 +1790,52 @@ impl McpServer {
     /// A `robots.txt` that is unreachable because its redirect went to a
     /// host the operator's policy refuses, or to a private address the
     /// policy could admit, is the policy's to change, so that refusal names
-    /// the policy file. A file this edge cut short is nobody's rule.
+    /// the policy file.
+    ///
+    /// `None` where `reason` already says all there is: the host's back-off
+    /// (or the back-off record that could not be kept, with its remedy), a
+    /// file this edge cut short, which it asks for again, and the hub's
+    /// origin, which the runtime closes and no policy setting opens.
     fn refused_by(
         &self,
         declarations: Option<&Declarations>,
         refused_url: &str,
         reason: &str,
-    ) -> String {
-        if let Some(event) = declarations.and_then(|d| {
-            d.backoff.iter().rev().find(|event| {
-                matches!(event.outcome.as_str(), "refused" | "unavailable")
-                    && event
-                        .reason
-                        .as_deref()
-                        .is_some_and(|backoff| reason.contains(backoff))
+    ) -> Option<String> {
+        if reason.contains(HUB_ORIGIN_REFUSAL)
+            || declarations.is_some_and(|d| {
+                d.backoff.iter().any(|event| {
+                    matches!(event.outcome.as_str(), "refused" | "unavailable")
+                        && event
+                            .reason
+                            .as_deref()
+                            .is_some_and(|backoff| reason.contains(backoff))
+                })
             })
-        }) {
-            return event
-                .reason
-                .clone()
-                .unwrap_or_else(|| "host back-off".to_owned());
+        {
+            return None;
         }
-        let policy = format!("operator policy in {}", self.policy.source().display());
-        match declarations.map(|declarations| &declarations.robots) {
-            Some(robots) if robots.refuses() && robots.requested_url == refused_url => {
-                match &robots.declined_redirect {
-                    Some(target)
-                        if robots.outcome == Some(discovery::RobotsRuling::Unreachable)
-                            && (self.policy.admit_host(target).is_refusal()
-                                || (!self.policy.mediates_address(target)
-                                    && !self.policy.holds_private_floor())) =>
-                    {
-                        format!(
-                            "{policy}, which does not admit {target}, where the source's \
-                             robots.txt redirected"
-                        )
-                    }
-                    // Neither the source nor the policy refused: this edge
-                    // did not read the file, and asks again next time.
-                    _ if robots.outcome == Some(discovery::RobotsRuling::CutShort) => format!(
-                        "this edge did not read {}, and the next crossing asks for it again",
-                        robots.url
-                    ),
-                    _ => format!("the source's robots.txt, {}", robots.url),
-                }
+        let policy = self.policy_named();
+        let Some(robots) = declarations
+            .map(|declarations| &declarations.robots)
+            .filter(|robots| robots.refuses() && robots.requested_url == refused_url)
+        else {
+            return Some(policy);
+        };
+        match &robots.declined_redirect {
+            Some(target)
+                if robots.outcome == Some(discovery::RobotsRuling::Unreachable)
+                    && (self.policy.admit_host(target).is_refusal()
+                        || (!self.policy.mediates_address(target)
+                            && !self.policy.holds_private_floor())) =>
+            {
+                Some(format!(
+                    "{policy}, which does not admit {target}, where the source's robots.txt \
+                     redirected"
+                ))
             }
-            _ => policy,
+            _ if robots.outcome == Some(discovery::RobotsRuling::CutShort) => None,
+            _ => Some(format!("the source's robots.txt, {}", robots.url)),
         }
     }
 
@@ -1806,6 +2116,12 @@ impl McpServer {
         ruling
     }
 
+    /// The receiver `relay.json` names, where the relay would accept the file.
+    fn receiver(&self) -> Option<String> {
+        let config = self.relay.as_ref().ok()?.as_ref()?;
+        Some(config.receiver.clone())
+    }
+
     /// The session's half of any reporting ruling: whether the scope clears
     /// telemetry egress, a receiver is configured and delivery happens
     /// without a person, with the receiver named in the record.
@@ -1826,10 +2142,38 @@ impl McpServer {
                  reported"
                     .to_owned(),
             )
-        } else if self.receiver.is_none() {
+        } else if let Err(error) = &self.relay {
+            // The relay refuses the whole file, so nothing leaves for the
+            // receiver it names either. The load error names the file in
+            // full; the caller is told it as the arms below tell it.
+            let relay = self.policy.source().with_file_name("relay.json");
+            Some(format!(
+                "{}, so nothing would be reported",
+                error.replace(&relay.display().to_string(), &self.path_named(&relay))
+            ))
+        } else if self.receiver().is_none() {
             Some(format!(
                 "no telemetry receiver is configured in {}, so nothing would be reported",
-                self.policy.source().with_file_name("relay.json").display()
+                self.path_named(&self.policy.source().with_file_name("relay.json"))
+            ))
+        } else if let Some(suppliers) = self
+            .relay
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .and_then(|config| config.suppliers.as_ref())
+        {
+            // Every caller rules on a fetched page, and a fetch names no
+            // supplier, so a scoped receiver is never sent its events.
+            let scope = if suppliers.is_empty() {
+                "an empty supplier list".to_owned()
+            } else {
+                format!("suppliers ({})", suppliers.join(", "))
+            };
+            Some(format!(
+                "the receiver in {} is scoped to {scope} and a fetched page is served by none of \
+                 them, so nothing would be reported",
+                self.path_named(&self.policy.source().with_file_name("relay.json")),
             ))
         } else {
             crate::delivery::SessionDelivery {
@@ -1838,11 +2182,17 @@ impl McpServer {
                 interval_relay: self.interval_relay,
             }
             .withheld_reason(self.home())
+            // The reason names the manual marker, which a hosted tenant is
+            // told relative to the operator home.
+            .map(|reason| {
+                let marker = crate::delivery::manual_marker(self.home());
+                reason.replace(&marker.display().to_string(), &self.path_named(&marker))
+            })
         };
         crate::discovery::ReportingRuling {
             profile,
             conformance_level,
-            receiver: self.receiver.clone(),
+            receiver: self.receiver(),
             telemetry_egress_cleared: cleared,
             met: reason.is_none(),
             reason,
@@ -1929,9 +2279,11 @@ impl McpServer {
 
         let supplier = supplier_with_released(provider, self.released.as_ref()).map_err(
             |error| match error {
-                SupplyError::CredentialMissing { variable } => {
-                    unavailable_credential(provider, &variable, self.credentials.path.as_path())
-                }
+                SupplyError::CredentialMissing { variable } => unavailable_credential(
+                    provider,
+                    &variable,
+                    &self.path_named(&self.credentials.path),
+                ),
                 _ if redact_supplier_errors => {
                     "unavailable: provider configuration could not be loaded".to_owned()
                 }
@@ -1971,7 +2323,7 @@ impl McpServer {
                     "unavailable: the policy source {} has no parent directory, so the \
                      allowance ledger cannot be located and the declared allowance cannot be \
                      enforced. No search was attempted.",
-                    self.policy.source().display()
+                    self.path_named(self.policy.source())
                 ));
             };
             let context = AllowanceContext::new(
@@ -1991,9 +2343,9 @@ impl McpServer {
                 && ruling.is_refusal()
             {
                 return Err(format!(
-                    "refused before the crossing: {} (operator policy in {})",
+                    "refused before the crossing: {} ({})",
                     ruling.reason().unwrap_or_default(),
-                    self.policy.source().display()
+                    self.policy_named()
                 ));
             }
             consulted = Some((context, decision));
@@ -2115,7 +2467,7 @@ impl McpServer {
             "comparison_id": self.session.session_id(), "query": request.query,
             "selected_providers": request.providers, "requested_limit": crate::compare::RESULT_LIMIT,
             "effective_limit": crate::compare::RESULT_LIMIT, "results": results,
-            "recorded_in": self.session.path().display().to_string(), "sharing": "local_only",
+            "recorded_in": self.record_named(), "sharing": "local_only",
             "cwd": self.cwd, "policy_identity": self.policy.identity(), "policy_mode": self.policy.mode(),
             "principal": self.policy.principal(), "authentication_basis": self.policy.authentication_basis().as_str()});
         self.session.record_comparison("comparison_finished", result.clone())
@@ -2135,13 +2487,17 @@ impl McpServer {
         reservation: &Reservation,
         reason: &str,
     ) -> Option<String> {
-        let error = context
-            .release_after_failure(record, reservation, reason, Utc::now())
-            .err()?;
-        let detail = format!(
-            "the allowance reservation {} could not be released ({error}); it stays held until \
-             the expiry sweep releases it",
-            reservation.id
+        let released = context.release_after_failure(record, reservation, reason, Utc::now());
+        let ledger = context.ledger.file();
+        self.name_the_ledger_in(&ledger, record);
+        let error = released.err()?;
+        let detail = self.ledger_named(
+            &ledger,
+            &format!(
+                "the allowance reservation {} could not be released ({error}); it stays held \
+                 until the expiry sweep releases it",
+                reservation.id
+            ),
         );
         if let Err(error) =
             self.session
@@ -2164,18 +2520,23 @@ impl McpServer {
         reservation: Option<&Reservation>,
         charge: &AcquisitionCharge,
     ) {
-        if let Err(failure) = context.settle_success(
+        let settled = context.settle_success(
             record,
             reservation,
             charge,
             Utc::now(),
             &format!("session {}", self.session.session_id()),
-        ) && let Err(error) = self.session.record_allowance_gap(
-            &self.host,
-            failure.reservation_id,
-            failure.observed.as_ref(),
-            &failure.to_string(),
-        ) {
+        );
+        let ledger = context.ledger.file();
+        self.name_the_ledger_in(&ledger, record);
+        if let Err(failure) = settled
+            && let Err(error) = self.session.record_allowance_gap(
+                &self.host,
+                failure.reservation_id,
+                failure.observed.as_ref(),
+                &self.ledger_named(&ledger, &failure.to_string()),
+            )
+        {
             self.evidence_error = Some(error.to_string());
         }
     }
@@ -2305,7 +2666,7 @@ impl McpServer {
             "adapter_version": commonmeasure_supply::ADAPTER_VERSION,
             "response_sha256": commonmeasure_types::canonical::sha256_digest(&acquisition.raw_response),
             "latency_ms": acquisition.latency_ms,
-            "recorded_in": self.session.path().display().to_string(),
+            "recorded_in": self.record_named(),
         })
     }
 
@@ -2426,14 +2787,24 @@ impl McpServer {
                 })
             })
             .collect();
+        // The operator's files, named relative to its home on a hosted edge.
+        let mut policy = self.policy.describe();
+        if let Some(source) = policy["source"].as_str() {
+            policy["source"] = json!(source.replace(
+                &self.policy.source().display().to_string(),
+                &self.path_named(self.policy.source()),
+            ));
+        }
+        let mut credentials = credentials_payload(&self.credentials, released.as_ref());
+        credentials["path"] = json!(self.path_named(&self.credentials.path));
         json!({
             "session_id": self.session.session_id(),
             "cwd": self.cwd,
             "host": self.host,
             "client": self.client,
-            "evidence": self.session.path().display().to_string(),
-            "policy": self.policy.describe(),
-            "credentials": credentials_payload(&self.credentials, released.as_ref()),
+            "evidence": self.record_named(),
+            "policy": policy,
+            "credentials": credentials,
             "providers": providers,
             "processors": commonmeasure_runtime::processor::installed(),
         })
@@ -2487,6 +2858,7 @@ impl McpServer {
         let crossing = Crossing {
             session_id: self.session.session_id().to_owned(),
             timestamp: Utc::now(),
+            requested_at: facts.requested_at,
             mode: CrossingMode::Mediated,
             host: self.host.clone(),
             client: self.client.clone(),
@@ -2504,6 +2876,7 @@ impl McpServer {
             content_hash: facts.content_hash,
             retrieved_hash: facts.retrieved_hash,
             estimated_tokens: facts.estimated_tokens,
+            delivered: facts.delivered,
             grounded: facts.grounded,
             licence: facts.licence,
             refusal: facts.refusal,
@@ -2545,6 +2918,7 @@ struct FetchFacts {
     content_hash: Option<String>,
     retrieved_hash: Option<String>,
     estimated_tokens: Option<u64>,
+    delivered: Option<Delivered>,
     grounded: bool,
     licence: LicenceState,
     refusal: Option<String>,
@@ -2557,6 +2931,7 @@ struct FetchFacts {
     content_telemetry_id: Option<uuid::Uuid>,
     allowance: Option<Value>,
     identity: Option<PresentedIdentity>,
+    requested_at: Option<DateTime<Utc>>,
     challenge: Option<String>,
     supplier: Option<String>,
 }
@@ -2568,6 +2943,7 @@ impl FetchFacts {
             content_hash: None,
             retrieved_hash: None,
             estimated_tokens: None,
+            delivered: None,
             grounded: false,
             licence: LicenceState::Unknown,
             refusal: None,
@@ -2580,6 +2956,7 @@ impl FetchFacts {
             content_telemetry_id: None,
             allowance: None,
             identity: None,
+            requested_at: None,
             challenge: None,
             supplier: None,
         }
@@ -2617,15 +2994,102 @@ impl FetchFacts {
     }
 }
 
-/// The receiver named in `<home>/relay.json`, read as the relay reads it:
-/// the `receiver` field, or none when the file is absent or does not name
-/// one. The relay refuses a malformed file before projecting; here a
-/// malformed file is no receiver, which is the conservative reading for a
-/// demand that needs one.
-fn configured_receiver(home: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(home.join("relay.json")).ok()?;
-    let config: Value = serde_json::from_slice(&bytes).ok()?;
-    config["receiver"].as_str().map(str::to_owned)
+/// The part of the extracted text one `context_fetch` asks for: `offset` and
+/// `max_chars`, in Unicode scalar values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FetchWindow {
+    offset: u64,
+    max_chars: u64,
+}
+
+impl FetchWindow {
+    /// Read `offset` (default 0) and `max_chars` (default
+    /// [`FETCH_DEFAULT_CHARS`]). A `max_chars` above [`FETCH_MAX_CHARS`] is
+    /// clamped to it; a value that is not a non-negative integer, or a
+    /// `max_chars` of 0, is refused before anything is requested.
+    fn from_arguments(arguments: &Value) -> Result<Self, String> {
+        let read = |name: &str| match arguments.get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => value
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| format!("{name} must be a non-negative integer, got {value}")),
+        };
+        let offset = read("offset")?.unwrap_or(0);
+        let max_chars = match read("max_chars")? {
+            None => FETCH_DEFAULT_CHARS,
+            Some(0) => {
+                return Err(
+                    "max_chars must be at least 1: a part of no characters would still \
+                            be a request to the site"
+                        .to_owned(),
+                );
+            }
+            Some(asked) => asked.min(FETCH_MAX_CHARS),
+        };
+        Ok(Self { offset, max_chars })
+    }
+
+    /// The characters of `text` this window covers. An offset at or past the
+    /// end gives an empty part.
+    fn slice<'a>(&self, text: &'a str) -> Part<'a> {
+        let total_chars = text.chars().count() as u64;
+        let start = byte_index(text, self.offset);
+        let end = start + byte_index(&text[start..], self.max_chars);
+        let chars = self.max_chars.min(total_chars.saturating_sub(self.offset));
+        Part {
+            text: &text[start..end],
+            offset: self.offset,
+            chars,
+            total_chars,
+        }
+    }
+}
+
+/// The byte index of the `chars`-th character of `text`, or its length where
+/// it has fewer. Always a character boundary.
+fn byte_index(text: &str, chars: u64) -> usize {
+    usize::try_from(chars)
+        .ok()
+        .and_then(|chars| text.char_indices().nth(chars))
+        .map_or(text.len(), |(index, _)| index)
+}
+
+/// One slice of a fetched page's extracted text.
+struct Part<'a> {
+    text: &'a str,
+    offset: u64,
+    chars: u64,
+    total_chars: u64,
+}
+
+impl Part<'_> {
+    /// Why the part is empty where its offset is at or past the end of a
+    /// text that has one. An empty text at offset 0 is delivered whole.
+    fn past_end(&self) -> Option<String> {
+        (self.offset > 0 && self.offset >= self.total_chars).then(|| {
+            format!(
+                "offset {} is past the end of the text, which has {} characters.",
+                self.offset, self.total_chars
+            )
+        })
+    }
+
+    /// True where more text follows this part.
+    fn truncated(&self) -> bool {
+        self.offset.saturating_add(self.chars) < self.total_chars
+    }
+
+    /// The record of this part: its range and the hash of exactly these
+    /// bytes.
+    fn delivered(&self) -> Delivered {
+        Delivered {
+            offset: self.offset,
+            chars: self.chars,
+            total_chars: self.total_chars,
+            hash: commonmeasure_types::canonical::sha256_digest(self.text.as_bytes()),
+        }
+    }
 }
 
 /// Whether the origin refused the fetcher rather than the resource, and what
@@ -2856,12 +3320,11 @@ fn credentials_payload(
 /// file to create and the fallback the operator already has, because "not
 /// configured" alone leaves a new user grepping for where configuration
 /// lives.
-fn unavailable_credential(provider: &str, variable: &str, path: &std::path::Path) -> String {
+fn unavailable_credential(provider: &str, variable: &str, file: &str) -> String {
     format!(
-        "unavailable: {provider} needs {variable}, which is not configured. Set it in {} \
+        "unavailable: {provider} needs {variable}, which is not configured. Set it in {file} \
          (KEY=VALUE lines, chmod 600), or export it in the environment that launches the \
-         harness — the environment wins where both name it. No search was attempted.",
-        path.display()
+         harness — the environment wins where both name it. No search was attempted."
     )
 }
 
@@ -3005,6 +3468,14 @@ enum FetchFailure {
     /// This edge did not send the hop for a reason of its own: the request
     /// could not be signed, or the call's time limit left nothing for it.
     NotSent { url: String, detail: String },
+    /// The hop was sent and answered with `status`, and this edge could not
+    /// record the answer in its back-off store, so the answer is not used.
+    /// `detail` says the host answered.
+    Unrecorded {
+        url: String,
+        status: u16,
+        detail: String,
+    },
 }
 
 /// Whether the addresses a hop resolved to are ones this policy may reach.
@@ -3051,12 +3522,41 @@ type UrlCheck<'a> = &'a dyn Fn(&str) -> Result<(), String>;
 /// Whether a hop's URL may be reached at the addresses it resolved to.
 type AddressCheck<'a> = &'a dyn Fn(&str, &[SocketAddr]) -> Result<(), String>;
 
+/// [`follow_resolving`] with names looked up in DNS.
+#[allow(clippy::too_many_arguments)]
+fn follow(
+    url: &str,
+    request: Request,
+    budget: &dyn Fn() -> Result<Duration, String>,
+    identity: Option<&SigningIdentity>,
+    allowed: UrlCheck<'_>,
+    reaches: AddressCheck<'_>,
+    on_hop: UrlCheck<'_>,
+    pacing: &crate::crawl_delay::Pacing,
+    answered: &std::cell::Cell<bool>,
+    requested_at: &std::cell::Cell<Option<DateTime<Utc>>>,
+) -> Result<(String, Response), FetchFailure> {
+    follow_resolving(
+        url,
+        request,
+        budget,
+        identity,
+        allowed,
+        reaches,
+        &system_resolve,
+        on_hop,
+        pacing,
+        answered,
+        requested_at,
+    )
+}
+
 /// Follow redirects to the resource that actually answered, so the recorded URL
 /// is the one whose bytes were hashed rather than the one first asked for.
 ///
 /// Two checks per hop, at the two moments they can be made: `allowed` judges
 /// the URL before the name is looked up at all — a denied host must not even be
-/// asked about — and `reaches` judges the addresses that lookup returned,
+/// asked about — and `reaches` judges the addresses that `resolve` returned,
 /// before a socket is opened. The connection is then made to exactly those
 /// addresses, leaving no second lookup for a different answer to land in.
 ///
@@ -3071,16 +3571,28 @@ type AddressCheck<'a> = &'a dyn Fn(&str, &[SocketAddr]) -> Result<(), String>;
 /// carries, and a redirect changes both: one signature reused across hops
 /// would attest to the host that redirected and would be refused by the host
 /// that answered. An edge with no key to sign with sends every hop unsigned.
+///
+/// `answered` is set once any request of the chain has been sent and
+/// answered. A failure's URL cannot say that: a redirect may lead back to
+/// the URL first asked for.
+///
+/// `requested_at` is set to the instant the first request of the chain is
+/// handed to the transport, after the back-off check and any wait, and is
+/// left alone by later hops. It stays `None` where the chain stopped before
+/// sending anything.
 #[allow(clippy::too_many_arguments)]
-fn follow(
+fn follow_resolving(
     url: &str,
     request: Request,
     budget: &dyn Fn() -> Result<Duration, String>,
     identity: Option<&SigningIdentity>,
     allowed: UrlCheck<'_>,
     reaches: AddressCheck<'_>,
+    resolve: &dyn Fn(&str) -> Result<Vec<SocketAddr>, String>,
     on_hop: UrlCheck<'_>,
     pacing: &crate::crawl_delay::Pacing,
+    answered: &std::cell::Cell<bool>,
+    requested_at: &std::cell::Cell<Option<DateTime<Utc>>>,
 ) -> Result<(String, Response), FetchFailure> {
     let mut current = url.to_owned();
     let first_host = grounding::host_of(url);
@@ -3093,11 +3605,11 @@ fn follow(
         if grounding::host_of(&current) != first_host {
             hop.headers.remove(CONTENT_TELEMETRY_ID);
         }
-        let addresses = match commonmeasure_http::resolve(&current) {
+        let addresses = match resolve(&current) {
             Ok(addresses) => addresses,
-            Err(error) => {
+            Err(detail) => {
                 return Err(FetchFailure::Failed {
-                    detail: format!("{error:#}"),
+                    detail,
                     url: current,
                 });
             }
@@ -3117,12 +3629,15 @@ fn follow(
                 });
             }
         };
-        pacing
-            .before_send(&current, timeout)
-            .map_err(|reason| FetchFailure::Backoff {
-                url: current.clone(),
-                reason,
-            })?;
+        // Held until the answer is recorded: every return before then,
+        // with nothing sent or nothing answered, releases the reservation.
+        let _reserved =
+            pacing
+                .before_send(&current, timeout)
+                .map_err(|reason| FetchFailure::Backoff {
+                    url: current.clone(),
+                    reason,
+                })?;
         // Waiting may have reduced the whole-call time left for transport.
         let timeout = budget().map_err(|detail| FetchFailure::NotSent {
             url: current.clone(),
@@ -3145,6 +3660,9 @@ fn follow(
                 url: current,
             });
         }
+        if requested_at.get().is_none() {
+            requested_at.set(Some(Utc::now()));
+        }
         let response = match commonmeasure_http::send_to(&current, &addresses, hop, timeout) {
             Ok(response) => response,
             Err(error) => {
@@ -3154,11 +3672,17 @@ fn follow(
                 });
             }
         };
+        answered.set(true);
         pacing
             .answered(&current, &response)
-            .map_err(|detail| FetchFailure::NotSent {
+            .map_err(|reason| FetchFailure::Unrecorded {
+                detail: format!(
+                    "{current} answered HTTP {}, and this edge could not record the answer, so \
+                     it is not used: {reason}",
+                    response.status
+                ),
                 url: current.clone(),
-                detail,
+                status: response.status,
             })?;
         if !matches!(response.status, 301 | 302 | 307 | 308) {
             return Ok((current, response));
@@ -3239,22 +3763,27 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "context_fetch",
-            "description": "Fetch a URL through Common Measure. An HTML page is delivered as its readable text, not its markup; any other body is delivered as received. The crossing is checked against operator source policy before it happens and recorded either way, with the hash of exactly what entered context and the hash of the bytes the origin served. Prefer this over WebFetch when the operator wants an evidence trail.",
+            "description": "Fetch a URL through Common Measure. An HTML page is delivered as its readable text, not its markup; any other body is delivered as received. One result carries at most max_chars characters of that text (default 60000, at most 200000) from offset (default 0); content_range and truncated say which part arrived, and a truncated result names the url and offset of the next part. Each part is a new request to the site, checked and recorded as the first was. The crossing is checked against operator source policy before it happens and recorded either way, with the hash of the whole text, the hash of the part delivered and the hash of the bytes the origin served. Prefer this over WebFetch when the operator wants an evidence trail.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"url": {"type": "string"}},
-                "required": ["url"]
+                "properties": {
+                    "url": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "max_chars": {"type": "integer", "minimum": 1}
+                },
+                "required": ["url"],
+                "additionalProperties": false
             },
             "annotations": read_only.clone()
         },
         {
             "name": "context_search",
-            "description": "Search a configured content provider (exa, firecrawl, keenable, linkup, nimble, ozone, parallel, search1api, serpdive, tavily, tinyfish, tollbit, you), or query the operator's own internal corpus (provider \"internal\", a bounded directory named by COMMONMEASURE_INTERNAL_CORPUS — deterministic retrieval with a declared licence, not a web search). Each result is checked against operator source policy and recorded. Reports unavailable, naming the missing credential or variable, when the provider is not configured.",
+            "description": "Search a configured content provider (dataville, exa, firecrawl, keenable, linkup, nimble, ozone, parallel, search1api, serpdive, tavily, tinyfish, tollbit, you), or query the operator's own internal corpus (provider \"internal\", a bounded directory named by COMMONMEASURE_INTERNAL_CORPUS — deterministic retrieval with a declared licence, not a web search). Each result is checked against operator source policy and recorded. Reports unavailable, naming the missing credential or variable, when the provider is not configured.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "provider": {"type": "string", "enum": ["exa", "firecrawl", "internal", "keenable", "linkup", "nimble", "ozone", "parallel", "search1api", "serpdive", "tavily", "tinyfish", "tollbit", "you"]},
+                    "provider": {"type": "string", "enum": ["dataville", "exa", "firecrawl", "internal", "keenable", "linkup", "nimble", "ozone", "parallel", "search1api", "serpdive", "tavily", "tinyfish", "tollbit", "you"]},
                     "limit": {"type": "integer"}
                 },
                 "required": ["query"]
@@ -3277,6 +3806,36 @@ fn tool_definitions() -> Value {
         }
     ])
 }
+
+/// The fields of a tool payload that carry what a supplier sent, as JSON
+/// pointers into the payload with `*` for any array element: a fetched
+/// page's text, the URL it was read at and the `next` built from that URL
+/// (`tool_fetch`); the URLs its `robots.txt` attribution names, which are
+/// the URL asked for, the file's URL and the URL that answered for it
+/// (`robots_summary`); each search result's URL, title and text, and a
+/// refused result's URL (`governed_search`). A hosted edge serves these as
+/// received and names the operator's home relative to itself in every
+/// other string (`docs/contracts/session-evidence.md`), so the text keeps
+/// its `content_hash` and a URL still names what it named. A result
+/// builder that adds a field carrying supplier bytes adds it here.
+///
+/// The exemption is by exact pointer, covers only a string there, and
+/// applies only to a result whose `isError` is `false`. An operator-authored
+/// field must never sit at one of these pointers: the hosted edge would
+/// serve it unchecked, and a path under the home in it would reach the
+/// tenant.
+pub const SUPPLIER_FIELDS: &[&str] = &[
+    "/content",
+    "/url",
+    "/next",
+    "/declarations/robots/requested_url",
+    "/declarations/robots/robots_url",
+    "/declarations/robots/final_url",
+    "/results/*/url",
+    "/results/*/title",
+    "/results/*/text",
+    "/refusals/*/url",
+];
 
 fn tool_result(id: Value, value: &Value, is_error: bool) -> Value {
     ok_response(
@@ -3426,10 +3985,83 @@ mod tests {
         .expect("chmod");
     }
 
-    /// A refused redirect hop is enforcement, and enforcement must be on the
-    /// record. Probed live against the real binary: the refusal was correctly
-    /// returned to the agent and the session log was never created, while the
-    /// identical refusal on a directly named URL was recorded.
+    /// A call to a tool this server does not serve is answered with the
+    /// tools it does, quoting nothing the caller sent: a hosted edge would
+    /// rewrite a quoted home, and that would confirm a guess (review G2).
+    #[test]
+    fn an_unknown_tool_is_answered_without_its_name() {
+        let (_home, mut server) = server(r#"{"policy_mode":"observe"}"#);
+        let answer = server
+            .handle_message(
+                &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "/srv/cm/x", "arguments": {}}}),
+                false,
+            )
+            .expect("answered");
+        assert_eq!(answer["result"]["isError"], true);
+        let payload: Value = serde_json::from_str(
+            answer["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text"),
+        )
+        .expect("JSON");
+        assert_eq!(
+            payload["error"],
+            format!("unknown tool; the tools are {}", TOOLS.join(", ")).as_str()
+        );
+    }
+
+    /// An own edge refused while another request to the host holds its
+    /// turn states the reason once, naming the reservation. The first
+    /// crossing reads `robots.txt`, so the second reaches the page's own
+    /// send. The call's time limit is shortened to 1 s on this thread
+    /// (`crawl_delay::TEST_CEILING`), so the waiter polls the reservation
+    /// until the call has no time left and is then refused.
+    #[test]
+    fn a_refusal_during_another_senders_reservation_states_its_reason_once() {
+        let mut site = bind_local()
+            .spawn(|request| {
+                if request.target == "/robots.txt" {
+                    Response::text(404, "none")
+                } else {
+                    Response::text(200, "the page")
+                }
+            })
+            .unwrap();
+        let (home, mut server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+        let page = format!("{}/page", site.url());
+        server.tool_fetch(&json!({"url": page})).unwrap();
+
+        let store = crate::crawl_delay::CrawlDelayStore::open(home.path());
+        store
+            .answered("127.0.0.1", 503, Some("0"), Utc::now())
+            .unwrap();
+        let other = crate::crawl_delay::Pacing::new(store.clone(), crate::crawl_delay::Pace::Own);
+        let _held = other.before_send(&page, Duration::from_secs(60)).unwrap();
+        let reserved_until = store.backoff("127.0.0.1").unwrap().unwrap().until;
+
+        crate::crawl_delay::TEST_CEILING.set(Some(Duration::from_secs(1)));
+        let error = server.tool_fetch(&json!({"url": page})).unwrap_err();
+        crate::crawl_delay::TEST_CEILING.set(None);
+        let reason = format!(
+            "another request to 127.0.0.1 is under way and holds the host's turn until {}; this \
+             fetch may spend no more time waiting",
+            reserved_until.to_rfc3339()
+        );
+        assert_eq!(error, format!("refused before the crossing: {reason}"));
+        assert_eq!(error.matches("under way").count(), 1, "{error}");
+        let records = crossings(home.path());
+        assert_eq!(records[1]["event"], "crossing_refused");
+        let events = records[1]["payload"]["declarations"]["backoff"]
+            .as_array()
+            .unwrap();
+        let event = events.last().unwrap();
+        assert_eq!(event["outcome"], "refused");
+        assert_eq!(event["reason"], json!(reason));
+        assert_eq!(event["backoff"]["reserved_until"], json!(reserved_until));
+        site.stop();
+    }
+
     #[test]
     fn a_hosted_backoff_refusal_withholds_other_tenants_response_details() {
         let site = bind_local()
@@ -3455,6 +4087,251 @@ mod tests {
         assert!(declarations["robots"].get("fetched_at").is_none());
     }
 
+    /// An own edge names its session record and its policy by full path; a
+    /// hosted one names the record relative to the home and the policy by
+    /// no path, because its tenant can act on neither.
+    #[test]
+    fn only_an_own_edge_names_the_operators_paths() {
+        for pace in [
+            crate::crawl_delay::Pace::Own,
+            crate::crawl_delay::Pace::Hosted,
+        ] {
+            let mut site = bind_local()
+                .spawn(|request| {
+                    if request.target == "/robots.txt" {
+                        Response::text(404, "none")
+                    } else {
+                        Response::text(200, "the page")
+                    }
+                })
+                .unwrap();
+            let (home, mut server) = server(
+                r#"{"policy_mode":"strict","allow_private_hosts":true,
+                    "constraints":[{"kind":"allowed_source_host","host":"127.0.0.1"}]}"#,
+            );
+            server.pace = pace;
+            let own = pace.names_the_edge();
+            let fetched = server
+                .tool_fetch(&json!({"url": format!("{}/page", site.url())}))
+                .unwrap();
+            let record = home.path().join("sessions/test-session.ndjson");
+            let recorded_in = if own {
+                record.display().to_string()
+            } else {
+                "sessions/test-session.ndjson".to_owned()
+            };
+            assert_eq!(fetched["recorded_in"], recorded_in, "{pace:?}");
+
+            let refused = server
+                .tool_fetch(&json!({"url": site.url().replace("127.0.0.1", "localhost")}))
+                .unwrap_err();
+            let policy = if own {
+                format!(
+                    "(operator policy in {})",
+                    home.path().join("policy.json").display()
+                )
+            } else {
+                "(the operator's policy)".to_owned()
+            };
+            assert!(refused.ends_with(&policy), "{pace:?}: {refused}");
+            let home_path = home.path().display().to_string();
+            assert_eq!(fetched.to_string().contains(&home_path), own, "{fetched}");
+            assert_eq!(refused.contains(&home_path), own, "{refused}");
+            site.stop();
+        }
+    }
+
+    /// A ledger the gate cannot read is named in full on an own edge and
+    /// relative to the home on a hosted one, in a fetch observe carries with
+    /// the breach and in the refusal strict gives (review R1.2). Unix only:
+    /// the allowance binds to the effective uid.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_allowance_ledger_is_named_by_pace() {
+        const PRICED: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
+  <content url="/"><license>
+    <permits type="usage">ai-input</permits>
+    <payment type="use"><amount currency="USD">0.015</amount></payment>
+  </license></content></rsl>"#;
+        let uid = crate::policy::trusted_os_user().expect("an effective uid");
+        for pace in [
+            crate::crawl_delay::Pace::Own,
+            crate::crawl_delay::Pace::Hosted,
+        ] {
+            for mode in ["observe", "strict"] {
+                let mut site = bind_local()
+                    .spawn(|request| match request.target.as_str() {
+                        "/robots.txt" => {
+                            Response::text(200, "License: /license.xml\nUser-agent: *\nAllow: /\n")
+                        }
+                        "/license.xml" => Response::new(200, PRICED.as_bytes().to_vec()),
+                        "/.well-known/content-telemetry.json" => Response::text(404, "none"),
+                        _ => Response::text(200, "the priced article"),
+                    })
+                    .unwrap();
+                let (home, mut server) = server(
+                    &json!({
+                        "policy_mode": mode,
+                        "allow_private_hosts": true,
+                        "principals": [{
+                            "principal": "capped", "os_user": uid,
+                            "allowances": [{
+                                "period": "day",
+                                "amount": {"currency": "USD", "micros": 1_000_000},
+                                "timezone": "UTC",
+                            }],
+                        }],
+                    })
+                    .to_string(),
+                );
+                let ledger = home.path().join("allowance/ledger.ndjson");
+                std::fs::create_dir_all(ledger.parent().expect("parent")).expect("directory");
+                std::fs::write(&ledger, "invalid ledger\n").expect("ledger");
+                server.pace = pace;
+                let own = pace.names_the_edge();
+                let named = if own {
+                    ledger.display().to_string()
+                } else {
+                    "allowance/ledger.ndjson".to_owned()
+                };
+                let said = format!("ledger could not be consulted: {named} line 1");
+                let fetched = server.tool_fetch(&json!({"url": format!("{}/article", site.url())}));
+                let served = match mode {
+                    "observe" => {
+                        let result = fetched.expect("observe fetches with the breach");
+                        for reason in [&result["breach"], &result["allowance"]["reason"]] {
+                            assert!(
+                                reason.as_str().is_some_and(|reason| reason.contains(&said)),
+                                "{pace:?}: {result}"
+                            );
+                        }
+                        result.to_string()
+                    }
+                    _ => {
+                        let refused = fetched.expect_err("strict refuses");
+                        assert!(refused.contains(&said), "{pace:?}: {refused}");
+                        refused
+                    }
+                };
+                assert_eq!(
+                    served.contains(&home.path().display().to_string()),
+                    own,
+                    "{pace:?} {mode}: {served}"
+                );
+                site.stop();
+            }
+        }
+    }
+
+    /// A `relay.json` the relay refuses is named as the ruling's other arms
+    /// name it: in full on an own edge, relative to the home on a hosted one
+    /// (review R1.3).
+    #[test]
+    fn a_relay_file_that_does_not_load_is_named_by_pace() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let work = home.path().join("reporting-cleared");
+        std::fs::create_dir_all(&work).expect("workspace");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"strict","scopes":[{"match":"reporting-cleared",
+                "engagement":"research","allow_telemetry_egress":true}]}"#,
+        )
+        .expect("policy");
+        std::fs::write(home.path().join("relay.json"), "{").expect("relay.json");
+        for pace in [
+            crate::crawl_delay::Pace::Own,
+            crate::crawl_delay::Pace::Hosted,
+        ] {
+            let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
+            let log = SessionLog::open(home.path(), "test-session").expect("session log");
+            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+                path: home
+                    .path()
+                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+                loaded: None,
+            };
+            let mut server =
+                McpServer::new(log, loaded, "claude-connector", None, credentials).interval_relay();
+            server.pace = pace;
+            let reason = server
+                .reporting_ruling_for(None, None)
+                .reason
+                .expect("unmet");
+            let named = if pace.names_the_edge() {
+                home.path().join("relay.json").display().to_string()
+            } else {
+                "relay.json".to_owned()
+            };
+            assert!(
+                reason.starts_with(&format!("{named} is not a valid relay config")),
+                "{pace:?}: {reason}"
+            );
+            assert_eq!(
+                reason.contains(&home.path().display().to_string()),
+                pace.names_the_edge(),
+                "{pace:?}: {reason}"
+            );
+        }
+    }
+
+    /// A back-off refusal the reason does not quote leaves the refusal
+    /// naming the policy. The host states a delay, so the second crossing
+    /// asks for the manifest on its first free turn; back-off refuses that
+    /// probe, and the crossing is then refused on the cached
+    /// `Content-Signal`, a ruling the operator's policy can change (EGR-118).
+    #[test]
+    fn an_unquoted_backoff_refusal_leaves_the_policy_named() {
+        let mut site = bind_local()
+            .spawn(|request| {
+                if request.target == "/robots.txt" {
+                    Response::text(
+                        200,
+                        "User-agent: *\nAllow: /\nCrawl-delay: 1\nContent-Signal: ai-input=no\n",
+                    )
+                } else {
+                    Response::text(404, "none")
+                }
+            })
+            .unwrap();
+        let (home, mut server) = server(r#"{"policy_mode":"strict","allow_private_hosts":true}"#);
+        let page = format!("{}/page", site.url());
+        server.tool_fetch(&json!({"url": page})).unwrap_err();
+
+        std::fs::remove_dir_all(home.path().join("manifests")).unwrap();
+        let store = crate::crawl_delay::CrawlDelayStore::open(home.path());
+        store
+            .answered("127.0.0.1", 503, Some("600"), Utc::now())
+            .unwrap();
+        std::thread::sleep(
+            store.pending_wait("127.0.0.1", Duration::from_secs(1), Utc::now())
+                + Duration::from_millis(50),
+        );
+
+        let error = server.tool_fetch(&json!({"url": page})).unwrap_err();
+        assert!(error.contains("Content-Signal: ai-input=no"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "(operator policy in {}; ",
+                home.path().join("policy.json").display()
+            )),
+            "{error}"
+        );
+        let records = crossings(home.path());
+        assert_eq!(records.len(), 2, "{records:?}");
+        assert_eq!(records[1]["event"], "crossing_refused");
+        let events = records[1]["payload"]["declarations"]["backoff"]
+            .as_array()
+            .unwrap();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0]["outcome"], "refused");
+        assert_eq!(events[0]["target"], "127.0.0.1");
+        site.stop();
+    }
+
+    /// A refused redirect hop is enforcement, and enforcement must be on the
+    /// record. Probed live against the real binary: the refusal was correctly
+    /// returned to the agent and the session log was never created, while the
+    /// identical refusal on a directly named URL was recorded.
     #[test]
     fn a_refused_redirect_hop_records_the_refusal_it_enforced() {
         // `robots.txt` answers 404, no rules: a `robots.txt` redirected to the
@@ -3489,7 +4366,262 @@ mod tests {
             recorded[0]["payload"]["url"], "https://denied.example/handbook",
             "the record names the hop that was refused, not the one asked for"
         );
+        assert!(
+            recorded[0]["payload"]["requested_at"].is_string(),
+            "the first hop's request was handed over before the later hop was refused"
+        );
         origin.stop();
+    }
+
+    /// Each request an origin received, with the instant it arrived.
+    type Arrivals = std::sync::Arc<std::sync::Mutex<Vec<(String, DateTime<Utc>)>>>;
+
+    /// An origin that notes when each request arrives and answers it with
+    /// `answer`.
+    fn noting_origin(
+        answer: impl Fn(&str) -> Response + Send + Sync + 'static,
+    ) -> (commonmeasure_http::ServerHandle, Arrivals) {
+        let arrivals: Arrivals = std::sync::Arc::default();
+        let log = std::sync::Arc::clone(&arrivals);
+        let origin = bind_local()
+            .spawn(move |request| {
+                log.lock()
+                    .expect("lock")
+                    .push((request.target.clone(), Utc::now()));
+                answer(&request.target)
+            })
+            .expect("spawn");
+        (origin, arrivals)
+    }
+
+    fn arrived(arrivals: &Arrivals, target: &str) -> Vec<DateTime<Utc>> {
+        arrivals
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(at, _)| at == target)
+            .map(|(_, instant)| *instant)
+            .collect()
+    }
+
+    fn instant_of(value: &Value) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value.as_str().expect("an instant"))
+            .expect("RFC 3339")
+            .with_timezone(&Utc)
+    }
+
+    // Catches: a crossing with no send time, or one stamped when the call
+    // began or when the record was written. Bounded by ordering alone: the
+    // send is after the call began, no later than the origin saw it, and
+    // before the record, which follows a slow answer.
+    #[test]
+    fn an_unpaced_crossing_records_when_its_request_was_sent() {
+        let (mut origin, arrivals) = noting_origin(|target| match target {
+            "/page" => {
+                std::thread::sleep(Duration::from_millis(200));
+                Response::text(200, "the page")
+            }
+            _ => Response::text(404, "none"),
+        });
+        let (home, mut server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+        let began = Utc::now();
+        server
+            .tool_fetch(&json!({"url": format!("{}/page", origin.url())}))
+            .expect("the page is fetched");
+        origin.stop();
+
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1);
+        let payload = &recorded[0]["payload"];
+        assert_eq!(payload["declarations"]["robots"].get("delay"), None);
+        let requested = instant_of(&payload["requested_at"]);
+        let timestamp = instant_of(&payload["timestamp"]);
+        let [reached] = arrived(&arrivals, "/page")[..] else {
+            panic!("one page request");
+        };
+        assert!(began <= requested, "requested {requested}, began {began}");
+        assert!(
+            requested <= reached,
+            "requested {requested}, reached {reached}"
+        );
+        assert!(
+            requested < timestamp,
+            "requested {requested}, recorded {timestamp}"
+        );
+    }
+
+    // Catches: a send time taken before the `Crawl-delay` wait. The host's
+    // turn is taken in the store the server paces from, so the page cannot
+    // go before that turn plus the delay whatever the scheduler does.
+    #[test]
+    fn a_paced_crossing_records_the_send_after_its_wait() {
+        let (mut origin, arrivals) = noting_origin(|target| match target {
+            "/robots.txt" => Response::text(200, "User-agent: *\nCrawl-delay: 1\nAllow: /\n"),
+            "/page" => Response::text(200, "the page"),
+            _ => Response::text(404, "none"),
+        });
+        let (home, mut server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+        let page = format!("{}/page", origin.url());
+        let delay = Duration::from_secs(1);
+        let seeded = Utc::now();
+        let turn = crate::crawl_delay::CrawlDelayStore::open(home.path()).take_turn(
+            &grounding::host_of(&page),
+            delay,
+            crate::crawl_delay::WAIT_BUDGET,
+            seeded,
+            crate::crawl_delay::Pace::Own,
+        );
+        assert!(turn.sends(), "{turn:?}");
+        let began = Utc::now();
+        server
+            .tool_fetch(&json!({"url": page}))
+            .expect("the page is fetched");
+        origin.stop();
+
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1);
+        let payload = &recorded[0]["payload"];
+        let ruling = &payload["declarations"]["robots"]["delay"];
+        assert_eq!(ruling["delay_ms"], 1000, "{ruling}");
+        let requested = instant_of(&payload["requested_at"]);
+        let timestamp = instant_of(&payload["timestamp"]);
+        let [reached] = arrived(&arrivals, "/page")[..] else {
+            panic!("one page request");
+        };
+        let earliest = seeded + chrono::Duration::from_std(delay).unwrap();
+        assert!(
+            requested >= earliest,
+            "requested {requested}, turn free at {earliest}"
+        );
+        if let Some(waited) = ruling["wait_ms"].as_i64() {
+            assert!(
+                requested >= began + chrono::Duration::milliseconds(waited),
+                "requested {requested}, began {began}, waited {waited} ms"
+            );
+        }
+        assert!(
+            requested <= reached,
+            "requested {requested}, reached {reached}"
+        );
+        assert!(
+            requested < timestamp,
+            "requested {requested}, recorded {timestamp}"
+        );
+    }
+
+    // Catches: the send time of the last hop of a redirect chain standing in
+    // for the first. The first request went before the origin saw it, and
+    // the second hop was only sent after the first was answered.
+    #[test]
+    fn a_redirected_crossing_records_its_first_requests_send() {
+        let (mut origin, arrivals) = noting_origin(|target| match target {
+            "/start" => {
+                let mut response = Response::new(302, Vec::new());
+                response.headers.set("Location", "/page");
+                response
+            }
+            "/page" => Response::text(200, "the page"),
+            _ => Response::text(404, "none"),
+        });
+        let (home, mut server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+        server
+            .tool_fetch(&json!({"url": format!("{}/start", origin.url())}))
+            .expect("the redirect is followed");
+        origin.stop();
+
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1);
+        let payload = &recorded[0]["payload"];
+        assert!(
+            payload["url"].as_str().unwrap().ends_with("/page"),
+            "{payload}"
+        );
+        let requested = instant_of(&payload["requested_at"]);
+        let [first] = arrived(&arrivals, "/start")[..] else {
+            panic!("one first request");
+        };
+        let [second] = arrived(&arrivals, "/page")[..] else {
+            panic!("one second request");
+        };
+        assert!(
+            requested <= first,
+            "requested {requested}, first reached {first}"
+        );
+        assert!(
+            requested < second,
+            "requested {requested}, second reached {second}"
+        );
+    }
+
+    // Catches: a send time on a crossing whose page request never left,
+    // whether copied from `timestamp` or taken from the `robots.txt` probe
+    // that did.
+    #[test]
+    fn a_crossing_refused_before_its_request_has_no_send_time() {
+        let (mut origin, arrivals) = noting_origin(|target| match target {
+            "/robots.txt" => Response::text(200, "User-agent: *\nDisallow: /page\n"),
+            _ => Response::text(200, "the page"),
+        });
+        let (home, mut server) = server(r#"{"policy_mode":"strict","allow_private_hosts":true}"#);
+        server
+            .tool_fetch(&json!({"url": format!("{}/page", origin.url())}))
+            .expect_err("robots.txt disallows the page");
+        origin.stop();
+
+        assert_eq!(arrived(&arrivals, "/robots.txt").len(), 1);
+        assert!(arrived(&arrivals, "/page").is_empty());
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert_eq!(recorded[0]["payload"].get("requested_at"), None);
+    }
+
+    // Catches: a send time stamped before the back-off wait, the budget
+    // re-check and signing, which would set it on a page request that was
+    // never handed to the transport.
+    #[test]
+    fn a_page_request_that_could_not_be_signed_has_no_send_time() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+        )
+        .expect("policy");
+        enrol(
+            home.path(),
+            "https://hub.example",
+            "https://agents.hub.example",
+        );
+        let record = crate::enrolment::EnrolmentRecord::path(home.path());
+        // The page's own `robots.txt` is the last request before the page;
+        // removing the enrolment record while answering it leaves the page
+        // request unsignable.
+        let (mut site, log) = two_label_site(move |line| {
+            if line == "www.site.localhost /robots.txt" {
+                let _ = std::fs::remove_file(&record);
+            }
+            Response::text(404, "not found")
+        });
+        let mut server = server_at(home.path());
+        let port = site.addr().port();
+        let page = format!("http://www.site.localhost:{port}/story");
+        let error = server
+            .tool_fetch(&json!({ "url": page }))
+            .expect_err("an unsigned page request is not sent");
+        site.stop();
+
+        assert!(error.contains("could not be signed"), "{error}");
+        assert!(
+            !log.lock()
+                .expect("lock")
+                .iter()
+                .any(|line| line.ends_with(" /story")),
+            "the page was not requested: {:?}",
+            log.lock().expect("lock")
+        );
+        let recorded = crossings(home.path());
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert_eq!(recorded[0]["payload"].get("requested_at"), None);
     }
 
     /// Enrol `home` with `hub` through the runtime's own types, as `connect`
@@ -3638,6 +4770,35 @@ mod tests {
         }
     }
 
+    /// A new session over an enrolment record that cannot be read runs
+    /// unsigned and every record carries the read error; it does not sign
+    /// under the key file left beside the record.
+    #[test]
+    fn a_session_over_an_unreadable_enrolment_record_runs_unsigned_and_says_why() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"observe"}"#,
+        )
+        .expect("policy");
+        enrol(
+            home.path(),
+            "https://hub.example",
+            "https://agents.hub.example",
+        );
+        std::fs::write(home.path().join("enrolment.json"), b"{ not json").expect("record");
+        let server = server_at(home.path());
+        let unsigned = server
+            .identity
+            .presented()
+            .unsigned
+            .expect("the edge does not sign");
+        assert!(
+            unsigned.contains("not a valid enrolment record"),
+            "{unsigned}"
+        );
+    }
+
     /// An enrolled edge whose `deployment.json` cannot be read does not know
     /// whether a `policy_url` names another authority at the hub, so it stops
     /// signing and every record says why.
@@ -3779,6 +4940,11 @@ mod tests {
         ] {
             assert!(error.contains(needed), "missing {needed:?} in {error}");
         }
+        // No policy setting opens the hub's origin, so neither the policy
+        // file nor the source's file is named as the rule to change.
+        for absent in ["operator policy", "the source's robots.txt,"] {
+            assert!(!error.contains(absent), "{absent:?} in {error}");
+        }
         assert!(
             calls.lock().expect("lock").is_empty(),
             "a probe reached the hub's origin: {:?}",
@@ -3791,6 +4957,182 @@ mod tests {
         );
         publisher.stop();
         hub.stop();
+    }
+
+    /// A publisher on loopback answering `www.site.localhost` and its
+    /// registrable domain `site.localhost`, logging `"<host> <target>"`, and
+    /// answering each request from `route`.
+    fn two_label_site(
+        route: impl Fn(&str) -> Response + Send + Sync + 'static,
+    ) -> (
+        commonmeasure_http::ServerHandle,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::clone(&seen);
+        let site = bind_local()
+            .spawn(move |request| {
+                let authority = request.headers.get("Host").unwrap_or_default();
+                let host = authority.split(':').next().unwrap_or_default();
+                let line = format!("{host} {}", request.target);
+                log.lock().expect("lock").push(line.clone());
+                route(&line)
+            })
+            .expect("spawn");
+        (site, seen)
+    }
+
+    /// Resolve the manifest for `page` through the production probe, as a
+    /// crossing does after the page.
+    fn resolve(server: &McpServer, page: &str) -> discovery::ManifestResolution {
+        let pacing = crate::crawl_delay::Pacing::new(server.crawl_delay.clone(), server.pace);
+        discovery::resolve_manifest(
+            &server.manifests,
+            &server.declarations,
+            page,
+            Utc::now(),
+            &|url, redirects| server.probe(url, &pacing, redirects),
+            Some(&pacing),
+            discovery::ManifestTurn::Paced,
+        )
+        .expect("a host")
+    }
+
+    /// A manifest probe this edge could not sign was refused before
+    /// transport: on the first probe the record says `cache: not_asked`,
+    /// and after the host's 404 it says `fetched` for the 404 alone. The
+    /// signature fails because the enrolment record is removed while the
+    /// publisher answers the request before it. Breaks under the mutation
+    /// that maps `FetchFailure::NotSent` to `CutShort { sent: true }` in
+    /// `McpServer::probe`, which reads the unsent first probe as sent and
+    /// records `fetched`.
+    #[test]
+    fn a_manifest_probe_that_could_not_be_signed_was_not_sent() {
+        let wk = "/.well-known/content-telemetry.json";
+        for (last_signed, expected, cache) in [
+            (
+                "www.site.localhost /robots.txt".to_owned(),
+                vec!["www.site.localhost /robots.txt".to_owned()],
+                discovery::CacheDecision::NotAsked,
+            ),
+            (
+                format!("www.site.localhost {wk}"),
+                vec![
+                    "www.site.localhost /robots.txt".to_owned(),
+                    format!("www.site.localhost {wk}"),
+                ],
+                discovery::CacheDecision::Fetched,
+            ),
+        ] {
+            let home = tempfile::tempdir().expect("tempdir");
+            std::fs::write(
+                home.path().join("policy.json"),
+                r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+            )
+            .expect("policy");
+            enrol(
+                home.path(),
+                "https://hub.example",
+                "https://agents.hub.example",
+            );
+            let record = crate::enrolment::EnrolmentRecord::path(home.path());
+            let trigger = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let armed = std::sync::Arc::clone(&trigger);
+            let (mut site, log) = two_label_site(move |line| {
+                if *armed.lock().expect("lock") == line {
+                    std::fs::remove_file(&record).expect("remove the enrolment record");
+                }
+                Response::text(404, "not found")
+            });
+            let server = server_at(home.path());
+            let port = site.addr().port();
+            let page = format!("http://www.site.localhost:{port}/story");
+            // The registrable domain's `robots.txt` is read, signed, first,
+            // so after the 404 the unsigned request is the manifest's own.
+            let pacing = crate::crawl_delay::Pacing::new(server.crawl_delay.clone(), server.pace);
+            discovery::rule_probe(
+                &server.declarations,
+                &format!("http://site.localhost:{port}{wk}"),
+                Utc::now(),
+                &|url, redirects| server.probe(url, &pacing, redirects),
+                Some(&pacing),
+            );
+            log.lock().expect("lock").clear();
+            *trigger.lock().expect("lock") = last_signed.clone();
+
+            let resolved = resolve(&server, &page);
+            assert_eq!(*log.lock().expect("lock"), expected, "{last_signed}");
+            assert_eq!(resolved.cache, cache, "{last_signed}: {resolved:?}");
+            let discovery::ManifestOutcome::Unavailable { reason } = &resolved.record.outcome
+            else {
+                panic!("{last_signed}: {resolved:?}");
+            };
+            assert!(reason.contains("could not be signed"), "{reason}");
+            let unsent = resolved.record.probes.last().expect("a probe");
+            assert_eq!(unsent.status, None, "{last_signed}: {resolved:?}");
+            assert_eq!(
+                resolved.record.expires_at, resolved.record.fetched_at,
+                "this edge's own failure is not kept"
+            );
+            site.stop();
+        }
+    }
+
+    /// A manifest probe the call's time limit ended after it was sent was
+    /// sent: `cache: fetched`, on the first probe and after the host's 404,
+    /// and not kept as the host's failure. The call's ceiling is shortened
+    /// to 1 s on this thread and the manifest answers after 1.5 s. Breaks
+    /// under the mutation `sent |= false` for a failed probe in
+    /// `resolve_manifest`, on the first probe.
+    #[test]
+    fn a_manifest_probe_the_time_limit_ended_after_sending_was_fetched() {
+        let wk = "/.well-known/content-telemetry.json";
+        for (slow, expected) in [
+            (
+                format!("www.site.localhost {wk}"),
+                vec![
+                    "www.site.localhost /robots.txt".to_owned(),
+                    format!("www.site.localhost {wk}"),
+                ],
+            ),
+            (
+                format!("site.localhost {wk}"),
+                vec![
+                    "www.site.localhost /robots.txt".to_owned(),
+                    format!("www.site.localhost {wk}"),
+                    "site.localhost /robots.txt".to_owned(),
+                    format!("site.localhost {wk}"),
+                ],
+            ),
+        ] {
+            let late = slow.clone();
+            let (mut site, log) = two_label_site(move |line| {
+                if line == late {
+                    std::thread::sleep(Duration::from_millis(1500));
+                }
+                Response::text(404, "not found")
+            });
+            let (_home, server) = server(r#"{"policy_mode":"observe","allow_private_hosts":true}"#);
+            let page = format!("http://www.site.localhost:{}/story", site.addr().port());
+
+            crate::crawl_delay::TEST_CEILING.set(Some(Duration::from_secs(1)));
+            let resolved = resolve(&server, &page);
+            crate::crawl_delay::TEST_CEILING.set(None);
+            assert_eq!(*log.lock().expect("lock"), expected, "{slow}");
+            assert_eq!(
+                resolved.cache,
+                discovery::CacheDecision::Fetched,
+                "{slow}: {resolved:?}"
+            );
+            let discovery::ManifestOutcome::Unavailable { reason } = &resolved.record.outcome
+            else {
+                panic!("{slow}: {resolved:?}");
+            };
+            assert!(reason.contains("time limit"), "{reason}");
+            assert_eq!(resolved.record.probes.last().unwrap().status, None);
+            assert_eq!(resolved.record.expires_at, resolved.record.fetched_at);
+            site.stop();
+        }
     }
 
     /// A redirect hop's `robots.txt`, probed with less than a whole probe's
@@ -3847,6 +5189,7 @@ mod tests {
         ] {
             assert!(error.contains(needed), "missing {needed:?} in {error}");
         }
+        assert_eq!(error.matches("next crossing").count(), 1, "{error}");
         assert!(!error.contains("could not be reached"), "{error}");
         let recorded = crossings(home.path());
         assert_eq!(recorded.len(), 1);
@@ -3858,7 +5201,7 @@ mod tests {
         assert!(robots["unreachable"].is_null(), "{robots}");
         assert!(
             discovery::DeclarationCache::open(home.path())
-                .load("localhost")
+                .load(&discovery::origin_key(&destination))
                 .robots
                 .is_none(),
             "an edge failure is not cached"
@@ -3885,7 +5228,8 @@ mod tests {
 
     /// A hosted endpoint's host word sends no session-end event, so a
     /// reporting demand is met there only where the service relays the home
-    /// on its interval; the transport says so with `interval_relay`.
+    /// on its interval; the transport says so with `interval_relay`. Even
+    /// then, a receiver scoped to suppliers leaves a fetch's demand unmet.
     #[test]
     fn a_hosted_session_meets_a_reporting_demand_only_under_the_interval_relay() {
         let home = tempfile::tempdir().expect("tempdir");
@@ -3928,6 +5272,123 @@ mod tests {
             reason.contains("this host (claude-connector) sends no session-end event"),
             "{reason}"
         );
+
+        // A receiver scoped to suppliers is never sent a fetched page's
+        // events, however the page's session delivers.
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"https://receiver.example/v1/events","suppliers":["ozone"]}"#,
+        )
+        .expect("relay.json");
+        let scoped = open(true).reporting_ruling_for(None, None);
+        assert!(!scoped.met);
+        let reason = scoped.reason.expect("a reason");
+        assert!(reason.contains("scoped to suppliers (ozone)"), "{reason}");
+    }
+
+    /// The harness reads `relay.json` with the relay's parser, so a supplier
+    /// list the relay refuses leaves a reporting demand unmet with the load
+    /// error as its reason, never met on the receiver alone. Absent and null
+    /// are unscoped and met; an empty list is scoped to no supplier and, like
+    /// any scope, unmet for a fetched page. The table is the one the parser's
+    /// own test reads (`relay_config::SUPPLIER_TABLE`).
+    #[test]
+    fn a_reporting_demand_is_ruled_on_the_supplier_list_the_relay_would_read() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let work = home.path().join("reporting-cleared");
+        std::fs::create_dir_all(&work).expect("workspace");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"strict","scopes":[{"match":"reporting-cleared",
+                "engagement":"research","allow_telemetry_egress":true}]}"#,
+        )
+        .expect("policy");
+        let ruling = || {
+            let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
+            let log = SessionLog::open(home.path(), "test-session").expect("session log");
+            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+                path: home
+                    .path()
+                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+                loaded: None,
+            };
+            McpServer::new(log, loaded, "claude-connector", None, credentials)
+                .interval_relay()
+                .reporting_ruling_for(None, None)
+        };
+
+        for (suppliers, expected) in crate::relay_config::SUPPLIER_TABLE {
+            let file = format!(r#"{{"receiver":"https://receiver.example/v1"{suppliers}}}"#);
+            std::fs::write(home.path().join("relay.json"), &file).expect("relay.json");
+            let ruling = ruling();
+            match expected {
+                Ok(None) => {
+                    assert!(ruling.met, "{file}: {:?}", ruling.reason);
+                    assert_eq!(
+                        ruling.receiver.as_deref(),
+                        Some("https://receiver.example/v1")
+                    );
+                }
+                Ok(Some(_)) => {
+                    assert!(!ruling.met, "{file}");
+                    let reason = ruling.reason.expect("a reason");
+                    assert!(reason.contains("is scoped to"), "{file}: {reason}");
+                }
+                Err(fault) => {
+                    assert!(!ruling.met, "{file}");
+                    assert_eq!(ruling.receiver, None, "{file}");
+                    let reason = ruling.reason.expect("a reason");
+                    assert!(
+                        reason.contains("is not a valid relay config"),
+                        "{file}: {reason}"
+                    );
+                    assert!(reason.contains(fault), "{file}: {reason}");
+                }
+            }
+        }
+    }
+
+    /// A receiver the relay refuses leaves a reporting demand unmet with the
+    /// load error as its reason. The reason names the receiver's origin and
+    /// never a key held in its credentials, query or path: it goes into the
+    /// breach an agent reads and into the source record.
+    #[test]
+    fn a_reporting_ruling_names_a_refused_receiver_by_its_origin_alone() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let work = home.path().join("reporting-cleared");
+        std::fs::create_dir_all(&work).expect("workspace");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"strict","scopes":[{"match":"reporting-cleared",
+                "engagement":"research","allow_telemetry_egress":true}]}"#,
+        )
+        .expect("policy");
+        for (planted, fault, origin) in crate::relay_config::PLANTED_RECEIVERS {
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": planted, "api_key": "ak"}).to_string(),
+            )
+            .expect("relay.json");
+            let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
+            let log = SessionLog::open(home.path(), "test-session").expect("session log");
+            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+                path: home
+                    .path()
+                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+                loaded: None,
+            };
+            let ruling = McpServer::new(log, loaded, "claude-connector", None, credentials)
+                .interval_relay()
+                .reporting_ruling_for(None, None);
+            assert!(!ruling.met, "{planted}");
+            assert_eq!(ruling.receiver, None, "{planted}");
+            let reason = ruling.reason.expect("a reason");
+            assert!(reason.contains(fault), "{planted}: {reason}");
+            assert!(!reason.contains("ak_PLANTED"), "{planted}: {reason}");
+            if let Some(origin) = origin {
+                assert!(reason.contains(origin), "{planted}: {reason}");
+            }
+        }
     }
 
     /// A refused redirect hop keeps the breaches carried on the hops before
@@ -4058,6 +5519,7 @@ mod tests {
                 .tool_fetch(&json!({"url": format!("{}/doc", publisher.url())}))
                 .expect_err("a licence that is not read admits nothing, in observe too");
             assert!(refused.contains("could not be read"), "{refused}");
+            assert!(!refused.contains("operator policy"), "{refused}");
             assert!(
                 refused.starts_with(if in_robots {
                     "refused before the crossing"
@@ -4132,14 +5594,13 @@ mod tests {
         origin.stop();
     }
 
-    /// The floor guards addresses, not spellings — and it has to guard them in
-    /// this direction too. `localhost.` is a name no private-host rule
-    /// matches, and it points at the loopback interface: without vetting what
-    /// the name resolved to, the mediated fetch reaches the operator's own
-    /// service and the crossing is recorded under a public-looking name, which
-    /// is also what would clear the relay's egress floor.
+    /// `localhost.` is `localhost` written as a fully qualified name. The
+    /// floor reads it as the private name it is and refuses it before it is
+    /// looked up: no socket is opened, and like any private address it stays
+    /// out of the record, rather than being recorded under a public-looking
+    /// name that would also clear the relay's egress floor.
     #[test]
-    fn a_public_name_resolving_into_private_space_is_refused_and_recorded() {
+    fn a_dotted_private_name_is_refused_before_it_is_resolved() {
         let reached = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = std::sync::Arc::clone(&reached);
         let mut origin = bind_local()
@@ -4153,9 +5614,9 @@ mod tests {
 
         let error = server
             .tool_fetch(&json!({"url": url}))
-            .expect_err("a name resolving into private space is not mediated");
+            .expect_err("a private name is not mediated");
         assert!(
-            error.contains("resolves to a local or private address"),
+            error.contains("does not mediate local or private addresses"),
             "{error}"
         );
         assert_eq!(
@@ -4163,18 +5624,223 @@ mod tests {
             0,
             "the refusal has to land before a socket is opened"
         );
+        assert!(
+            crossings(home.path()).is_empty(),
+            "a private address never enters the record"
+        );
+        origin.stop();
+    }
+
+    /// The floor guards addresses, not spellings, and it has to guard them in
+    /// this direction too: a public name whose record points at loopback or
+    /// into private space would otherwise be mediated into a service on the
+    /// operator's own machine. What the name resolved to is put to the same
+    /// floor. The addresses are given here, as no public name resolves to
+    /// loopback on every test machine.
+    #[test]
+    fn a_public_name_resolving_into_private_space_is_refused() {
+        let (_home, server) = server(r#"{"policy_mode":"observe"}"#);
+        let url = "http://service.example/admin";
+        for address in ["127.0.0.1:8080", "10.1.2.3:80", "[::1]:443"] {
+            let resolved: SocketAddr = address.parse().expect("an address");
+            let error = reaches_allowed_addresses(&server.policy, url, &[resolved])
+                .expect_err("a public name resolving into private space is not mediated");
+            assert!(
+                error.contains("service.example resolves to a local or private address"),
+                "{error}"
+            );
+            assert!(
+                !error.contains(&resolved.ip().to_string()),
+                "the address stays out of the refusal: {error}"
+            );
+        }
+        let public: SocketAddr = "93.184.216.34:80".parse().expect("an address");
+        assert!(reaches_allowed_addresses(&server.policy, url, &[public]).is_ok());
+    }
+
+    /// A loopback listener that accepts connections, counts them and answers
+    /// none.
+    fn counting_listener() -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("local addr");
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&connections);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        (address, connections)
+    }
+
+    /// Holds a current `robots.txt` allowing everything for the `https`
+    /// origin of `url`, so the crossing reaches the page request without the
+    /// probe path, which keeps the system resolver, looking the name up.
+    fn hold_robots(home: &std::path::Path, url: &str) {
+        let now = Utc::now();
+        let robots: discovery::HostRecord = serde_json::from_value(json!({"robots": {
+            "url": discovery::robots_url_of(url),
+            "fetched_at": now,
+            "expires_at": now + discovery::ROBOTS_CACHE_AGE,
+            "status": 200,
+            "body": "User-agent: *\nAllow: /\n",
+        }}))
+        .expect("a host record");
+        discovery::DeclarationCache::open(home).save(&grounding::host_of(url), &robots);
+    }
+
+    /// The same floor through the whole mediated fetch. `service.example` is
+    /// given a DNS answer pointing at a listener on loopback, as no public
+    /// name resolves there on every test machine; everything after the
+    /// lookup is the production path. The refusal lands before a connection
+    /// is made and is on the record under the name, and the address stays
+    /// out of the record. The host's `robots.txt` is held, current, so the
+    /// crossing reaches the page request.
+    #[test]
+    fn a_public_name_resolving_into_private_space_is_refused_and_recorded() {
+        let (service, connections) = counting_listener();
+        let url = "https://service.example/admin";
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"observe"}"#,
+        )
+        .expect("policy");
+        hold_robots(home.path(), url);
+        let mut server = server_at(home.path());
+        server.resolve = Box::new(move |hop| {
+            if grounding::host_of(hop) == "service.example" {
+                Ok(vec![service])
+            } else {
+                system_resolve(hop)
+            }
+        });
+
+        let error = server
+            .tool_fetch(&json!({"url": url}))
+            .expect_err("a name resolving into private space is not mediated");
+        assert!(
+            error.contains("service.example resolves to a local or private address"),
+            "{error}"
+        );
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the refusal has to land before a connection is made"
+        );
 
         let recorded = crossings(home.path());
         assert_eq!(recorded.len(), 1, "the enforcement is on the record");
         assert_eq!(recorded[0]["event"], "crossing_refused");
         assert_eq!(recorded[0]["payload"]["url"], url);
+        let address = service.ip().to_string();
         assert!(
             !records(home.path())
                 .iter()
-                .any(|record| record.to_string().contains("127.0.0.1")),
+                .any(|record| record.to_string().contains(&address)),
             "the address the operator runs a service on stays out of the record"
         );
+    }
+
+    /// The resolved-address floor holds on every hop of a redirect chain, not
+    /// only the first. The first hop is an address the operator named as
+    /// internal supply, so the floor admits it and it serves its own
+    /// `robots.txt`; it redirects to `service.example`, whose answer is a
+    /// loopback listener nobody named. The redirect is refused before a
+    /// connection is made to it.
+    #[test]
+    fn a_redirect_to_a_public_name_resolving_into_private_space_is_refused() {
+        let (service, connections) = counting_listener();
+        let target = "https://service.example/admin";
+        let mut origin = bind_local()
+            .spawn(move |request| match request.target.as_str() {
+                "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+                "/go" => {
+                    let mut response = Response::text(302, "moved");
+                    response.headers.set("Location", target);
+                    response
+                }
+                _ => Response::text(404, "not here"),
+            })
+            .expect("spawn");
+        let named = format!("http://127.0.0.1:{}/", origin.addr().port());
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            json!({"policy_mode": "observe", "record_internal_prefixes": [named]}).to_string(),
+        )
+        .expect("policy");
+        hold_robots(home.path(), target);
+        let mut server = server_at(home.path());
+        server.resolve = Box::new(move |hop| {
+            if grounding::host_of(hop) == "service.example" {
+                Ok(vec![service])
+            } else {
+                system_resolve(hop)
+            }
+        });
+
+        let error = server
+            .tool_fetch(&json!({"url": format!("{named}go")}))
+            .expect_err("the redirect target is not mediated");
+        assert!(
+            error.contains("service.example resolves to a local or private address"),
+            "{error}"
+        );
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the refusal has to land before a connection is made"
+        );
         origin.stop();
+    }
+
+    /// A hop's name is looked up once, and the connection goes to the
+    /// addresses the floor was put to. `public.example` answers an address
+    /// the operator named first and an unnamed loopback address after that:
+    /// a second lookup at connect time would reach the second.
+    #[test]
+    fn a_hop_connects_to_the_addresses_its_one_lookup_returned() {
+        let (named, named_connections) = counting_listener();
+        let (unnamed, unnamed_connections) = counting_listener();
+        let url = "https://public.example/page";
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            json!({"policy_mode": "observe",
+                   "record_internal_prefixes": [format!("http://{named}/")]})
+            .to_string(),
+        )
+        .expect("policy");
+        hold_robots(home.path(), url);
+        let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&lookups);
+        let mut server = server_at(home.path());
+        server.resolve = Box::new(move |hop| {
+            if grounding::host_of(hop) != "public.example" {
+                return system_resolve(hop);
+            }
+            match counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => Ok(vec![named]),
+                _ => Ok(vec![unnamed]),
+            }
+        });
+
+        // The listener answers no TLS handshake, so the fetch fails once it
+        // has connected; where it connected is the point.
+        let _ = server.tool_fetch(&json!({"url": url}));
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            named_connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the connection goes to the address the floor admitted"
+        );
+        assert_eq!(
+            unnamed_connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no second lookup is made for a different answer to land in"
+        );
     }
 
     /// And the operator who says so still gets their own network. The vetting
@@ -4220,7 +5886,7 @@ mod tests {
                 // for again, nothing answers, and the held answer rules.
                 let then = Utc::now() - chrono::Duration::days(3);
                 discovery::DeclarationCache::open(home.path()).save(
-                    "127.0.0.1",
+                    &discovery::origin_key(&url),
                     &discovery::HostRecord {
                         robots: Some(discovery::Probe {
                             url: discovery::robots_url_of(&url),
@@ -4234,6 +5900,7 @@ mod tests {
                             not_sent: false,
                             declined_redirect: None,
                             cut_short: false,
+                            refused_by: None,
                         }),
                         ..Default::default()
                     },
@@ -4252,6 +5919,9 @@ mod tests {
                 assert_eq!(recorded[0]["event"], "crossing_mediated");
                 assert_eq!(recorded[0]["payload"]["grounded"], false);
                 assert!(recorded[0]["payload"]["failure"].is_string());
+                // The attempt was handed to the transport, so it has a send
+                // time although nothing answered.
+                assert!(recorded[0]["payload"]["requested_at"].is_string());
                 let robots = &recorded[0]["payload"]["declarations"]["robots"];
                 assert_eq!(robots["cache"], "fetched", "{robots}");
                 assert_eq!(robots["unreachable"], true, "{robots}");
@@ -4260,6 +5930,7 @@ mod tests {
             } else {
                 assert_eq!(recorded[0]["event"], "crossing_refused");
                 assert!(error.contains("could not be reached"), "{error}");
+                assert_eq!(recorded[0]["payload"].get("requested_at"), None);
                 assert_eq!(
                     recorded[0]["payload"]["declarations"]["robots"]["outcome"],
                     "unreachable"
@@ -4508,7 +6179,7 @@ mod tests {
         let message = unavailable_credential(
             "exa",
             "EXA_API_KEY",
-            std::path::Path::new("/home/op/.commonmeasure/credentials.env"),
+            "/home/op/.commonmeasure/credentials.env",
         );
         assert!(
             message.contains("unavailable: exa needs EXA_API_KEY"),
@@ -4675,6 +6346,56 @@ mod tests {
         );
     }
 
+    /// A settlement or release the ledger refuses names the ledger as the
+    /// gate does: in full on an own edge, relative to the home on a hosted
+    /// one, in the record, the session's gap and the tool error alike
+    /// (review F7).
+    #[test]
+    fn a_refused_settlement_or_release_names_the_ledger_by_pace() {
+        for pace in [
+            crate::crawl_delay::Pace::Own,
+            crate::crawl_delay::Pace::Hosted,
+        ] {
+            let (home, mut server) = server(r#"{"policy_mode":"observe"}"#);
+            server.pace = pace;
+            let full = home.path().display().to_string();
+            let (context, mut settled) = held_reservation(home.path());
+            let (_, mut released) = held_reservation(home.path());
+            refuse_ledger_writes(&context);
+
+            let settling = settled.reservation.take().expect("held");
+            server.settle_mediated(
+                &context,
+                &mut settled.record,
+                Some(&settling),
+                &AcquisitionCharge {
+                    money: Some(Money::new("USD", 7_000)),
+                    native: None,
+                },
+            );
+            let releasing = released.reservation.take().expect("held");
+            let detail = server
+                .release_mediated(&context, &mut released.record, &releasing, "test")
+                .expect("a refused release is reported");
+
+            let gaps = allowance_gaps(home.path());
+            let said = [
+                settled.record.to_string(),
+                released.record.to_string(),
+                detail,
+                json!(gaps).to_string(),
+            ];
+            for said in said {
+                assert!(said.contains("allowance/ledger.ndjson"), "{pace:?}: {said}");
+                assert_eq!(
+                    said.contains(&full),
+                    pace.names_the_edge(),
+                    "{pace:?}: {said}"
+                );
+            }
+        }
+    }
+
     /// A release the ledger refuses is not a silent hold until the expiry
     /// sweep: the session records the gap naming the reservation, and the
     /// tool error names it too.
@@ -4811,5 +6532,189 @@ mod tests {
         );
         assert!(ruling.is_refusal(), "the switch refuses the public page");
         drop(home);
+    }
+
+    /// A refused connection releases the back-off reservation its request
+    /// made, so the next fetch to the host is sent at once rather than
+    /// waiting out the first request's 30 s timeout (EGR-53). The host's
+    /// back-off has just ended, so the first fetch reserves it; the second
+    /// has 500 ms to wait, which before the release it spent polling the
+    /// first's reservation and was then refused.
+    #[test]
+    fn a_refused_connection_does_not_hold_the_next_fetch_to_the_host() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let store = crate::crawl_delay::CrawlDelayStore::open(home.path());
+        store
+            .answered("127.0.0.1", 503, Some("0"), Utc::now())
+            .expect("seed the back-off");
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = closed.local_addr().expect("address");
+        drop(closed);
+        let url = format!("http://127.0.0.1:{}/page", address.port());
+        let fetch = |pacing: &crate::crawl_delay::Pacing| {
+            let outcome = follow_resolving(
+                &url,
+                Request::get("/"),
+                &|| Ok(commonmeasure_http::CLIENT_TIMEOUT),
+                None,
+                &|_| Ok(()),
+                &|_, _| Ok(()),
+                &|_| Ok(vec![address]),
+                &|_| Ok(()),
+                pacing,
+                &std::cell::Cell::new(false),
+                &std::cell::Cell::new(None),
+            );
+            match outcome {
+                Err(FetchFailure::Failed { .. }) => "failed",
+                Err(FetchFailure::Backoff { .. }) => "backoff",
+                Err(_) => "other failure",
+                Ok(_) => "answered",
+            }
+        };
+        let first = crate::crawl_delay::Pacing::new(store.clone(), crate::crawl_delay::Pace::Own);
+        assert_eq!(fetch(&first), "failed");
+        let second = crate::crawl_delay::Pacing::with_budget(
+            store.clone(),
+            Duration::from_millis(500),
+            crate::crawl_delay::Pace::Own,
+        );
+        assert_eq!(fetch(&second), "failed", "{:?}", second.backoff_events());
+        assert!(
+            second
+                .backoff_events()
+                .iter()
+                .all(|event| event.outcome != "waited"),
+            "{:?}",
+            second.backoff_events()
+        );
+    }
+
+    /// The reservation a send makes is held while its request is in flight
+    /// (EGR-53). The host's back-off has just ended, so the fetch reserves
+    /// it; the origin reads the host's back-off record when the request
+    /// arrives. A guard dropped before the send (`let _ =` for
+    /// `let _reserved =` in [`follow_resolving`]) releases the reservation
+    /// first, and the origin finds none.
+    #[test]
+    fn a_reservation_is_held_while_its_request_is_in_flight() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let store = crate::crawl_delay::CrawlDelayStore::open(home.path());
+        store
+            .answered("127.0.0.1", 503, Some("0"), Utc::now())
+            .expect("seed the back-off");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let record = std::sync::Arc::clone(&seen);
+        let origin_store = store.clone();
+        let origin = bind_local()
+            .spawn(move |_| {
+                let backoff = origin_store.backoff("127.0.0.1").expect("readable");
+                *record.lock().expect("record") =
+                    Some(serde_json::to_value(backoff).expect("serialisable"));
+                Response::text(200, "ok")
+            })
+            .expect("origin");
+        let address = origin.addr();
+        let pacing = crate::crawl_delay::Pacing::new(store.clone(), crate::crawl_delay::Pace::Own);
+        let outcome = follow_resolving(
+            &format!("{}/page", origin.url()),
+            Request::get("/"),
+            &|| Ok(commonmeasure_http::CLIENT_TIMEOUT),
+            None,
+            &|_| Ok(()),
+            &|_, _| Ok(()),
+            &|_| Ok(vec![address]),
+            &|_| Ok(()),
+            &pacing,
+            &std::cell::Cell::new(false),
+            &std::cell::Cell::new(None),
+        );
+        assert!(outcome.is_ok(), "the origin answered 200");
+        let seen = seen
+            .lock()
+            .expect("record")
+            .take()
+            .expect("the origin was asked");
+        assert!(
+            seen["reservation"]["id"].is_string(),
+            "no reservation while the request was in flight: {seen}"
+        );
+    }
+
+    #[test]
+    fn a_fetch_window_counts_characters_and_never_splits_one() {
+        let text = "a𝄞b€c";
+        let window = FetchWindow {
+            offset: 1,
+            max_chars: 3,
+        };
+        let part = window.slice(text);
+        assert_eq!(part.text, "𝄞b€");
+        assert_eq!((part.offset, part.chars, part.total_chars), (1, 3, 5));
+        assert!(part.truncated());
+        assert_eq!(part.delivered().hash, sha256_digest("𝄞b€".as_bytes()));
+    }
+
+    #[test]
+    fn a_fetch_window_past_the_end_delivers_nothing_and_says_why() {
+        let part = FetchWindow {
+            offset: 10,
+            max_chars: 5,
+        }
+        .slice("short");
+        assert_eq!(part.text, "");
+        assert_eq!((part.chars, part.total_chars), (0, 5));
+        assert!(!part.truncated());
+        assert_eq!(
+            part.past_end().as_deref(),
+            Some("offset 10 is past the end of the text, which has 5 characters.")
+        );
+        let at_end = FetchWindow {
+            offset: 5,
+            max_chars: 5,
+        };
+        assert!(at_end.slice("short").past_end().is_some());
+        let empty = FetchWindow {
+            offset: 0,
+            max_chars: 5,
+        };
+        assert_eq!(empty.slice("").past_end(), None, "an empty text is whole");
+        assert!(at_end.slice("").past_end().is_some());
+    }
+
+    #[test]
+    fn fetch_arguments_default_clamp_and_refuse() {
+        assert_eq!(
+            FetchWindow::from_arguments(&json!({"url": "https://a.example/"})),
+            Ok(FetchWindow {
+                offset: 0,
+                max_chars: FETCH_DEFAULT_CHARS
+            })
+        );
+        assert_eq!(
+            FetchWindow::from_arguments(&json!({"offset": 7, "max_chars": u64::MAX})),
+            Ok(FetchWindow {
+                offset: 7,
+                max_chars: FETCH_MAX_CHARS
+            })
+        );
+        for refused in [
+            json!({"offset": -1}),
+            json!({"offset": 1.5}),
+            json!({"max_chars": "100"}),
+            json!({"max_chars": 0}),
+        ] {
+            assert!(FetchWindow::from_arguments(&refused).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_fetch_schema_names_offset_and_max_chars_and_closes_the_rest() {
+        let fetch = &tool_definitions()[0];
+        assert_eq!(fetch["name"], "context_fetch");
+        let schema = &fetch["inputSchema"];
+        assert_eq!(schema["properties"]["offset"]["minimum"], 0);
+        assert_eq!(schema["properties"]["max_chars"]["minimum"], 1);
+        assert_eq!(schema["additionalProperties"], false);
     }
 }

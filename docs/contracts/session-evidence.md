@@ -102,7 +102,7 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `turn_completed` | a hook at the end of a turn (Claude Code: `Stop`) | a turn boundary, the same |
 | `context_snapshot` | a transcript carrying the provider's usage counters and the host's own records of what it assembled, read at the end-of-turn hook (Claude Code: `Stop`) | a context-budget observation at the boundary, with its basis named, and the inventory of the window by category (§Context snapshots) |
 | `nudge_issued` | a hook at session start whose stdout the host adds to context (Claude Code: `SessionStart`) | the standing mediation nudge was emitted for the host to add to the session's context |
-| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start, on an enrolled edge | the identity this edge runs under: the hub, the key id the hub assigned at enrolment, and the key's standing (`enrolled`, or `revoked` with when and by which side), and whether the hub's key directory lists the key, as the edge last learnt it: `listed_until`, the time the hub stops serving the key's directory proof (its expiry less the 7,200-second margin), or `unlisted` with the reason. The edge keeps what it last learnt in `<home>/directory-listing.json`, bound to the key id, and never in `enrolment.json`, whose shape stays the one every released binary reads. A signed request under a key the directory does not list verifies nowhere. Absent on an edge that is not enrolled |
+| `edge_identity` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start, on an enrolled edge | the identity this edge runs under: the hub by its origin alone (scheme, host and port; `null` where the stored hub URL has none, as for one that does not parse, with `hub_refused` saying why nothing is sent to it), the key id the hub assigned at enrolment, and the key's standing (`enrolled`; `revoked` with when and by which side; or, where the stored hub URL is one nothing is sent to, `cleartext_hub` for a cleartext URL or `unusable_hub_url` for one carrying credentials, a query or a fragment, with `hub_refused` saying what the edge refuses and the remedy), and whether the hub's key directory lists the key, as the edge last learnt it: `listed_until`, the time the hub stops serving the key's directory proof (its expiry less the 7,200-second margin), or `unlisted` with the reason. A reason the hub stated reads `hub: <text>`; the edge's own conclusion from a refused directory proof upload reads `this edge concluded the key is unlisted when the hub refused its directory proof (<status>): <detail>` ([enrolment](enrolment.md)). The edge keeps what it last learnt in `<home>/directory-listing.json`, bound to the key id, and never in `enrolment.json`, whose shape stays the one every released binary reads. A signed request under a key the directory does not list verifies nowhere. Absent on an edge that is not enrolled. A record can also hold the stored hub URL whole, and 0.4.1's `connect` stored hub URLs with credentials in them; every reader reduces the field to its origin and the log is not rewritten. 0.4.1 built a `policy_sync` record's `policy_url` from that stored URL where the hub gave a policy path and no policy URL, so the console's session records API (`GET /api/sessions/<id>`) serves that field by its origin too, and the log keeps it as written |
 | `credentials_loaded` | nothing; the MCP server writes it before the first record a tool call or host observation leaves | the operator credentials file was loaded at server start: its path, digest and variable names, never a value |
 | `policy_sync` | a hook at session start (Claude Code: `SessionStart`), or the MCP server's start for a session no hook refreshed | on a managed edge, what refreshing the policy from the hub did for this session: the outcome, the revision in force and whether its envelope has expired (§Policy synchronisation). Absent on a local edge |
 | `host_process` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start | the host process this path runs under, so the hook log and the MCP log of one host session can be joined (§Host process) |
@@ -146,25 +146,63 @@ could have refused it:
 
 ```json
 {
-  "session_id": "…", "timestamp": "…", "mode": "mediated",
+  "session_id": "…", "timestamp": "…", "requested_at": "…", "mode": "mediated",
   "host": "codex", "client": {"name": "codex-mcp-client", "version": "0.154.0", "title": "Codex"},
   "cwd": "/home/operator/code/project", "policy_scope": "code/project",
   "principal": "research-agent", "authentication_basis": "os_user",
   "url": "…", "host_name": "…",
-  "identity": {"user_agent": "CommonMeasureBot/0.4.0 (+https://…/bot; mailto:…)",
+  "identity": {"user_agent": "CommonMeasureBot/<version> (+https://…/bot; mailto:…)",
                "key_id": "…", "signature_agent": "https://…"},
   "content_hash": "sha256:…", "retrieved_hash": "sha256:…",
   "estimated_tokens": 12, "token_basis": "characters/4",
+  "delivered": {"offset": 0, "chars": 48, "total_chars": 48,
+                "hash": "sha256:…"},
   "grounded": true, "licence": {"state": "unknown"},
   "policy_identity": "sha256:…"
 }
 ```
 
+`timestamp` on every crossing is when the record was written. On a
+mediated fetch that is after the response, and after any licence read or
+manifest probe the crossing made once the page answered, so it is never the
+time the request was sent.
+
+`requested_at` is the instant the mediated fetch handed its page request to
+the transport, after any `Crawl-delay` or back-off wait. It is taken where
+the request is handed over, not derived from `timestamp`. It is taken before
+the connection, the TLS handshake and the write, so it is present where the
+origin received nothing, and it is never later than the request's arrival at
+the origin. A crossing has at most one:
+
+- Where a redirect was followed (`declarations.redirects` is non-empty), it
+  is the instant of the request to `redirects[0].requested_url`, not to
+  `url`, which names the last hop. Later hops' send instants are not
+  recorded, so the record does not establish pacing across a redirect chain.
+- A `crossing_refused` refused at a later redirect hop carries it, because
+  the first hop's request was handed over.
+- It is present where the request was handed over and nothing answered, since
+  the attempt was made (the crossing carries `failure`). `failure` does not
+  imply `requested_at`: a crossing that stopped before the request also
+  carries `failure` and has none.
+- It is absent where no page request was handed over: a refusal before the
+  request, a first-hop name that could not be resolved, a turn that could not
+  be kept, a host in back-off, a request that could not be signed, or a call
+  with no time left. It is also absent on search results, observed and
+  reconstructed crossings, and every record written before the field existed.
+
+A reader never presents `timestamp`, or any field other than `requested_at`,
+as the send time. Where `requested_at` is absent a reader may still use
+`timestamp` as the record time. The relay does not project it; the retrieval
+event's `timestamp` is the record's
+([telemetry projection](telemetry-projection.md)).
+A `robots.txt`, licence or manifest probe is not the page request and does
+not set it.
+
 `retrieved_hash` is SHA-256 over the response body as the origin served it,
 and appears on a mediated fetch that received a body and on no other record.
-`content_hash` beside it covers the text delivered to the agent or withheld
-from it, which for an HTML page is the page's readable text and not its
-markup ([`docs/contracts/processor.md`](processor.md) §Status, `html-text-extractor`). An
+`content_hash` beside it covers the whole text extracted from that body,
+delivered to the agent or withheld from it, which for an HTML page is the
+page's readable text and not its markup ([`docs/contracts/processor.md`](processor.md) §Status, `html-text-extractor`). An
 origin that serves the body under the gzip content coding, which some do
 whatever the request accepts, has `retrieved_hash` over the coded bytes it
 served and `content_hash` over the text taken from what they decode to. The
@@ -176,9 +214,46 @@ the `processor_invoked` record of the extractor written before the crossing
 carries `retrieved_hash` as its input hash and `content_hash` as its output
 hash, and a reader re-derives the second from the bytes the first names by
 applying the rules the record's configuration digest pins
-([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md) §12). `estimated_tokens` counts the delivered text.
+([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md) §12). `estimated_tokens` counts the delivered text: on
+a mediated fetch, the part `delivered` names, or on a refusal the part the
+result would have carried.
 The relay projects `content_hash` and never `retrieved_hash`: what a
-receiver learns is the hash of what entered context.
+receiver learns is the hash of the whole extracted text, which is more than
+entered context where the result carried a part of it.
+
+`delivered` is the part of the extracted text the tool result carried, on a
+mediated fetch that returned text and on no other record. One
+`context_fetch` result carries at most `max_chars` characters from `offset`
+([host integration](host-integration.md#the-parts-of-a-fetch)); characters
+are Unicode scalar values and a part never splits one.
+
+- `offset`: characters of the extracted text before the part.
+- `chars`: characters in the part. It is 0 only where the whole text is
+  empty.
+- `total_chars`: characters in the whole extracted text, the text
+  `content_hash` covers.
+- `hash`: SHA-256 over the UTF-8 bytes of the part, in the `sha256:` form.
+  Where the part is the whole text it equals `content_hash`.
+
+The crossing's `estimated_tokens` is the part's estimate, so the crossings
+of a page read in parts add up to the whole text's estimate, within one token
+per part, while the page is unchanged. `total_chars`
+gives the size of the whole text.
+
+Each part is a crossing of its own: a call for a later part requests the
+page again, under the same admission, `robots.txt`, pacing and allowance as
+the first, and the edge keeps no body between calls. Where the page changed
+between parts, the two crossings carry different `content_hash` values. A
+call whose `offset` is above 0 and at or past the end of the text is
+recorded as `crossing_refused`, with both hashes and a `refusal` naming the
+offset and `total_chars`, and no `delivered`: the page was requested, and
+nothing entered context.
+
+`delivered` records what the edge handed the host. The edge does not see
+what the host then does with the result: whether it placed the part in the
+model's context whole, stored it to a file, or let the model read excerpts
+of it. No record describes that, and `delivered.hash` is not evidence of
+what the model read.
 
 `identity` is the network identity the request presented, and it appears on
 every mediated crossing whose request left the machine and on no other: a
@@ -348,12 +423,14 @@ are not stamped `host_required` and cannot receive a context-entry observation.
 
 In this mode each admitted text fetch carries an `acquisition_id` (UUID) and a
 separate `crossing_id` (UUID) on its `crossing_mediated` record. `observer` is
-`cm`, `grade` is `mediated`, and `context_observation` is `host_required`.
-The fetch response returns the acquisition handle only after its record has
-been fsynced. Failure to record it makes the fetch unavailable. Refusals and
-failed fetches yield no handle. The handle identifies the admitted bytes named
-by `content_hash`; it is neither supplier-issued delivery identity nor a licence.
-A repeated acquisition receives a new handle, even for identical bytes.
+`cm`, `grade` is `mediated`, and `context_observation` is `host_required`. The
+fetch response returns the acquisition handle only after its record has been
+fsynced. Failure to record it makes the fetch unavailable. Refusals and failed
+fetches yield no handle. A fetch whose answer this edge could not record
+carries `failure` and is not stamped `host_required`. The handle identifies the
+admitted bytes named by `content_hash`; it is neither supplier-issued delivery
+identity nor a licence. A repeated acquisition receives a new handle, even for
+identical bytes.
 
 `grounded` is false on these crossings. Retrieval establishes no context entry.
 Older sessions and integrations which have not opted in retain their existing
@@ -670,7 +747,10 @@ on the crossing, with three more fields:
 - `http_status` — the status the final URL answered with. Absent for a search
   result, for a transport failure and for a refusal made before any request.
 - `failure` — the client's account of a transport failure, when the request
-  left the machine and nothing usable answered.
+  left the machine and nothing usable answered, or of this edge's own reason
+  for not sending it. Beside `http_status`, the host answered and this edge
+  could not record the answer in its back-off store, so the answer was not
+  used; `failure` says so and names the repair.
 - `declarations` — what was read, from where, and what it adds up to.
 
 The reader (`crates/commonmeasure-harness/src/declarations.rs`, the cache and
@@ -727,10 +807,16 @@ statement they carry is ruled on before any bytes move; the header and a
 carry is ruled on after, and the bytes are withheld from context until it
 has been read. The host's cache file keeps, per page URL, the licence the
 page's `Link` header named when it was last fetched (`page_licences`), so a
-later crossing to a host that states a delay reads it before the page. `robots.txt` is fetched once per host and cached for
-24 hours, or for the response's `max-age` where shorter, under
-`$COMMONMEASURE_HOME/declarations/<host>.json` beside the licence documents it
-names (`cache` says `fetched`, `reused`, or `not_asked` where the host's
+later crossing to a host that states a delay reads it before the page. A
+`robots.txt` answer is used for 24 hours, or for the response's `max-age`
+where shorter, and asked for again once it has expired. It is cached per
+origin (scheme, host and port) under
+`$COMMONMEASURE_HOME/declarations/<key>.json`, beside the licence documents
+it names: `<key>` is the host for `https` on port 443, and
+`<host>_<scheme>_<port>` for any other origin, so two origins on one host
+never share a copy or a held answer. The host is read in lower case with a
+trailing dot removed, so `a.example.com.` and `a.example.com` send the same
+requests and share one entry (`cache` says `fetched`, `reused`, or `not_asked` where the host's
 `Crawl-delay` put the probe beyond what the fetch may still spend waiting, or
 the crossing was refused before the licence was reached); a probe that
 failed, or that the host answered outside 2xx (and, for `robots.txt`, with
@@ -747,7 +833,8 @@ not asked for, the request failed or timed out, the host answered outside
 2xx other than 404 and 410, the body was over the bound or did not parse as
 RSL. A 401, 403, 451 or any other 4xx but 404 and 410 says the document
 exists and is withheld from this fetcher, so it is `unread`. A 5xx is
-`unread`. Redirects are followed, and the final status decides. A licence
+`unread`. Redirects are followed where `robots.txt` at the target's origin
+allows them (below), and the final status decides. A licence
 the source named that answers 404 or 410 is `missing`: `status` holds the
 code, `unavailable` says the declared licence is missing, and `missing` is
 a gap (`reason: "evidence_missing"`) naming the URL and the status; the
@@ -756,12 +843,53 @@ are on the licence in the tool result's `declarations.licences`. A licence
 that was read and has no `<content>` entry for the page is not unread; it
 names no terms for that page. For `robots.txt`, a 4xx other than 429 is not
 a failure: the host publishes no rules for this fetcher (RFC 9309 §2.3.1.3),
-and the answer is cached as a file is. A failed `robots.txt` probe never
-overwrites the host's last answer: it is kept under `robots_held` in the
-cache file while `robots` holds the failure, and dropped once the host
-answers again. Cache files are written whole and renamed into place. Every probe goes
-through the same host policy and address floor as the page, and no probe is
-ever recorded as a crossing.
+and the answer is cached as a file is. A failed `robots.txt` probe, or one this
+edge did not send or cut short, never loses the origin's last answer: it is
+kept under `robots_held` in the cache file while `robots` holds the failure
+or nothing, and dropped once the host answers again. Cache files are written
+whole and renamed into place. Every probe goes through the same host policy
+and address floor as the page, and no probe is ever recorded as a crossing.
+
+A request the edge makes on its own account, and not the agent's, is ruled
+by `robots.txt` as a page is. The manifest probe, the probe of the
+registrable domain's manifest (§Manifest discovery) and a licence that only
+the page's `Link` header names are each ruled, before they are sent, by
+`robots.txt` at their own origin for the `CommonMeasureBot` group, or `*`
+where no group names it, in every policy mode. So is every redirect from any
+of these probes and from a licence, at the redirect's own origin. That file
+is read through the cache above, as a page's is: it takes no `Crawl-delay`
+turn, a live copy is reused, and a request for it observes back-off. A
+`Disallow` for the URL, or a file that cannot be reached with no answer held,
+refuses the probe, and it is not sent. A licence named by a `License:`
+directive in a `robots.txt` is fetched without that check where it is at the
+origin of the page whose `robots.txt` was requested (scheme, host and
+effective port, the host read as the cache key reads it), because that file
+could have refused it; a redirect from it is still ruled. A licence the
+directive names at any other origin, including the origin a redirected
+`robots.txt` was served from, is ruled by `robots.txt` at that origin, as a
+licence the `Link` header names is: naming it there does not exempt it. A
+`robots.txt` probe's own redirects are followed and not ruled (RFC 9309
+§2.3.1.2).
+
+A licence refused this way, whether the page's `Link` header or another
+origin's `License:` line named it, carries `refused_by: "robots.txt"`,
+`unread: true` and the rule that refused it in `unavailable`; `cache` is
+`not_asked`, or `fetched` where the licence was asked for and answered with
+a redirect that was refused. The page is treated as having no readable
+licence, and where `governing` is `statements` an unread licence refuses
+the crossing in every mode. A licence a `License:` line names is read before
+the page, so its refusal refuses the crossing before the page is requested.
+A licence the `Link` header names is ruled on from the page's response,
+including one read before the page on a host that states a delay because the
+last response named it: the page is fetched, and its bytes are withheld
+while the response names that licence. The refusal is cached until the copy
+of `robots.txt` that refused it expires.
+
+```json
+{"url": "https://licences.example/rsl.xml", "mechanism": "link-header",
+ "cache": "not_asked", "refused_by": "robots.txt", "unread": true,
+ "unavailable": "https://licences.example/robots.txt disallows CommonMeasureBot at https://licences.example/rsl.xml: the `User-agent: *` group, which addresses every fetcher because no group names CommonMeasureBot; rule `Disallow: /`, a literal path prefix"}
+```
 
 `robots` is the access-rule attribution for the URL the crossing names.
 `requested_url` is the URL the rules were applied to; `url` is the
@@ -817,7 +945,9 @@ connection failure left no answer, or where the file redirected to a URL
 this edge declines to follow; `unavailable` then names the failure, and a
 probe timeout reads "did not answer within the 5s exchange budget".
 A declined redirect is one to an address this edge does not mediate, to the
-hub's origin, or to a host the operator's policy refuses. `unavailable`
+hub's origin, to a host the operator's policy refuses, or to a host in
+back-off. Like any failure it is cached for five minutes, so while the
+target's back-off lasts the file is not asked for on every crossing. `unavailable`
 reads "<file> redirected to <target>, which this edge does not follow:
 <reason>", `declined_redirect` names the target, and the refusal cites RFC
 9309 §2.3.1.2 beside §2.3.1.4. §2.3.1.2 expects a crawler to follow at
@@ -841,9 +971,13 @@ from it however old it is, `held_copy` names it (`fetched_at`,
 held, `reading` is absent, `outcome` is `unreachable`, and the refusal names
 the file, the host and the failure, and ends "An unreachable robots.txt is
 a complete disallow in every policy mode: refused before the request."
-A cached probe that earlier releases recorded as `unavailable` for a
-declined redirect or a body over 512 KiB is asked for again rather than
-reused.
+A cached `robots.txt` probe is reused, while it is live, only in a shape
+this edge writes: a file, with `truncated` where it was over 512 KiB; a 4xx
+other than 429; or a failure with its reason. Any other entry, such as a
+2xx kept without its file, is asked for again rather than reused. A
+`robots.txt` probe this edge did not send (`not_asked`) is asked for again
+on the next crossing: the rule that stopped it is this edge's own and is
+checked again before any request.
 
 A probe can fail for a reason of this edge's own rather than the host's:
 the whole-call time limit (below) left no time for the request, or the
@@ -858,7 +992,11 @@ request in every mode, because a page is not fetched under a `robots.txt`
 this edge has not read. The refusal ends ": refused before the request, in
 every policy mode." A licence probe cut short is `unread`, and so refuses
 the crossing, and is asked again at the next crossing; a manifest probe
-cut short is `unavailable` and is not kept.
+cut short is `unavailable` and is not kept. Whether the request was sent is
+recorded apart from why it failed: a probe cut short before transport (no
+time left, or no signature) has `cache: "not_asked"`, and one the time
+limit ended after it was sent, or whose redirect target was not requested,
+has `cache: "fetched"`.
 
 ```json
 "robots": {"requested_url": "https://publisher.example/private/report",
@@ -926,6 +1064,12 @@ carry `reason`. Own edges keep the full failure details. `status`,
 later failure does not replace them. `http_date`, when present, is the
 uncapped HTTP-date that set the end. While another request holds a reservation,
 `reserved_until` names its timeout separately from the failure's `until`.
+An own edge's refusal in that time says another request to the host is
+under way and holds its turn until `reserved_until`; it names the back-off's
+end and status only while that period lasts. Once another request's failure
+runs to or past `reserved_until`, the record holds no separate timeout:
+`reserved_until` is absent, and a waiter reads and waits out the back-off
+alone.
 A reset retains the last failure's status and end time with `failures: 0`, so a successful concurrent request
 cannot revoke a wait another answer has already imposed.
 
@@ -942,9 +1086,21 @@ inside that period keep the count and may extend the end.
 
 After back-off ends, the first sender reserves the host under its lock until
 that request's timeout. Its answer clears or renews the reservation; other
-callers wait for the answer within their own budgets. A process that stops
-without an answer leaves a reservation that expires at the timeout. This
-reservation does not add a failure or resend a failed request.
+callers wait for the answer within their own budgets. A request that ends
+without an HTTP answer (not sent after all, or a transport failure such as a
+refused or reset connection, TLS failure or timeout) releases its own
+reservation: `until` returns to the failure's end, the count is unchanged and
+back-off is not extended. A response whose status line arrived but whose
+headers or body could not be read whole (for example a truncated body, an
+unsupported content coding or a body over the size limit) counts as no
+answer: its status and `Retry-After` are not recorded, and the reservation
+is released. A release never touches a reservation a later sender has
+taken. A process that stops without an answer leaves a
+reservation that expires at the timeout, as does a release that cannot
+update the record. An answer this edge cannot record releases the
+reservation only when the answer is not itself a failure; a 429 or 5xx it
+cannot record keeps the reservation to its timeout. This reservation does not
+add a failure or resend a failed request.
 
 Back-off is kept in `<host>.backoff.json` beside the crawl-delay turn,
 under the same host lock. Every MCP process using the home shares it, and
@@ -953,9 +1109,15 @@ explicitly unavailable. An unreadable record refuses before sending. A
 read-only store permits a healthy host with no active failure record: its
 successful answer takes no lock and writes nothing. When an answer needs an
 update and that update fails, the failure belongs to the edge; it is never
-cached as an unreachable `robots.txt`. After repair the next crossing asks
-again. The remedy names that host's back-off file and retains the storage
-error's cause. Crawl-delay recovery does not clear back-off. Interrupted
+cached as an unreachable `robots.txt`. A page's crossing keeps the answer's
+`http_status` beside `failure`. After repair the next crossing asks again.
+The remedy retains the storage error's cause and names that host's back-off
+file where the record cannot be read, or the back-off directory where it
+cannot be created, locked, written or removed. Two lock faults have their
+own remedies: a lock another process on the edge held for the whole wait is
+named as held by it, and a lock file that exists and cannot be opened is
+named, to be made readable and writable by this user or removed while no
+process holds it. Crawl-delay recovery does not clear back-off. Interrupted
 back-off writes are swept with crawl-delay temporaries; expired zero-count
 records are removed when a reset has no remaining wait, or during a later
 sweep under a host lock already held for an update. Healthy sends do not take
@@ -1018,7 +1180,15 @@ page, but only if the host is clear: it takes a turn that costs nothing or
 is not sent. Where a licence is to be read first, the licence has the
 host's next turn and the manifest waits for a later crossing: it carries no
 demand. Every redirect hop is ruled
-and takes its own host's turn in the same order. A publisher's log cannot
+and takes its own host's turn in the same order, a redirect from a licence
+or manifest probe included. A probe's redirect takes its turn from what the
+probe was given, so what the probe keeps back for the requests after it is
+kept back from the redirect too: a licence read before the page keeps the
+page's turn, and the manifest asked before the page, which takes only a
+turn that costs nothing, follows its redirect only where the target's host
+is clear. A probe's redirect whose turn does not fit is not requested: the
+probe's record says the redirect was declined and why, and is kept for five
+minutes, as a redirect to a host in back-off is. A publisher's log cannot
 tell a probe from the page fetch, which is why the probes are paced; a
 manifest probe whose wait does not fit is not sent and is recorded as
 `not_asked` rather than refusing the crossing. A licence another server's
@@ -1093,11 +1263,70 @@ An edge serving several tenants from one home paces them all as one fetcher,
 because one identity is what the publisher sees. A refusal served over that
 transport carries no `next_at` and no `wait_ms`, and says the session is
 served over HTTP; its `unavailable` and `recovered` text names the store's
-file by name alone and no recorded instant, because the tenant can act on
-neither the operator's file system nor another tenant's fetch. A `waited`
+files by name alone, under the directory's name `crawl-delay` where a cause
+gives a path, and no recorded instant, because the tenant can act on neither
+the operator's file system nor another tenant's fetch. The same holds for a
+back-off `unavailable` event's `reason`, whose remedy there is the
+operator's: the store is kept on the edge that serves the session, and its
+operator can make it writable or clear it. A `waited`
 ruling still carries `wait_ms` there, and a tenant can derive from it when
 another tenant last asked the host; the call's own elapsed time gives the
 same figure, so withholding it would hide nothing.
+
+The tools name the files they report the same way over that transport.
+`recorded_in`, and `context_status`'s `evidence`, `policy.source` and
+`credentials.path`, name their files relative to the operator home, as in
+`sessions/<id>.ndjson`, and a refusal names "the operator's policy" with no
+path. The transport then rewrites the operator home in everything it sends:
+every string in a JSON body, which covers tool results, tool errors,
+JSON-RPC errors and the HTTP error bodies including the `401`, and every
+response header, including the `WWW-Authenticate` challenge. A body that is
+not JSON is not sent; the answer is a `500`. The home is matched as
+`COMMONMEASURE_HOME` gives it, made absolute, and as the file system
+resolves it, with or without a trailing separator. An occurrence of either
+form that is not preceded by a name character (a letter, digit, `_`, `-` or
+`.`) or a separator, and not followed by a name character, becomes the path
+relative to the home, as `allowance/ledger.ndjson`; the home alone becomes
+`.`. Text that is not a path under the home can match: with the home
+`/srv/cm`, `~/srv/cm/x` becomes `~x`, `${HOME}/srv/cm/x` becomes
+`${HOME}x`, `backup@host:/srv/cm/x` becomes `backup@host:x` and
+`/srv/cm/../etc` becomes `../etc`. A string the tenant supplied and the
+edge quotes is rewritten like any other, so it can confirm a guessed home;
+it cannot read one. For that reason the edge does not quote a tool name, a
+JSON-RPC method, an `MCP-Protocol-Version` it does not serve, or an
+`Origin` header that is not an origin; the `Origin` check runs before the
+token is read. JSON-RPC requires the request's `id` in the answer, and a
+string `id` is rewritten like any other string, so an `id` naming a path
+under the home comes back relative to it. Before
+authentication the edge quotes nothing else a caller sends: a foreign
+`Origin` is quoted only in canonical form (scheme, host and port, with no
+path), and a token refused before its signature is checked is refused by
+the check that failed, naming what the edge expects (`EdDSA`, the issuer
+pinned at enrolment, a key the issuer publishes) and no value the token
+carries.
+
+A tool result's payload is JSON text inside a string; the transport parses
+it and applies the rule to its strings, so a path after a newline is
+matched. In a result that is not a tool error (`isError` is `false`), the
+fields that carry what a supplier sent, at exactly these pointers, are
+served as received: a fetch's `content`, `url` and `next` and its
+`declarations.robots.requested_url`, `declarations.robots.robots_url` and
+`declarations.robots.final_url`, and a search's `results[].url`,
+`results[].title`, `results[].text` and `refusals[].url`
+(`SUPPLIER_FIELDS` in `crates/commonmeasure-harness/src/mcp.rs`).
+`declarations.robots.explanation` quotes the asked URL in prose and is
+rewritten. A page that quotes the operator home reaches the tenant as the publisher sent it,
+so its text still matches `content_hash`, and a URL still names the page it
+named. A `file://` URL is an identifier and a supplier field, so a document
+in an internal corpus kept under the home is served by its full `file://`
+URL, which names the home; an operator who does not want that keeps the
+corpus outside the home. Payload text that does not parse is rewritten as
+text. The hosted service is not documented or tested on Windows.
+
+The service's standard error names the token file and a session that could
+not be opened by their full paths. An allowance ledger fault is not printed
+there; the ledger is always `allowance/ledger.ndjson` under the home. An
+edge served over stdio names each file by its full path.
 
 For response-driven back-off on a hosted edge, the tenant's refusal text and
 `declarations.backoff` event say only that the host is in back-off. They
@@ -1105,8 +1334,15 @@ withhold `status`, `failures`, `wait_ms` and any `until` derived from a
 response time, including delta-seconds `Retry-After` and a capped HTTP-date.
 An uncapped `Retry-After` HTTP-date that set the end may be named as `until`,
 because it is the host's own statement. The tenant's `backoff` object is
-otherwise empty; `budget_ms` remains that call's own budget. Own edges keep
-the full record.
+otherwise empty; `budget_ms` remains that call's own budget. Two channels
+remain: a `reset` event on the tenant's own answer that is not a failure
+tells it that a request to the host, perhaps another tenant's, had failed,
+and on a paced host a `waited` event's `budget_ms` less
+`robots.delay.budget_ms` gives the back-off wait that `wait_ms` withholds,
+and with it the `until` withheld above, as the call's own elapsed time does.
+Neither
+reveals the other request's status, the failure count or a response time.
+Own edges keep the full record.
 
 Each redirect hop is evaluated against the `robots.txt` at its own origin
 before the hop is requested: a hop its own file disallows is refused, in
@@ -1157,7 +1393,13 @@ A licence's telemetry reporting demand is met when its profile is the Content
 Telemetry binding this runtime speaks, its conformance level is one this
 runtime emits (`retrieval` or `grounding`), and the session can deliver:
 the policy scope clears telemetry egress, `$COMMONMEASURE_HOME/relay.json`
-names a receiver, and automatic delivery is in force. Automatic delivery
+is one the relay loads and names a receiver that is not scoped to suppliers
+([telemetry projection §Supplier scope](telemetry-projection.md#supplier-scope):
+a fetched page names no supplier, so a scoped receiver never carries it, and
+an empty list is a scope), and automatic delivery is in force. A `relay.json`
+the relay refuses, a malformed `suppliers` list among its faults, leaves the
+demand unmet with the load error as the reason, because the relay sends
+nothing under it. Automatic delivery
 means the events leave without anyone typing a command — the session-end
 relay ([telemetry projection §Relay at session end](telemetry-projection.md#relay-at-session-end)) or the hosted service's interval. The marker
 file `$COMMONMEASURE_HOME/relay/manual` switches it off, and a demand is
@@ -1173,7 +1415,10 @@ the home's own state, never from host files under `$HOME`:
   service's interval relay reads every session log in the home. "Running"
   means a process holds the home's lock `hosted-service.lock` now
   (`delivery::service_running`, the probe `doctor` uses); a service that is
-  configured but stopped holds nothing and does not count. The interval
+  configured but stopped holds nothing and does not count. A lock file the
+  probe cannot open does not count either: whether a service holds it is
+  unknown, `doctor` and `status` say so, and the session is treated as
+  having no automatic delivery. The interval
   relay skips its run while `relay/manual` is present and says so in the
   journal.
 - A hosted session under `hosted service`: automatic for the same reason.
@@ -1380,14 +1625,71 @@ error leaves the participant unverified and rejects nothing (`not_published`
 and `unavailable`); invalid JSON, a schema failure, a duplicate key id or a
 `domains` entry that is not the manifest's own host or a subdomain of it
 rejects the manifest with the reason (`rejected`); any `1.x` version is
-accepted. When a subdomain answers 404 the apex, one label up, is asked once,
-because an apex manifest may claim its subdomains; `probes` lists both. The
-outcome is cached per host under `$COMMONMEASURE_HOME/manifests/<host>.json`
+accepted. When the host answers 404, the manifest at its registrable domain
+is asked once, because a manifest there may claim the hosts beneath it
+(section 8.6), and `probes` lists both. The registrable domain is the host's
+public suffix under the Public Suffix List, ICANN and private sections, and
+the one label before it; the list is compiled into the binary, so no request
+leaves the edge to learn it. It is asked only where it differs from the host,
+and nothing else is asked, whatever it answers: `a.b.example.com` asks
+`example.com` and never `b.example.com`, `www.bbc.co.uk` asks `bbc.co.uk`,
+and `bbc.co.uk`, `x.pages.dev` and `user.github.io` ask nothing further, so
+the fallback never asks a public suffix such as `co.uk` or `pages.dev`. A
+suffix host is asked only where the page itself is on it, and then for its
+own `robots.txt` and manifest and nothing further, or where a redirect the
+publisher serves leads there, and then under that host's `robots.txt`. An
+address or a single-label host asks nothing further. A manifest at an intermediate host,
+such as `b.example.com` for `a.b.example.com`, is not found. The trailing dot
+of a host is removed before the lookup and before the cache key.
+
+Each probe is ruled by `robots.txt` at its own origin before it is sent, in
+every policy mode (§Source declarations): the page host's copy, already read
+for the page, and the registrable domain's, read before its probe. A
+redirect from a probe is ruled at the redirect's origin and takes its
+target host's `Crawl-delay` turn (§Source declarations); a redirect whose
+turn does not fit is declined, `outcome` is `unavailable`, and the record
+is kept for five minutes. A probe that is
+refused is not sent; its entry in `probes` has no `status` and names what
+refused it in `refused_by`, and `outcome` is `refused` with the reason. Two
+refusals land there, told apart by `refused_by`: `"robots.txt"`, where the
+host's `robots.txt` disallows the URL or a redirect from it, and `"policy"`,
+where this edge sends no request to the URL (the operator's policy, the
+address floor or the hub's origin). `refused` leaves the participant
+unverified and rejects nothing, as `not_published` does. A `robots.txt`
+refusal expires when the copy of `robots.txt` that refused it expires; a
+`policy` refusal is kept for five minutes. `cache` is
+`not_asked` where no manifest request was sent on the crossing, and
+`fetched` where one was, including one that was answered with a redirect
+that was not followed or that the call's time limit ended after it was
+sent. A probe this edge could not sign, or had no time left to send, was
+not sent.
+
+```json
+{
+  "session_id": "…", "host": "news.publisher.example", "timestamp": "…",
+  "cache": "fetched", "fetched_at": "…", "expires_at": "…",
+  "probes": [{"url": "https://news.publisher.example/.well-known/content-telemetry.json", "status": 404},
+             {"url": "https://publisher.example/.well-known/content-telemetry.json", "refused_by": "robots.txt"}],
+  "outcome": "refused",
+  "reason": "https://publisher.example/robots.txt disallows CommonMeasureBot at https://publisher.example/.well-known/content-telemetry.json: the `User-agent: *` group, which addresses every fetcher because no group names CommonMeasureBot; rule `Disallow: /`, a literal path prefix"
+}
+```
+
+A release that does not know the outcome `refused` cannot read a record
+that carries it. The readers of a stored manifest record are the per-host
+cache under `manifests/`, which such a release treats as absent, probing the
+host again and overwriting the file; the console, which shows a session
+record's fields as written; and the relay, which projects nothing from any
+manifest record. Run one release per `$COMMONMEASURE_HOME`: a home that a
+release writing `refused` has used is not read by a release that does not
+know it.
+
+The outcome is cached per host under `$COMMONMEASURE_HOME/manifests/<host>.json`
 for the response's `max-age`, an hour when it names none, a day for a 404 and
 five minutes for a failure, written whole and renamed into place; a crossing
 under a live cache entry records `cache: reused` with the same facts. The
 manifest's `id` must name the host it was fetched from, after redirects. Every probe goes through the same host policy and address
-floor as the page. The relay projects nothing from this record
+floor as the page, and is ruled by `robots.txt` at its origin as above. The relay projects nothing from this record
 (`crates/commonmeasure-relay/tests/relay.rs`).
 
 ## Prompt sources
@@ -1576,8 +1878,8 @@ member is added.
 
 The mediating server and the CLI both append to one record. Each reads the
 record again and writes it while holding an exclusive lock on
-`<home>/instances/.lock`, after the hub has answered and never across a
-request, so neither drops the other's entry; a standing older than the
+`<home>/instances/.lock` (created readable by the owner only), after the
+hub has answered and never across a request, so neither drops the other's entry; a standing older than the
 revision held is ignored. Files are staged under the whole file name plus a
 value unique to the write, because session identifiers may contain dots.
 
@@ -2212,6 +2514,23 @@ the policy stays in force and the record says since when it has been stale
 staleness). A local edge writes no such record, because it makes no
 management request. The refresh the relay runs before delivery writes to
 the managed state file, not to any session.
+
+`policy_url` is the URL as the deployment file holds it, and `null` on an
+`unavailable` record. `reason` is `null` on a success and otherwise a
+sentence for the operator, the same one the managed state file records,
+except on `unavailable`: that reason reaches the session log alone, and the
+state file keeps the previous synchronisation. A
+reason names the policy URL by its origin alone (scheme, host and port),
+because a hand-written `policy_url` can carry credentials: a name
+resolution that did not finish within the budget is `name resolution for
+https://hub.example did not complete within 3 s: timed out`, and a refused
+`policy_url` is `policy_url at http://hub.example must be an https URL, or
+http to a loopback origin`, after the deployment file's path. A
+`policy_url` that does not parse has no origin and is refused with the URL
+parser's reason, which quotes no part of it: `policy_url is not a URL:
+invalid port number`. Up to and including 0.4.1 the timeout and the refusal
+quoted the URL whole, and the console withholds a reason that can hold one
+([`docs/CONSOLE.md`](../CONSOLE.md) §Record).
 
 ## What is deliberately absent
 

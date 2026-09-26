@@ -60,12 +60,15 @@ a receiver counts it once.
 
 - **`content_retrieved`**, one per cleared crossing: `content_url` (the
   crossing's URL without user information); `license_ref` where the crossing's
-  licence is `declared`; `content_telemetry_id` (below); `instance` (§Instance
-  reference).
+  licence is `declared`, also without user information, since a licence URL
+  resolved against the page's URL keeps any the page URL carried;
+  `content_telemetry_id` (below); `instance` (§Instance reference).
 - **`content_grounded`**, for a crossing that grounded: `data.scope`
-  `session`, `data.content_hash` (the hash of the text delivered to the agent,
-  never `retrieved_hash`, the hash of the body as served), and the ingestion
-  measure (§Ingestion measure). A crossing whose context entry the host
+  `session`, `data.content_hash` and the ingestion measure (§Ingestion
+  measure). `data.content_hash` is the hash of the whole text extracted for
+  the agent, of which one fetch result may carry only a part, as session
+  evidence `delivered` records; it is never `retrieved_hash`, the hash of the
+  body as served. A crossing whose context entry the host
   observes is grounded by the observation instead, with `data.scope` `turn`
   and the observation's representation hash (§Grounding from host
   observations).
@@ -221,6 +224,108 @@ failure (`DeliveryFailure.instance_references_withheld`) and the command
 prints the warning after the failure, because the accepted batches' events
 are recorded delivered whatever happened to the rest. The count does not cover events projected for a receiver that was not
 the issuer, which never carried the member.
+
+## Supplier scope
+
+A receiver may be scoped to named suppliers: `relay.json` takes a `suppliers`
+list, such as `["ozone"]` for a supplier's own telemetry server.
+
+- Only events whose `data.commonmeasure-supplier` names a listed supplier
+  leave for that receiver: the supplier's retrievals and any recorded
+  grounding of what it served. The operator's own fetches, other suppliers'
+  results and turn boundaries stay home.
+- A scoped receiver gets grounding only where the source record holds it.
+  Mediated search records a supplier's results as retrievals and records no
+  grounding for them, so from mediated search a scoped receiver gets
+  retrieval events only.
+- A batch for a scoped receiver has no `refused` field. The count covers the
+  session's refusals of every source, and a supplier is owed nothing about
+  sources it did not serve; a zero would state a fact about the session that
+  is not true (§The refused count on the wire). No batch is sent to a scoped
+  receiver only to carry a moved count.
+- An absent list, or `null`, means every cleared event and the refused
+  count, as for any receiver. Enrolment writes no list, so the operator's own
+  hub is unscoped.
+- An empty list, `[]`, is scoped to no supplier: the receiver is sent
+  nothing, and nothing is queued or recorded delivered for it.
+- Any other value is a load error, and the relay sends nothing until it is
+  corrected: a string, an object, a list holding anything but names, or an
+  empty name. The harness reads `relay.json` with the relay's parser, so the
+  same file leaves a reporting demand unmet with the load error as the
+  reason ([session evidence §Source declarations](session-evidence.md#source-declarations)).
+- The scope belongs to the receiver `relay.json` names, however a
+  `--receiver` override spells it. The two are one receiver when they reach
+  one endpoint (below); an override to another endpoint is not scoped.
+- The spool is shared by every receiver the relay has been pointed at. A
+  queued batch is narrowed again on the document each delivery posts to a
+  scoped receiver, as the instance reference is; a batch left with no event
+  is held undelivered for a later unscoped receiver. The spooled file stays
+  as queued. Events narrowed out are not recorded delivered, so a later
+  unscoped relay projects them from the session log again.
+- A page this edge or the host fetched names no supplier, so a scoped
+  receiver never carries it. A run's fetch through a supplier's `fetch` names
+  that supplier, and its receiver gets the retrieval and any recorded
+  grounding. A reporting demand on a fetched page's licence or the
+  operator's terms is ruled unmet while `relay.json` sets `suppliers`
+  ([session evidence §Source declarations](session-evidence.md#source-declarations)).
+
+### One receiver
+
+The relay posts each batch to the receiver with its trailing slashes
+removed, followed by `/events`, and parses that URL with the WHATWG URL
+rules. Two receiver URLs are one receiver when the URLs posted to are equal
+after that parse (`commonmeasure_harness::relay_config::same_receiver`).
+Scope selection uses this comparison alone. These spellings are one
+receiver:
+
+| Difference | Example | Handled by |
+|---|---|---|
+| Trailing slash, one or more | `/telemetry/`, `/telemetry` | the `/events` derivation |
+| Empty path | `https://r.example`, `https://r.example/` | the URL parse |
+| Scheme or host case | `HTTPS://R.Example/t` | the URL parse |
+| Explicit default port | `https://r.example:443/t` | the URL parse |
+| Dot segments | `/x/../t`, `/./t` | the URL parse |
+| Host spelling | IDNA names, IPv4 and IPv6 address forms | the URL parse |
+| Credentials in the URL | `https://user@r.example/t` | not sent by the transport |
+| Fragment | `https://r.example/t/events#x` | not sent by the transport |
+| Trailing dots on the host, one or more | `https://r.example./t`, `https://r.example../t` | removed for the comparison only |
+
+A host with its trailing root dot reaches the same server: the transport
+resolves the absolute name, sends it in `Host` as written, and the TLS
+client drops the dot from the server name and matches the certificate. The
+comparison removes every terminal dot, reading the host as a crossing's host
+is read (`commonmeasure_harness::grounding::host_of`). More than one is not a valid DNS
+name, and treating two spellings as one receiver can only apply a scope. A different scheme, port, path, path case or query
+is another receiver.
+
+`relay.json` is refused at load when its receiver URL has a query or a
+fragment (the `/events` suffix would land inside it rather than on the
+path), credentials (the transport never sends them; the key belongs in
+`api_key`), a scheme other than `http` or `https`, or no host. A
+`--receiver` override is not refused for these; it is compared as above, and
+one the transport cannot post to matches nothing.
+
+The load error names the fault and the receiver's origin (scheme, host and
+port, such as `https://hub.example:8443`), and no other part of the URL: a
+key can sit in the credentials, the query or a tokenised path, and the error
+reaches `status`, `doctor`, directory status, the source record and, as the
+reason for an unmet reporting demand, the agent. A receiver that is not a
+URL is named by no part of itself. `status` and `doctor` name the receiver of
+the last recorded delivery by its origin in the same way, or as "an earlier
+receiver" where it has none, and show a recorded delivery error that quotes a
+receiver URL without the URL: `relay/receipts.json` written by 0.4.1 holds
+the receiver as it was configured, and a `--receiver` override is kept as
+given. A host can itself be a capability, since
+some webhook services put the token in the host name, so for such a receiver
+the origin shown is sensitive too.
+
+The comparison is by URL. Two host names that resolve to one server, such
+as `localhost` and `127.0.0.1`, are two receivers to it.
+
+The list narrows what this edge sends. It is not the authority on what a
+supplier may see: that follows the supplier's grant, and an operator may
+narrow within it but never widen it (owner decision, 22 September 2026).
+Nothing here checks the list against a grant yet.
 
 ## Ingestion measure
 
@@ -618,7 +723,8 @@ session, the highest count a receiver has accepted, whatever the receiver
 spool as sent. Its summary states the totals it queued for the wire this run and nothing
 more. A session that was refused and admitted nothing produces no batch and
 its count does not cross; a batch without the field comes from an edge that
-does not report it, which is not the same as a count of zero.
+does not report it, or was sent to a receiver scoped to suppliers
+(§Supplier scope), which is not the same as a count of zero.
 `conformance/session-refused.json` is the vector.
 
 ## Verification
@@ -634,6 +740,14 @@ whose origin is its issuer, on content events only, at each source record's
 revision, that an unregistered session's batch carries none, and that a batch
 spooled for the issuer and delivered to another receiver is posted without
 the member; the receivers there record what the relay posts and are not hubs.
+The supplier scope tests there post to loopback receivers and assert on the
+JSON received: a scoped receiver gets its supplier's retrieval and grounding
+and no `refused` member, also when the override spells the configured URL
+with a trailing slash, when the batch was spooled unscoped, and when a
+directory selection's recheck has rewritten the count; a list that does not
+parse sends nothing, `null` is unscoped and `[]` sends nothing. The URL
+comparison and the parser's table are unit-tested in
+`crates/commonmeasure-harness/src/relay_config.rs`.
 `crates/commonmeasure-relay/tests/conformance.rs` validates the corpus against
 the pinned schemas, including rejection of missing or invalid turn privacy
 levels. A receiver must re-pin the changed corpus and run its own replay gate.

@@ -64,9 +64,9 @@ External dependencies are configured explicitly:
 
 - **Provider acquisition** happens only with `--live`, and only for providers
   whose credential variable is set (`commonmeasure_supply::required_variable` is the
-  one list: `EXA_API_KEY`, `FIRECRAWL_API_KEY`, `KEENABLE_API_KEY`,
-  `LINKUP_API_KEY`, `NIMBLE_API_KEY`, `OZONE_LIVE_API_KEY`, `PARALLEL_API_KEY`,
-  `REDPINE_API_KEY`,
+  one list: `DATAVILLE_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`,
+  `KEENABLE_API_KEY`, `LINKUP_API_KEY`, `NIMBLE_API_KEY`,
+  `OZONE_LIVE_API_KEY`, `PARALLEL_API_KEY`, `REDPINE_API_KEY`,
   `SEARCH1API_API_KEY`, `SERPDIVE_API_KEY`, `TAVILY_API_KEY`,
   `TINYFISH_API_KEY`, `TOLLBIT_API_KEY`, `YOU_API_KEY`). These calls are
   billable. **Skill invocation** is behind the same `--live` gate: it
@@ -426,7 +426,9 @@ is evidence about this run only.
 - `native`: the provider's own unit and number, with `basis` of `observed` or
   `quoted`.
 
-Exa reports decimal USD. Firecrawl reports integer credits and no currency.
+Exa and Dataville report decimal USD. Dataville reads `usage.request_cost`;
+an absent field leaves its charge unknown. Firecrawl reports integer credits
+and no currency.
 Tavily reports nothing, so its charge is `quoted` from the published price
 with a note saying so. TollBit's search is not a priced operation. Redpine's
 confirm receipt reports `cost_charged` and `balance_remaining`; a
@@ -584,8 +586,9 @@ volatile fields. This contract and the runtime change together.
   than asked for, or a provider whose published search page is smaller than
   the job's result limit, the gap naming both numbers — and is distinct from
   the coverage evaluator's rubric measurement.
-- `search` (every open-web adapter, Ozone Live, and Redpine behind its quote
-  gate), `fetch` (Exa, Firecrawl, Linkup, Ozone Live, Parallel, Search1API and Tavily,
+- `search` (every open-web adapter, Dataville, Ozone Live, and Redpine
+  behind its quote gate), `fetch` (Exa, Firecrawl, Linkup, Ozone Live,
+  Parallel, Search1API and Tavily,
   dispatched only when the job names a `fetch_target`), `query` (the
   internal corpus), `quote` (the Redpine adapter's quote-then-buy gate) and
   `invoke` (catalogued local skills) are implemented. The rest of the

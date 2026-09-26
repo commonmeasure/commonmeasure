@@ -23,6 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{SecondsFormat, Utc};
 use commonmeasure_harness::policy::Principal;
+use commonmeasure_runtime::declaration::{self, LockRefused};
 use commonmeasure_types::canonical::sha256_digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,6 +60,10 @@ const KEY_CACHE_FILE: &str = "hosted-jwks.json";
 
 /// Where the hashes of edge-issued tokens live under the operator home.
 const EDGE_TOKENS_FILE: &str = "hosted-tokens.json";
+
+/// The lock `issue` and `revoke` hold across their read, change and write
+/// of [`EDGE_TOKENS_FILE`], beside it in the operator home.
+const EDGE_TOKENS_LOCK: &str = "hosted-tokens.lock";
 
 /// Who a verified token names. Compared to bind a session to the identity
 /// that opened it: a session is answered only to the same bearer.
@@ -164,15 +169,30 @@ impl Verifier {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fetched = fetch_keys(&self.issuer)?;
         cache.last_fetch = Some(Instant::now());
-        self.store_keys(&fetched);
-        cache.keys = fetched;
+        self.hold_keys(&mut cache, fetched);
         Ok(cache.keys.len())
     }
 
-    /// Write the fetched keys beside the home. A cache that cannot be
-    /// written costs the next process a fetch; it does not fail a
-    /// verification.
-    fn store_keys(&self, keys: &HashMap<String, [u8; 32]>) {
+    /// Verify under `fetched` from now on, and write them to the disk cache
+    /// for the next process.
+    ///
+    /// A cache that cannot be written does not fail a verification, but it is
+    /// logged: after the issuer withdraws a key, the earlier cache still
+    /// holds it, and the next process verifies under it until it refetches.
+    fn hold_keys(&self, cache: &mut KeyCache, fetched: HashMap<String, [u8; 32]>) {
+        if let Err(error) = self.store_keys(&fetched) {
+            log_fault(format!(
+                "issuer keys held in memory only; the key cache was not written: {error}"
+            ));
+        }
+        cache.keys = fetched;
+    }
+
+    /// Replace the key cache beside the home whole, so a failed write leaves
+    /// the earlier cache rather than a torn one. The keys are public, so the
+    /// file is written under the umask like the rest of the home;
+    /// [`declaration::replace_private`] would add nothing.
+    fn store_keys(&self, keys: &HashMap<String, [u8; 32]>) -> Result<(), String> {
         let stored = StoredKeys {
             issuer: self.issuer.clone(),
             fetched_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -184,9 +204,9 @@ impl Verifier {
                 })
                 .collect(),
         };
-        if let Ok(encoded) = serde_json::to_vec_pretty(&stored) {
-            let _ = std::fs::write(self.home.join(KEY_CACHE_FILE), encoded);
-        }
+        let encoded = serde_json::to_vec_pretty(&stored)
+            .map_err(|error| format!("serialise {KEY_CACHE_FILE}: {error}"))?;
+        declaration::replace(&self.home.join(KEY_CACHE_FILE), &encoded)
     }
 
     /// The checks in the order that spends least on a token that is not
@@ -208,13 +228,13 @@ impl Verifier {
         let algorithm = header_value["alg"].as_str().unwrap_or("none");
         if algorithm != ACCEPTED_ALGORITHM {
             return Err(format!(
-                "token algorithm {algorithm:?} is not accepted; the hub signs {ACCEPTED_ALGORITHM}"
+                "the token's algorithm is not accepted; the hub signs {ACCEPTED_ALGORITHM}"
             ));
         }
         let issuer = claims_value["iss"].as_str().unwrap_or("");
         if issuer.trim_end_matches('/') != self.issuer {
             return Err(format!(
-                "token issuer {issuer:?} is not the issuer pinned at enrolment, {}",
+                "the token's issuer is not the issuer pinned at enrolment, {}",
                 self.issuer
             ));
         }
@@ -229,7 +249,7 @@ impl Verifier {
         let signed = &token[..header.len() + 1 + claims.len()];
         ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
             .verify(signed.as_bytes(), &signature)
-            .map_err(|_| format!("the token signature does not verify under key {kid}"))?;
+            .map_err(|_| "the token signature does not verify under the key it names".to_owned())?;
 
         let now = Utc::now().timestamp();
         let expiry = claims_value["exp"]
@@ -291,7 +311,7 @@ impl Verifier {
             && at.elapsed() < KEY_REFETCH_INTERVAL
         {
             return Err(format!(
-                "signing key {kid} is not one the issuer {} published when last asked, {}s \
+                "the token's signing key is not one the issuer {} published when last asked, {}s \
                  ago; it is asked again after {}s",
                 self.issuer,
                 at.elapsed().as_secs(),
@@ -300,15 +320,22 @@ impl Verifier {
         }
         cache.last_fetch = Some(Instant::now());
         let fetched = fetch_keys(&self.issuer)?;
-        self.store_keys(&fetched);
-        cache.keys = fetched;
+        self.hold_keys(&mut cache, fetched);
         cache.keys.get(kid).copied().ok_or_else(|| {
             format!(
-                "signing key {kid} is not one the issuer {} publishes",
+                "the token's signing key is not one the issuer {} publishes",
                 self.issuer
             )
         })
     }
+}
+
+/// Say a fault on standard error, where the hosted service says its others
+/// and where its service log receives them.
+fn log_fault(line: String) {
+    #[cfg(test)]
+    tests::LOGGED.with(|logged| logged.borrow_mut().push(line.clone()));
+    eprintln!("commonmeasure: {line}");
 }
 
 /// Fetch the issuer's Ed25519 keys: its authorisation-server metadata
@@ -406,6 +433,29 @@ pub(crate) fn path(home: &Path) -> PathBuf {
     home.join(EDGE_TOKENS_FILE)
 }
 
+/// Hold the token file against every other writer, in this process or
+/// another, until the guard drops. Without it an `issue` that read the file
+/// before a concurrent `revoke` wrote it back would write its older copy over
+/// the revocation, and the revoked token would verify again. Readers take no
+/// lock: `store` replaces the file by rename, so a reader sees one whole
+/// version or the other.
+///
+/// A busy refusal is worded here rather than taken from [`declaration::lock`],
+/// whose text speaks of an edit and would say what did not happen twice.
+fn lock(home: &Path, change: &str) -> Result<declaration::Lock, String> {
+    let path = home.join(EDGE_TOKENS_LOCK);
+    declaration::lock(&path).map_err(|refused| match refused {
+        LockRefused::Busy(_) => format!(
+            "another process has held {} for {}s; no token was {change}",
+            path.display(),
+            declaration::LOCK_DEADLINE.as_secs()
+        ),
+        refused @ (LockRefused::LockFile(_) | LockRefused::Failed(_)) => {
+            format!("no token was {change}: {refused}")
+        }
+    })
+}
+
 fn load(home: &Path) -> Result<EdgeTokens, String> {
     let source = path(home);
     match std::fs::read(&source) {
@@ -416,16 +466,18 @@ fn load(home: &Path) -> Result<EdgeTokens, String> {
     }
 }
 
-/// Write-then-rename, owner-readable: the file holds hashes, but a hash of a
-/// bearer secret is still a fact about who may call.
+/// Replace the file owner-readable: it holds hashes, but a hash of a bearer
+/// secret is still a fact about who may call. [`declaration::replace_private`]
+/// writes a temporary of its own at 0600, removes it if the write fails, and
+/// syncs the directory after the rename, so a revocation that returned is
+/// still there after a crash. Without that sync, ext4 and XFS on Linux make
+/// the rename durable only at their next journal commit, seconds later; on
+/// Windows there is no directory sync and the rename is as durable as NTFS
+/// makes it. The caller holds [`lock`].
 fn store(home: &Path, tokens: &EdgeTokens) -> Result<(), String> {
-    let target = path(home);
-    let tmp = target.with_extension("json.tmp");
     let encoded =
         serde_json::to_vec_pretty(tokens).map_err(|error| format!("serialise tokens: {error}"))?;
-    commonmeasure_harness::identity::write_private(&tmp, &encoded)?;
-    std::fs::rename(&tmp, &target)
-        .map_err(|error| format!("cannot write {}: {error}", target.display()))
+    declaration::replace_private(&path(home), &encoded)
 }
 
 /// Mint a token for `label`, bound to the endpoint `host` when given, and
@@ -453,7 +505,10 @@ pub(crate) fn issue(home: &Path, label: &str, host: Option<&str>) -> Result<Stri
                 .to_owned(),
         );
     }
+    let _lock = lock(home, "issued")?;
     let mut tokens = load(home)?;
+    #[cfg(test)]
+    tests::after_issue_loaded(home);
     if tokens.tokens.iter().any(|token| token.label == label) {
         return Err(format!(
             "an edge token for {label:?} was already issued; revoke it and choose another label"
@@ -477,7 +532,10 @@ pub(crate) fn issue(home: &Path, label: &str, host: Option<&str>) -> Result<Stri
 /// Revoke `label`'s token. The file is read on every request, so the next
 /// request carrying it is refused without a restart.
 pub(crate) fn revoke(home: &Path, label: &str) -> Result<(), String> {
+    let _lock = lock(home, "revoked")?;
     let mut tokens = load(home)?;
+    #[cfg(test)]
+    tests::after_revoke_loaded(home);
     let token = tokens
         .tokens
         .iter_mut()
@@ -498,7 +556,13 @@ pub(crate) fn list(home: &Path) -> Result<Vec<EdgeToken>, String> {
 
 fn verify_edge_token(home: &Path, token: &str, host: &str) -> Result<Bearer, String> {
     let digest = sha256_digest(token.as_bytes());
-    let tokens = load(home)?;
+    // The refusal reaches a caller no token has authenticated yet, so it
+    // names the file and not where the operator keeps it; the service log
+    // keeps the path.
+    let tokens = load(home).map_err(|reason| {
+        log_fault(format!("edge tokens not verified: {reason}"));
+        reason.replace(&path(home).display().to_string(), EDGE_TOKENS_FILE)
+    })?;
     let held = tokens
         .tokens
         .iter()
@@ -521,6 +585,151 @@ fn verify_edge_token(home: &Path, token: &str, host: &str) -> Result<Bearer, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+
+    type Pause = (PathBuf, Arc<dyn Fn() + Send + Sync>);
+
+    thread_local! {
+        /// What [`log_fault`] said on this thread.
+        pub(super) static LOGGED: std::cell::RefCell<Vec<String>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn take_logged() -> Vec<String> {
+        LOGGED.with(|logged| std::mem::take(&mut *logged.borrow_mut()))
+    }
+
+    /// A pause `issue` takes after reading the file, for the one home a test
+    /// names, so a test can place another writer between that read and the
+    /// write. Keyed by home because the module's other tests run in parallel.
+    static ISSUE_PAUSE: Mutex<Option<Pause>> = Mutex::new(None);
+
+    /// The same pause in `revoke`.
+    static REVOKE_PAUSE: Mutex<Option<Pause>> = Mutex::new(None);
+
+    pub(super) fn after_issue_loaded(home: &Path) {
+        take_pause(&ISSUE_PAUSE, home);
+    }
+
+    pub(super) fn after_revoke_loaded(home: &Path) {
+        take_pause(&REVOKE_PAUSE, home);
+    }
+
+    fn take_pause(slot: &Mutex<Option<Pause>>, home: &Path) {
+        let pause = slot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|(held, _)| held == home)
+            .map(|(_, pause)| Arc::clone(pause));
+        if let Some(pause) = pause {
+            pause();
+        }
+    }
+
+    /// EGR-60. `issue` reads the file, then a revoke from another writer
+    /// lands, then `issue` writes. Unlocked, the issue writes back the
+    /// snapshot it read and the revoked token stands again.
+    ///
+    /// Two threads stand in for two processes: the lock is `flock` (or
+    /// `LockFileEx`), held per open file description, and each call opens
+    /// the lock file itself, so the threads contend as two processes do.
+    /// The paused issue waits for the revoke to finish, or for a second:
+    /// with the lock held the revoke cannot finish, and a second is inside
+    /// the lock's two-second deadline, so the revoke then takes the lock
+    /// after the issue releases it rather than being refused.
+    #[test]
+    fn a_revoke_between_an_issues_read_and_write_is_kept() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let revoked = issue(home.path(), "a", None).expect("issued a");
+        let (loaded_tx, loaded_rx) = mpsc::channel::<()>();
+        let (revoked_tx, revoked_rx) = mpsc::channel::<()>();
+        let revoked_rx = Mutex::new(revoked_rx);
+        *ISSUE_PAUSE.lock().expect("pause") = Some((
+            home.path().to_owned(),
+            Arc::new(move || {
+                loaded_tx.send(()).expect("loaded");
+                let _ = revoked_rx
+                    .lock()
+                    .expect("receiver")
+                    .recv_timeout(Duration::from_secs(1));
+            }),
+        ));
+        let revoker = {
+            let home = home.path().to_owned();
+            std::thread::spawn(move || {
+                loaded_rx.recv().expect("issue read the file");
+                let outcome = revoke(&home, "a");
+                let _ = revoked_tx.send(());
+                outcome
+            })
+        };
+        let issued = issue(home.path(), "b", None);
+        ISSUE_PAUSE.lock().expect("pause").take();
+        issued.expect("issued b");
+        revoker.join().expect("revoker").expect("revoked a");
+
+        let refused = verify_edge_token(home.path(), &revoked, "chatgpt")
+            .expect_err("a revoked token stays revoked");
+        assert!(refused.contains("revoked"), "{refused}");
+        let labels: Vec<String> = list(home.path())
+            .expect("list")
+            .into_iter()
+            .map(|token| token.label)
+            .collect();
+        assert_eq!(labels, ["a", "b"]);
+    }
+
+    /// The mirror of the test above: `revoke` reads the file, then an issue
+    /// from another writer runs. An `issue` that read the file before taking
+    /// the lock would wait for the revoke's lock with that read in hand and
+    /// then write it back, and the revoked token would stand again.
+    ///
+    /// The paused revoke waits a second for the issue to finish, which it
+    /// cannot while the lock is held; the issue then takes the lock within
+    /// its two-second deadline, after the revoke releases it.
+    #[test]
+    fn an_issue_between_a_revokes_read_and_write_keeps_the_revocation() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let revoked = issue(home.path(), "a", None).expect("issued a");
+        let (loaded_tx, loaded_rx) = mpsc::channel::<()>();
+        let (issued_tx, issued_rx) = mpsc::channel::<()>();
+        let issued_rx = Mutex::new(issued_rx);
+        *REVOKE_PAUSE.lock().expect("pause") = Some((
+            home.path().to_owned(),
+            Arc::new(move || {
+                loaded_tx.send(()).expect("loaded");
+                let _ = issued_rx
+                    .lock()
+                    .expect("receiver")
+                    .recv_timeout(Duration::from_secs(1));
+            }),
+        ));
+        let issuer = {
+            let home = home.path().to_owned();
+            std::thread::spawn(move || {
+                loaded_rx.recv().expect("revoke read the file");
+                let outcome = issue(&home, "b", None);
+                let _ = issued_tx.send(());
+                outcome
+            })
+        };
+        let outcome = revoke(home.path(), "a");
+        REVOKE_PAUSE.lock().expect("pause").take();
+        outcome.expect("revoked a");
+        issuer.join().expect("issuer").expect("issued b");
+
+        let refused = verify_edge_token(home.path(), &revoked, "chatgpt")
+            .expect_err("a revoked token stays revoked");
+        assert!(refused.contains("revoked"), "{refused}");
+        let labels: Vec<String> = list(home.path())
+            .expect("list")
+            .into_iter()
+            .map(|token| token.label)
+            .collect();
+        assert_eq!(labels, ["a", "b"]);
+    }
 
     #[test]
     fn an_issued_token_verifies_until_revoked_and_a_label_is_issued_once() {
@@ -548,6 +757,123 @@ mod tests {
     }
 
     #[test]
+    fn a_change_refused_behind_another_writer_says_nothing_changed() {
+        let home = tempfile::tempdir().expect("tempdir");
+        issue(home.path(), "a", None).expect("issued a");
+        let before = std::fs::read(path(home.path())).expect("file");
+        let held = declaration::lock(&home.path().join(EDGE_TOKENS_LOCK)).expect("held");
+        let refused = revoke(home.path(), "a").expect_err("busy");
+        assert!(
+            refused.contains(EDGE_TOKENS_LOCK) && refused.ends_with("no token was revoked"),
+            "{refused}"
+        );
+        assert!(
+            !refused.contains("no edit was made"),
+            "said once: {refused}"
+        );
+        drop(held);
+        assert_eq!(std::fs::read(path(home.path())).expect("file"), before);
+    }
+
+    fn leftovers(home: &Path) -> Vec<String> {
+        std::fs::read_dir(home)
+            .expect("home")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect()
+    }
+
+    /// EGR-123. A write that fails leaves the token file as it was and no
+    /// temporary beside it: the directory refuses the temporary, or the
+    /// rename fails after the temporary was written.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_write_leaves_no_temporary_and_the_file_as_it_was() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        issue(home.path(), "a", None).expect("issued a");
+        let before = std::fs::read(path(home.path())).expect("file");
+        // SAFETY: `geteuid` has no arguments or memory preconditions. Root
+        // writes into a 0555 directory, so the refusal half needs another
+        // user.
+        if unsafe { libc::geteuid() } != 0 {
+            std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o555))
+                .expect("read-only home");
+            let refused = revoke(home.path(), "a");
+            std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700))
+                .expect("writable home");
+            let refused = refused.expect_err("a read-only home refuses the write");
+            // The directory's own error, not a search for a free temporary
+            // name that sends the operator after leftover files that do not
+            // exist.
+            assert!(
+                refused.contains("Permission denied") && !refused.contains("tries"),
+                "{refused}"
+            );
+            assert_eq!(std::fs::read(path(home.path())).expect("file"), before);
+            assert_eq!(leftovers(home.path()), Vec::<String>::new());
+        }
+
+        let blocked = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(path(blocked.path())).expect("a directory where the file goes");
+        std::fs::write(path(blocked.path()).join("keep"), b"").expect("non-empty");
+        store(blocked.path(), &EdgeTokens::default()).expect_err("the rename is refused");
+        assert!(path(blocked.path()).join("keep").exists());
+        assert_eq!(leftovers(blocked.path()), Vec::<String>::new());
+    }
+
+    /// A temporary an earlier failed write left behind, under a wider mode,
+    /// does not pass that mode on to the token file.
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_temporary_does_not_widen_the_token_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let leftover = path(home.path()).with_extension("json.tmp");
+        std::fs::write(&leftover, b"").expect("leftover");
+        std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(0o644)).expect("wide");
+        issue(home.path(), "a", None).expect("issued a");
+        let mode = std::fs::metadata(path(home.path()))
+            .expect("file")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// EGR-124. A key cache that cannot be written is said where the service
+    /// says its other faults, the earlier cache stays whole, and the fetched
+    /// keys are still the ones verified under.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_cache_that_cannot_be_written_is_logged_and_the_earlier_one_kept() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let verifier = Verifier::new(home.path(), "https://hub.test", "org-1");
+        let mut cache = KeyCache::default();
+        verifier.hold_keys(&mut cache, HashMap::from([("old".to_owned(), [1u8; 32])]));
+        let cached = home.path().join(KEY_CACHE_FILE);
+        let before = std::fs::read(&cached).expect("the first cache is written");
+        let _ = take_logged();
+
+        std::fs::set_permissions(&cached, std::fs::Permissions::from_mode(0o444))
+            .expect("read-only cache");
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o555))
+            .expect("read-only home");
+        verifier.hold_keys(&mut cache, HashMap::from([("new".to_owned(), [2u8; 32])]));
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("writable home");
+
+        assert_eq!(std::fs::read(&cached).expect("cache"), before);
+        let logged = take_logged();
+        assert!(
+            logged.len() == 1 && logged[0].contains(KEY_CACHE_FILE),
+            "{logged:?}"
+        );
+        assert!(cache.keys.contains_key("new") && !cache.keys.contains_key("old"));
+    }
+
+    #[test]
     fn a_bound_token_is_accepted_on_its_endpoint_alone() {
         let home = tempfile::tempdir().expect("tempdir");
         assert!(issue(home.path(), "ci:x", Some("claude-code")).is_err());
@@ -564,6 +890,31 @@ mod tests {
         assert_eq!(
             list(home.path()).expect("list")[0].host.as_deref(),
             Some("copilot-cloud-agent")
+        );
+    }
+
+    #[test]
+    fn a_token_file_that_does_not_parse_is_named_to_the_caller_and_logged_in_full() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(path(home.path()), "{").expect("token file");
+        let _ = take_logged();
+        let refused =
+            verify_edge_token(home.path(), "cmet_anything", "chatgpt").expect_err("refused");
+        assert!(
+            refused.starts_with("hosted-tokens.json is not a valid token file: "),
+            "{refused}"
+        );
+        assert!(
+            !refused.contains(&home.path().display().to_string()),
+            "{refused}"
+        );
+        let logged = take_logged();
+        assert!(
+            logged.iter().any(|line| line.contains(&format!(
+                "{} is not a valid token file",
+                path(home.path()).display()
+            ))),
+            "the service log keeps the path: {logged:?}"
         );
     }
 
@@ -593,7 +944,8 @@ mod tests {
                 "chatgpt",
             )
             .expect_err("refused");
-        assert!(refused.contains("HS256"), "{refused}");
+        assert!(refused.contains("algorithm is not accepted"), "{refused}");
+        assert!(!refused.contains("HS256"), "{refused}");
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA","kid":"k"}"#);
         let claims = URL_SAFE_NO_PAD.encode(br#"{"iss":"https://other.test"}"#);
         let refused = verifier
@@ -604,6 +956,7 @@ mod tests {
             )
             .expect_err("refused");
         assert!(refused.contains("not the issuer pinned"), "{refused}");
+        assert!(!refused.contains("other.test"), "{refused}");
         assert!(
             verifier.keys.lock().expect("lock").last_fetch.is_none(),
             "no fetch was made for a token that is not ours"

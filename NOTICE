@@ -11,3 +11,9 @@ docs/contracts/ are licensed separately under the Creative Commons
 Attribution 4.0 International licence (CC-BY-4.0); see docs/contracts/LICENSE.
 
 Third-party code and standards retain their own notices.
+
+The binary carries the Public Suffix List (https://publicsuffix.org/),
+compiled in through the psl crate (MIT or Apache-2.0). The list is
+licensed under the Mozilla Public License, Version 2.0
+(https://mozilla.org/MPL/2.0/); its source is
+https://publicsuffix.org/list/public_suffix_list.dat.

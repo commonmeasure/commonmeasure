@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 license-file = "LICENSE.md"
 rust-version = "1.97"
@@ -114,6 +114,13 @@ toml_edit = "0.22"
 # (`crates/commonmeasure-harness/src/declarations.rs`). Default features only:
 # no async runtime, no encoding tables.
 quick-xml = "0.41"
+# The Public Suffix List, compiled into the binary, for the registrable
+# domain a manifest probe may ask after a 404
+# (`crates/commonmeasure-harness/src/manifest.rs`): no request leaves the edge
+# to learn the list. The crate is MIT or Apache-2.0 and has no dependency but
+# its types; the list it carries is MPL-2.0 (`NOTICE`). Its patch version
+# tracks the upstream list, and `RELEASING.md` refreshes it for each release.
+psl = "2.1.238"
 
 # The C2PA SDK signs and reads the output provenance manifest
 # (`crates/commonmeasure-runtime/src/processor/provenance.rs`) and reads the

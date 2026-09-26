@@ -10,15 +10,16 @@
 //! same digest.
 //!
 //! Every mediated fetch that produced a body passes through here, HTML or
-//! not, so the record can tie the bytes the origin served to the text that
-//! entered or was withheld from context in every case. A body whose content
+//! not, so the record can tie the bytes the origin served to the text
+//! extracted from them in every case, whether a fetch result carried that
+//! text whole or in part, or withheld it. A body whose content
 //! type is not HTML is decoded and delivered with any supported Annex A.8
 //! credential wrapper removed after verification. The input and output hashes
 //! are equal when content decoding and wrapper removal leave the bytes
 //! unchanged. The invocation's input
 //! is the hash of the bytes the origin served, coded where it served them
 //! under gzip, and its
-//! output the hash of the text delivered, which is how a reader re-derives
+//! output the hash of the extracted text, which is how a reader re-derives
 //! the crossing's `content_hash` from its `retrieved_hash` without trusting
 //! this runtime (`docs/FAIL-POLICY.md` §12).
 //!
@@ -755,7 +756,7 @@ mod tests {
     }
 
     /// A body served under gzip: the input hash is over the coded bytes the
-    /// origin served, the output hash over the text delivered, and the record
+    /// origin served, the output hash over the extracted text, and the record
     /// names the coding and both sizes. The two hashes differ even for a body
     /// delivered unextracted, because the coding was removed.
     #[test]

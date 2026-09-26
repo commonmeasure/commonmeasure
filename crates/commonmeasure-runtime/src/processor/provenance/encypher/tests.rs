@@ -58,11 +58,12 @@ fn input<'a>(
     }
 }
 
-fn signed_response(case: &str) -> String {
+/// A credential Encypher could return, signed over `sources` as the request
+/// named them.
+fn signed_response(case: &str, sources: &[Source]) -> String {
     let policy = policy();
-    let sources = sources();
     let signing = SigningIdentity::Unconfigured;
-    let input = input(&policy, &sources, &signing);
+    let input = input(&policy, sources, &signing);
     let mut definition = definition(&input);
     match case {
         "source_record" => definition["assertions"][2]["data"]["run_id"] = json!("another-run"),
@@ -130,7 +131,17 @@ fn signed_response(case: &str) -> String {
 }
 
 fn run_case(case: &'static str) -> (Value, Option<Label>, Vec<Request>) {
-    let signed = signed_response(case);
+    run_with(case, sources(), &sources())
+}
+
+/// Run the adapter on `sources` against a fixture that returns a credential
+/// signed over `sent`, the sources the request is expected to name.
+fn run_with(
+    case: &'static str,
+    sources: Vec<Source>,
+    sent: &[Source],
+) -> (Value, Option<Label>, Vec<Request>) {
+    let signed = signed_response(case, sent);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&seen);
     let server = Server::bind("127.0.0.1:0")
@@ -198,7 +209,6 @@ fn run_case(case: &'static str) -> (Value, Option<Label>, Vec<Request>) {
     } else {
         &signing
     };
-    let sources = sources();
     let (invocation, label) = super::super::invoke(&input(&policy, &sources, signing));
     assert_eq!(
         capture.path().join("response.json").exists(),
@@ -303,6 +313,151 @@ fn signed_but_wrong_claims_and_failed_responses_never_publish_a_label() {
         }
         assert!(!invocation.to_string().contains(KEY), "{case}");
         assert!(!invocation.to_string().contains(ANSWER), "{case}");
+    }
+}
+
+/// Sources with each reference in `references`, and the same sources with
+/// each reference replaced by its counterpart in `sent`.
+fn sources_sent_as(references: &[(&str, &str)]) -> (Vec<Source>, Vec<Source>) {
+    let recorded: Vec<Source> = references
+        .iter()
+        .enumerate()
+        .map(|(index, (reference, _))| Source {
+            reference: (*reference).to_owned(),
+            content_hash: sha256_digest(format!("source {index}").as_bytes()),
+            grade: Grade::Mediated,
+        })
+        .collect();
+    let sent = recorded
+        .iter()
+        .zip(references)
+        .map(|(source, (_, sent))| Source {
+            reference: (*sent).to_owned(),
+            ..source.clone()
+        })
+        .collect();
+    (recorded, sent)
+}
+
+/// Every reference the request names: the ingredient titles and the source
+/// record's sources, in that order.
+fn sent_references(request: &Request) -> Vec<String> {
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    let assertions = body["options"]["custom_assertions"].as_array().unwrap();
+    let mut references: Vec<String> = assertions[2..]
+        .iter()
+        .map(|assertion| assertion["data"]["dc:title"].as_str().unwrap().to_owned())
+        .collect();
+    references.extend(
+        assertions[0]["data"]["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|source| source["reference"].as_str().unwrap().to_owned()),
+    );
+    references
+}
+
+/// Checks the exchange admits, that the request names `expected` twice over
+/// (ingredients, then source record) and that the run's own record keeps the
+/// references as recorded. Returns the serialised request body.
+fn exchange_sends(references: &[(&str, &str)]) -> String {
+    let (recorded, sent) = sources_sent_as(references);
+    let (invocation, label, requests) = run_with("success", recorded.clone(), &sent);
+    assert_eq!(requests.len(), 1);
+    let expected: Vec<String> = references
+        .iter()
+        .chain(references)
+        .map(|(_, sent)| (*sent).to_owned())
+        .collect();
+    assert_eq!(sent_references(&requests[0]), expected);
+    assert_eq!(invocation["decision"], "admit", "{invocation:#}");
+    let read = read_back(&label.unwrap().text).unwrap();
+    assert_eq!(read.ingredients, sent, "the label names what was sent");
+    let inputs: Vec<&str> = invocation["inputs"].as_array().unwrap()[1..]
+        .iter()
+        .map(|input| input["reference"].as_str().unwrap())
+        .collect();
+    let kept: Vec<&str> = recorded.iter().map(|s| s.reference.as_str()).collect();
+    assert_eq!(inputs, kept, "the local record keeps each reference");
+    let definition = &invocation["detail"]["manifest_definition"]["ingredients"];
+    for (ingredient, source) in definition.as_array().unwrap().iter().zip(&recorded) {
+        assert_eq!(ingredient["title"], source.reference.as_str());
+    }
+    String::from_utf8(requests[0].body.clone()).unwrap()
+}
+
+#[test]
+fn credentials_in_manifest_and_supplier_urls_do_not_reach_encypher() {
+    let body = exchange_sends(&[
+        (
+            "https://u:p@host.example/m.json",
+            "https://host.example/m.json",
+        ),
+        (
+            "https://acct-7:supplier-secret@supplier.example/items/7?edition=2",
+            "https://supplier.example/items/7?edition=2",
+        ),
+    ]);
+    for leaked in ["u:p", "acct-7", "supplier-secret", "@"] {
+        assert!(!body.contains(leaked), "the request carries {leaked:?}");
+    }
+}
+
+#[test]
+fn credentials_in_an_unparseable_reference_do_not_reach_encypher() {
+    let references = [
+        // An out-of-range port and a space in an opaque host fail to parse.
+        (
+            "https://user:pw@host.example:99999/m.json",
+            "https://host.example:99999/m.json",
+        ),
+        (
+            "terms://user:pw@legal desk/contract-7",
+            "terms://legal desk/contract-7",
+        ),
+    ];
+    for (reference, _) in references {
+        assert!(url::Url::parse(reference).is_err(), "{reference} parses");
+    }
+    let body = exchange_sends(&references);
+    for leaked in ["user", "pw", "@"] {
+        assert!(!body.contains(leaked), "the request carries {leaked:?}");
+    }
+}
+
+#[test]
+fn only_the_userinfo_of_a_sent_reference_changes() {
+    exchange_sends(&[
+        // No case folding, default-port removal or path resolution.
+        (
+            "HTTPS://U:P@Host.Example:443/a/../m.json",
+            "HTTPS://Host.Example:443/a/../m.json",
+        ),
+        // Without userinfo, byte for byte, however a parser would reserialise
+        // it and wherever an `@` sits outside the authority.
+        (
+            "HTTPS://Host.Example:443/a/../b?q=c@d#f@g",
+            "HTTPS://Host.Example:443/a/../b?q=c@d#f@g",
+        ),
+        ("https://host.example/u@b", "https://host.example/u@b"),
+        (r"http://h\@evil.example/l", r"http://h\@evil.example/l"),
+        (
+            "mailto:licensing@publisher.example",
+            "mailto:licensing@publisher.example",
+        ),
+        ("plans/local/source@1", "plans/local/source@1"),
+        ("urn:example:source:7", "urn:example:source:7"),
+    ]);
+}
+
+#[test]
+fn a_reference_whose_userinfo_cannot_be_cut_from_the_text_is_sent_as_serialised() {
+    // Without slashes after the scheme there is no authority to cut from the
+    // text, but the parser still reads `u:p` as userinfo.
+    let body = exchange_sends(&[("https:u:p@h.example/f", "https://h.example/f")]);
+    for leaked in ["u:p", "@"] {
+        assert!(!body.contains(leaked), "the request carries {leaked:?}");
     }
 }
 

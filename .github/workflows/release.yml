@@ -13,9 +13,9 @@ permissions:
   contents: write
 
 jobs:
-  # The tag, the workspace manifest, the binary and the plugin manifest must
-  # name one version, and the release notes for that version must exist.
-  # Nothing is built for release until they do.
+  # The tag, the workspace manifest, the binary and the plugin and browser
+  # manifests must name one version, and the release notes for that version
+  # must exist. Nothing is built for release until they do.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -34,15 +34,15 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: The plugin manifest carries the same version
+      - name: The plugin and browser manifests carry the same version
         run: cargo test --locked -p commonmeasure-cli --test version_identity
       - name: The release notes for this tag are committed
         run: sh .github/scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > /dev/null
 
   # One binary per platform the release supports, named as the plugin's
-  # launcher expects. Linux and Windows are cross-compiled with zig on one
-  # Linux runner, as plugin/build.sh does; both macOS binaries are built on
-  # one Apple Silicon runner, where Apple's SDK links either architecture.
+  # launcher expects. Each of the five matrix entries gets its own runner:
+  # three Linux runners cross-compile Linux and Windows with zig, as
+  # plugin/build.sh does; two Apple silicon runners build the macOS binaries.
   build:
     needs: version
     strategy:
@@ -112,7 +112,8 @@ jobs:
 
   # The release holds the binaries, the installer, SHA256SUMS over every
   # asset, and the plugin archive packaged from those same binaries. Its
-  # title is the first heading of the committed notes and its body the rest.
+  # title is Common Measure <version>; its body is the committed version
+  # section with the heading removed.
   publish:
     needs: [version, build]
     runs-on: ubuntu-latest
@@ -144,12 +145,12 @@ jobs:
             --title "Common Measure ${GITHUB_REF_NAME#v}" \
             --notes-file body.md release/*
 
-  # The acceptance check for the release, the same check RELEASING.md
-  # records: a container with no toolchain and no credential installs the
-  # binary through the installer downloaded from the public release with the
-  # checksum verified, the installed binary reports the tag, the plugin
-  # archive installs into Claude Code, and the repository itself installs
-  # as a Claude Code marketplace.
+  # The acceptance check for the release, the stricter workflow form
+  # described in RELEASING.md: a container with no toolchain and no
+  # credential installs the binary through the installer downloaded from the
+  # public release with the checksum verified, the installed binary reports
+  # the tag, the plugin archive installs into Claude Code, and the
+  # repository itself installs as a Claude Code marketplace.
   verify:
     needs: [version, publish]
     runs-on: ubuntu-latest

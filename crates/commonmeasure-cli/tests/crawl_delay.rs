@@ -4,15 +4,24 @@
 //! decision, 14 September 2026), so the modes here vary and the outcome does
 //! not.
 //!
-//! A test that waits one out uses two seconds, short enough to keep the file
-//! quick and long enough that a loaded machine does not leave the delay
-//! before the second fetch starts. A test that needs a refusal writes the
-//! turn another request would have left, dated ahead, so the wait is longer
-//! than the whole budget and no test waits a minute for it.
+//! A test that waits one out uses two seconds, which keeps the file quick. It
+//! asserts the turns the store reserved, read at the origin as each request
+//! arrives, and that each request arrived at or after its own turn: a gap
+//! between two arrivals shrinks whenever a loaded machine is late sending the
+//! first, without any fault in the pacing. The one wall-clock bound is on
+//! lateness: a request must arrive less than half the delay after its turn.
+//! Measured lateness is 6 to 22 ms, so the bound is loose on purpose; it is
+//! there to catch slow work between taking a turn and sending, which would
+//! let the origin see two requests closer than the delay while every turn
+//! was reserved correctly.
+//!
+//! A test that needs a refusal writes the turn another request would have
+//! left, dated ahead, so the wait is longer than the whole budget and no test
+//! waits a minute for it.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,6 +34,17 @@ struct Origin {
     handle: ServerHandle,
     host: &'static str,
     seen: Arc<Mutex<Vec<(String, Instant)>>>,
+    arrivals: Arc<Mutex<Vec<Arrival>>>,
+}
+
+/// A request as the origin received it, beside the turn the crawl-delay
+/// store held for the host at that moment. Where no other server is taking
+/// turns on the host, that is the turn reserved for this request.
+#[derive(Debug, Clone)]
+struct Arrival {
+    target: String,
+    received: chrono::DateTime<chrono::Utc>,
+    turn: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Origin {
@@ -52,22 +72,54 @@ impl Origin {
         self.seen.lock().unwrap().clone()
     }
 
-    fn first(&self, target: &str) -> Instant {
-        self.requests()
-            .into_iter()
-            .find(|(asked, _)| asked == target)
+    /// The first arrival of `target`. Only an origin started with
+    /// [`paced_origin`] or [`paced_licensed_origin`] reads the turns.
+    fn arrived(&self, target: &str) -> Arrival {
+        self.arrivals
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|arrival| arrival.target == target)
             .unwrap_or_else(|| panic!("{target} was never asked for"))
-            .1
+            .clone()
+    }
+
+    /// Every page request's arrival, in order, as [`Origin::pages`] counts
+    /// them.
+    fn page_arrivals(&self) -> Vec<Arrival> {
+        self.arrivals
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|arrival| {
+                arrival.target != "/robots.txt"
+                    && arrival.target != "/.well-known/content-telemetry.json"
+                    && arrival.target != "/license.xml"
+            })
+            .cloned()
+            .collect()
     }
 }
 
 fn origin(host: &'static str, robots: &'static str, redirect_to: Option<String>) -> Origin {
-    serve(host, robots, redirect_to, None)
+    serve(host, robots, redirect_to, None, None)
+}
+
+/// An origin on `127.0.0.1` that reads the host's turn from the crawl-delay
+/// store under `home` as each request arrives.
+fn paced_origin(home: &Path, robots: &'static str) -> Origin {
+    serve("127.0.0.1", robots, None, None, Some(home))
 }
 
 /// An origin whose `robots.txt` names `/license.xml`, which it serves.
 fn licensed_origin(robots: &'static str, licence: &'static str) -> Origin {
-    serve("127.0.0.1", robots, None, Some(licence))
+    serve("127.0.0.1", robots, None, Some(licence), None)
+}
+
+/// A [`licensed_origin`] that reads the host's turn under `home` as
+/// [`paced_origin`] does.
+fn paced_licensed_origin(home: &Path, robots: &'static str, licence: &'static str) -> Origin {
+    serve("127.0.0.1", robots, None, Some(licence), Some(home))
 }
 
 fn serve(
@@ -75,15 +127,25 @@ fn serve(
     robots: &'static str,
     redirect_to: Option<String>,
     licence: Option<&'static str>,
+    home: Option<&Path>,
 ) -> Origin {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&seen);
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let arrived = Arc::clone(&arrivals);
+    let home = home.map(Path::to_path_buf);
     let handle = Server::bind("127.0.0.1:0")
         .expect("bind")
         .spawn(move |request| {
+            let received = chrono::Utc::now();
             log.lock()
                 .unwrap()
                 .push((request.target.clone(), Instant::now()));
+            arrived.lock().unwrap().push(Arrival {
+                target: request.target.clone(),
+                received,
+                turn: home.as_deref().and_then(|home| recorded_turn(home, host)),
+            });
             if request.target == "/robots.txt" {
                 return Response::text(200, robots);
             }
@@ -102,7 +164,12 @@ fn serve(
             Response::text(200, "the page text")
         })
         .expect("spawn");
-    Origin { handle, host, seen }
+    Origin {
+        handle,
+        host,
+        seen,
+        arrivals,
+    }
 }
 
 fn start(home: &Path, session: &str) -> Child {
@@ -124,6 +191,21 @@ fn answers(child: Child) -> Vec<Value> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect()
+}
+
+/// The answers still to come on `stdout`, once `child` exits cleanly.
+fn answers_after(mut child: Child, stdout: BufReader<ChildStdout>) -> Vec<Value> {
+    let answers = stdout
+        .lines()
+        .map(|line| line.expect("read an answer"))
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(&line).expect("one JSON object per line"))
+        .collect();
+    assert!(
+        child.wait().expect("wait").success(),
+        "the server should exit cleanly"
+    );
+    answers
 }
 
 fn ask(child: &mut Child, requests: &[Value]) {
@@ -206,6 +288,62 @@ fn seed_turn(home: &Path, host: &str, at: chrono::DateTime<chrono::Utc>) {
     .expect("the record");
 }
 
+/// The turn the store holds for `host`: the send time of the last request
+/// to it, or of the one waiting to be sent. `None` where no turn was taken.
+fn recorded_turn(home: &Path, host: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let path = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home).path_of(host);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("read {}: {error}", path.display()),
+    };
+    let record: Value = serde_json::from_slice(&bytes).expect("a turn record");
+    Some(
+        record["at"]
+            .as_str()
+            .expect("a turn")
+            .parse()
+            .expect("an instant"),
+    )
+}
+
+/// Each request took a turn, arrived at or after it, and was reserved at
+/// least `delay` after the request before it. These are orderings against
+/// the times the store wrote, so they allow nothing below the turn.
+///
+/// Each request must also arrive less than `delay / 2` after its turn.
+/// Without that bound, work done between taking a turn and sending (or a
+/// back-dated turn) would bring two arrivals closer than the delay while
+/// every turn still looked kept. Measured lateness is 6 to 22 ms, so half a
+/// two-second delay fails only a gross regression or a process stalled for
+/// most of a second.
+fn assert_turns_kept(arrivals: &[Arrival], delay: chrono::Duration) {
+    for arrival in arrivals {
+        let turn = arrival
+            .turn
+            .unwrap_or_else(|| panic!("{} was sent without a turn: {arrival:?}", arrival.target));
+        assert!(
+            arrival.received >= turn,
+            "{} arrived before its reserved turn: {arrival:?}",
+            arrival.target
+        );
+        assert!(
+            arrival.received - turn < delay / 2,
+            "{} was sent long after its turn, so the origin saw less than half the delay: \
+             {arrival:?}",
+            arrival.target
+        );
+    }
+    for pair in arrivals.windows(2) {
+        assert!(
+            pair[1].turn.unwrap() >= pair[0].turn.unwrap() + delay,
+            "{} was given a turn inside the delay of {}: {pair:?}",
+            pair[1].target,
+            pair[0].target
+        );
+    }
+}
+
 fn home_with_mode(mode: &str) -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -247,22 +385,18 @@ const NO_DELAY: &str = "User-agent: *\nAllow: /\n";
 
 #[test]
 fn the_delay_of_the_group_naming_the_product_token_is_waited_out() {
-    let site = origin("127.0.0.1", NAMED_TWO_SECONDS, None);
     let home = home_with_mode("observe");
+    let site = paced_origin(home.path(), NAMED_TWO_SECONDS);
     let article = site.url("/article");
 
     let responses = converse(home.path(), &[fetch(1, &article), fetch(2, &article)]);
     assert_eq!(responses[1]["result"]["isError"], false, "{}", responses[1]);
 
-    let pages = site.pages();
+    // One server takes every turn and waits for each answer before the next,
+    // so the turn read as a page arrives is that page's own.
+    let pages = site.page_arrivals();
     assert_eq!(pages.len(), 2);
-    // The turn is taken just before the request is signed and sent, so the
-    // gap the origin sees is the delay less the few milliseconds between the
-    // two.
-    assert!(
-        pages[1].1.duration_since(pages[0].1) >= Duration::from_millis(1_900),
-        "the origin was asked twice inside its delay"
-    );
+    assert_turns_kept(&pages, chrono::Duration::seconds(2));
 
     let shown = payload(&responses[1])["declarations"]["robots"].clone();
     assert_eq!(shown["group"], "CommonMeasureBot");
@@ -420,8 +554,8 @@ fn a_delay_over_the_bound_is_kept_at_the_bound_and_recorded_as_capped() {
 
 #[test]
 fn the_delay_is_kept_across_two_server_processes() {
-    let site = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
     let home = home_with_mode("observe");
+    let site = paced_origin(home.path(), WILDCARD_TWO_SECONDS);
     let article = site.url("/article");
 
     let first = converse(home.path(), &[fetch(1, &article)]);
@@ -433,37 +567,103 @@ fn the_delay_is_kept_across_two_server_processes() {
         "waited",
         "a restart does not forget the last request"
     );
-    let pages = site.pages();
+    // The second process starts after the first has exited, so each page's
+    // arrival reads its own turn, and the second turn can only be measured
+    // from the first through the store.
+    let pages = site.page_arrivals();
     assert_eq!(pages.len(), 2);
-    assert!(
-        pages[1].1.duration_since(pages[0].1) >= Duration::from_millis(1_900),
-        "the second process fired inside the delay"
-    );
+    assert_turns_kept(&pages, chrono::Duration::seconds(2));
 }
 
 #[test]
 fn two_servers_asking_at_once_do_not_both_fire_inside_the_delay() {
-    let site = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
     let home = home_with_mode("observe");
+    let site = paced_origin(home.path(), WILDCARD_TWO_SECONDS);
     let article = site.url("/article");
+    let delay = chrono::Duration::seconds(2);
 
     // Each server writes its own session log; the record they share is the
-    // last request to the host.
-    let mut left = start(home.path(), "left");
-    let mut right = start(home.path(), "right");
-    ask(&mut left, &[fetch(1, &article)]);
-    ask(&mut right, &[fetch(1, &article)]);
-    drop(left.stdin.take());
-    drop(right.stdin.take());
-    for answer in [answers(left), answers(right)] {
+    // last request to the host. Both answer a first request before the
+    // anchor is seeded, so a slow start on a fresh home falls outside it.
+    let mut servers: Vec<_> = ["left", "right"]
+        .into_iter()
+        .map(|session| start(home.path(), session))
+        .collect();
+    for server in &mut servers {
+        ask(
+            server,
+            &[json!({"jsonrpc": "2.0", "id": 0, "method": "tools/list"})],
+        );
+    }
+    let mut servers: Vec<_> = servers
+        .into_iter()
+        .map(|mut server| {
+            let mut stdout = BufReader::new(server.stdout.take().expect("stdout"));
+            let mut line = String::new();
+            stdout.read_line(&mut line).expect("read the first answer");
+            let ready: Value = serde_json::from_str(&line).expect("one JSON object per line");
+            assert!(ready["result"]["tools"].is_array(), "not ready: {ready}");
+            (server, stdout)
+        })
+        .collect();
+
+    // Each server's page turn is written while the other may be taking its
+    // own, so the earlier turn can be overwritten before its page arrives
+    // and the origin cannot read it. An earlier request's turn, a second
+    // ahead, gives both turns a known start: the first page's turn is at
+    // least one delay after it, and the second's, measured from the first,
+    // at least two. That holds only while the host is still inside the
+    // seeded turn's delay when both manifest probes run, so that neither
+    // takes a turn; the test checks that no manifest was sent.
+    let seeded = chrono::Utc::now() + chrono::Duration::seconds(1);
+    seed_turn(home.path(), "127.0.0.1", seeded);
+
+    for (server, _) in &mut servers {
+        ask(server, &[fetch(1, &article)]);
+        drop(server.stdin.take());
+    }
+    for (server, stdout) in servers {
+        let answer = answers_after(server, stdout);
         assert_eq!(answer[0]["result"]["isError"], false, "{}", answer[0]);
     }
 
-    let pages = site.pages();
-    assert_eq!(pages.len(), 2);
+    let manifests: Vec<_> = site
+        .arrivals
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|arrival| arrival.target == "/.well-known/content-telemetry.json")
+        .cloned()
+        .collect();
+    for manifest in &manifests {
+        assert!(
+            manifest.received >= seeded + delay,
+            "a manifest was sent inside the delay of the turn already taken: {manifest:?}"
+        );
+    }
     assert!(
-        pages[1].1.duration_since(pages[0].1) >= Duration::from_millis(1_900),
-        "two servers fired inside the delay"
+        manifests.is_empty(),
+        "a manifest was sent, so the anchor lapsed: the seeded turn's delay was over before \
+         the servers fetched, and the concurrent turns went unchecked: {manifests:?}"
+    );
+
+    let pages = site.page_arrivals();
+    assert_eq!(pages.len(), 2);
+    for page in &pages {
+        assert!(
+            page.received >= seeded + delay,
+            "a page was sent inside the delay of the turn already taken: {page:?}"
+        );
+    }
+    let last = recorded_turn(home.path(), "127.0.0.1").expect("a turn");
+    assert!(
+        last >= seeded + delay * 2,
+        "the later server's turn was not measured from the earlier's: {last} after {seeded}"
+    );
+    let latest = pages.iter().map(|page| page.received).max().unwrap();
+    assert!(
+        latest >= last,
+        "no page waited for the later turn {last}: {pages:?}"
     );
 }
 
@@ -547,6 +747,7 @@ fn a_robots_file_that_cannot_be_reached_refuses_paces_nothing_and_says_so() {
         handle,
         host: "127.0.0.1",
         seen,
+        arrivals: Arc::default(),
     };
     let home = home_with_mode("observe");
     let article = site.url("/article");
@@ -665,6 +866,7 @@ fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
         handle,
         host: "127.0.0.1",
         seen,
+        arrivals: Arc::default(),
     };
 
     let responses = converse(home.path(), &[fetch(1, &shortener.url("/s/abc"))]);
@@ -712,31 +914,32 @@ fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
 
 #[test]
 fn the_manifest_takes_the_crossings_free_turn_the_page_waits_behind_it_and_robots_txt_takes_none() {
-    let site = origin("127.0.0.1", WILDCARD_TWO_SECONDS, None);
     let home = home_with_mode("observe");
+    let site = paced_origin(home.path(), WILDCARD_TWO_SECONDS);
 
     let responses = converse(home.path(), &[fetch(1, &site.url("/article"))]);
     assert_eq!(responses[0]["result"]["isError"], false, "{}", responses[0]);
-    let robots = site.first("/robots.txt");
-    let manifest = site.first("/.well-known/content-telemetry.json");
-    let page = site.pages()[0].1;
+    let robots = site.arrived("/robots.txt");
+    let manifest = site.arrived("/.well-known/content-telemetry.json");
+    let page = site.page_arrivals()[0].clone();
     // `robots.txt` is exempt: the delay cannot be read without it, so it is
     // asked for at once and takes no turn.
     assert!(
-        manifest.duration_since(robots) < Duration::from_millis(1_900),
-        "the manifest waited for a turn robots.txt had not taken"
+        robots.turn.is_none(),
+        "robots.txt was asked after a turn was taken: {robots:?}"
     );
     // The manifest is an ordinary request to the same host, so it takes a
     // turn — the free one, before the page, because after the page it would
-    // need a whole delay from what the page left. The page waits behind it.
+    // need a whole delay from what the page left. The store held no turn
+    // when robots.txt was asked and the manifest's is the first written
+    // after it, so there was nothing for the manifest to wait for.
+    let manifest_turn = manifest.turn.expect("the manifest took a turn");
     assert!(
-        page > manifest,
-        "the manifest was not asked at the crossing's first free turn"
+        manifest_turn >= robots.received,
+        "the manifest's turn was taken before robots.txt was asked: {manifest:?}"
     );
-    assert!(
-        page.duration_since(manifest) >= Duration::from_millis(1_900),
-        "the page did not wait for the turn the manifest probe took"
-    );
+    // The page waits behind it.
+    assert_turns_kept(&[manifest, page], chrono::Duration::seconds(2));
     let delay = &crossings(home.path())[0]["payload"]["declarations"]["robots"]["delay"];
     assert_eq!(delay["outcome"], "waited", "{delay}");
 }
@@ -788,8 +991,8 @@ fn a_licence_with_no_current_reading_is_read_before_the_page_and_its_demand_rule
     // Met: the scope clears egress and a receiver is named. The licence is
     // read first, the page waits a whole delay behind it, and a second page
     // on the same host reuses the licence and takes one turn only.
-    let site = licensed_origin(LICENSED_TWO_SECONDS, REPORTING_LICENCE);
     let home = tempfile::tempdir().expect("tempdir");
+    let site = paced_licensed_origin(home.path(), LICENSED_TWO_SECONDS, REPORTING_LICENCE);
     std::fs::write(
         home.path().join("policy.json"),
         r#"{"policy_mode":"strict","allow_private_hosts":true,
@@ -815,16 +1018,16 @@ fn a_licence_with_no_current_reading_is_read_before_the_page_and_its_demand_rule
     for response in &responses {
         assert_eq!(response["result"]["isError"], false, "{response}");
     }
-    let licence_at = site.first("/license.xml");
-    let article_at = site.first("/article");
-    let other_at = site.first("/other");
-    assert!(
-        article_at.duration_since(licence_at) >= Duration::from_millis(1_900),
-        "the page was asked inside the licence's delay"
-    );
-    assert!(
-        other_at.duration_since(article_at) >= Duration::from_millis(1_900),
-        "the second page was asked inside the first page's delay"
+    // One server, answered before it asks again: each arrival reads its own
+    // turn. The page's turn is at least a delay after the licence's, and the
+    // second page's a delay after the first's.
+    assert_turns_kept(
+        &[
+            site.arrived("/license.xml"),
+            site.arrived("/article"),
+            site.arrived("/other"),
+        ],
+        chrono::Duration::seconds(2),
     );
     let licence_asks = site
         .requests()
@@ -856,7 +1059,10 @@ fn licence_then_page_beyond_the_budget_is_refused_before_any_request() {
     let now = chrono::Utc::now();
     std::fs::create_dir_all(home.path().join("declarations")).expect("cache");
     std::fs::write(
-        home.path().join("declarations/127.0.0.1.json"),
+        home.path().join(format!(
+            "declarations/{}.json",
+            commonmeasure_harness::discovery::origin_key(&site.url("/"))
+        )),
         serde_json::to_vec(&json!({"robots": {
             "url": site.url("/robots.txt"),
             "fetched_at": now,
@@ -936,6 +1142,7 @@ fn licence_answering(status: u16, body: &'static str) -> Origin {
         handle,
         host: "127.0.0.1",
         seen,
+        arrivals: Arc::default(),
     }
 }
 
@@ -1053,7 +1260,10 @@ fn cache_declarations(home: &Path, site: &Origin, robots: &str, licence: Option<
     }
     std::fs::create_dir_all(home.join("declarations")).expect("cache");
     std::fs::write(
-        home.join("declarations/127.0.0.1.json"),
+        home.join(format!(
+            "declarations/{}.json",
+            commonmeasure_harness::discovery::origin_key(&site.url("/"))
+        )),
         serde_json::to_vec(&record).expect("a record"),
     )
     .expect("the cached declarations");
@@ -1493,20 +1703,160 @@ fn a_backoff_update_fault_is_the_edges_and_repair_allows_the_next_probe() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(first[0]["result"]["isError"], true, "{first:?}");
     let detail = text_of(&first[0]);
-    assert!(detail.contains("127.0.0.1.backoff.json"), "{detail}");
+    // The lock file cannot be created, so the directory is what to repair.
+    assert!(
+        detail.contains(&format!(
+            "Make the back-off directory, {}, writable",
+            dir.display()
+        )),
+        "{detail}"
+    );
     assert!(
         detail.contains("Permission denied") || detail.contains("os error 13"),
         "{detail}"
     );
     assert!(!detail.contains("unreachable"), "{detail}");
     let declaration: Value = serde_json::from_slice(
-        &std::fs::read(home.path().join("declarations/127.0.0.1.json")).unwrap(),
+        &std::fs::read(home.path().join(format!(
+            "declarations/{}.json",
+            commonmeasure_harness::discovery::origin_key(&url)
+        )))
+        .unwrap(),
     )
     .unwrap();
     assert!(declaration["robots"].is_null(), "{declaration}");
     let second = converse(home.path(), &[fetch(2, &url)]);
     assert_eq!(second[0]["result"]["isError"], false, "{second:?}");
     assert_eq!(*hits.lock().unwrap(), 2);
+}
+
+/// A page answered 503 into a back-off store whose directory cannot be
+/// written (review scratch S6). The answer cannot be recorded, so it is not
+/// used, but the crossing keeps the publisher's status and says the host
+/// answered, and the remedy names the directory: the lock file cannot be
+/// created there, and the host's back-off file does not exist.
+#[test]
+#[cfg(unix)]
+fn a_503_the_store_cannot_record_keeps_its_status_and_names_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = home_with_mode("observe");
+    let dir = home.path().join("crawl-delay");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let site = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(|request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            Response::text(503, "busy")
+        })
+        .unwrap();
+    let url = format!("{}/article", site.url());
+    let responses = converse(home.path(), &[fetch(1, &url)]);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+    let detail = payload(&responses[0])["error"]
+        .as_str()
+        .expect("an error")
+        .to_owned();
+    let remedy = format!(
+        "Make the back-off directory, {}, writable, and try again.",
+        dir.display()
+    );
+    assert!(
+        detail.starts_with(&format!(
+            "{url} answered HTTP 503, and this edge could not record the answer, so it is not \
+             used: the back-off record for 127.0.0.1 could not be locked: "
+        )),
+        "{detail}"
+    );
+    assert!(detail.ends_with(&remedy), "{detail}");
+    assert!(!detail.contains("backoff.json"), "{detail}");
+    let records = crossings(home.path());
+    let crossing = &records[0]["payload"];
+    assert_eq!(crossing["http_status"], 503, "{crossing}");
+    assert_eq!(crossing["failure"], json!(detail));
+    let event = &crossing["declarations"]["backoff"][0];
+    assert_eq!(event["outcome"], "unavailable");
+    assert!(
+        event["reason"].as_str().unwrap().ends_with(&remedy),
+        "{event}"
+    );
+    // Nothing could be kept, so nothing paces the next request.
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+    // The session a person reads says the host answered.
+    let shown = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["session", "test-session"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .output()
+        .expect("the binary runs");
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(text.contains("answer not used: "), "{text}");
+    assert!(!text.contains("no answer: "), "{text}");
+}
+
+/// The same unrecorded 503 with host observations opted in. No page was
+/// read and no acquisition was issued, so the crossing awaits no host
+/// context evidence: it is not stamped `host_required`, and the session
+/// counts it as a URL named whose page was never read.
+#[test]
+#[cfg(unix)]
+fn an_unrecorded_answer_awaits_no_host_observation() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = home_with_mode("observe");
+    let dir = home.path().join("crawl-delay");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let site = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(|request| {
+            if request.target == "/robots.txt" {
+                return Response::text(200, NO_DELAY);
+            }
+            Response::text(503, "busy")
+        })
+        .unwrap();
+    let url = format!("{}/article", site.url());
+    let responses = converse(
+        home.path(),
+        &[
+            json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"clientInfo": {"name": "pi", "version": "fixture"}}}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "commonmeasure/observe",
+                "params": {"event": "observations_started"}}),
+            fetch(2, &url),
+        ],
+    );
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(responses[1].get("result").is_some(), "{responses:?}");
+    assert_eq!(responses[2]["result"]["isError"], true, "{responses:?}");
+
+    let log = std::fs::read_to_string(home.path().join("sessions/test-session.ndjson")).unwrap();
+    assert!(log.contains(r#""event":"observations_started""#), "{log}");
+    let records = crossings(home.path());
+    let crossing = records
+        .iter()
+        .find(|r| r["event"] == "crossing_mediated")
+        .map(|r| &r["payload"])
+        .expect("a mediated crossing");
+    assert_eq!(crossing["http_status"], 503, "{crossing}");
+    assert!(crossing["failure"].is_string(), "{crossing}");
+    assert!(crossing.get("context_observation").is_none(), "{crossing}");
+    assert!(crossing.get("acquisition_id").is_none(), "{crossing}");
+
+    let shown = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["session", "test-session"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .output()
+        .expect("the binary runs");
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        text.contains("1 named a URL whose page was never read"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1589,9 +1939,11 @@ fn three_processes_allow_one_sender_and_one_failure_after_backoff() {
     converse(home.path(), &[fetch(1, &url)]);
     failing.store(true, Ordering::SeqCst);
     let store = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path());
-    store
-        .answered("127.0.0.1", 503, Some("2"), chrono::Utc::now())
-        .unwrap();
+    let seeded = store
+        .answered("127.0.0.1", 503, Some("5"), chrono::Utc::now())
+        .unwrap()
+        .unwrap()
+        .until;
     let mut children: Vec<_> = (0..3)
         .map(|i| start(home.path(), &format!("waiter-{i}")))
         .collect();
@@ -1605,6 +1957,37 @@ fn three_processes_allow_one_sender_and_one_failure_after_backoff() {
     }
     assert_eq!(failures.load(Ordering::SeqCst), 1);
     assert_eq!(store.backoff("127.0.0.1").unwrap().unwrap().failures, 2);
+    // Every child waited out the seeded back-off, so all three were waiting
+    // when it ended. A child that started after it ended did not test the
+    // herd, and the test says so rather than passing.
+    for i in 0..3 {
+        let log = home.path().join(format!("sessions/waiter-{i}.ndjson"));
+        let text = std::fs::read_to_string(&log).unwrap();
+        let crossing: Value = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("the log is NDJSON"))
+            .find(|record| {
+                record["event"]
+                    .as_str()
+                    .is_some_and(|event| event.starts_with("crossing_"))
+            })
+            .expect("a crossing");
+        let waited = crossing["payload"]["declarations"]["backoff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["outcome"] == "waited"
+                    && event["backoff"]["until"]
+                        .as_str()
+                        .and_then(|until| until.parse::<chrono::DateTime<chrono::Utc>>().ok())
+                        == Some(seeded)
+            });
+        assert!(
+            waited,
+            "waiter-{i} did not wait for the seeded back-off: {crossing}"
+        );
+    }
 }
 
 #[test]
@@ -1615,7 +1998,10 @@ fn a_licence_probe_refused_by_backoff_writes_no_crawl_delay_ruling() {
     );
     let home = home_with_mode("observe");
     converse(home.path(), &[fetch(1, &site.url("/article"))]);
-    let path = home.path().join("declarations/127.0.0.1.json");
+    let path = home.path().join(format!(
+        "declarations/{}.json",
+        commonmeasure_harness::discovery::origin_key(&site.url("/"))
+    ));
     let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     record["licences"] = json!({});
     std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();

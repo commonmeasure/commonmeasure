@@ -5,6 +5,7 @@ use commonmeasure_http::{
 };
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -136,29 +137,98 @@ fn a_drip_feeding_client_is_cut_off_at_its_deadline() {
 
 /// The connection cap is a queue, not a refusal: with every slot held, the next
 /// client waits for one to free and is then served normally.
+///
+/// Every slot is held by a handler that has started and is parked, so the cap
+/// is full before the next request is sent however slowly the connections
+/// were set up. The queued request must then not reach the handler until one
+/// of them is released. A server that would serve it at once is given a
+/// moment to do so; a loaded machine can only make that moment too short to
+/// catch a lifted cap, never fail a server that keeps it.
 #[test]
 fn a_connection_past_the_cap_is_queued_not_refused() {
+    let events = Arc::new((Mutex::new(Vec::<&str>::new()), Condvar::new()));
+    let gate = Arc::new((Mutex::new(0usize), Condvar::new()));
+    let seen = Arc::clone(&events);
+    let held_until = Arc::clone(&gate);
     let handle = Server::bind("127.0.0.1:0")
         .expect("bind")
-        .timeout(TEST_TIMEOUT)
-        .spawn(|_| Response::text(200, "served"))
+        .spawn(move |request| {
+            let (log, changed) = &*seen;
+            if request.target != "/held" {
+                log.lock().unwrap().push("queued");
+                changed.notify_all();
+                return Response::text(200, "served");
+            }
+            log.lock().unwrap().push("held");
+            changed.notify_all();
+            let (released, opened) = &*held_until;
+            let mut released = opened
+                .wait_while(released.lock().unwrap(), |released| *released == 0)
+                .unwrap();
+            *released -= 1;
+            Response::text(200, "held")
+        })
         .expect("spawn");
 
-    let held: Vec<TcpStream> = (0..MAX_CONCURRENT_CONNECTIONS)
-        .map(|_| TcpStream::connect(handle.addr()).expect("connect"))
+    let held: Vec<_> = (0..MAX_CONCURRENT_CONNECTIONS)
+        .map(|_| {
+            let url = format!("{}/held", handle.url());
+            std::thread::spawn(move || {
+                send_with_timeout(&url, Request::get("/"), Duration::from_secs(60))
+                    .expect("a held request is answered once released")
+            })
+        })
         .collect();
+    let (log, changed) = &*events;
+    let (full, timed_out) = changed
+        .wait_timeout_while(log.lock().unwrap(), Duration::from_secs(60), |log| {
+            log.len() < MAX_CONCURRENT_CONNECTIONS
+        })
+        .unwrap();
+    assert!(
+        !timed_out.timed_out(),
+        "only {} slots were taken",
+        full.len()
+    );
+    drop(full);
 
-    let started = Instant::now();
-    let resp = send_with_timeout(&handle.url(), Request::get("/"), Duration::from_secs(10))
+    let url = handle.url();
+    let queued = std::thread::spawn(move || {
+        send_with_timeout(&url, Request::get("/"), Duration::from_secs(60))
+    });
+    let (early, _) = changed
+        .wait_timeout_while(log.lock().unwrap(), TEST_TIMEOUT, |log| {
+            !log.contains(&"queued")
+        })
+        .unwrap();
+    assert!(
+        !early.contains(&"queued"),
+        "a request past the cap was served with every slot held: the cap is not being enforced"
+    );
+    drop(early);
+
+    let (released, opened) = &*gate;
+    log.lock().unwrap().push("released");
+    *released.lock().unwrap() += 1;
+    opened.notify_all();
+    let resp = queued
+        .join()
+        .unwrap()
         .expect("a queued request is served, not refused");
     assert_eq!(resp.status, 200);
     assert_eq!(resp.body, b"served");
+    let order = log.lock().unwrap().clone();
+    let at = |event| order.iter().position(|seen| *seen == event).unwrap();
     assert!(
-        started.elapsed() >= TEST_TIMEOUT / 2,
-        "served in {:?} with every slot held: the cap is not being enforced",
-        started.elapsed()
+        at("released") < at("queued"),
+        "the queued request was served before a slot was released: {order:?}"
     );
-    drop(held);
+
+    *released.lock().unwrap() += MAX_CONCURRENT_CONNECTIONS;
+    opened.notify_all();
+    for held in held {
+        assert_eq!(held.join().unwrap().status, 200);
+    }
 }
 
 /// The client's budget covers the whole exchange. An origin dripping its

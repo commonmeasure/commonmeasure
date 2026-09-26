@@ -22,6 +22,7 @@ const MARKERS: &[&str] = &[
     "EXA_API_KEY=",
     "sk-",
     "tvly-",
+    "dataville_",
 ];
 
 /// Assert that none of `artefacts` under `output` carries a credential-shaped

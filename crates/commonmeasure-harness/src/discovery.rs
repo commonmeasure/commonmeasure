@@ -1,9 +1,11 @@
-//! Reading a source's declarations for one page: the per-host cache of
+//! Reading a source's declarations for one page: the per-origin cache of
 //! `robots.txt` and licence documents, and the record a crossing carries.
 //!
-//! `robots.txt` is fetched once per host and cached for 24 hours, the age the
-//! attachment draft and RFC 9309 allow; a licence document is cached with it
-//! under its URL. A probe that failed is cached for five minutes, so a host
+//! A `robots.txt` answer is kept for 24 hours, the age the attachment draft
+//! and RFC 9309 allow, or for the response's `max-age` where that is shorter,
+//! and asked for again once it has expired; the slot is one per origin
+//! (scheme, host and port). A licence document is cached with it under its
+//! URL. A probe that failed is cached for five minutes, so a host
 //! that is down is not asked again on every crossing and the failure is
 //! still on each record. A failed `robots.txt` probe never discards the last
 //! copy the host answered with: RFC 9309 §2.4 lets a crawler use it past its
@@ -14,6 +16,17 @@
 //! Every outbound request goes through the prober the caller supplies, which
 //! is the mediated fetch path with its host policy and address floor.
 //! Nothing here resolves a name.
+//!
+//! A request this edge makes on its own account, not the agent's, is ruled
+//! by `robots.txt` at its own origin for the product token's group, as a page
+//! is, in every policy mode: the manifest probe, the probe of the registrable
+//! domain's manifest, a licence only a page's `Link` header names, and every
+//! redirect from one of them. The one exception is a licence a `License:`
+//! line in `robots.txt` names at the origin of the page whose `robots.txt`
+//! was requested, which the file has already admitted
+//! ([`LicenceMechanism::RobotsLicense`]); a redirect from it is still ruled,
+//! and one it names at any other origin, including the origin a redirected
+//! `robots.txt` was served from, is ruled there.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -69,8 +82,10 @@ pub struct Probe {
     /// cut short, or a licence body over the bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// True where this edge did not send the request ([`ProbeFailure::NotSent`]).
-    /// A failure without it was sent, or tried, and nothing answered.
+    /// True where this edge did not send the request: refused it
+    /// ([`ProbeFailure::NotSent`]), held it back for back-off, or cut it
+    /// short before transport ([`ProbeFailure::sent`]). A failure without it
+    /// was sent, or tried.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub not_sent: bool,
     /// The redirect target this edge declined to request
@@ -82,7 +97,19 @@ pub struct Probe {
     /// the record expires when it is made and the next crossing asks again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cut_short: bool,
+    /// [`REFUSED_BY_ROBOTS`] where `robots.txt` refused the probe, or a
+    /// redirect from it, before the request ([`ProbeFailure::RobotsRefused`]).
+    /// The record then expires with the copy of `robots.txt` that refused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_by: Option<String>,
 }
+
+/// What `refused_by` names where the host's `robots.txt` refused a probe.
+pub const REFUSED_BY_ROBOTS: &str = "robots.txt";
+/// What a manifest probe's `refused_by` names where this edge sends no
+/// request to the URL: the operator's policy, the address floor or the hub's
+/// origin.
+pub const REFUSED_BY_POLICY: &str = "policy";
 
 impl Probe {
     /// Whether the host answered with something the access rule can be read
@@ -104,16 +131,53 @@ impl Probe {
         }
     }
 
-    /// A `robots.txt` probe cached by an earlier build that this edge now
-    /// reads differently, so it is asked for again rather than reused: a 2xx
-    /// over the bound, kept with no body, and a probe recorded as not sent,
-    /// which covered a redirect this edge declined.
-    fn read_differently_now(&self) -> bool {
-        self.not_sent
-            || (self.body.is_none()
-                && self
-                    .status
-                    .is_some_and(|status| (200..300).contains(&status)))
+    /// Whether a live cached `robots.txt` probe may be reused: only a shape
+    /// [`cached_probe`] writes for `robots.txt` and reuses. A shape this
+    /// build does not write is asked for again.
+    /// A 2xx kept with no body, as 0.3.5 kept a file over the bound, would
+    /// otherwise read as unavailable and so as no rules.
+    /// A 0.3.x failure kept in the same bytes as this build's unreachable
+    /// host (a refusal by that edge's own rule, a back-off hold or a time
+    /// limit) is reused and read as unreachable, since shape cannot tell
+    /// them apart; it fails closed and expires within five minutes.
+    fn reusable_as_robots(&self) -> bool {
+        // A request this edge did not send is asked for again on the next
+        // crossing. What stopped it is this edge's own rule (the operator's
+        // policy, the address floor or the hub's origin), checked before
+        // transport, so asking again costs the host nothing while the rule
+        // stands and applies a changed rule at once.
+        if self.not_sent {
+            return false;
+        }
+        // Never kept: a probe cut short empties the slot, and a redirect of
+        // a `robots.txt` probe is followed rather than ruled.
+        if self.cut_short || self.refused_by.is_some() {
+            return false;
+        }
+        let failure = self.body.is_none() && self.truncated.is_none() && self.error.is_some();
+        match self.status {
+            // The file: whole within the bound, or its complete lines
+            // within it with `truncated` set.
+            Some(status) if (200..300).contains(&status) => {
+                self.body.is_some()
+                    && self.error.is_none()
+                    && self.final_url.is_some()
+                    && self.declined_redirect.is_none()
+            }
+            // No rules for this fetcher.
+            Some(status) if robots_status_is_no_rules(status) => {
+                self.body.is_none()
+                    && self.truncated.is_none()
+                    && self.error.is_none()
+                    && self.final_url.is_some()
+                    && self.declined_redirect.is_none()
+            }
+            // A status that makes the file unreachable, kept for the
+            // failure age.
+            Some(_) => failure && self.final_url.is_some() && self.declined_redirect.is_none(),
+            // Nothing answered, or a redirect this edge declined.
+            None => failure && self.final_url.is_none(),
+        }
     }
 }
 
@@ -151,7 +215,7 @@ fn robots_status_is_no_rules(status: u16) -> bool {
     (400..500).contains(&status) && status != 429
 }
 
-/// Everything cached for one host.
+/// Everything cached for one origin.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,15 +236,71 @@ pub struct HostRecord {
     pub page_licences: BTreeMap<String, String>,
 }
 
-/// The cache directory, `<home>/declarations/`, one JSON file per host.
+/// The cache directory, `<home>/declarations/`, one JSON file per origin,
+/// named by [`origin_key`].
 pub struct DeclarationCache {
     dir: PathBuf,
 }
 
+/// The declaration cache's key for `url`'s origin: the host as
+/// [`crate::grounding::host_of`] reads it, followed by the scheme and port
+/// for any origin other than `https` on 443. Two origins on one host each
+/// keep their own `robots.txt` and the last answer it gave, and
+/// `a.example.com.` shares `a.example.com`'s entry. An `https` origin on 443
+/// is named by its host alone, as a per-host cache file is, so a copy already
+/// cached for it is kept.
+pub fn origin_key(url: &str) -> String {
+    let host = crate::grounding::host_of(url);
+    match url::Url::parse(url) {
+        Ok(parsed)
+            if !(parsed.scheme() == "https" && parsed.port_or_known_default() == Some(443)) =>
+        {
+            let port = parsed
+                .port_or_known_default()
+                .map_or_else(String::new, |port| port.to_string());
+            format!("{host}_{}_{port}", parsed.scheme())
+        }
+        _ => host,
+    }
+}
+
+/// Whether two URLs are at one origin: the same scheme, the same host as
+/// [`crate::grounding::host_of`] reads it, and the same effective port. The
+/// three are compared as they are, not as the [`origin_key`] they join into:
+/// a host may contain `_`, so two origins can share a key. A URL that does
+/// not parse is at no origin.
+fn same_origin(a: &str, b: &str) -> bool {
+    let origin = |url: &str| {
+        url::Url::parse(url).ok().map(|parsed| {
+            (
+                parsed.scheme().to_owned(),
+                crate::grounding::host_of(url),
+                parsed.port_or_known_default(),
+            )
+        })
+    };
+    matches!((origin(a), origin(b)), (Some(a), Some(b)) if a == b)
+}
+
 /// A fetch of one URL through the mediated path: the final URL and the
-/// response, or why nothing was fetched.
+/// response, or why nothing was fetched. The second argument says what the
+/// fetch does with a redirect.
 pub type Prober<'a> =
-    &'a dyn Fn(&str) -> Result<(String, commonmeasure_http::Response), ProbeFailure>;
+    &'a dyn Fn(&str, Redirects) -> Result<(String, commonmeasure_http::Response), ProbeFailure>;
+
+/// What a probe does with a redirect before following it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Redirects {
+    /// Follows it, within the host policy and address floor. A `robots.txt`
+    /// probe's redirects are followed: RFC 9309 §2.3.1.2 expects a crawler to
+    /// follow them, and the file reached rules the origin that redirected.
+    Followed,
+    /// Rules the target against `robots.txt` at the target's own origin
+    /// first, as a page's redirect is ruled ([`rule_probe`]), and does not
+    /// request a target those rules refuse
+    /// ([`ProbeFailure::RobotsRefused`]).
+    Ruled,
+}
 
 /// Why a probe brought back no response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,8 +315,11 @@ pub enum ProbeFailure {
     /// Response-driven pacing refused the request before it was sent.
     Backoff(String),
     /// The request was sent and answered with a redirect this edge declined
-    /// to follow: to an address it does not mediate, to the hub's origin, or
-    /// to a host the operator's policy refuses. The document was not read.
+    /// to follow: to an address it does not mediate, to the hub's origin, to
+    /// a host the operator's policy refuses, or to a host in back-off. The
+    /// document was not read, and the failure is kept for
+    /// [`FAILURE_CACHE_AGE`] as the host's answer, so a target in back-off is
+    /// not asked about on every crossing.
     /// RFC 9309 §2.3.1.2 expects a crawler to follow at least five
     /// redirects, so for `robots.txt` this is unreachable, not unavailable.
     RedirectDeclined {
@@ -210,7 +333,21 @@ pub enum ProbeFailure {
     /// signed. It is never remembered as a failure of the host. For
     /// `robots.txt` the file is not read, and a page is not fetched under a
     /// file this edge has not read, so the crossing is refused.
-    CutShort(String),
+    ///
+    /// `sent` says whether a request of the probe left this edge first: a
+    /// request ended by the time limit, or a redirect whose target was not
+    /// requested, was; one refused its time or its signature before
+    /// transport was not. The reason does not decide it.
+    CutShort { reason: String, sent: bool },
+    /// A redirect from the probe was to a URL that `robots.txt` at the
+    /// target's origin refuses ([`Redirects::Ruled`]), so the target was not
+    /// requested. `url` is the target; what is remembered of the probe
+    /// expires at `expires_at`, with the copy of `robots.txt` that refused it.
+    RobotsRefused {
+        url: String,
+        reason: String,
+        expires_at: DateTime<Utc>,
+    },
 }
 
 impl ProbeFailure {
@@ -220,7 +357,20 @@ impl ProbeFailure {
             | Self::NotSent(reason)
             | Self::Backoff(reason)
             | Self::RedirectDeclined { reason, .. }
-            | Self::CutShort(reason) => reason,
+            | Self::CutShort { reason, .. }
+            | Self::RobotsRefused { reason, .. } => reason,
+        }
+    }
+
+    /// Whether a request of the probe left this edge, for the record's
+    /// `cache`: a request sent, or tried, before the probe failed.
+    pub fn sent(&self) -> bool {
+        match self {
+            Self::NotSent(_) | Self::Backoff(_) => false,
+            Self::CutShort { sent, .. } => *sent,
+            Self::Unreachable(_) | Self::RedirectDeclined { .. } | Self::RobotsRefused { .. } => {
+                true
+            }
         }
     }
 }
@@ -232,11 +382,11 @@ impl DeclarationCache {
         }
     }
 
-    fn path_for(&self, host: &str) -> PathBuf {
+    fn path_for(&self, key: &str) -> PathBuf {
         // Hosts are DNS names or IP literals; the characters outside that
         // set, brackets and colons of an IPv6 literal, are folded so the name
-        // is a plain file name.
-        let name: String = host
+        // is a plain file name, as is the separator before a scheme and port.
+        let name: String = key
             .chars()
             .map(|c| {
                 if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
@@ -249,8 +399,9 @@ impl DeclarationCache {
         self.dir.join(format!("{name}.json"))
     }
 
-    pub fn load(&self, host: &str) -> HostRecord {
-        std::fs::read(self.path_for(host))
+    /// The record kept under `key`, an [`origin_key`].
+    pub fn load(&self, key: &str) -> HostRecord {
+        std::fs::read(self.path_for(key))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
@@ -259,10 +410,10 @@ impl DeclarationCache {
     /// Best-effort: a cache that cannot be written costs a repeated probe,
     /// never a crossing. Written whole and renamed into place, so two
     /// servers on one home never leave a reader half a file.
-    pub fn save(&self, host: &str, record: &HostRecord) {
+    pub fn save(&self, key: &str, record: &HostRecord) {
         let _ = std::fs::create_dir_all(&self.dir);
         if let Ok(bytes) = serde_json::to_vec_pretty(record) {
-            let _ = crate::declaration::replace(&self.path_for(host), &bytes);
+            let _ = crate::declaration::replace(&self.path_for(key), &bytes);
         }
     }
 }
@@ -294,7 +445,7 @@ fn cached_probe(
     if let Some(existing) = slot.as_ref()
         && existing.url == url
         && existing.expires_at > now
-        && !(kind == ProbeKind::Robots && existing.read_differently_now())
+        && (kind != ProbeKind::Robots || existing.reusable_as_robots())
     {
         return (existing.clone(), CacheDecision::Reused);
     }
@@ -319,6 +470,7 @@ fn cached_probe(
                     not_sent: true,
                     declined_redirect: None,
                     cut_short: false,
+                    refused_by: None,
                 };
                 *slot = Some(unasked.clone());
                 return (unasked, CacheDecision::NotAsked);
@@ -326,7 +478,11 @@ fn cached_probe(
         },
         None => now,
     };
-    let answer = probe(url);
+    let redirects = match kind {
+        ProbeKind::Robots => Redirects::Followed,
+        ProbeKind::Licence => Redirects::Ruled,
+    };
+    let answer = probe(url, redirects);
     if let Some((pacing, _)) = pacing {
         pacing.end_probe();
     }
@@ -349,6 +505,7 @@ fn cached_probe(
                 not_sent: false,
                 declined_redirect: None,
                 cut_short: false,
+                refused_by: None,
             }
         }
         // Any other answer outside 2xx is a failure of the probe, not a
@@ -371,6 +528,7 @@ fn cached_probe(
                 not_sent: false,
                 declined_redirect: None,
                 cut_short: false,
+                refused_by: None,
             }
         }
         Ok((final_url, response)) => {
@@ -420,34 +578,39 @@ fn cached_probe(
                 not_sent: false,
                 declined_redirect: None,
                 cut_short: false,
+                refused_by: None,
             }
         }
         Err(failure) => {
             let cut_short = matches!(
                 failure,
-                ProbeFailure::CutShort(_) | ProbeFailure::Backoff(_)
+                ProbeFailure::CutShort { .. } | ProbeFailure::Backoff(_)
             );
             Probe {
                 url: url.to_owned(),
                 fetched_at: now,
                 // A probe this edge cut short says nothing about the host, so
                 // it is not kept as the host's failure: the next crossing
-                // asks again.
-                expires_at: if cut_short {
-                    now
-                } else {
-                    now + FAILURE_CACHE_AGE
+                // asks again. A redirect `robots.txt` refused expires with
+                // the copy that refused it.
+                expires_at: match &failure {
+                    _ if cut_short => now,
+                    ProbeFailure::RobotsRefused { expires_at, .. } => *expires_at,
+                    _ => now + FAILURE_CACHE_AGE,
                 },
                 final_url: None,
                 status: None,
                 body: None,
                 truncated: None,
-                not_sent: matches!(failure, ProbeFailure::NotSent(_) | ProbeFailure::Backoff(_)),
+                not_sent: !failure.sent(),
                 declined_redirect: match &failure {
-                    ProbeFailure::RedirectDeclined { target, .. } => Some(target.clone()),
+                    ProbeFailure::RedirectDeclined { target, .. }
+                    | ProbeFailure::RobotsRefused { url: target, .. } => Some(target.clone()),
                     _ => None,
                 },
                 cut_short,
+                refused_by: matches!(failure, ProbeFailure::RobotsRefused { .. })
+                    .then(|| REFUSED_BY_ROBOTS.to_owned()),
                 error: Some(failure.reason().to_owned()),
             }
         }
@@ -622,24 +785,24 @@ impl RobotsOutcome {
     /// operator chose.
     pub fn rule(&mut self, mode: PolicyMode) -> Option<String> {
         self.mode = Some(mode);
-        let Some(reading) = &self.reading else {
-            if self.unreachable {
-                self.outcome = Some(RobotsRuling::Unreachable);
-                return Some(self.attribution());
-            }
-            if self.cut_short {
-                self.outcome = Some(RobotsRuling::CutShort);
-                return Some(self.attribution());
-            }
-            self.outcome = Some(RobotsRuling::Unavailable);
-            return None;
-        };
-        if reading.crawlable != Some(false) {
-            self.outcome = Some(RobotsRuling::Allowed);
-            return None;
+        let ruling = self.ruling();
+        self.outcome = Some(ruling);
+        matches!(
+            ruling,
+            RobotsRuling::Refused | RobotsRuling::Unreachable | RobotsRuling::CutShort
+        )
+        .then(|| self.attribution())
+    }
+
+    /// What the access rule does with `requested_url`, whatever the mode.
+    fn ruling(&self) -> RobotsRuling {
+        match &self.reading {
+            None if self.unreachable => RobotsRuling::Unreachable,
+            None if self.cut_short => RobotsRuling::CutShort,
+            None => RobotsRuling::Unavailable,
+            Some(reading) if reading.crawlable != Some(false) => RobotsRuling::Allowed,
+            Some(_) => RobotsRuling::Refused,
         }
-        self.outcome = Some(RobotsRuling::Refused);
-        Some(self.attribution())
     }
 
     /// Whether the access rule stopped this crossing: a `Disallow`, or a
@@ -695,11 +858,14 @@ impl RobotsOutcome {
             return true;
         }
         let host = crate::grounding::host_of(&self.requested_url);
-        let before = pacing.spendable_now();
-        if pacing.before_turn(&host, before).is_err() {
+        // Only a sleep charges the wait budget. What the call may spend
+        // asleep also falls as the whole-call ceiling runs down, so it
+        // cannot tell whether back-off slept.
+        let before = pacing.wait_left();
+        if pacing.before_turn(&host, pacing.spendable_now()).is_err() {
             return false;
         }
-        let now = if pacing.spendable_now() == before {
+        let now = if pacing.wait_left() == before {
             now
         } else {
             Utc::now()
@@ -827,11 +993,14 @@ impl RobotsOutcome {
             }
             if self.cut_short {
                 return format!(
-                    "{} was not read for {}: {failure}. The request failed for a reason of this \
-                     edge's own, so the host is not held to have failed and the file is asked \
-                     for again at the next crossing. No copy of it is held, and a page is not \
+                    "{} was not read for {}: {}. The request failed for a reason of this edge's \
+                     own, so the host is not held to have failed and the file is asked for \
+                     again at the next crossing. No copy of it is held, and a page is not \
                      fetched under a robots.txt this edge has not read",
-                    self.url, self.requested_url,
+                    self.url,
+                    self.requested_url,
+                    // A back-off store fault's reason ends with its own full stop.
+                    failure.trim_end_matches('.'),
                 );
             }
             return format!(
@@ -928,6 +1097,12 @@ pub struct LicenceOutcome {
     /// the status on the crossing and in the tool result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing: Option<commonmeasure_types::Gap>,
+    /// [`REFUSED_BY_ROBOTS`] where `robots.txt` at the licence's origin, or
+    /// at a redirect's, refused the request: a licence only the page's `Link`
+    /// header names, or a redirect from any licence. The licence was not
+    /// read, so it is also `unread`, and `unavailable` gives the rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_by: Option<String>,
 }
 
 /// What decided the AI-input question for this crossing.
@@ -1144,12 +1319,14 @@ pub fn take_page_turn(
     declarations.robots.take_turn(pacing, now)
 }
 
-/// What one host's `robots.txt` says for one URL, read and ruled on, before
-/// anything the file names is asked for.
+/// What one origin's `robots.txt` says for one URL, read and ruled on,
+/// before anything the file names is asked for.
 pub struct RobotsRead {
     record: HostRecord,
     robots: RobotsOutcome,
     host: String,
+    /// The origin's [`origin_key`], which `record` is kept under.
+    key: String,
     robots_url: String,
     refused_by_the_access_rule: bool,
 }
@@ -1227,9 +1404,14 @@ impl RobotsRead {
 }
 
 /// Read and rule on `robots.txt` for `page_url`. The file takes no turn: the
-/// delay cannot be read without it, and it is fetched once per host per day.
-/// Nothing else has been asked of the host when this returns, so a crossing
-/// refused on a `Disallow` costs the host only this file.
+/// delay cannot be read without it, and a copy is used until it expires, so
+/// most crossings ask nothing for it. Nothing else has been asked of the host
+/// when this returns, so a crossing refused on a `Disallow` costs the host
+/// only this file.
+///
+/// The origin's record is saved here when the file was asked for, so a
+/// manifest probe ruled before [`read_declared`] saves reads the same copy
+/// rather than asking again.
 pub fn read_robots(
     cache: &DeclarationCache,
     page_url: &str,
@@ -1239,11 +1421,42 @@ pub fn read_robots(
     mode: PolicyMode,
 ) -> RobotsRead {
     let host = crate::grounding::host_of(page_url);
-    let mut record = cache.load(&host);
+    let key = origin_key(page_url);
+    let loaded = cache.load(&key);
+    let mut record = loaded.clone();
+    let mut robots = read_robots_in(&mut record, page_url, now, probe, pacing);
+    if record != loaded {
+        cache.save(&key, &record);
+    }
+    // Ruled from `robots.txt`, which took no turn, so nothing is owed to the
+    // host yet. `rule` is consulted again when the crossing is ruled on as a
+    // whole; it reads the same reading and gives the same answer.
+    robots.rule(mode);
+    let refused_by_the_access_rule = robots.refuses();
+    RobotsRead {
+        record,
+        robots_url: robots.url.clone(),
+        robots,
+        host,
+        key,
+        refused_by_the_access_rule,
+    }
+}
+
+/// Read `robots.txt` for `url` into `record`, the record of `url`'s origin,
+/// and say what it says for `url`'s path, not yet ruled on.
+fn read_robots_in(
+    record: &mut HostRecord,
+    url: &str,
+    now: DateTime<Utc>,
+    probe: Prober<'_>,
+    pacing: Option<&Pacing>,
+) -> RobotsOutcome {
+    let page_url = url;
+    let host = crate::grounding::host_of(page_url);
     let robots_url = robots_url_of(page_url);
     let previous = record.robots.clone();
-    // `robots.txt` takes no turn: the delay cannot be read without it, and
-    // it is fetched once per host per day.
+    // `robots.txt` takes no turn: the delay cannot be read without it.
     let (robots_probe, cache_decision) = cached_probe(
         &mut record.robots,
         &robots_url,
@@ -1252,9 +1465,12 @@ pub fn read_robots(
         None,
         ProbeKind::Robots,
     );
-    // The last answer is set aside when a fetch fails rather than lost with
-    // the slot it was in, and dropped once the host answers again.
-    if cache_decision == CacheDecision::Fetched {
+    // The last answer is set aside whenever the slot stops holding one, and
+    // dropped once the host answers again. A probe that was not sent, or
+    // that this edge cut short, empties or overwrites the slot as a failure
+    // does, so the answer is kept aside for those too: otherwise the next
+    // unreachable probe would find nothing held and disallow every path.
+    if cache_decision != CacheDecision::Reused {
         if robots_probe.answered() {
             record.robots_held = None;
         } else if let Some(answer) =
@@ -1312,9 +1528,9 @@ pub fn read_robots(
     {
         pacing.learn(&host, honoured);
     }
-    let mut robots = RobotsOutcome {
+    RobotsOutcome {
         requested_url: page_url.to_owned(),
-        url: robots_url.clone(),
+        url: robots_url,
         final_url: robots_probe.final_url.clone(),
         declined_redirect: robots_probe.declined_redirect.clone(),
         cache: cache_decision,
@@ -1330,18 +1546,189 @@ pub fn read_robots(
         mode: None,
         outcome: None,
         delay: None,
-    };
-    // Ruled from `robots.txt`, which took no turn, so nothing is owed to the
-    // host yet. `rule` is consulted again when the crossing is ruled on as a
-    // whole; it reads the same reading and gives the same answer.
-    robots.rule(mode);
-    let refused_by_the_access_rule = robots.refuses();
-    RobotsRead {
-        record,
-        robots,
-        host,
-        robots_url,
-        refused_by_the_access_rule,
+    }
+}
+
+/// How `robots.txt` at a URL's own origin rules a request this edge makes
+/// on its own account ([`rule_probe`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeRuling {
+    /// The rules permit the URL or state none for this fetcher. Also where
+    /// the file was not requested because this edge sends nothing to that
+    /// origin: the probe, at the same origin, is refused by the same check.
+    Allowed,
+    /// The rules disallow the URL for the product token's group, or the file
+    /// could not be reached and no copy of it is held, which is a complete
+    /// disallow (RFC 9309 §2.3.1.4). The request is not sent. `reason` is the
+    /// attribution; `expires_at` is when that copy of the file is next asked
+    /// for, and a record of the refusal expires then.
+    Refused {
+        reason: String,
+        expires_at: DateTime<Utc>,
+    },
+    /// This edge's own request for the file failed for a reason of its own
+    /// and no copy is held, so the request is not sent under rules this edge
+    /// has not read, and nothing about it is kept.
+    Unread(String),
+}
+
+impl ProbeRuling {
+    fn of(robots: &RobotsOutcome, now: DateTime<Utc>) -> Self {
+        match robots.ruling() {
+            RobotsRuling::Refused | RobotsRuling::Unreachable => Self::Refused {
+                reason: robots.attribution(),
+                expires_at: robots.expires_at.unwrap_or(now),
+            },
+            RobotsRuling::CutShort => Self::Unread(robots.attribution()),
+            RobotsRuling::Allowed | RobotsRuling::Unavailable | RobotsRuling::Carried => {
+                Self::Allowed
+            }
+        }
+    }
+}
+
+/// Rule `url`, a request this edge would make on its own account (a
+/// manifest probe, a licence only a page names, a redirect from either),
+/// against `robots.txt` at `url`'s own origin for the product token's
+/// group, as a page is ruled and in every policy mode. The file is read
+/// through the cache as the page path reads it: it takes no turn, a live copy
+/// is reused, and a request for it observes back-off.
+pub fn rule_probe(
+    cache: &DeclarationCache,
+    url: &str,
+    now: DateTime<Utc>,
+    probe: Prober<'_>,
+    pacing: Option<&Pacing>,
+) -> ProbeRuling {
+    let key = origin_key(url);
+    let loaded = cache.load(&key);
+    let mut record = loaded.clone();
+    let robots = read_robots_in(&mut record, url, now, probe, pacing);
+    if record != loaded {
+        cache.save(&key, &record);
+    }
+    ProbeRuling::of(&robots, now)
+}
+
+/// One origin's cache record in hand, not yet saved, with the cache and a
+/// URL at that origin. A probe to that origin is ruled on the copy in hand
+/// rather than on the older one on disk.
+struct InHand<'a> {
+    cache: &'a DeclarationCache,
+    at: &'a str,
+    record: &'a mut HostRecord,
+}
+
+impl InHand<'_> {
+    fn rule_probe(
+        &mut self,
+        url: &str,
+        now: DateTime<Utc>,
+        probe: Prober<'_>,
+        pacing: Option<&Pacing>,
+    ) -> ProbeRuling {
+        if !same_origin(url, self.at) {
+            return rule_probe(self.cache, url, now, probe, pacing);
+        }
+        let robots = read_robots_in(self.record, url, now, probe, pacing);
+        ProbeRuling::of(&robots, now)
+    }
+
+    /// Read the licence a `License:` line in this origin's `robots.txt`
+    /// names. At this origin it is read without a `robots.txt` check: the
+    /// file that could refuse it named it. At any other origin that file
+    /// rules nothing, so the licence is ruled by `robots.txt` at its own
+    /// origin, as a licence only a page names is, and a refusal leaves it
+    /// unread. The second value is when the request was sent, or `now`
+    /// where nothing was.
+    fn read_robots_licence(
+        &mut self,
+        licence_url: &str,
+        page_url: &str,
+        now: DateTime<Utc>,
+        probe: Prober<'_>,
+        pacing: Option<(&Pacing, Duration)>,
+    ) -> (LicenceOutcome, DateTime<Utc>) {
+        if same_origin(licence_url, self.at) {
+            return read_licence(
+                self.record,
+                licence_url,
+                LicenceMechanism::RobotsLicense,
+                page_url,
+                now,
+                probe,
+                pacing,
+            );
+        }
+        let (answer, decision) = self.named_licence_probe(licence_url, now, probe, pacing);
+        licence_outcome(
+            &answer,
+            decision,
+            licence_url,
+            LicenceMechanism::RobotsLicense,
+            page_url,
+            now,
+        )
+    }
+
+    /// Probe a licence ruled at its own origin, one only a page's `Link`
+    /// header names or one another origin's `robots.txt` names: from the
+    /// cache while live, otherwise ruled against `robots.txt` at its own
+    /// origin first. A refusal is kept with the copy of `robots.txt` that
+    /// refused it, so the licence is not asked for again sooner.
+    fn named_licence_probe(
+        &mut self,
+        url: &str,
+        now: DateTime<Utc>,
+        probe: Prober<'_>,
+        pacing: Option<(&Pacing, Duration)>,
+    ) -> (Probe, CacheDecision) {
+        if let Some(existing) = self.record.licences.get(url)
+            && existing.url == url
+            && existing.expires_at > now
+        {
+            return (existing.clone(), CacheDecision::Reused);
+        }
+        let unsent = |error: String, expires_at: DateTime<Utc>| Probe {
+            url: url.to_owned(),
+            fetched_at: now,
+            expires_at,
+            final_url: None,
+            status: None,
+            body: None,
+            truncated: None,
+            error: Some(error),
+            not_sent: true,
+            declined_redirect: None,
+            cut_short: false,
+            refused_by: None,
+        };
+        match self.rule_probe(url, now, probe, pacing.map(|(pacing, _)| pacing)) {
+            ProbeRuling::Allowed => {
+                let mut slot = self.record.licences.remove(url);
+                let answer = cached_probe(&mut slot, url, now, probe, pacing, ProbeKind::Licence);
+                if let Some(kept) = slot {
+                    self.record.licences.insert(url.to_owned(), kept);
+                }
+                answer
+            }
+            ProbeRuling::Refused { reason, expires_at } => {
+                let refused = Probe {
+                    refused_by: Some(REFUSED_BY_ROBOTS.to_owned()),
+                    ..unsent(reason, expires_at)
+                };
+                if expires_at > now {
+                    self.record.licences.insert(url.to_owned(), refused.clone());
+                } else {
+                    self.record.licences.remove(url);
+                }
+                (refused, CacheDecision::NotAsked)
+            }
+            ProbeRuling::Unread(reason) => {
+                self.record.licences.remove(url);
+                (unsent(reason, now), CacheDecision::NotAsked)
+            }
+        }
     }
 }
 
@@ -1383,6 +1770,7 @@ pub fn read_declared(
         mut record,
         mut robots,
         host,
+        key,
         robots_url: _,
         refused_by_the_access_rule,
     } = read;
@@ -1458,33 +1846,40 @@ pub fn read_declared(
             };
             let events_before = pacing.map_or(0, |pacing| pacing.backoff_events().len());
             let paced = pacing.map(|pacing| (pacing, reserve));
+            let mut in_hand = InHand {
+                cache,
+                at: page_url,
+                record: &mut record,
+            };
             let (cache, sent_at) = if *from_robots {
-                let (outcome, sent_at) = read_licence(
-                    &mut record,
-                    url,
-                    LicenceMechanism::RobotsLicense,
-                    page_url,
-                    now,
-                    probe,
-                    paced,
+                let (outcome, sent_at) =
+                    in_hand.read_robots_licence(url, page_url, now, probe, paced);
+                let cache = (
+                    outcome.cache,
+                    outcome.unavailable.clone(),
+                    outcome.refused_by.is_some(),
                 );
-                let cache = (outcome.cache, outcome.unavailable.clone());
                 if let Some(terms) = &outcome.terms {
                     statements.extend(terms.statements.iter().cloned());
                 }
                 licences.push(outcome);
                 (cache, sent_at)
             } else {
-                let mut slot = record.licences.remove(url.as_str());
-                let (answer, decision) =
-                    cached_probe(&mut slot, url, now, probe, paced, ProbeKind::Licence);
-                if let Some(kept) = slot {
-                    record.licences.insert(url.clone(), kept);
-                }
-                ((decision, answer.error), answer.fetched_at)
+                // Named by the page's `Link` header, not by `robots.txt`, so
+                // ruled against `robots.txt` at its own origin first.
+                let (answer, decision) = in_hand.named_licence_probe(url, now, probe, paced);
+                (
+                    (decision, answer.error, answer.refused_by.is_some()),
+                    answer.fetched_at,
+                )
             };
             match cache {
-                (CacheDecision::NotAsked, reason) => {
+                // Refused by `robots.txt` at the licence's origin: the
+                // licence is unread, which the ruling on the declarations
+                // acts on as it does for any unread licence. Nothing further
+                // is asked, and the page's turn is not the reason.
+                (CacheDecision::NotAsked, _, true) => break,
+                (CacheDecision::NotAsked, reason, false) => {
                     backoff_refused = pacing.is_some_and(|pacing| {
                         pacing
                             .backoff_events()
@@ -1540,10 +1935,13 @@ pub fn read_declared(
                 outcome.unread = false;
                 outcome
             } else {
-                read_licence(
-                    &mut record,
+                InHand {
+                    cache,
+                    at: page_url,
+                    record: &mut record,
+                }
+                .read_robots_licence(
                     url,
-                    LicenceMechanism::RobotsLicense,
                     page_url,
                     now,
                     probe,
@@ -1557,7 +1955,7 @@ pub fn read_declared(
             licences.push(outcome);
         }
     }
-    cache.save(&host, &record);
+    cache.save(&key, &record);
     let assessment_decision = terms.map(|terms| AssessmentDecision::for_fetch(terms, page_url));
     let mut declarations = Declarations {
         backoff: if backoff_refused {
@@ -1599,6 +1997,7 @@ fn not_asked(url: &str, why: &str) -> LicenceOutcome {
         terms: None,
         unread: true,
         missing: None,
+        refused_by: None,
     }
 }
 
@@ -1634,8 +2033,8 @@ pub fn after_fetch(
         .headers
         .get("Link")
         .and_then(|link| declarations::rsl_link(link, page_url));
-    let host = crate::grounding::host_of(page_url);
-    let mut record = cache.load(&host);
+    let key = origin_key(page_url);
+    let mut record = cache.load(&key);
     let remembered = record.page_licences.get(page_url).cloned();
     match &named {
         Some(url) => {
@@ -1653,14 +2052,26 @@ pub fn after_fetch(
             .iter()
             .any(|licence| licence.url == licence_url)
     {
-        let (outcome, _) = read_licence(
-            &mut record,
+        // A licence the page names, where `robots.txt` names none, is
+        // ruled against `robots.txt` at its own origin before it is asked for.
+        let (answer, decision) = InHand {
+            cache,
+            at: page_url,
+            record: &mut record,
+        }
+        .named_licence_probe(
+            &licence_url,
+            now,
+            probe,
+            pacing.map(|pacing| (pacing, Duration::ZERO)),
+        );
+        let (outcome, _) = licence_outcome(
+            &answer,
+            decision,
             &licence_url,
             LicenceMechanism::LinkHeader,
             page_url,
             now,
-            probe,
-            pacing.map(|pacing| (pacing, Duration::ZERO)),
         );
         if let Some(terms) = &outcome.terms {
             declarations
@@ -1668,9 +2079,9 @@ pub fn after_fetch(
                 .extend(terms.statements.iter().cloned());
         }
         declarations.licences.push(outcome);
-        cache.save(&host, &record);
+        cache.save(&key, &record);
     } else if remembered != record.page_licences.get(page_url).cloned() {
-        cache.save(&host, &record);
+        cache.save(&key, &record);
     }
     declarations.recombine();
 }
@@ -1699,6 +2110,26 @@ fn read_licence(
     if let Some(probe) = slot {
         record.licences.insert(licence_url.to_owned(), probe);
     }
+    licence_outcome(
+        &licence_probe,
+        cache_decision,
+        licence_url,
+        mechanism,
+        page_url,
+        now,
+    )
+}
+
+/// What a licence probe says for `page_url`. The second value is when the
+/// request was sent, or `now` where nothing was.
+fn licence_outcome(
+    licence_probe: &Probe,
+    cache_decision: CacheDecision,
+    licence_url: &str,
+    mechanism: LicenceMechanism,
+    page_url: &str,
+    now: DateTime<Utc>,
+) -> (LicenceOutcome, DateTime<Utc>) {
     let sent_at = match cache_decision {
         CacheDecision::Fetched => licence_probe.fetched_at,
         _ => now,
@@ -1713,6 +2144,7 @@ fn read_licence(
         terms: None,
         unread: false,
         missing: None,
+        refused_by: licence_probe.refused_by.clone(),
     };
     if licence_probe.body.is_none()
         && licence_probe.error.is_none()
@@ -1762,9 +2194,10 @@ fn read_licence(
     (outcome, sent_at)
 }
 
-/// `robots.txt` at the page's origin: same scheme, host and port.
+/// `robots.txt` at the page's origin: same scheme, host and port, with a
+/// domain host's trailing dot removed.
 pub fn robots_url_of(page_url: &str) -> String {
-    match url::Url::parse(page_url) {
+    match url::Url::parse(&crate::grounding::without_trailing_dot(page_url)) {
         Ok(mut parsed) => {
             parsed.set_path("/robots.txt");
             parsed.set_query(None);
@@ -1788,6 +2221,10 @@ mod tests {
         assert_eq!(
             robots_url_of("http://127.0.0.1:4711/doc"),
             "http://127.0.0.1:4711/robots.txt"
+        );
+        assert_eq!(
+            robots_url_of("https://example.com./a"),
+            "https://example.com/robots.txt"
         );
     }
 
@@ -1877,7 +2314,9 @@ mod tests {
         ] {
             let asked = Cell::new(0);
             let probe =
-                |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+                |url: &str,
+                 _: Redirects|
+                 -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
                     asked.set(asked.get() + 1);
                     Ok((
                         url.to_owned(),
@@ -1943,7 +2382,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let cache = DeclarationCache::open(home.path());
         let asked = Cell::new(0);
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
             asked.set(asked.get() + 1);
             if url.ends_with("/robots.txt") {
                 if asked.get() == 1 {
@@ -2027,7 +2468,9 @@ mod tests {
         let cache = DeclarationCache::open(home.path());
         let answer: RefCell<Result<(u16, &str), ProbeFailure>> =
             RefCell::new(Ok((200, "User-agent: *\nDisallow: /private/\n")));
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
             answer.borrow().clone().map(|(status, body)| {
                 (
                     url.to_owned(),
@@ -2100,7 +2543,9 @@ mod tests {
     fn an_unreachable_robots_file_with_nothing_held_refuses_in_every_mode() {
         let home = tempfile::tempdir().unwrap();
         let cache = DeclarationCache::open(home.path());
-        let probe = |_: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+        let probe = |_: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
             Err(ProbeFailure::Unreachable(
                 "host.example did not answer within the 5s exchange budget".to_owned(),
             ))
@@ -2140,7 +2585,9 @@ mod tests {
                 target: "https://www.example.com/robots.txt".to_owned(),
                 reason: declined.to_owned(),
             }));
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
             answer.borrow().clone().map(|(status, body)| {
                 (
                     url.to_owned(),
@@ -2200,7 +2647,9 @@ mod tests {
 
         let home = tempfile::tempdir().unwrap();
         let cache = DeclarationCache::open(home.path());
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
             Ok((
                 url.to_owned(),
                 commonmeasure_http::Response::text(200, &body),
@@ -2269,49 +2718,207 @@ mod tests {
         assert!(within_parsing_limit(long.as_bytes()).is_empty());
     }
 
-    /// A 2xx over the bound cached by an earlier build, with no body, is
-    /// asked for again rather than read as unavailable for the rest of its
-    /// day.
+    /// A probe answering every request with `answer`, counting the requests.
+    fn counting_prober<'a>(
+        answer: &'a std::cell::RefCell<Result<(u16, String), ProbeFailure>>,
+        asked: &'a std::cell::Cell<usize>,
+    ) -> impl Fn(&str, Redirects) -> Result<(String, commonmeasure_http::Response), ProbeFailure> + 'a
+    {
+        move |url, _| {
+            asked.set(asked.get() + 1);
+            answer.borrow().clone().map(|(status, body)| {
+                (
+                    url.to_owned(),
+                    commonmeasure_http::Response::text(status, &body),
+                )
+            })
+        }
+    }
+
+    /// A live `robots.txt` probe in a shape this build does not write is
+    /// asked for again, and the file the host now serves rules the page.
+    /// The first is how 0.3.5 kept a file over the bound: reused, it has no
+    /// body and no failure this build reads, so it would rule as no rules
+    /// until it expired. The second is a shape no build wrote. The third is
+    /// how 0.3.5 kept a 403, with an error this build does not write beside
+    /// a status it reads as no rules. The rest are shapes no build writes,
+    /// each rejected by one guard of the rule alone.
     #[test]
-    fn an_oversized_robots_file_cached_without_its_body_is_asked_for_again() {
+    fn a_robots_probe_in_a_shape_this_build_does_not_write_is_asked_for_again() {
+        let now = Utc::now();
+        let kept = |status: u16, body: Option<&str>, truncated, error: Option<&str>| Probe {
+            url: "https://host.example/robots.txt".to_owned(),
+            fetched_at: now,
+            expires_at: now + ROBOTS_CACHE_AGE,
+            final_url: Some("https://host.example/robots.txt".to_owned()),
+            status: Some(status),
+            body: body.map(str::to_owned),
+            truncated,
+            error: error.map(str::to_owned),
+            not_sent: false,
+            declined_redirect: None,
+            cut_short: false,
+            refused_by: None,
+        };
+        let over = Some("the body is 600000 bytes, over the 524288 byte bound this reader keeps");
+        let cut = Some(Truncated {
+            size: 600_000,
+            read: 524_000,
+        });
+        for (shape, probe) in [
+            ("0.3.5 oversized", kept(200, None, None, over)),
+            ("2xx with no body and no error", kept(200, None, None, None)),
+            ("truncated with no body", kept(200, None, cut, None)),
+            ("0.3.5 403", kept(403, None, None, Some("answered 403"))),
+            (
+                "2xx with a body and an error",
+                kept(200, Some("User-agent: *\nAllow: /\n"), None, Some("x")),
+            ),
+            (
+                "failure with no status and a final address",
+                Probe {
+                    status: None,
+                    ..kept(200, None, None, Some("timed out"))
+                },
+            ),
+            (
+                "cut short",
+                Probe {
+                    status: None,
+                    final_url: None,
+                    cut_short: true,
+                    ..kept(200, None, None, Some("cut short"))
+                },
+            ),
+            (
+                "refused by robots.txt",
+                Probe {
+                    status: None,
+                    final_url: None,
+                    refused_by: Some(REFUSED_BY_ROBOTS.to_owned()),
+                    ..kept(200, None, None, Some("refused"))
+                },
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let cache = DeclarationCache::open(home.path());
+            cache.save(
+                "host.example",
+                &HostRecord {
+                    robots: Some(probe),
+                    ..Default::default()
+                },
+            );
+            let answer = std::cell::RefCell::new(Ok((200, "User-agent: *\nDisallow: /\n".into())));
+            let asked = std::cell::Cell::new(0);
+            let probe = counting_prober(&answer, &asked);
+            let read = read_robots(
+                &cache,
+                "https://host.example/a",
+                now,
+                &probe,
+                None,
+                PolicyMode::Observe,
+            );
+            assert_eq!(read.robots.cache, CacheDecision::Fetched, "{shape}");
+            assert_eq!(asked.get(), 1, "{shape}");
+            assert!(read.refused(), "{shape}");
+        }
+    }
+
+    /// Each shape this build keeps for `robots.txt`, written by a first
+    /// crossing, is reused by a second while it is live and nothing is
+    /// asked. Breaks where a shape check refuses something this build
+    /// writes, a truncated file among them, which would ask for the file on
+    /// every crossing.
+    #[test]
+    fn each_robots_probe_this_build_keeps_is_reused_while_live() {
+        let mut oversized = "User-agent: *\nDisallow: /private/\n".to_owned();
+        oversized.push_str(&"# padding\n".repeat(MAX_PROBE_BODY / 10 + 1));
+        let one_long_line = "#".repeat(MAX_PROBE_BODY + 10);
+        let declined = ProbeFailure::RedirectDeclined {
+            target: "https://www.host.example/robots.txt".to_owned(),
+            reason: "host www.host.example is not in the allowed source hosts".to_owned(),
+        };
+        for (shape, first) in [
+            ("a file", Ok((200, "User-agent: *\nAllow: /\n".to_owned()))),
+            ("a truncated file", Ok((200, oversized))),
+            (
+                "a file with nothing within the bound",
+                Ok((200, one_long_line)),
+            ),
+            ("a 404", Ok((404, "not found".to_owned()))),
+            ("a 429", Ok((429, "slow down".to_owned()))),
+            ("a 503", Ok((503, "busy".to_owned()))),
+            ("a 301 not followed", Ok((301, String::new()))),
+            (
+                "nothing answered",
+                Err(ProbeFailure::Unreachable("timed out".to_owned())),
+            ),
+            ("a declined redirect", Err(declined.clone())),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let cache = DeclarationCache::open(home.path());
+            let answer = std::cell::RefCell::new(first);
+            let asked = std::cell::Cell::new(0);
+            let probe = counting_prober(&answer, &asked);
+            let now = Utc::now();
+            let read = |now| {
+                read_robots(
+                    &cache,
+                    "https://host.example/a",
+                    now,
+                    &probe,
+                    None,
+                    PolicyMode::Observe,
+                )
+                .robots
+            };
+            let first = read(now);
+            assert_eq!(first.cache, CacheDecision::Fetched, "{shape}");
+            let kept = cache.load("host.example").robots.expect("kept");
+            assert!(kept.expires_at > now, "{shape}: live");
+            *answer.borrow_mut() = Err(ProbeFailure::Unreachable("not asked".to_owned()));
+            let again = read(now + chrono::Duration::seconds(1));
+            assert_eq!(again.cache, CacheDecision::Reused, "{shape}");
+            assert_eq!(asked.get(), 1, "{shape}");
+            assert_eq!(again.outcome, first.outcome, "{shape}");
+            assert_eq!(again.truncated, first.truncated, "{shape}");
+        }
+    }
+
+    /// A `robots.txt` probe this edge did not send is kept for the failure
+    /// age but asked for again on the next crossing: the refusal is this
+    /// edge's own and is checked again before transport.
+    #[test]
+    fn a_robots_probe_this_edge_did_not_send_is_asked_for_again_on_the_next_crossing() {
         let home = tempfile::tempdir().unwrap();
         let cache = DeclarationCache::open(home.path());
+        let answer = std::cell::RefCell::new(Err(ProbeFailure::NotSent(
+            "https://host.example/robots.txt is refused by policy".to_owned(),
+        )));
+        let asked = std::cell::Cell::new(0);
+        let probe = counting_prober(&answer, &asked);
         let now = Utc::now();
-        cache.save(
-            "host.example",
-            &HostRecord {
-                robots: Some(Probe {
-                    url: "https://host.example/robots.txt".to_owned(),
-                    fetched_at: now,
-                    expires_at: now + ROBOTS_CACHE_AGE,
-                    final_url: None,
-                    status: Some(200),
-                    body: None,
-                    truncated: None,
-                    error: Some("the body is 600000 bytes, over the bound".to_owned()),
-                    not_sent: false,
-                    declined_redirect: None,
-                    cut_short: false,
-                }),
-                ..Default::default()
-            },
-        );
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
-            Ok((
-                url.to_owned(),
-                commonmeasure_http::Response::text(200, "User-agent: *\nDisallow: /\n"),
-            ))
+        let read = |now| {
+            read_robots(
+                &cache,
+                "https://host.example/a",
+                now,
+                &probe,
+                None,
+                PolicyMode::Observe,
+            )
+            .robots
         };
-        let read = read_robots(
-            &cache,
-            "https://host.example/a",
-            now,
-            &probe,
-            None,
-            PolicyMode::Observe,
-        );
-        assert_eq!(read.robots.cache, CacheDecision::Fetched);
-        assert!(read.refused());
+        assert_eq!(read(now).cache, CacheDecision::NotAsked);
+        let kept = cache.load("host.example").robots.expect("kept");
+        assert!(kept.not_sent && kept.expires_at == now + FAILURE_CACHE_AGE);
+        *answer.borrow_mut() = Ok((200, "User-agent: *\nDisallow: /\n".to_owned()));
+        let later = read(now + chrono::Duration::seconds(1));
+        assert_eq!(later.cache, CacheDecision::Fetched);
+        assert_eq!(asked.get(), 2);
+        assert_eq!(later.outcome, Some(RobotsRuling::Refused));
     }
 
     #[test]
@@ -2332,6 +2939,7 @@ mod tests {
                 not_sent: false,
                 declined_redirect: None,
                 cut_short: false,
+                refused_by: None,
             }),
             robots_held: None,
             licences: BTreeMap::new(),
@@ -2368,15 +2976,30 @@ pub enum ManifestOutcome {
     Verified {
         facts: Box<crate::manifest::ManifestFacts>,
     },
-    /// The host answered 404 at the well-known path (and at the apex where
-    /// one was tried): the participant is unverified and nothing is rejected
-    /// on that basis (section 8.7).
+    /// The host answered 404 at the well-known path (and the registrable
+    /// domain did too, where it was asked): the participant is unverified
+    /// and nothing is rejected on that basis (section 8.7).
     NotPublished,
     /// A document arrived and the consumer rules reject it. The participant
     /// is unverified.
     Rejected { reason: String },
+    /// A probe was refused before it was sent, and the probe that refused
+    /// names what refused it in `refused_by`: the host's `robots.txt`
+    /// ([`REFUSED_BY_ROBOTS`]), which disallows the URL or a redirect from
+    /// it, or this edge's own rules for where it sends requests
+    /// ([`REFUSED_BY_POLICY`]: the operator's policy, the address floor or
+    /// the hub's origin). Both land here, one variant told apart by that
+    /// field. The participant is unverified and nothing is rejected, as for
+    /// [`Self::NotPublished`]. A `robots.txt` refusal expires with the copy
+    /// of `robots.txt` that refused it.
+    ///
+    /// A binary that does not know this variant cannot read a record with
+    /// it: its manifest cache treats the file as absent and probes again.
+    Refused { reason: String },
     /// No answer, or an answer that is neither a document nor a 404: a
-    /// transport failure, a policy refusal of the probe, or another status.
+    /// transport failure or another status; or a probe this edge did not
+    /// send for a reason of its own (no turn under the host's delay,
+    /// back-off, the call's time limit, or a `robots.txt` it could not read).
     Unavailable { reason: String },
 }
 
@@ -2386,6 +3009,11 @@ pub struct ManifestProbe {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<u16>,
+    /// What refused this probe before it was sent, where something did:
+    /// [`REFUSED_BY_ROBOTS`] or [`REFUSED_BY_POLICY`]. `status` is then
+    /// absent, and the outcome is [`ManifestOutcome::Refused`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2397,7 +3025,8 @@ pub struct ManifestRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_age: Option<u64>,
     /// The URLs asked, in order: the well-known path at the host, then the
-    /// apex when the host answered 404 and has one.
+    /// registrable domain's when the host answered 404 and is not that
+    /// domain itself. Never more than two.
     pub probes: Vec<ManifestProbe>,
     #[serde(flatten)]
     pub outcome: ManifestOutcome,
@@ -2476,12 +3105,23 @@ pub enum ManifestTurn {
 }
 
 /// Resolve the manifest for the host of `page_url`: from the cache while it
-/// is live, otherwise by probing the well-known path and, on a 404 at a
-/// subdomain, the apex. Every probe goes through the caller's mediated path.
+/// is live, otherwise by probing the well-known path and, on a 404, the
+/// registrable domain's ([`crate::manifest::apex_url`]), once, where that is
+/// not the host itself. Nothing further is asked, whatever it answers.
+///
+/// Each probe is the edge's own request, so before it is sent it is ruled
+/// against `robots.txt` at its own origin for the product token's group
+/// ([`rule_probe`]), in every policy mode; a redirect from it is ruled at
+/// the redirect's origin. The page host's `robots.txt` is in `declarations`
+/// already; the registrable domain's is read there before its probe. A
+/// probe `robots.txt` refuses is not sent, and the record expires with that
+/// copy of `robots.txt`. Every probe goes through the caller's
+/// mediated path.
 ///
 /// `turn` says what the probe may spend on a host that states a delay.
 pub fn resolve_manifest(
     cache: &ManifestCache,
+    declarations: &DeclarationCache,
     page_url: &str,
     now: DateTime<Utc>,
     probe: Prober<'_>,
@@ -2501,14 +3141,39 @@ pub fn resolve_manifest(
         });
     }
     let first_url = crate::manifest::well_known_url(page_url)?;
+    let apex = crate::manifest::apex_url(&first_url);
     let mut probes = Vec::new();
     let mut max_age = None;
-    let mut candidate = Some(first_url);
     let mut outcome = ManifestOutcome::NotPublished;
     let mut age = MANIFEST_NOT_FOUND_AGE;
-    let mut asked = true;
+    // Whether a manifest request left this edge on this crossing.
+    let mut sent = false;
     let mut now = now;
-    while let Some(url) = candidate.take() {
+    for url in std::iter::once(first_url).chain(apex) {
+        let refused = |url: String, by: &str| ManifestProbe {
+            url,
+            status: None,
+            refused_by: Some(by.to_owned()),
+        };
+        match rule_probe(declarations, &url, now, probe, pacing) {
+            ProbeRuling::Allowed => {}
+            ProbeRuling::Refused { reason, expires_at } => {
+                probes.push(refused(url, REFUSED_BY_ROBOTS));
+                outcome = ManifestOutcome::Refused { reason };
+                age = (expires_at - now).max(chrono::Duration::zero());
+                break;
+            }
+            ProbeRuling::Unread(reason) => {
+                probes.push(ManifestProbe {
+                    url,
+                    status: None,
+                    refused_by: None,
+                });
+                outcome = ManifestOutcome::Unavailable { reason };
+                age = chrono::Duration::zero();
+                break;
+            }
+        }
         // The manifest is a request to the same host as the page, so it
         // takes a turn under the host's delay. Where the turn is not there to
         // take, the probe is not sent and what is recorded is held only until
@@ -2524,31 +3189,35 @@ pub fn resolve_manifest(
                 Ok(sent_at) => now = sent_at,
                 Err(reason) => {
                     pacing.end_probe();
-                    probes.push(ManifestProbe { url, status: None });
+                    probes.push(ManifestProbe {
+                        url,
+                        status: None,
+                        refused_by: None,
+                    });
                     outcome = ManifestOutcome::Unavailable { reason };
                     age = pacing
                         .delay_for(&host)
                         .and_then(|delay| chrono::Duration::from_std(delay).ok())
                         .unwrap_or_else(chrono::Duration::zero);
-                    asked = false;
                     break;
                 }
             }
         }
-        let answer = probe(&url);
+        let answer = probe(&url, Redirects::Ruled);
         if let Some(pacing) = pacing {
             pacing.end_probe();
         }
         match answer {
             Ok((final_url, response)) => {
+                sent = true;
                 probes.push(ManifestProbe {
                     url: url.clone(),
                     status: Some(response.status),
+                    refused_by: None,
                 });
                 if response.status == 404 {
-                    // A subdomain may be claimed by the apex manifest
-                    // (section 8.6), so the apex is asked once.
-                    candidate = crate::manifest::apex_url(&url);
+                    // The registrable domain's manifest may claim this host
+                    // (section 8.6); it is next, and last.
                     continue;
                 }
                 if !(200..300).contains(&response.status) {
@@ -2572,20 +3241,43 @@ pub fn resolve_manifest(
                 };
                 break;
             }
+            // Sent and answered with a redirect whose target `robots.txt`
+            // refuses: kept as long as the copy that refused it.
+            Err(ProbeFailure::RobotsRefused {
+                reason, expires_at, ..
+            }) => {
+                sent = true;
+                probes.push(refused(url, REFUSED_BY_ROBOTS));
+                outcome = ManifestOutcome::Refused { reason };
+                age = (expires_at - now).max(chrono::Duration::zero());
+                break;
+            }
+            Err(ProbeFailure::NotSent(reason)) => {
+                probes.push(refused(url, REFUSED_BY_POLICY));
+                outcome = ManifestOutcome::Refused { reason };
+                age = FAILURE_CACHE_AGE;
+                break;
+            }
             Err(failure) => {
-                probes.push(ManifestProbe { url, status: None });
+                // A probe this edge cut short, or held back, says nothing
+                // about the host and is not kept.
+                let own = matches!(
+                    failure,
+                    ProbeFailure::CutShort { .. } | ProbeFailure::Backoff(_)
+                );
+                sent |= failure.sent();
+                probes.push(ManifestProbe {
+                    url,
+                    status: None,
+                    refused_by: None,
+                });
                 outcome = ManifestOutcome::Unavailable {
                     reason: failure.reason().to_owned(),
                 };
-                // A probe this edge cut short says nothing about the host.
-                if matches!(failure, ProbeFailure::Backoff(_) | ProbeFailure::NotSent(_)) {
-                    asked = false;
-                }
-                age = match failure {
-                    ProbeFailure::CutShort(_) | ProbeFailure::Backoff(_) => {
-                        chrono::Duration::zero()
-                    }
-                    _ => FAILURE_CACHE_AGE,
+                age = if own {
+                    chrono::Duration::zero()
+                } else {
+                    FAILURE_CACHE_AGE
                 };
                 break;
             }
@@ -2601,9 +3293,10 @@ pub fn resolve_manifest(
     };
     cache.save(&host, &record);
     Some(ManifestResolution {
-        cache: match asked {
-            true => CacheDecision::Fetched,
-            false => CacheDecision::NotAsked,
+        cache: if sent {
+            CacheDecision::Fetched
+        } else {
+            CacheDecision::NotAsked
         },
         record,
     })
@@ -2623,9 +3316,15 @@ mod manifest_pacing_tests {
         let home = tempfile::tempdir().unwrap();
         let store = CrawlDelayStore::open(home.path());
         let cache = ManifestCache::open(home.path());
+        let declarations = DeclarationCache::open(home.path());
         let asked = Cell::new(0);
-        let probe = |url: &str| -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
-            asked.set(asked.get() + 1);
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+            // `robots.txt` answers 404, no rules; only the manifest counts.
+            if !url.ends_with("/robots.txt") {
+                asked.set(asked.get() + 1);
+            }
             Ok((
                 url.to_owned(),
                 commonmeasure_http::Response::text(404, "no manifest"),
@@ -2642,8 +3341,16 @@ mod manifest_pacing_tests {
         store.take_turn(HOST, delay, WAIT_BUDGET, now, Pace::Own);
         let busy = Pacing::new(store.clone(), Pace::Own);
         busy.learn(HOST, 45_000);
-        let unasked =
-            resolve_manifest(&cache, PAGE, now, &probe, Some(&busy), ManifestTurn::Free).unwrap();
+        let unasked = resolve_manifest(
+            &cache,
+            &declarations,
+            PAGE,
+            now,
+            &probe,
+            Some(&busy),
+            ManifestTurn::Free,
+        )
+        .unwrap();
         assert_eq!(unasked.cache, CacheDecision::NotAsked);
         assert_eq!(
             unasked.record.expires_at,
@@ -2660,8 +3367,16 @@ mod manifest_pacing_tests {
         let soon = now + chrono::Duration::seconds(10);
         let again = Pacing::new(store.clone(), Pace::Own);
         again.learn(HOST, 45_000);
-        let reused =
-            resolve_manifest(&cache, PAGE, soon, &probe, Some(&again), ManifestTurn::Free).unwrap();
+        let reused = resolve_manifest(
+            &cache,
+            &declarations,
+            PAGE,
+            soon,
+            &probe,
+            Some(&again),
+            ManifestTurn::Free,
+        )
+        .unwrap();
         assert_eq!(reused.cache, CacheDecision::Reused);
         assert_eq!(asked.get(), 0);
 
@@ -2672,6 +3387,7 @@ mod manifest_pacing_tests {
         clear.learn(HOST, 45_000);
         let resolved = resolve_manifest(
             &cache,
+            &declarations,
             PAGE,
             later,
             &probe,
@@ -2689,6 +3405,273 @@ mod manifest_pacing_tests {
         let page = store.take_turn(HOST, delay, std::time::Duration::ZERO, later, Pace::Own);
         assert_eq!(page.wait_ms, Some(45_000), "{page:?}");
         assert!(clear.left() > std::time::Duration::from_secs(200));
+    }
+
+    /// A page's turn is dated at the instant it was given unless back-off
+    /// slept first. Once the whole-call ceiling binds, what the call may
+    /// spend asleep falls between two reads with nothing slept, and that
+    /// must not be read as a wait.
+    #[test]
+    fn a_binding_ceiling_with_no_backoff_sleep_keeps_the_given_instant() {
+        let home = tempfile::tempdir().unwrap();
+        let store = CrawlDelayStore::open(home.path());
+        let mut robots: RobotsOutcome = serde_json::from_value(serde_json::json!({
+            "requested_url": PAGE,
+            "url": "https://publisher.example/robots.txt",
+            "cache": "fetched",
+            "reading": {
+                "group": "*",
+                "crawlable": true,
+                "statements": [],
+                "licences": [],
+                "crawl_delay": {"value": "2", "delay_ms": 2000, "honoured_ms": 2000},
+            },
+        }))
+        .unwrap();
+        crate::crawl_delay::TEST_CEILING.set(Some(std::time::Duration::from_secs(1)));
+        let pacing = Pacing::new(store.clone(), Pace::Own);
+        crate::crawl_delay::TEST_CEILING.set(None);
+        assert!(pacing.left() < WAIT_BUDGET, "the ceiling binds");
+        let given: DateTime<Utc> = "2026-09-24T04:00:00Z".parse().unwrap();
+
+        assert!(robots.take_turn(&pacing, given));
+
+        // The turn was recorded at `given`, so a second later the host is
+        // still inside its delay for one more second.
+        let second = given + chrono::Duration::seconds(1);
+        assert_eq!(
+            store.pending_wait(HOST, std::time::Duration::from_secs(2), second),
+            std::time::Duration::from_secs(1)
+        );
+        assert!(pacing.backoff_events().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod host_spelling_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    const MANIFEST: &str = r#"{"schema_version":"1.0","id":"https://publisher.example/.well-known/content-telemetry.json","roles":["content_owner"],"operator":{"name":"Example"}}"#;
+
+    /// A host written with and without a fully qualified name's trailing dot
+    /// is one host: both spellings ask the dotless `robots.txt` and share
+    /// its cache slot, so the second crossing sends nothing.
+    #[test]
+    fn a_dotted_and_a_dotless_crossing_share_one_robots_slot() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = DeclarationCache::open(home.path());
+        let asked = RefCell::new(Vec::new());
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+            asked.borrow_mut().push(url.to_owned());
+            Ok((
+                url.to_owned(),
+                commonmeasure_http::Response::text(200, "User-agent: *\nAllow: /\n"),
+            ))
+        };
+        let now = Utc::now();
+        let read = |page: &str| {
+            before_fetch(&cache, page, None, now, &probe, None, PolicyMode::Observe).robots
+        };
+
+        let dotted = read("https://publisher.example./article");
+        assert_eq!(dotted.cache, CacheDecision::Fetched);
+        let dotless = read("https://publisher.example/other");
+        assert_eq!(dotless.cache, CacheDecision::Reused);
+        let robots: Vec<String> = asked
+            .borrow()
+            .iter()
+            .filter(|url| url.ends_with("/robots.txt"))
+            .cloned()
+            .collect();
+        assert_eq!(robots, ["https://publisher.example/robots.txt"]);
+        assert_eq!(dotted.url, dotless.url);
+    }
+
+    /// A crossing through `publisher.example.` asks the manifest at
+    /// `publisher.example`, so the manifest's id matches the host it was
+    /// fetched from and is accepted. The record is saved under the dotless
+    /// host, and a dotless crossing reuses the accepted record: one dotted
+    /// link cannot leave a rejection for the host to reuse.
+    #[test]
+    fn a_dotted_crossing_asks_the_dotless_manifest_and_a_dotless_one_reuses_it() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = ManifestCache::open(home.path());
+        let declarations = DeclarationCache::open(home.path());
+        let asked = RefCell::new(Vec::new());
+        // The manifest is ruled by `robots.txt` before it is sent, so the
+        // prober answers that too.
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+            asked.borrow_mut().push(url.to_owned());
+            let body = if url.ends_with("/robots.txt") {
+                "User-agent: *\nAllow: /\n"
+            } else {
+                MANIFEST
+            };
+            Ok((
+                url.to_owned(),
+                commonmeasure_http::Response::text(200, body),
+            ))
+        };
+        let now = Utc::now();
+
+        let dotted = resolve_manifest(
+            &cache,
+            &declarations,
+            "https://publisher.example./article",
+            now,
+            &probe,
+            None,
+            ManifestTurn::Free,
+        )
+        .unwrap();
+        assert_eq!(dotted.cache, CacheDecision::Fetched);
+        assert!(
+            matches!(dotted.record.outcome, ManifestOutcome::Verified { .. }),
+            "{:?}",
+            dotted.record.outcome
+        );
+
+        let dotless = resolve_manifest(
+            &cache,
+            &declarations,
+            "https://publisher.example/other",
+            now + chrono::Duration::seconds(1),
+            &probe,
+            None,
+            ManifestTurn::Free,
+        )
+        .unwrap();
+        assert_eq!(dotless.cache, CacheDecision::Reused);
+        assert!(
+            matches!(dotless.record.outcome, ManifestOutcome::Verified { .. }),
+            "{:?}",
+            dotless.record.outcome
+        );
+        assert_eq!(
+            *asked.borrow(),
+            [
+                "https://publisher.example/robots.txt",
+                "https://publisher.example/.well-known/content-telemetry.json"
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod licence_origin_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    const RSL: &str = r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/"><license><permits type="usage">ai-input</permits></license></content></rsl>"#;
+
+    /// Read `page` whose `robots.txt` names `licence` in a `License:` line
+    /// and allows only `/article`, so a licence ruled by it would be
+    /// refused. Every other `robots.txt` disallows everything. Returns the licence
+    /// outcome and every URL asked for.
+    fn read(page: &str, licence: &str) -> (LicenceOutcome, Vec<String>) {
+        let home = tempfile::tempdir().unwrap();
+        let cache = DeclarationCache::open(home.path());
+        let asked = RefCell::new(Vec::new());
+        let page_robots = robots_url_of(page);
+        let probe = |url: &str,
+                     _: Redirects|
+         -> Result<(String, commonmeasure_http::Response), ProbeFailure> {
+            asked.borrow_mut().push(url.to_owned());
+            let body = if url == page_robots {
+                format!("License: {licence}\nUser-agent: *\nAllow: /article\nDisallow: /\n")
+            } else if url.ends_with("/robots.txt") {
+                "User-agent: *\nDisallow: /\n".to_owned()
+            } else {
+                RSL.to_owned()
+            };
+            Ok((
+                url.to_owned(),
+                commonmeasure_http::Response::text(200, &body),
+            ))
+        };
+        let declarations = before_fetch(
+            &cache,
+            page,
+            None,
+            Utc::now(),
+            &probe,
+            None,
+            PolicyMode::Observe,
+        );
+        let licence = declarations.licences.into_iter().next().expect("a licence");
+        (licence, asked.into_inner())
+    }
+
+    /// A licence at the page's host under another scheme or another port is
+    /// at another origin, so the page's `robots.txt` rules nothing there: it
+    /// is ruled by the file at its own origin, whose `Disallow: /` leaves it
+    /// unrequested and unread. So is a licence whose host, scheme and port
+    /// join into the page origin's cache key (`publisher.example_http_80`
+    /// on `https` 443). Breaks under the mutation that compares only
+    /// `host_of` in `same_origin` (the first two are read unchecked), and
+    /// under the one that compares `origin_key` strings (the third is).
+    #[test]
+    fn a_licence_at_another_scheme_or_port_is_ruled_at_its_own_origin() {
+        for (page, licence, licence_robots) in [
+            (
+                "https://publisher.example/article",
+                "http://publisher.example/rsl.xml",
+                "http://publisher.example/robots.txt",
+            ),
+            (
+                "https://publisher.example/article",
+                "https://publisher.example:8443/rsl.xml",
+                "https://publisher.example:8443/robots.txt",
+            ),
+            (
+                "http://publisher.example/article",
+                "https://publisher.example_http_80/rsl.xml",
+                "https://publisher.example_http_80/robots.txt",
+            ),
+        ] {
+            let (outcome, asked) = read(page, licence);
+            assert_eq!(
+                asked,
+                [robots_url_of(page).as_str(), licence_robots],
+                "{licence}"
+            );
+            assert_eq!(outcome.mechanism, LicenceMechanism::RobotsLicense);
+            assert_eq!(
+                outcome.refused_by.as_deref(),
+                Some(REFUSED_BY_ROBOTS),
+                "{licence}"
+            );
+            assert!(outcome.unread, "{licence}");
+            assert_eq!(outcome.cache, CacheDecision::NotAsked, "{licence}");
+        }
+    }
+
+    /// The same origin written another way, with the default port or a
+    /// trailing dot, is the page's own: the licence is read without a
+    /// `robots.txt` check, under that file's `Disallow: /`. Breaks under the
+    /// mutation that compares whole URL strings in `same_origin`, which
+    /// rules the licence and refuses it.
+    #[test]
+    fn a_licence_at_the_pages_origin_spelt_otherwise_is_read_unchecked() {
+        for licence in [
+            "https://publisher.example:443/rsl.xml",
+            "https://Publisher.Example./rsl.xml",
+        ] {
+            let (outcome, asked) = read("https://publisher.example/article", licence);
+            // The licence itself follows the page's `robots.txt`, with no
+            // other `robots.txt` between.
+            assert_eq!(asked.len(), 2, "{licence}: {asked:?}");
+            assert_eq!(asked[0], "https://publisher.example/robots.txt");
+            assert!(asked[1].ends_with("/rsl.xml"), "{licence}: {asked:?}");
+            assert_eq!(outcome.refused_by, None, "{licence}");
+            assert!(!outcome.unread, "{licence}");
+            assert!(outcome.terms.is_some(), "{licence}");
+        }
     }
 }
 
@@ -2746,7 +3729,7 @@ mod licence_first_tests {
         let home = tempfile::tempdir().unwrap();
         let cache = DeclarationCache::open(home.path());
         let (robots, log) = publisher(true, 30);
-        let probe = |url: &str| answer(&robots, &log, url);
+        let probe = |url: &str, _: Redirects| answer(&robots, &log, url);
         let pacing = Pacing::new(CrawlDelayStore::open(home.path()), Pace::Hosted);
         let now = Utc::now();
         let read = read_robots(
@@ -2789,7 +3772,7 @@ mod licence_first_tests {
         let cache = DeclarationCache::open(home.path());
         let store = CrawlDelayStore::open(home.path());
         let (robots, log) = publisher(false, 3);
-        let probe = |url: &str| answer(&robots, &log, url);
+        let probe = |url: &str, _: Redirects| answer(&robots, &log, url);
         let now = Utc::now();
         let mut page = commonmeasure_http::Response::text(200, "the page");
         page.headers.set(
@@ -2845,5 +3828,270 @@ mod licence_first_tests {
         let read = &second.licences[0];
         assert_eq!(read.cache, CacheDecision::Reused);
         assert!(!read.unread && read.terms.is_some(), "{read:?}");
+    }
+}
+
+/// The requests discovery makes, asserted at the prober: every request the
+/// edge sends passes through it, in order. The public-suffix names here do
+/// not resolve to loopback, so the mediated end-to-end tests cover the
+/// `*.localhost` shapes and these cover the registries.
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    type Answer = Result<(u16, &'static str), ProbeFailure>;
+
+    /// A prober that logs each URL it is asked for and answers from `route`.
+    fn prober<'a>(
+        log: &'a RefCell<Vec<String>>,
+        route: &'a dyn Fn(&str) -> Answer,
+    ) -> impl Fn(&str, Redirects) -> Result<(String, commonmeasure_http::Response), ProbeFailure> + 'a
+    {
+        move |url, _| {
+            log.borrow_mut().push(url.to_owned());
+            route(url).map(|(status, body)| {
+                (
+                    url.to_owned(),
+                    commonmeasure_http::Response::text(status, body),
+                )
+            })
+        }
+    }
+
+    /// A page on a host under a public suffix: after the host's 404 the
+    /// fallback asks nothing under `pages.dev` or `co.uk`, and
+    /// `www.example.co.uk` asks `example.co.uk` once. Breaks where the
+    /// fallback takes the parent host, which asks `pages.dev`, and for
+    /// `www.example.co.uk` climbs on to `co.uk`.
+    #[test]
+    fn the_fallback_never_chooses_a_public_suffix() {
+        let not_found: &dyn Fn(&str) -> Answer = &|_| Ok((404, "not found"));
+        for (page, expected) in [
+            (
+                "https://x.pages.dev/a",
+                vec![
+                    "https://x.pages.dev/robots.txt",
+                    "https://x.pages.dev/.well-known/content-telemetry.json",
+                ],
+            ),
+            (
+                "https://www.example.co.uk/a",
+                vec![
+                    "https://www.example.co.uk/robots.txt",
+                    "https://www.example.co.uk/.well-known/content-telemetry.json",
+                    "https://example.co.uk/robots.txt",
+                    "https://example.co.uk/.well-known/content-telemetry.json",
+                ],
+            ),
+            (
+                "https://user.github.io/a",
+                vec![
+                    "https://user.github.io/robots.txt",
+                    "https://user.github.io/.well-known/content-telemetry.json",
+                ],
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let log = RefCell::new(Vec::new());
+            let probe = prober(&log, not_found);
+            let resolved = resolve_manifest(
+                &ManifestCache::open(home.path()),
+                &DeclarationCache::open(home.path()),
+                page,
+                Utc::now(),
+                &probe,
+                None,
+                ManifestTurn::Paced,
+            )
+            .expect("a host");
+            assert_eq!(*log.borrow(), expected, "{page}");
+            assert_eq!(resolved.record.outcome, ManifestOutcome::NotPublished);
+        }
+    }
+
+    /// The boundary the publisher text states: a suffix host is asked only
+    /// for a page on it. A page on `pages.dev` itself asks that host's
+    /// `robots.txt` and manifest and nothing further; a page on
+    /// `x.pages.dev` never asks `pages.dev`. Breaks under the mutation that
+    /// makes `apex_url` return the parent host (the `main` climb), which
+    /// asks `dev` for the first and `pages.dev` for the second.
+    #[test]
+    fn a_suffix_host_is_asked_only_for_a_page_on_it() {
+        let not_found: &dyn Fn(&str) -> Answer = &|_| Ok((404, "not found"));
+        for (page, expected) in [
+            (
+                "https://pages.dev/a",
+                [
+                    "https://pages.dev/robots.txt",
+                    "https://pages.dev/.well-known/content-telemetry.json",
+                ],
+            ),
+            (
+                "https://x.pages.dev/a",
+                [
+                    "https://x.pages.dev/robots.txt",
+                    "https://x.pages.dev/.well-known/content-telemetry.json",
+                ],
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let log = RefCell::new(Vec::new());
+            let probe = prober(&log, not_found);
+            let resolved = resolve_manifest(
+                &ManifestCache::open(home.path()),
+                &DeclarationCache::open(home.path()),
+                page,
+                Utc::now(),
+                &probe,
+                None,
+                ManifestTurn::Paced,
+            )
+            .expect("a host");
+            assert_eq!(*log.borrow(), expected, "{page}");
+            assert_eq!(resolved.record.probes.len(), 1, "{page}");
+            assert_eq!(resolved.record.outcome, ManifestOutcome::NotPublished);
+        }
+    }
+
+    /// A probe cut short by a back-off store fault, whose reason ends with
+    /// its own full stop: the attribution carries one full stop there.
+    #[test]
+    fn a_cut_short_attribution_ends_the_reason_once() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = DeclarationCache::open(home.path());
+        let answer: RefCell<Answer> = RefCell::new(Err(ProbeFailure::Backoff(
+            "the back-off record for host.example could not be locked. Make the back-off \
+             directory, crawl-delay, writable, and try again."
+                .to_owned(),
+        )));
+        let log = RefCell::new(Vec::new());
+        let route = |_: &str| answer.borrow().clone();
+        let probe = prober(&log, &route);
+        let robots = read_robots(
+            &cache,
+            "https://host.example/a",
+            Utc::now(),
+            &probe,
+            None,
+            PolicyMode::Strict,
+        )
+        .robots;
+        assert_eq!(robots.outcome, Some(RobotsRuling::CutShort));
+        let attribution = robots.attribution();
+        assert!(
+            attribution.contains("and try again. The request failed"),
+            "{attribution}"
+        );
+        assert!(!attribution.contains(".."), "{attribution}");
+    }
+
+    /// The held answer: an answer that has expired, then a probe
+    /// this edge held back or did not send, then an unreachable file. The
+    /// answer is set aside by the probe that was not sent and rules when the
+    /// file is unreachable. Breaks where the unsent probe drops the answer
+    /// and the unreachable file then disallows every path.
+    #[test]
+    fn an_unsent_robots_probe_keeps_the_held_answer() {
+        for unsent in [
+            ProbeFailure::Backoff("host.example is in back-off".to_owned()),
+            ProbeFailure::CutShort {
+                reason: "no time left".to_owned(),
+                sent: false,
+            },
+            ProbeFailure::NotSent("refused by policy".to_owned()),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let cache = DeclarationCache::open(home.path());
+            let answer: RefCell<Answer> = RefCell::new(Ok((200, "User-agent: *\nAllow: /\n")));
+            let log = RefCell::new(Vec::new());
+            let route = |_: &str| answer.borrow().clone();
+            let probe = prober(&log, &route);
+            let start = Utc::now();
+            let read = |now| {
+                read_robots(
+                    &cache,
+                    "https://host.example/a",
+                    now,
+                    &probe,
+                    None,
+                    PolicyMode::Strict,
+                )
+                .robots
+            };
+            assert_eq!(read(start).outcome, Some(RobotsRuling::Allowed));
+            *answer.borrow_mut() = Err(unsent.clone());
+            let later = start + chrono::Duration::days(2);
+            read(later);
+            assert!(
+                cache.load("host.example").robots_held.is_some(),
+                "{unsent:?}: the answer is set aside"
+            );
+            *answer.borrow_mut() = Err(ProbeFailure::Unreachable("timed out".to_owned()));
+            let ruled = read(later + FAILURE_CACHE_AGE + chrono::Duration::seconds(1));
+            assert!(ruled.held_copy.is_some(), "{unsent:?}: {ruled:?}");
+            assert_eq!(ruled.outcome, Some(RobotsRuling::Allowed), "{unsent:?}");
+        }
+    }
+
+    /// The `http` and `https` origins of one host each keep their
+    /// own `robots.txt` and their own last answer. Alternating crossings ask
+    /// each file once, and a failure at one origin is ruled by that origin's
+    /// held answer. Breaks where one slot per host name is
+    /// overwritten by each origin in turn: the third crossing asks again,
+    /// and the failure finds nothing held.
+    #[test]
+    fn each_origin_of_a_host_keeps_its_own_robots_slot_and_held_answer() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = DeclarationCache::open(home.path());
+        let down = RefCell::new(false);
+        let route = |url: &str| -> Answer {
+            match (url.starts_with("http:"), *down.borrow()) {
+                (true, true) => Err(ProbeFailure::Unreachable("refused".to_owned())),
+                (true, false) => Ok((200, "User-agent: *\nDisallow: /private/\n")),
+                (false, _) => Ok((200, "User-agent: *\nAllow: /\n")),
+            }
+        };
+        let log = RefCell::new(Vec::new());
+        let probe = prober(&log, &route);
+        let start = Utc::now();
+        let read =
+            |url: &str, now| read_robots(&cache, url, now, &probe, None, PolicyMode::Strict).robots;
+        read("http://host.example/private/a", start);
+        read("https://host.example/private/a", start);
+        read("http://host.example/private/b", start);
+        read("https://host.example/private/b", start);
+        assert_eq!(
+            *log.borrow(),
+            [
+                "http://host.example/robots.txt",
+                "https://host.example/robots.txt"
+            ]
+        );
+        *down.borrow_mut() = true;
+        let ruled = read(
+            "http://host.example/private/c",
+            start + chrono::Duration::days(2),
+        );
+        assert!(ruled.unreachable && ruled.held_copy.is_some(), "{ruled:?}");
+        assert_eq!(ruled.outcome, Some(RobotsRuling::Refused));
+        assert_eq!(
+            read("https://host.example/private/c", start).outcome,
+            Some(RobotsRuling::Allowed)
+        );
+    }
+
+    /// The cache key is the origin: `https` on 443 keeps the host's name,
+    /// any other scheme or port adds both, and a trailing dot is dropped.
+    #[test]
+    fn the_cache_key_is_the_origin() {
+        assert_eq!(origin_key("https://Example.com./a"), "example.com");
+        assert_eq!(origin_key("https://example.com:443/a"), "example.com");
+        assert_eq!(
+            origin_key("https://example.com:8443/a"),
+            "example.com_https_8443"
+        );
+        assert_eq!(origin_key("http://example.com/a"), "example.com_http_80");
+        assert_eq!(origin_key("http://127.0.0.1:4711/a"), "127.0.0.1_http_4711");
     }
 }

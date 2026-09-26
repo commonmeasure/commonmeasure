@@ -166,6 +166,13 @@ fn the_json_api_serves_the_same_evidence_the_pages_render() {
     assert_eq!(records.as_array().expect("records").len(), 1);
 
     assert_eq!(console.get("/api/status").status, 200);
+
+    // `commonmeasure service status` reads this to tell a console running an
+    // old binary from one running the binary on PATH.
+    let version = console.get_json("/api/version");
+    assert_eq!(version["product"], "commonmeasure");
+    assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(version["pid"], console.child.id());
 }
 
 #[test]
@@ -705,8 +712,9 @@ fn record_mediated_crossing(home: &Path, session: &str, url: &str) {
 /// The Record pane shows what the record carries and nothing else: a
 /// mediated fetch renders both hashes, the HTTP status and the identity the
 /// request presented; an observed crossing renders its content hash alone,
-/// with no status and no identity. Read back from the log the real binary
-/// wrote, so the strings asserted are the record's own.
+/// labelled as the text in context, with no status and no identity. Read
+/// back from the log the real binary wrote, so the strings asserted are the
+/// record's own.
 #[test]
 fn the_record_pane_shows_the_hashes_status_and_identity_the_record_carries() {
     let origin = commonmeasure_http::Server::bind("127.0.0.1:0")
@@ -736,7 +744,7 @@ fn the_record_pane_shows_the_hashes_status_and_identity_the_record_carries() {
     assert!(pane.contains(retrieved), "{pane}");
     assert!(pane.contains(content), "{pane}");
     assert!(
-        pane.contains("<dt>bytes received</dt>") && pane.contains("<dt>text read</dt>"),
+        pane.contains("<dt>bytes received</dt>") && pane.contains("<dt>text extracted</dt>"),
         "{pane}"
     );
     assert!(
@@ -755,7 +763,8 @@ fn the_record_pane_shows_the_hashes_status_and_identity_the_record_carries() {
         .expect("content_hash");
     let pane = console.text("/app/fragments/session/s-observed");
     assert!(pane.contains(observed_hash), "{pane}");
-    assert!(pane.contains("<dt>text read</dt>"), "{pane}");
+    assert!(pane.contains("<dt>text in context</dt>"), "{pane}");
+    assert!(!pane.contains("<dt>text extracted</dt>"), "{pane}");
     assert!(!pane.contains("<dt>bytes received</dt>"), "{pane}");
     assert!(!pane.contains("<dt>status</dt>"), "{pane}");
     assert!(!pane.contains("<dt>identity</dt>"), "{pane}");
@@ -1994,5 +2003,445 @@ fn comparison_export_downloads_retained_results_without_rerunning_and_defaults_t
             ))
             .status,
         400
+    );
+}
+
+/// A session record can hold the stored hub URL whole, and a home 0.4.1
+/// enrolled can hold it with credentials. The log is not rewritten;
+/// the session page, its fragment, the agents API and the raw records API
+/// name the hub by its origin alone, in `edge_identity` and in the policy
+/// URL 0.4.1 built from it for `policy_sync`.
+#[test]
+fn an_old_session_record_never_shows_the_hub_urls_credentials() {
+    let home = tempfile::tempdir().expect("home");
+    hook_session(home.path(), "s-old", "/home/op/code/ozone", true);
+    append_record(
+        home.path(),
+        "s-old",
+        "edge_identity",
+        json!({"host": "claude-code", "hub": "https://user:ak_PLANTED@hub.example/",
+               "key_id": "k-1", "standing": "enrolled",
+               "revoked_at": null, "revocation": null}),
+    );
+    append_record(
+        home.path(),
+        "s-old",
+        "policy_sync",
+        json!({"trigger": "session_start",
+               "policy_url": "https://user:ak_PLANTED@hub.example/api/v1/policy",
+               "outcome": "already_applied", "revision": 3, "digest": "sha256:ab",
+               "reason": null, "applied": null, "stale_since": null}),
+    );
+    let log = std::fs::read_to_string(home.path().join("sessions/s-old.ndjson")).expect("log");
+    assert!(
+        log.contains("ak_PLANTED"),
+        "the fixture holds the credential"
+    );
+
+    let console = Console::start(home.path());
+    let agents = console.get_json("/api/agents");
+    assert_eq!(
+        agent(&agents, "s-old")["edge_identity"]["hub"],
+        "https://hub.example"
+    );
+    let page = console.text("/app/agents?agent=s-old");
+    assert!(
+        page.contains("<dt>Hub</dt><dd>https://hub.example</dd>"),
+        "{page}"
+    );
+    for (path, body) in [
+        ("/api/agents", agents.to_string()),
+        ("/app/agents?agent=s-old", page),
+        (
+            "/app/fragments/agent/s-old",
+            console.text("/app/fragments/agent/s-old"),
+        ),
+        (
+            "/api/sessions/s-old",
+            console.get_json("/api/sessions/s-old").to_string(),
+        ),
+        (
+            "/app/record?session=s-old",
+            console.text("/app/record?session=s-old"),
+        ),
+        (
+            "/app/fragments/session/s-old",
+            console.text("/app/fragments/session/s-old"),
+        ),
+    ] {
+        assert!(!body.contains("ak_PLANTED"), "{path}: {body}");
+    }
+}
+
+/// 0.4.2 and earlier quoted the policy URL whole in a `policy_sync` reason:
+/// a name-resolution timeout, and a refused `policy_url`, recorded with a
+/// null `policy_url`. The log is not rewritten; every console surface
+/// withholds such a reason and serves any other as recorded.
+#[test]
+fn an_old_policy_sync_reason_never_shows_the_policy_urls_credentials() {
+    let home = tempfile::tempdir().expect("home");
+    let planted = [
+        (
+            "s-timeout",
+            json!("https://op:ak_PLANTED@hub.example/api/v1/policy/desired"),
+            "unreachable",
+            "name resolution for https://op:ak_PLANTED@hub.example/api/v1/policy/desired did \
+             not complete within 3 s: timed out",
+        ),
+        (
+            "s-slashless",
+            json!("https:/op:ak_PLANTED@hub.example/api/v1/policy/desired"),
+            "unreachable",
+            "name resolution for https:/op:ak_PLANTED@hub.example/api/v1/policy/desired did \
+             not complete within 3 s: timed out",
+        ),
+        (
+            "s-refused",
+            Value::Null,
+            "unavailable",
+            "/home/op/.commonmeasure/deployment.json: policy_url \
+             \"http://op:ak_PLANTED@hub.example/api/v1/policy/desired\" must be an https URL, \
+             or http to a loopback origin",
+        ),
+        (
+            "s-clean",
+            json!("https://hub.example/api/v1/policy/desired"),
+            "unreachable",
+            "the policy URL answered 404 Not Found",
+        ),
+    ];
+    for (session, policy_url, outcome, reason) in &planted {
+        hook_session(home.path(), session, "/home/op/code/ozone", true);
+        append_record(
+            home.path(),
+            session,
+            "policy_sync",
+            json!({"trigger": "session_start", "policy_url": policy_url,
+                   "outcome": outcome, "revision": null, "digest": null,
+                   "reason": reason, "applied": null, "stale_since": null}),
+        );
+    }
+
+    let console = Console::start(home.path());
+    for (session, _, _, _) in &planted[..3] {
+        for path in [
+            "/api/agents".to_owned(),
+            format!("/app/agents?agent={session}"),
+            format!("/app/fragments/agent/{session}"),
+            format!("/api/sessions/{session}"),
+            format!("/app/record?session={session}"),
+            format!("/app/fragments/session/{session}"),
+        ] {
+            let body = console.text(&path);
+            assert!(
+                !body.contains("PLANTED") && !body.contains("op:ak"),
+                "{path}: {body}"
+            );
+        }
+        let records = console.get_json(&format!("/api/sessions/{session}"));
+        let sync = records
+            .as_array()
+            .expect("records")
+            .iter()
+            .find(|record| record["event"] == "policy_sync")
+            .expect("served");
+        assert!(sync["payload"]["reason"].as_str().is_some(), "{sync}");
+    }
+    let records = console.get_json("/api/sessions/s-clean");
+    assert!(
+        records
+            .to_string()
+            .contains("the policy URL answered 404 Not Found"),
+        "{records}"
+    );
+    assert!(
+        console
+            .text("/app/agents?agent=s-clean")
+            .contains("the policy URL answered 404 Not Found")
+    );
+}
+
+/// A `policy_sync` record's reason as `/api/sessions/<id>` and `/api/agents`
+/// serve it.
+fn served_sync_reasons(console: &Console, session: &str) -> [Value; 2] {
+    let records = console.get_json(&format!("/api/sessions/{session}"));
+    let record = records
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|record| record["event"] == "policy_sync")
+        .expect("served")["payload"]["reason"]
+        .clone();
+    let agents = console.get_json("/api/agents");
+    let agent = agent(&agents, session)["policy"]["syncs"]
+        .as_array()
+        .expect("syncs")
+        .iter()
+        .find(|sync| sync["session_id"] == session)
+        .expect("sync")["reason"]
+        .clone();
+    [record, agent]
+}
+
+/// The console withholds a reason whose record's `policy_url` carries
+/// credentials even where the reason itself holds no `@`: whether an old
+/// reason quoted the URL is not read from its free text.
+#[test]
+fn a_credentialed_policy_url_withholds_a_reason_that_holds_no_at() {
+    let home = tempfile::tempdir().expect("home");
+    hook_session(home.path(), "s-url", "/home/op/code/ozone", true);
+    append_record(
+        home.path(),
+        "s-url",
+        "policy_sync",
+        json!({"trigger": "session_start",
+               "policy_url": "https://op:ak_PLANTED@hub.example/api/v1/policy/desired",
+               "outcome": "unreachable", "revision": null, "digest": null,
+               "reason": "the policy URL answered 404 Not Found",
+               "applied": null, "stale_since": null}),
+    );
+
+    let console = Console::start(home.path());
+    for reason in served_sync_reasons(&console, "s-url") {
+        let reason = reason.as_str().expect("a note in its place");
+        assert!(reason.starts_with("withheld:"), "{reason}");
+    }
+}
+
+/// Credentials an `@` test cannot see: a key in the policy URL's query,
+/// which 0.4.2 and earlier quoted in a name-resolution timeout, and a
+/// refused `policy_url` that does not parse, quoted in the refusal on a
+/// record whose `policy_url` is null. Neither reason is served, nor a reason
+/// whose record holds a `policy_url` that does not parse. A current
+/// refusal, which quotes nothing, is served as recorded, and so is a
+/// `rejected` reason that quotes a key id: the `"` test is for `unavailable`
+/// reasons only.
+#[test]
+fn an_old_policy_sync_reason_never_shows_a_credential_outside_userinfo() {
+    let home = tempfile::tempdir().expect("home");
+    let planted = [
+        (
+            "s-query",
+            json!("https://hub.example/api/v1/policy/desired?key=ak_PLANTED"),
+            "unreachable",
+            "name resolution for https://hub.example/api/v1/policy/desired?key=ak_PLANTED did \
+             not complete within 3 s: timed out",
+        ),
+        (
+            "s-encoded",
+            Value::Null,
+            "unavailable",
+            "/home/op/.commonmeasure/deployment.json: policy_url \
+             \"https://op:ak_PLANTED%40hub.example/p\" must be an https URL, or http to a \
+             loopback origin",
+        ),
+        (
+            "s-unparsed",
+            json!("https://op:ak_PLANTED%40hub.example/p"),
+            "unreachable",
+            "name resolution for https://op:ak_PLANTED%40hub.example/p did not complete \
+             within 3 s: timed out",
+        ),
+    ];
+    let current = "/home/op/.commonmeasure/deployment.json: policy_url is not a URL: invalid \
+                   port number";
+    let rejected = "the envelope is signed by key \"k-2\"; this edge pins \"k-1\"";
+    for (session, policy_url, outcome, reason) in planted.iter().chain([
+        &("s-current", Value::Null, "unavailable", current),
+        &(
+            "s-rejected",
+            json!("https://hub.example/api/v1/policy/desired"),
+            "rejected",
+            rejected,
+        ),
+    ]) {
+        hook_session(home.path(), session, "/home/op/code/ozone", true);
+        append_record(
+            home.path(),
+            session,
+            "policy_sync",
+            json!({"trigger": "session_start", "policy_url": policy_url,
+                   "outcome": outcome, "revision": null, "digest": null,
+                   "reason": reason, "applied": null, "stale_since": null}),
+        );
+    }
+
+    let console = Console::start(home.path());
+    for (session, _, _, _) in &planted {
+        for path in [
+            "/api/agents".to_owned(),
+            format!("/app/agents?agent={session}"),
+            format!("/app/fragments/agent/{session}"),
+            format!("/api/sessions/{session}"),
+            format!("/app/record?session={session}"),
+            format!("/app/fragments/session/{session}"),
+        ] {
+            let body = console.text(&path);
+            assert!(!body.contains("PLANTED"), "{path}: {body}");
+        }
+        for reason in served_sync_reasons(&console, session) {
+            let reason = reason.as_str().expect("a note in its place");
+            assert!(reason.starts_with("withheld:"), "{session}: {reason}");
+        }
+    }
+    assert_eq!(
+        served_sync_reasons(&console, "s-current"),
+        [json!(current), json!(current)]
+    );
+    assert_eq!(
+        served_sync_reasons(&console, "s-rejected"),
+        [json!(rejected), json!(rejected)]
+    );
+}
+
+/// A key in the policy URL's path or fragment, which 0.4.2 and earlier
+/// quoted whole in a name-resolution timeout: the reason holds the record's
+/// `policy_url` verbatim, and that URL is more than its origin, so the
+/// reason is withheld, including where the path is `/` and only the
+/// fragment holds the key. A query-bearing `policy_url` withholds the reason
+/// even where the reason spells the URL differently. A current timeout
+/// quotes only the origin, and one for a `policy_url` that is only its
+/// origin is served as recorded.
+#[test]
+fn an_old_timeout_never_shows_a_credential_in_the_policy_urls_path_or_fragment() {
+    let home = tempfile::tempdir().expect("home");
+    let planted = [
+        (
+            "s-path",
+            "https://hub.example/t/ak_PLANTED/api/v1/policy/desired",
+        ),
+        (
+            "s-fragment",
+            "https://hub.example/api/v1/policy/desired#ak_PLANTED",
+        ),
+        ("s-root-fragment", "https://hub.example/#ak_PLANTED"),
+    ];
+    let origin_only = "https://hub.example";
+    for (session, policy_url) in planted.iter().chain([&("s-origin", origin_only)]) {
+        hook_session(home.path(), session, "/home/op/code/ozone", true);
+        append_record(
+            home.path(),
+            session,
+            "policy_sync",
+            json!({"trigger": "session_start", "policy_url": policy_url,
+                   "outcome": "unreachable", "revision": null, "digest": null,
+                   "reason": format!("name resolution for {policy_url} did not complete \
+                                      within 3 s: timed out"),
+                   "applied": null, "stale_since": null}),
+        );
+    }
+    // The query rule does not depend on the reason quoting the URL as
+    // recorded: here the reason spells the host in lower case.
+    hook_session(home.path(), "s-respelt", "/home/op/code/ozone", true);
+    append_record(
+        home.path(),
+        "s-respelt",
+        "policy_sync",
+        json!({"trigger": "session_start",
+               "policy_url": "https://Hub.Example/api/v1/policy/desired?key=ak_PLANTED",
+               "outcome": "unreachable", "revision": null, "digest": null,
+               "reason": "name resolution for \
+                          https://hub.example/api/v1/policy/desired?key=ak_PLANTED did not \
+                          complete within 3 s: timed out",
+               "applied": null, "stale_since": null}),
+    );
+
+    let console = Console::start(home.path());
+    for session in planted
+        .iter()
+        .map(|(session, _)| *session)
+        .chain(["s-respelt"])
+    {
+        for path in [
+            "/api/agents".to_owned(),
+            format!("/app/agents?agent={session}"),
+            format!("/api/sessions/{session}"),
+        ] {
+            let body = console.text(&path);
+            assert!(!body.contains("PLANTED"), "{path}: {body}");
+        }
+        for reason in served_sync_reasons(&console, session) {
+            let reason = reason.as_str().expect("a note in its place");
+            assert!(reason.starts_with("withheld:"), "{session}: {reason}");
+        }
+    }
+    let timeout = json!(format!(
+        "name resolution for {origin_only} did not complete within 3 s: timed out"
+    ));
+    assert_eq!(
+        served_sync_reasons(&console, "s-origin"),
+        [timeout.clone(), timeout]
+    );
+}
+
+/// A torn `edge_identity` or `policy_sync` line can hold a hub or policy
+/// URL with its credentials, as typed: here a 0.4.1 hub with an extra `/`
+/// after `://`, and a managed `policy_url` with one `/` and no `//`, both
+/// of which a URL parser reads as userinfo. The records API serves such a
+/// line as its line number and length, and the pages built from the same
+/// records show none of its text; the log keeps it as written.
+#[test]
+fn a_torn_line_is_served_without_the_hub_urls_credentials() {
+    let home = tempfile::tempdir().expect("home");
+    hook_session(home.path(), "s-torn", "/home/op/code/ozone", true);
+    let path = home.path().join("sessions/s-torn.ndjson");
+    let before = std::fs::read_to_string(&path).expect("log").lines().count();
+    let identity = r#"{"seq":9,"event":"edge_identity","payload":{"hub":"https:///user:s3cr'et_ak_PLANTED@hub.example","key_id":"k-"#;
+    let sync = r#"{"seq":10,"event":"policy_sync","payload":{"session_id":"s-torn","host":"claude-code","timestamp":"2026-09-26T10:00:00.000Z","trigger":"session_start","policy_url":"https:/op:ak_CUT@hub.example/api/v1/policy/desired","outcome":"unrea"#;
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("session log");
+    writeln!(log, "{identity}").expect("append");
+    writeln!(log, "{sync}").expect("append");
+    drop(log);
+    let written = std::fs::read_to_string(&path).expect("log");
+    assert!(written.contains("ak_PLANTED") && written.contains("ak_CUT"));
+
+    let console = Console::start(home.path());
+    let records = console.get_json("/api/sessions/s-torn");
+    let unreadable: Vec<&Value> = records
+        .as_array()
+        .expect("records")
+        .iter()
+        .filter(|record| record["event"] == "unreadable")
+        .collect();
+    assert_eq!(
+        unreadable,
+        [
+            &json!({"event": "unreadable", "line": before + 1, "bytes": identity.len()}),
+            &json!({"event": "unreadable", "line": before + 2, "bytes": sync.len()}),
+        ],
+        "{records}"
+    );
+    for (path, body) in [
+        ("/api/sessions/s-torn", records.to_string()),
+        (
+            "/app/record?session=s-torn",
+            console.text("/app/record?session=s-torn"),
+        ),
+        (
+            "/app/fragments/session/s-torn",
+            console.text("/app/fragments/session/s-torn"),
+        ),
+    ] {
+        for text in [
+            "ak_",
+            "s3cr",
+            "user:",
+            "op:ak",
+            "hub.example",
+            "key_id",
+            "policy/desired",
+            "https:/op",
+            "https:///user",
+        ] {
+            assert!(!body.contains(text), "{path} serves {text:?}: {body}");
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("log"),
+        written,
+        "the log is not rewritten"
     );
 }

@@ -167,6 +167,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
                         .to_owned(),
                 }),
             promoted: &["url", "title", "snippets", "page_age"],
+            ..Default::default()
         })
     }))
 }

@@ -316,14 +316,32 @@ separately from its crawl-delay ruling, including waits, refusals and store
 failures. A back-off refusal before a crawl-delay turn writes no delay ruling.
 After back-off ends, one sender reserves the host for its request timeout;
 other callers wait for its answer within their budgets. Its answer clears or
-renews the reservation, and a reservation left by a stopped process expires.
+renews the reservation. A request that ends without an answer, such as a
+refused connection, releases it without counting a failure, and a
+reservation left by a stopped process expires. A response whose headers or
+body cannot be read whole counts as no answer: its status and `Retry-After`
+are not recorded.
 
 An unreadable store refuses before the request. A read-only store does not
 prevent a healthy host's successful answer when no failure needs resetting:
 that answer takes no lock and writes nothing. An update that cannot be kept
 is an edge failure, never cached or attributed to the host as an unreachable
-`robots.txt`. The error retains its cause and names that host's back-off file
-to repair; the next crossing asks again after repair.
+`robots.txt`. A page's crossing keeps the answer's `http_status`, and its
+`failure` says the host answered and the answer was not used. The error
+retains its cause and names what to repair: that host's back-off file where
+the record cannot be read, and the back-off directory where it cannot be
+created, locked, written or removed. A lock another process held for the
+whole wait is named as held, and a lock file that exists and cannot be
+opened is named, to be made readable and writable by this user or removed
+while no process holds it. The next crossing asks again after repair.
+
+A store whose directory cannot be written keeps no back-off, so a failing
+host's 429 or 5xx paces nothing: a host that states no `Crawl-delay` is asked
+again at the rate the agent calls, and each crossing records the answer as
+not used and names the directory. A host that states a `Crawl-delay` is not
+asked, because its crawl-delay turn cannot be kept either, and a turn that
+cannot be kept refuses the request
+([session evidence](contracts/session-evidence.md#source-declarations)).
 
 - `retry_after_is_shared_by_sessions_and_a_restarted_process`,
   `a_503_http_date_sets_the_next_send_and_refuses_a_short_budget`,

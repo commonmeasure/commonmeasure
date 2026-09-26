@@ -622,7 +622,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "commonmeasure-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64",
  "c2pa",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-console"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -667,12 +667,13 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "url",
  "zip",
 ]
 
 [[package]]
 name = "commonmeasure-harness"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64",
  "c2pa",
@@ -685,6 +686,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "libc",
+ "psl",
  "quick-xml",
  "ring",
  "schemars 1.2.2",
@@ -700,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-http"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "flate2",
@@ -712,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-inference"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -724,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-relay"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -735,6 +737,7 @@ dependencies = [
  "commonmeasure-types",
  "ed25519-dalek",
  "jsonschema",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -745,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-runtime"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "c2pa",
  "c2pa-text",
@@ -754,6 +757,7 @@ dependencies = [
  "commonmeasure-inference",
  "commonmeasure-supply",
  "commonmeasure-types",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -766,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-supply"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -780,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-types"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2478,6 +2482,21 @@ dependencies = [
  "regex-syntax",
  "unarray",
 ]
+
+[[package]]
+name = "psl"
+version = "2.1.238"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e6aa2cd4e8e062e78ac5d7df6206e2f8e39b624f658efd6f34f9aa1928ac5da"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
 
 [[package]]
 name = "pulldown-cmark"

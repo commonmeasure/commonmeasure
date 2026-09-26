@@ -18,11 +18,37 @@ commonmeasure serve --listen 127.0.0.1:4180      # another loopback port
 It is rendered from the session evidence logs in the operator home. An
 index of them (`~/.commonmeasure/telemetry.db`) is refreshed before every
 answer, so a crossing recorded while the console is open appears on reload.
-Deleting the index loses nothing; it is rebuilt from the logs. A
-measurement the record does not hold is shown as "unknown", never as zero
+Deleting the index loses nothing; it is rebuilt from the logs.
+
+The index keeps each line as it first read it. A line changed in a log in
+place, such as a credential redacted by hand, stays in the index as read
+until the index is deleted. To clear it, stop the console (`Ctrl-C` on
+`commonmeasure serve`; where the service runs it,
+`commonmeasure service uninstall console`, since the service restarts a
+`serve` that is killed), delete `telemetry.db` with its `telemetry.db-wal`
+and `telemetry.db-shm` beside it, and start it again (`commonmeasure serve`,
+or `commonmeasure service install console` from a shell with the same Edge
+home: [Keep the console
+running](GETTING-STARTED.md#keep-the-console-running-macos)). A console
+left running keeps the deleted index open and serves it until it stops.
+
+A measurement the record does not hold is shown as "unknown", never as zero
 or a blank ([`docs/FAIL-POLICY.md`](FAIL-POLICY.md) §7). Terms such as
 crossing, engagement, scope and policy mode are in
 [`docs/GLOSSARY.md`](GLOSSARY.md).
+
+On macOS, `commonmeasure service install console` keeps it running as a
+LaunchAgent for the Edge home of the installing shell, logging to
+`logs/console.log` in that home. `commonmeasure service status` reports the
+service, the Edge home and log its plist names, and any console on the port
+that the service did not start
+([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §5). `commonmeasure update`
+stops the service before it replaces the binary the service runs, and starts
+it again with the Edge home and log in its plist, whichever home the shell
+running `update` selects. It refuses a plist edited since `service install`
+wrote it (§1 of the same guide, Updating). `GET /api/version`
+answers the running binary's version and process id, which `service status`
+compares with the `commonmeasure` on `PATH`.
 
 The console writes four things: the policy mode, a scope's denied hosts,
 the attribution rules, and the record of each comparison Compare runs.
@@ -50,7 +76,15 @@ policy file and its revision.
 `/`. Crossings recorded, witnessed by Common Measure, refused by policy,
 and delivered by the relay. Beneath them, the most recent crossings by
 host, and each engagement with its crossings, attributed by the working
-directory each crossing ran in.
+directory each crossing ran in. The Hub card gives the relay's delivery
+state, the receiver and the edge key with its standing. Where the stored
+hub URL is one nothing is sent to, the standing reads in words beside
+`cleartext_hub` or `unusable_hub_url`, and a callout gives the reason and
+the remedy as `commonmeasure status` prints them. Where the spool is
+refused, a callout states what it still owes in the words `status` uses; a
+count it could not complete reads as unknown. Where `enrolment.json` exists
+but cannot be read, the key reads as unknown and a callout gives the error
+as `status` prints it.
 
 ### Record
 
@@ -72,17 +106,48 @@ and the chosen session in a pane. Each session has its own address,
   §Crossing):
   - *bytes received*: `retrieved_hash`, the hash of the body the origin
     served, on a mediated fetch that received one;
-  - *text read*: `content_hash`, the hash of the text delivered to the
-    agent, on every witnessed crossing;
+  - *text extracted*: `content_hash` on a mediated fetch, the hash of the
+    whole text taken from the body;
+  - *text supplied*: `content_hash` on a search result, a mediated crossing
+    that names its `supplier`: the supplier's hash of the text it
+    delivered; no page was fetched, so nothing was extracted;
+  - *text in context*: `content_hash` on a crossing whose `mode` is
+    `observed`, the hash of the text the host's tool returned into context;
+    no body was seen, so nothing was extracted;
+  - *text in transcript*: `content_hash` on a crossing whose `mode` is
+    `reconstructed`, the hash of the tool result as the host transcript
+    holds it;
+  - *part delivered*: `delivered.hash` and the part's range in characters,
+    on a mediated fetch that returned text;
   - *status*: `http_status`, on a mediated fetch that was answered;
   - *identity*: `signed as <key id>` for an enrolled edge, or `unsigned`
     with the recorded reason, on a mediated crossing whose request left the
     machine.
-- A refused crossing is a marked card with the reason and none of those
-  fields, because nothing was fetched.
+- A refused crossing is a marked card with the reason. A refusal after the
+  fetch also shows the hashes it recorded; one before the request has none.
 - Witnessed and reconstructed evidence are never totalled together.
 - A session that crossed nothing says so and names what it did record:
   turn boundaries, and lines the console could not read.
+- `GET /api/sessions/<id>` returns the session's records in log order.
+  An `edge_identity` record's `hub` and a `policy_sync` record's
+  `policy_url` are given by their origin. A `policy_sync` record's
+  `reason` is withheld whole, here and on Agents, where up to and
+  including 0.4.1 it could quote the policy URL with its credentials: where
+  the reason or the record's `policy_url` holds an `@`, where the
+  `policy_url` carries a query or does not parse as a URL, where the
+  reason holds the record's `policy_url` verbatim and that URL has a path
+  other than `/`, a query or a fragment, as the old timeout did, and where
+  an `unavailable` record's reason holds a `"`, as the old refusal of a
+  `policy_url` did around the value. The console serves a note in its
+  place; the log keeps the reason as written. A line the console could not
+  parse is `{"event": "unreadable", "line": <number>, "bytes": <length>}`:
+  its 1-based line number in the session log and its length in bytes as
+  the console holds it, without the line ending, with none of its text.
+  Where the line is not valid UTF-8 this length can differ from its
+  length in the log. A torn `edge_identity` or
+  `policy_sync` line can hold a hub or policy URL with credentials. The
+  log and the console index keep the line as written; read the line in
+  the log. Up to and including 0.4.1 the record carried the line as `raw`.
 
 ### Agents
 
@@ -95,8 +160,11 @@ each: what it can be seen doing, the policy it loaded against the policy
 the edge holds now, its latest context snapshot, its coverage from the
 path table in
 [`docs/contracts/host-integration.md`](contracts/host-integration.md) §6,
-and anything that needs attention, such as a delivery problem the relay
-reports or a running process that has recorded no work for an hour. A
+the edge identity it started under (the hub by its origin alone, the key
+and its standing, and the edge's refusal of the hub URL where the
+`edge_identity` record carries one), and anything that needs attention,
+such as a delivery problem the relay reports, a revoked key or a refused
+hub URL, or a running process that has recorded no work for an hour. A
 process is shown running only when it is found in the process table; a
 missing `session_ended` record is never read as running, and where the
 table cannot be read the screen says liveness is unavailable.
@@ -233,6 +301,17 @@ runtime's ledger, read through the same loader and ledger that enforcement
 uses. Session logs carry no acquisition charge per engagement, so there is
 no spend total per engagement, and the screen says so. An allowance whose
 declaration or ledger cannot be read is shown as unreadable.
+
+The context footprint, here, on each session and in the internal-use view,
+sums `estimated_tokens` over the witnessed crossings, observed and mediated,
+each basis apart; for a session with a context snapshot, it is the figure
+`commonmeasure session` states. A reconstructed crossing's estimate is of
+the text in a transcript, not of what entered context, so its tokens are
+shown apart as the reconstructed figure (`reconstructed_estimated_tokens`
+and its companions in the JSON) and never added to the witnessed one; a
+session made only of imported crossings has a reconstructed figure and no
+witnessed one. A refused crossing counts in neither, even where it records
+an estimate, because its text was withheld.
 
 ## The guide
 

@@ -154,11 +154,14 @@ The licence state is `unknown`, and not `allowed`. The edge read
 permits the path, and found no statement about AI use and no licence. An
 absent statement is recorded as unknown, never as permission. The edge also
 looked for a discovery manifest at `/.well-known/content-telemetry.json`.
-The one on `www.gov.uk` answered 404, and the probe of the apex host was
-stopped by the operator's own rules: the manifest record's reason reads
+The one on `www.gov.uk` answered 404. In the session this page reads, the
+edge then asked `gov.uk`, and the operator's own rules stopped that probe:
+the manifest record's reason reads
 `https://gov.uk/.well-known/content-telemetry.json is refused by policy:
 access rule 32 (*) refuses host gov.uk.` The operator's rules govern every
-request the edge makes, including the ones it makes on its own account.
+request the edge makes, including the ones it makes on its own account. The
+current edge does not ask `gov.uk`: `gov.uk` is a public suffix, so
+`www.gov.uk` is its own registrable domain and nothing above it is asked.
 
 ## 2. people.com: admitted, and the terms it published were invisible
 

@@ -26,6 +26,7 @@
 //! real code under the real limits and the live path is the only path.
 
 pub mod credentials;
+mod dataville;
 mod exa;
 mod firecrawl;
 mod internal;
@@ -43,6 +44,7 @@ mod tinyfish;
 mod tollbit;
 mod you;
 
+pub use dataville::DatavilleAdapter;
 pub use exa::ExaAdapter;
 pub use firecrawl::FirecrawlAdapter;
 pub use internal::{CORPUS_VARIABLE, InternalCorpusAdapter};
@@ -79,14 +81,16 @@ pub const ADAPTER_VERSION: &str = "commonmeasure-supply/0.1";
 /// run's plan list does not depend on map iteration. `internal` is the
 /// operator's own corpus (`query`); `redpine` is a licensed supplier bought by
 /// quote then confirm; `ozone` retrieves from a licensed publisher corpus with
-/// no quote gate; the rest are open-web providers (`search`).
+/// no quote gate; `dataville` searches public-source catalogues; the rest are
+/// open-web providers (`search`).
 ///
 /// Skill providers are deliberately absent and cannot be added: each one is
 /// named for a bundle the operator's catalogue declares at run time
 /// ([`SKILL_PROVIDER_PREFIX`]), so the set is not knowable at compile time
 /// and a list that pretended otherwise would be a list of somebody else's
 /// machine.
-pub const IMPLEMENTED_PROVIDERS: [&str; 15] = [
+pub const IMPLEMENTED_PROVIDERS: [&str; 16] = [
+    "dataville",
     "exa",
     "firecrawl",
     "internal",
@@ -320,8 +324,8 @@ pub trait SupplyAdapter {
     /// The most results this provider's `search` will return, where it
     /// publishes a ceiling below what a job may ask for.
     ///
-    /// `None` means no published ceiling, which is every provider but one.
-    /// TollBit caps its search page at 20. A job asking for more gets the
+    /// `None` means no published ceiling. Dataville caps its response at one,
+    /// Ozone at 100 and TollBit at 20. A job asking for more gets the
     /// cap, so the runtime records the shortfall as a gap naming both
     /// numbers rather than letting a provider comparison run at two sizes
     /// with nothing saying so.
@@ -413,6 +417,7 @@ pub trait SupplyAdapter {
 /// can never name different variables.
 pub fn required_variable(provider: &str) -> Option<&'static str> {
     Some(match provider {
+        "dataville" => "DATAVILLE_API_KEY",
         "exa" => "EXA_API_KEY",
         "firecrawl" => "FIRECRAWL_API_KEY",
         "parallel" => "PARALLEL_API_KEY",
@@ -458,6 +463,10 @@ pub fn remote_adapter(
 ) -> Option<Box<dyn SupplyAdapter>> {
     let at = |default: &'static str| origin.unwrap_or(default).to_owned();
     Some(match provider {
+        "dataville" => Box::new(DatavilleAdapter::new(
+            &at(dataville::DEFAULT_BASE_URL),
+            credential,
+        )),
         "exa" => Box::new(ExaAdapter::new(&at(exa::DEFAULT_BASE_URL), credential)),
         "firecrawl" => Box::new(FirecrawlAdapter::new(
             &at(firecrawl::DEFAULT_BASE_URL),
@@ -609,6 +618,7 @@ fn credential_for(
 /// recorded as unavailable rather than silently dropped.
 pub fn declared_provider_ref(provider: &str) -> Option<ProviderRef> {
     let capabilities: &[ProviderCapability] = match provider {
+        "dataville" => dataville::CAPABILITIES,
         "exa" => exa::CAPABILITIES,
         "firecrawl" => firecrawl::CAPABILITIES,
         "internal" => internal::CAPABILITIES,
@@ -817,6 +827,8 @@ pub(crate) fn native_metadata(item: &Value, promoted: &[&str]) -> Value {
 /// else about the envelope. The rules every provider shares are applied by
 /// [`envelopes_from_results`] once, so no adapter can drift from them.
 pub(crate) struct ResultFields {
+    /// A supplier-declared licence reference; absent declarations stay unknown.
+    pub(crate) licence: LicenceState,
     pub(crate) url: String,
     pub(crate) title: Option<String>,
     /// `None` when the provider returned no text or an empty string: "returned
@@ -830,15 +842,27 @@ pub(crate) struct ResultFields {
     pub(crate) promoted: &'static [&'static str],
 }
 
+impl Default for ResultFields {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            title: None,
+            text: None,
+            declared_date: None,
+            licence: LicenceState::Unknown,
+            promoted: &[],
+        }
+    }
+}
+
 /// One envelope per result `map` can read, in the order the provider ranked
 /// them.
 ///
 /// The rules applied here are the ones every content adapter holds to: a
 /// result whose URL is absent or whose host cannot be read is not offered as
 /// supply at all (see [`host_of`]); the content hash is over exactly the text
-/// admitted; the licence is [`LicenceState::Unknown`] because no open-web or
-/// licensed-supplier response in this crate carries a machine-readable
-/// licence, and search accessibility is not permission; the retrieval rank is
+/// admitted; the licence is unknown unless the supplier declares a reference,
+/// because search accessibility is not permission; the retrieval rank is
 /// the result's 1-based position in the sequence `items` yields, so an adapter
 /// that caps the offered candidates itself passes the capped iterator and the
 /// rank still counts what was offered.
@@ -860,7 +884,7 @@ where
                     .map(|text| sha256_digest(text.as_bytes())),
                 title: fields.title,
                 text: fields.text,
-                licence: LicenceState::Unknown,
+                licence: fields.licence,
                 declared_date: fields.declared_date,
                 native_metadata: native_metadata(item, fields.promoted),
                 retrieval_rank: index as u32 + 1,

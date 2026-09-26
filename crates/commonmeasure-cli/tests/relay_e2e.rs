@@ -1161,6 +1161,62 @@ fn dry_run_prints_no_api_key() {
     );
 }
 
+/// A receipt as 0.4.1 wrote it holds the receiver as configured, and that
+/// release accepted a key in the receiver's credentials or query. `doctor`
+/// names the receiver by origin whether `relay.json` is still refused,
+/// corrected as the 0.4.2 Upgrading note says, or removed.
+#[test]
+fn doctor_names_a_receipt_receiver_by_its_origin_alone() {
+    for delivered_to in [
+        "https://ops:ak_PLANTED@hub.example/api/v1/telemetry",
+        "https://hub.example/api/v1/telemetry?api_key=ak_PLANTED",
+    ] {
+        for relay_json in [
+            Some(json!({"receiver": delivered_to})),
+            Some(
+                json!({"receiver": "https://hub.example/api/v1/telemetry", "api_key": "ak_PLANTED"}),
+            ),
+            None,
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(home.path().join("relay")).unwrap();
+            std::fs::write(
+                home.path().join("relay/receipts.json"),
+                json!({
+                    "receiver": delivered_to,
+                    "delivered_to": delivered_to,
+                    "last_delivered_at": "2026-09-20T10:00:00.000Z",
+                    "last_error": null,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            if let Some(relay_json) = &relay_json {
+                std::fs::write(home.path().join("relay.json"), relay_json.to_string()).unwrap();
+            }
+            let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .arg("doctor")
+                .env("COMMONMEASURE_HOME", home.path())
+                .output()
+                .unwrap();
+            let printed = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.status.success(), "{printed}");
+            assert!(
+                printed.contains("last delivery: 2026-09-20T10:00:00.000Z"),
+                "{printed}"
+            );
+            assert!(
+                !printed.contains("ak_PLANTED"),
+                "{delivered_to} with relay.json {relay_json:?}: {printed}"
+            );
+        }
+    }
+}
+
 #[test]
 fn dry_run_of_an_empty_home_prints_zero_and_creates_no_relay_state() {
     let home = tempfile::tempdir().unwrap();

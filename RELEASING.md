@@ -19,11 +19,12 @@ crate takes it from there, and the binary reports it:
 commonmeasure --version
 ```
 
-`plugin/.claude-plugin/plugin.json` carries the same string, because Claude
-Code reads that manifest and the operator reads the binary;
-`crates/commonmeasure-cli/tests/version_identity.rs` fails when they differ.
-`browser/manifest.json` carries the same version; the harness registration
-test checks it against the binary.
+`plugin/.claude-plugin/plugin.json` and `browser/manifest.json` carry the
+same string, because Claude Code and the browser read those manifests and the
+operator reads the binary;
+`crates/commonmeasure-cli/tests/version_identity.rs` fails when any of them
+differ, and the release workflow's version job runs it before anything is
+built.
 `plugin/package.sh` names the archive from the version the bundled binary
 reports and refuses a manifest that disagrees. A release tag is the version
 with `v` in front: `v0.4.0` for version `0.4.0`.
@@ -32,35 +33,37 @@ with `v` in front: `v0.4.0` for version `0.4.0`.
 
 Set the version in `Cargo.toml`, `plugin/.claude-plugin/plugin.json` and
 `browser/manifest.json`, update the workspace packages in `Cargo.lock`,
+refresh the Public Suffix List the binary carries with
+`cargo update -p psl` (the crate publishes each day the list changes; a
+release knows only the suffixes listed on the day its crate was published,
+and may ask a suffix added later as though it were a registrable domain),
 write the version's `CHANGELOG.md` section (§Release notes) and replace
 `(unreleased)` in its heading with the release date, run the gates and
-commit. The release is published as one commit carrying that tree on `main`
-of `github.com/commonmeasure/commonmeasure`; the tag is created on that
-commit only and pushed with it, and the tag push starts the release
-workflow:
-
-```sh
-git tag -a v0.4.0 -m "commonmeasure 0.4.0" <release commit>
-git push --atomic https://github.com/commonmeasure/commonmeasure.git main v0.4.0
-```
+commit. The maintainers' publishing process creates one public commit
+carrying that tree on `main` of `github.com/commonmeasure/commonmeasure`,
+creates the release tag on that commit and pushes them together. The tag
+push starts the release workflow.
 
 The release workflow (`.github/workflows/release.yml`) runs four jobs:
 
 1. **version** builds the binary, fails when the tag is not `v` followed by
-   the version the binary reports, runs the identity test, and fails when
+   the version the binary reports, runs the identity test (the plugin and
+   browser manifests against the workspace version), and fails when
    `CHANGELOG.md` has no dated, non-empty section for the version
    (`.github/scripts/release-notes.sh`). Nothing is built for release until
    the tag, the manifests, the binary and the notes agree.
 2. **build** produces one binary per platform the release supports: Linux
-   x64 and arm64 (static, musl) and Windows x64, cross-compiled with zig on
-   one Linux runner as `plugin/build.sh` does, and macOS arm64 and x64,
-   built on one Apple Silicon runner. Where the runner can execute what it
-   built, the built binary must report the tagged version.
+   x64 and arm64 (static, musl) and Windows x64, cross-compiled with zig as
+   `plugin/build.sh` does, and macOS arm64 and x64, built on Apple silicon.
+   The five-entry matrix gives each binary its own runner: three Linux
+   runners and two macOS runners. Where the runner can execute what it
+   built, the binary must report the tagged version.
 3. **publish** packages the plugin archive from those binaries with
    `plugin/package.sh`, writes `SHA256SUMS` over every asset and creates the
-   release under the tag, titled with the version, with the version's
-   `CHANGELOG.md` section as its notes.
-4. **verify** runs §The clean-container check on the published release.
+   release under the tag, titled `Common Measure <version>`, with the
+   version's `CHANGELOG.md` section as its notes.
+4. **verify** runs the stricter workflow form of §The clean-container check
+   on the published release.
 
 The asset names are those in `docs/GETTING-STARTED.md` §1; the binaries are
 named as the plugin's launcher names them. The release is public, and
@@ -152,13 +155,16 @@ a marketplace and the plugin installed from it, listed at the version and
 enabled; and `commonmeasure <version>` from that launcher, which bundles no
 binary and finds the installed one.
 
-The `verify` job of the release workflow runs the same check on every tag,
-in a Linux x64 container on GitHub against the release the run has just
-published.
+The `verify` job runs a stricter form on every tag in a Linux x64 container
+on GitHub against the release just published. It fails if `cargo`, `rustc`
+or `cc` is present, checks that the installed binary reports exactly
+`commonmeasure <version>`, and checks both plugin listings for the release
+version. The manual commands above print these results for inspection; their
+toolchain probe also names `gcc`.
 
 What this check covers: the installer, the archive and both marketplace
 routes on Linux, x64 in the workflow and arm64 where the check is run on an
-Apple Silicon machine. The macOS arm64 binary is built and run on the
+Apple silicon machine. The macOS arm64 binary is built and run on the
 workflow's macOS runner; the macOS x64, Linux arm64 (in the workflow) and
 Windows binaries are built and checksummed by the same run. Where the
 installer has been run by hand is in `docs/GETTING-STARTED.md` §1.

@@ -266,7 +266,8 @@ Verification makes no network calls, downloads no trust list and does not fetch
 current revocation status. Operators supply and maintain their chosen anchors.
 The reader uses fresh settings per call; the default read and local signing path have
 no anchors. `--run <directory>` additionally compares the embedded source record
-with the run summary, and a mismatch fails. This is a local reader capability;
+with the run summary, and a mismatch fails; a source reference that differs only
+by its userinfo is not a mismatch. This is a local reader capability;
 managed trust distribution and live host output signing remain planned.
 
 ### Optional Encypher signing
@@ -291,7 +292,16 @@ produces an unavailable invocation without a request or local-signing fallback.
 The adapter sends the answer, source references, hashes, acquisition grades, run
 identifiers and declared output-use preferences to the fixed
 `https://api.encypher.com/api/v1/sign` endpoint. It sends no prompt or source body
-separately; the answer itself may contain excerpts. It requests a full document
+separately; the answer itself may contain excerpts. Each source reference is sent
+with any userinfo (`user:key@`) removed, in the ingredient assertions and the
+source record alike. The userinfo is cut from the text and every other byte is
+kept as recorded; where it cannot be cut from the text, the URL parser's
+serialisation without the userinfo is sent (`https:u:p@h.example/f` is sent as
+`https://h.example/f`). A value that does not parse as a URL but has a
+`scheme://user@host` authority loses its userinfo too. The signed credential
+names the references as sent. The run's own record keeps them as recorded, and
+`--run` verification does not count a reference's userinfo as a difference. This
+changed the processor's version and configuration digest in 0.4.2. The answer, labelled-output and manifest-store references are not sent. It requests a full document
 credential with plain-text embedding, no attribution indexing and no manifest
 database persistence. Those options do not establish complete provider retention.
 The answer is limited to 1 MB and the request to 2 MiB. One HTTP exchange uses

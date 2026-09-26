@@ -49,6 +49,10 @@ ed25519-dalek.workspace = true
 c2pa.workspace = true
 c2pa-text.workspace = true
 
+# `service` names the user's launchd domain, gui/<uid>.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 # The principal end-to-end test binds policy to this process's own uid.
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true

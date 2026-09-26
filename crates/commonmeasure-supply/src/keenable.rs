@@ -177,6 +177,7 @@ fn envelopes_from(
                         .to_owned(),
                 }),
             promoted: &["url", "title", "snippet", "published_at"],
+            ..Default::default()
         })
     }))
 }

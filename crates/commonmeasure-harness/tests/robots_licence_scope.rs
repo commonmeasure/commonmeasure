@@ -100,7 +100,9 @@ fn publisher(robots: &'static str) -> Publisher {
 /// What the reader establishes for `path` at the publisher before the page
 /// is requested, fetching over loopback.
 fn before_fetch(site: &Publisher, home: &std::path::Path, path: &str) -> Declarations {
-    let probe = |url: &str| -> Result<(String, Response), discovery::ProbeFailure> {
+    let probe = |url: &str,
+                 _: discovery::Redirects|
+     -> Result<(String, Response), discovery::ProbeFailure> {
         commonmeasure_http::send(url, Request::get("/"))
             .map(|response| (url.to_owned(), response))
             .map_err(|error| discovery::ProbeFailure::Unreachable(error.to_string()))

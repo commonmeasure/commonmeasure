@@ -215,7 +215,8 @@ impl EdgeKey {
         }))
     }
 
-    /// Write `<home>/edge-key.json`, readable by the owner only.
+    /// Write `<home>/edge-key.json` atomically, readable by the owner only,
+    /// through a temporary file of this writer's own.
     pub fn store(&self, home: &Path) -> Result<(), String> {
         let path = Self::path(home);
         let jwk = PrivateJwk {
@@ -226,11 +227,7 @@ impl EdgeKey {
         };
         let encoded =
             serde_json::to_vec_pretty(&jwk).map_err(|error| format!("serialise key: {error}"))?;
-        let tmp = path.with_extension("json.tmp");
-        write_private(&tmp, &encoded)?;
-        std::fs::rename(&tmp, &path)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        Ok(())
+        crate::declaration::replace_private(&path, &encoded)
     }
 
     /// The JWK `x` member: the public key, base64url unpadded.
@@ -263,31 +260,6 @@ impl EdgeKey {
     fn sign_raw(&self, message: &[u8]) -> [u8; 64] {
         self.signing.sign(message).to_bytes()
     }
-}
-
-/// Write a file that holds a credential: created with mode 0600 where the
-/// platform has modes, fsynced before the caller renames it into place.
-#[cfg(unix)]
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
-    file.write_all(bytes)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("cannot fsync {}: {error}", path.display()))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    std::fs::write(path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 /// What this edge can present on a request.
@@ -332,7 +304,7 @@ impl Identity {
         // A revoked key is out of the directory, so a signature under it
         // verifies nowhere. Signing with it would claim an identity the hub
         // has withdrawn.
-        if record.revoked_at.is_some() {
+        if record.is_revoked() {
             return Ok(Self::Unsigned {
                 reason: format!(
                     "the enrolled key {} was revoked by the {}, so this edge stopped signing",
@@ -364,6 +336,7 @@ impl Identity {
             origin: record.identity.origin,
             bot_page: record.identity.bot_page,
             contact: record.identity.contact,
+            enrolment_home: Some(home.to_owned()),
         })))
     }
 
@@ -415,9 +388,52 @@ pub struct SigningIdentity {
     origin: String,
     bot_page: String,
     contact: Option<String>,
+    /// The home whose enrolment record is read again before each signature
+    /// ([`Self::still_enrolled`]). `None` only for the fixed signing vectors
+    /// in this module's tests, which have no home.
+    enrolment_home: Option<PathBuf>,
 }
 
 impl SigningIdentity {
+    /// Whether the enrolment this identity was loaded from still stands.
+    /// A process holds its identity for its life (an MCP server for its host
+    /// session, a hosted service session until it ends), and a revocation
+    /// learnt by another process in the meantime must stop it signing too.
+    /// One read of `enrolment.json` per signature, so a refusal lasts only
+    /// while the record says revoked, names another key, is gone or cannot
+    /// be read: one failed read refuses one signature, and a withdrawn
+    /// 401-only revocation lets this identity sign again
+    /// (`docs/contracts/bot-identity.md` §Revocation).
+    fn still_enrolled(&self) -> Result<(), String> {
+        let Some(home) = &self.enrolment_home else {
+            return Ok(());
+        };
+        let record = EnrolmentRecord::load(home).map_err(|reason| {
+            format!("{reason}, so this signature was refused; the next one reads it again")
+        })?;
+        match record {
+            None => Err(format!(
+                "the enrolment record at {} is gone, so this session stops signing as key {}; a \
+                 new session runs unsigned, and `commonmeasure connect` enrols a new key",
+                EnrolmentRecord::path(home).display(),
+                self.key_id
+            )),
+            Some(record) if record.key_id != self.key_id => Err(format!(
+                "this edge is now enrolled as key {}, not key {}, which this session loaded; a \
+                 new session signs under the new key",
+                record.key_id, self.key_id
+            )),
+            Some(record) if record.is_revoked() => Err(format!(
+                "the enrolled key {} was revoked by the {} after this session loaded it, so this \
+                 session stops signing with it; a new session runs unsigned, and `commonmeasure \
+                 connect` enrols a new key",
+                self.key_id,
+                record.revocation.as_deref().unwrap_or("hub")
+            )),
+            Some(_) => Ok(()),
+        }
+    }
+
     pub fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -500,6 +516,7 @@ impl SigningIdentity {
         created: i64,
         nonce: &str,
     ) -> Result<(), String> {
+        self.still_enrolled()?;
         let agent = quote(&self.origin);
         request.headers.set(SIGNATURE_AGENT, &agent);
 
@@ -564,6 +581,7 @@ impl SigningIdentity {
         created: i64,
         lifetime_secs: i64,
     ) -> Result<DirectoryProof, String> {
+        self.still_enrolled()?;
         Ok(self.key.directory_proof(
             &self.key_id,
             authority,
@@ -720,6 +738,7 @@ impl SigningIdentity {
         request: &LifecycleRequest<'_>,
         created: i64,
     ) -> Result<RegistrationSignature, String> {
+        self.still_enrolled()?;
         Ok(self
             .key
             .sign_registration(&self.key_id, request, &nonce()?, created))
@@ -893,6 +912,43 @@ mod tests {
         }
     }
 
+    /// Two `connect` runs at once each store a key. Each writes through its
+    /// own temporary file, so neither renames the other's away and the key
+    /// that lands is one of theirs, whole.
+    #[test]
+    fn concurrent_key_stores_each_land_whole() {
+        let home = tempfile::tempdir().expect("home");
+        let keys: Vec<EdgeKey> = (0..4)
+            .map(|_| EdgeKey::generate().expect("generate"))
+            .collect();
+        let failures = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for key in &keys {
+                let (home, failures) = (home.path(), &failures);
+                scope.spawn(move || {
+                    for _ in 0..40 {
+                        if let Err(error) = key.store(home) {
+                            failures.lock().unwrap().push(error);
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(failures.into_inner().unwrap(), Vec::<String>::new());
+        let landed = EdgeKey::load(home.path()).expect("load").expect("a key");
+        assert!(
+            keys.iter()
+                .any(|key| key.thumbprint() == landed.thumbprint())
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(home.path())
+            .expect("list")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
     #[test]
     fn a_key_file_that_cannot_be_used_is_an_error_not_an_unenrolled_edge() {
         let home = tempfile::tempdir().expect("home");
@@ -1016,6 +1072,7 @@ mod tests {
             origin: "https://hub.example".to_owned(),
             bot_page: "https://hub.example/bot".to_owned(),
             contact: None,
+            enrolment_home: None,
         };
         let first = identity
             .directory_proof("hub.example", 1_000, 604_800)
@@ -1047,6 +1104,7 @@ mod tests {
             origin: "https://hub.example".to_owned(),
             bot_page: "https://hub.example/bot".to_owned(),
             contact: Some("mailto:bot@hub.example".to_owned()),
+            enrolment_home: None,
         };
 
         let mut bare = Request::get("/");
@@ -1098,6 +1156,7 @@ mod tests {
             origin: "https://hub.example".to_owned(),
             bot_page: "https://hub.example/bot".to_owned(),
             contact: None,
+            enrolment_home: None,
         }
     }
 
@@ -1279,6 +1338,7 @@ mod tests {
             origin: text("/signature_agent_origin"),
             bot_page: "https://hub.example/bot".to_owned(),
             contact: None,
+            enrolment_home: None,
         };
         assert_eq!(identity.key.jwk_x(), text("/key/x"));
         assert_eq!(identity.key.thumbprint(), text("/key_id"));
@@ -1432,6 +1492,7 @@ mod tests {
             origin: "https://hub.example".to_owned(),
             bot_page: "https://hub.example/bot".to_owned(),
             contact: Some("mailto:bot@hub.example".to_owned()),
+            enrolment_home: None,
         }));
         assert_eq!(
             signing.user_agent(),
@@ -1486,6 +1547,115 @@ mod tests {
         assert!(identity.signer().is_none());
         let reason = identity.presented().unsigned.expect("a reason");
         assert!(reason.contains("revoked by the owner"), "{reason}");
+    }
+
+    /// An identity already loaded reads the enrolment record again before
+    /// each signature, so a revocation, a disconnect or a new enrolment
+    /// recorded by another process stops it signing requests, lifecycle
+    /// calls and directory proofs, for as long as the record says so.
+    #[test]
+    fn a_loaded_identity_stops_signing_when_the_record_changes_under_it() {
+        let home = tempfile::tempdir().expect("home");
+        let key = EdgeKey::generate().expect("generate");
+        key.store(home.path()).expect("store");
+        let mut record = crate::enrolment::EnrolmentRecord {
+            hub: "https://hub.example".to_owned(),
+            organization: crate::enrolment::EnrolledOrganization {
+                id: "org-1".to_owned(),
+                name: "Org".to_owned(),
+            },
+            name: "laptop".to_owned(),
+            key_id: key.thumbprint(),
+            identity: crate::enrolment::EnrolledIdentity {
+                origin: "https://hub.example".to_owned(),
+                bot_page: "https://hub.example/bot".to_owned(),
+                contact: None,
+            },
+            enrolled_at: "2026-09-06T00:00:00.000Z".to_owned(),
+            revoked_at: None,
+            revocation: None,
+            revocation_learnt_at: None,
+        };
+        record.store(home.path()).expect("store");
+        let identity = Identity::load(home.path()).expect("load");
+        let signer = identity.signer().expect("an enrolled key signs");
+        let attempts = |signer: &SigningIdentity| {
+            let mut request = Request::get("/");
+            [
+                signer.sign_request("https://example.org/", &mut request, &[], 1_000),
+                signer
+                    .sign_registration(
+                        &LifecycleRequest {
+                            method: "GET",
+                            target_uri: "https://hub.example/api/v1/instances/i",
+                            body: &[],
+                            idempotency_key: "check-1",
+                        },
+                        1_000,
+                    )
+                    .map(|_| ()),
+                signer
+                    .directory_proof("hub.example", 1_000, 604_800)
+                    .map(|_| ()),
+            ]
+        };
+        assert!(attempts(signer).iter().all(Result::is_ok));
+
+        let learnt = |expected: &str| {
+            for attempt in attempts(signer) {
+                let reason = attempt.expect_err("no signature");
+                assert!(reason.contains(expected), "{reason}");
+            }
+        };
+        record
+            .record_refusal(home.path(), "the member was removed")
+            .expect("store");
+        learnt("revoked by the hub: the member was removed after this session loaded it");
+
+        // A refusal lasts only while the record says so: a withdrawn 401 and
+        // a read that failed once leave the same identity signing again.
+        assert!(
+            record
+                .withdraw_refusal(
+                    home.path(),
+                    chrono::Utc::now() + chrono::Duration::seconds(1)
+                )
+                .expect("store")
+        );
+        assert!(attempts(signer).iter().all(Result::is_ok));
+        let path = crate::enrolment::EnrolmentRecord::path(home.path());
+        let whole = std::fs::read(&path).expect("read");
+        std::fs::write(&path, "{").expect("write");
+        learnt("not a valid enrolment record");
+        learnt("the next one reads it again");
+        std::fs::write(&path, &whole).expect("write");
+        assert!(attempts(signer).iter().all(Result::is_ok));
+
+        // A revocation the hub stated after the 401 is not withdrawn.
+        record
+            .record_refusal(home.path(), "the member was removed")
+            .expect("store");
+        record
+            .record_revocation(home.path(), "2026-09-25T09:00:00Z", "owner")
+            .expect("store");
+        assert!(
+            !record
+                .withdraw_refusal(
+                    home.path(),
+                    chrono::Utc::now() + chrono::Duration::seconds(1)
+                )
+                .expect("store")
+        );
+        learnt("revoked by the owner after this session loaded it");
+
+        record.revoked_at = None;
+        record.revocation = None;
+        record.revocation_learnt_at = None;
+        record.key_id = "another-key".to_owned();
+        record.store(home.path()).expect("store");
+        learnt("now enrolled as key another-key");
+        std::fs::remove_file(crate::enrolment::EnrolmentRecord::path(home.path())).expect("remove");
+        learnt("is gone");
     }
 
     /// An enrolment record with no key beside it is a broken edge, not an

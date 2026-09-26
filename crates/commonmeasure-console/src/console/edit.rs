@@ -104,10 +104,10 @@ pub fn write_policy(
                 notice: format!("Not saved: {reason}."),
             };
         }
-        Err(LockRefused::Failed(reason)) => {
+        Err(refused @ (LockRefused::LockFile(_) | LockRefused::Failed(_))) => {
             return Outcome::Refused {
                 status: 500,
-                notice: format!("Not saved: {reason}."),
+                notice: format!("Not saved: {refused}."),
             };
         }
     };
@@ -249,10 +249,10 @@ pub fn set_attribution(home: &Path, revision: &str, pairs: &[(String, String)]) 
                 notice: format!("Not saved: {reason}."),
             };
         }
-        Err(LockRefused::Failed(reason)) => {
+        Err(refused @ (LockRefused::LockFile(_) | LockRefused::Failed(_))) => {
             return Outcome::Refused {
                 status: 500,
-                notice: format!("Not saved: {reason}."),
+                notice: format!("Not saved: {refused}."),
             };
         }
     };

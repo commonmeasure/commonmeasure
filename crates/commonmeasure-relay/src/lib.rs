@@ -36,7 +36,7 @@ pub use enrolment::{
     ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, disconnect,
     refresh_directory_proof, refresh_directory_proof_if_due,
 };
-pub use state::egress_report;
+pub use state::{egress_report, enrolment_error_line, refused_spool_line};
 
 #[derive(Debug, Default)]
 pub struct RelayOptions {
@@ -428,6 +428,13 @@ pub fn relay_with_clock(
         options.dry_run || options.policy.is_none(),
         "--policy requires --dry-run"
     );
+    if !options.dry_run
+        && let Some(record) = commonmeasure_harness::EnrolmentRecord::load(home)
+            .map_err(|reason| anyhow::anyhow!(reason))?
+    {
+        commonmeasure_harness::enrolment::hub_url_accepted(&record.hub)
+            .map_err(|reason| anyhow::anyhow!(reason))?;
+    }
     let configured = RelayConfig::load(home).map_err(|error| anyhow::anyhow!(error))?;
     let receiver = options
         .receiver
@@ -441,6 +448,13 @@ pub fn relay_with_clock(
         );
     };
     let api_key = key_for(&receiver, &receiver, options, configured.as_ref());
+    // A supplier scope belongs to the receiver relay.json names, however the
+    // override spells it; a `--receiver` override to another endpoint is not
+    // scoped by it.
+    let supplier_scope: Option<Vec<String>> = configured
+        .as_ref()
+        .filter(|config| config::same_receiver(&config.receiver, &receiver))
+        .and_then(|config| config.suppliers.clone());
 
     // The same policy.json the capture paths read, held for the whole
     // invocation: every egress decision below is taken against these bytes, so
@@ -621,13 +635,16 @@ pub fn relay_with_clock(
             sessions_withheld_access_context += 1;
             continue;
         }
-        let projected = project::project_session(
+        let mut projected = project::project_session(
             Some(&receiver),
             session_id,
             &records,
             &internal_prefixes,
             &|at| cleared.contains_key(&at),
         );
+        if let Some(suppliers) = &supplier_scope {
+            project::scope_to_suppliers(&mut projected, suppliers);
+        }
         for (event, position) in &projected.event_positions {
             // Every projected event comes from a record this filter cleared,
             // and a crossing is cleared only under a named governing
@@ -647,15 +664,19 @@ pub fn relay_with_clock(
                 .iter()
                 .flat_map(|batch| &batch.events)
                 .any(|event| !already.contains(&event.id));
-            if has_new {
-                refused_reported += projected.refused;
-            } else if projected.refused > refused_known.get(&wire_session).copied().unwrap_or(0) {
-                let last = projected.batches.last().expect("a non-empty projection");
-                let mut carrier = last.clone();
-                carrier.events = vec![last.events.last().expect("a batch has events").clone()];
-                carrier.refused = Some(projected.refused);
-                carriers.push((path.display().to_string(), carrier));
-                refused_reported += projected.refused;
+            // A scoped projection has no count, so it reports none and
+            // needs no carrier.
+            if let Some(refused) = projected.refused {
+                if has_new {
+                    refused_reported += refused;
+                } else if refused > refused_known.get(&wire_session).copied().unwrap_or(0) {
+                    let last = projected.batches.last().expect("a non-empty projection");
+                    let mut carrier = last.clone();
+                    carrier.events = vec![last.events.last().expect("a batch has events").clone()];
+                    carrier.refused = Some(refused);
+                    carriers.push((path.display().to_string(), carrier));
+                    refused_reported += refused;
+                }
             }
         }
         batches.extend(
@@ -676,8 +697,11 @@ pub fn relay_with_clock(
                 .with_context(|| format!("read {}", summary_path.display()))?,
         )
         .with_context(|| format!("{} is not valid JSON", summary_path.display()))?;
-        let projected = project::project_run(&summary, &internal_prefixes)
+        let mut projected = project::project_run(&summary, &internal_prefixes)
             .with_context(|| format!("project {}", run_dir.display()))?;
+        if let Some(suppliers) = &supplier_scope {
+            project::retain_supplied(&mut projected, suppliers);
+        }
         if !projected.is_empty() {
             runs_projected += 1;
         }
@@ -824,6 +848,20 @@ pub fn relay_with_clock(
                 continue;
             }
         }
+        if let Some(suppliers) = &supplier_scope {
+            // After the directory recheck, which rewrites the refused count
+            // from an unscoped projection of the origin log.
+            project::scope_document(&mut entry.document, suppliers);
+            if event_ids(&entry.document).is_empty() {
+                if !options.dry_run {
+                    spool.hold(
+                        index,
+                        "Held by the receiver's supplier scope: no event in it is from a listed supplier; undelivered.",
+                    )?;
+                }
+                continue;
+            }
+        }
         if !options.dry_run && !spool.claim(index, now())? {
             continue;
         }
@@ -835,6 +873,7 @@ pub fn relay_with_clock(
         // The batch may have been queued for a receiver other than this one.
         let references_withheld =
             project::withhold_unissued_instances(&mut entry.document, &receiver);
+        project::strip_licence_userinfo(&mut entry.document);
         let (ids, by_type) = events_of(&entry.document);
         if options.dry_run {
             for event in entry.document["events"].as_array().into_iter().flatten() {

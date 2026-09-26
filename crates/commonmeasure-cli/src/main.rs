@@ -13,6 +13,9 @@ mod hosted_tokens;
 mod inspect;
 mod instance;
 mod mcp_session;
+mod processes;
+mod service;
+mod update;
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
@@ -60,8 +63,9 @@ const MCP_HOSTS: [&str; 7] = [
                   reports and, for the mediated tools, apply the operator's policy before \
                   the content moves. `run` and `inspect` are the batch side: a job is run \
                   through named supply plans and published as an inspectable run directory. \
-                  `serve` renders the operator console over the local record, and `relay` is \
-                  the only way records leave the machine."
+                  `serve` renders the operator console over the local record, `service` keeps \
+                  it running as a login service, and `relay` is the only way records leave \
+                  the machine."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -395,6 +399,32 @@ enum Command {
         #[arg(long)]
         allow_remote: bool,
     },
+    /// Run the operator console as a login service, see whether it is
+    /// running and which binary it runs, and remove it. macOS only: a
+    /// LaunchAgent in ~/Library/LaunchAgents.
+    Service {
+        #[command(subcommand)]
+        command: service::ServiceCommand,
+    },
+    /// Replace this binary with the latest release, or the one --tag names,
+    /// through the installer compiled into it: the checksum from the
+    /// release's SHA256SUMS and the new binary's version are verified before
+    /// it is moved into place, and a failure before then leaves this binary
+    /// as it was. When the installer fails, update compares the binary with
+    /// the one it recorded first and says whether it is unchanged, was
+    /// replaced (naming the version the new binary reports, asked after the
+    /// attempt to start the console service again), or cannot be told.
+    /// Refuses while other processes run this binary, naming them by pid,
+    /// executable, subcommand and COMMONMEASURE_HOME. A loaded
+    /// console service running this binary is stopped for the update and
+    /// started again, with its installed Edge home, on the binary then in
+    /// place; when it cannot be started again, update fails and says whether
+    /// the binary was replaced. On macOS, refuses a binary run through a
+    /// symbolic link; Linux does not detect one. Prints the release origin
+    /// first; a release build ignores COMMONMEASURE_RELEASE_URL. Contacts
+    /// the release location only when run; --check reports the versions and
+    /// changes nothing. macOS and Linux.
+    Update(update::Update),
 }
 
 #[derive(Subcommand)]
@@ -566,6 +596,8 @@ fn main() -> ExitCode {
             listen,
             allow_remote,
         } => serve_console(listen, allow_remote),
+        Command::Service { command } => service::run(command),
+        Command::Update(args) => update::run(args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -1152,7 +1184,10 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
 }
 
 fn run_hosted(command: HostedCommand) -> Result<(), String> {
+    // Absolute before anything names it: the hosted boundary matches the
+    // home in served text, and a relative home would match a word.
     let home = home_dir().map_err(|error| error.to_string())?;
+    let home = std::path::absolute(&home).map_err(|error| error.to_string())?;
     match command {
         HostedCommand::Serve {
             listen,
@@ -1385,10 +1420,14 @@ fn automatic_relay_line(home: &Path, session_end: bool) -> String {
              refused while the marker is there"
         );
     }
+    use commonmeasure_harness::delivery::ServiceState;
     let service = hosted::ServiceConfig::read(home).ok().flatten();
+    let state = service
+        .as_ref()
+        .map(|_| commonmeasure_harness::delivery::service_state(home));
     let running = service
         .as_ref()
-        .filter(|_| hosted::HomeLock::held(home))
+        .filter(|_| state == Some(ServiceState::Running))
         .map(|config| {
             format!(
                 "on the hosted service's interval (every {}s), which relays every session in \
@@ -1396,17 +1435,38 @@ fn automatic_relay_line(home: &Path, session_end: bool) -> String {
                 config.interval_seconds
             )
         });
-    match (session_end, running) {
-        (true, Some(service)) => format!(
+    // A lock this user cannot open says nothing either way, so the line
+    // does not call the service stopped; sessions still treat it as not
+    // running (`SessionDelivery::withheld_reason`).
+    let unknown = match &state {
+        Some(ServiceState::Unknown(reason)) => Some(reason),
+        _ => None,
+    };
+    match (session_end, running, unknown) {
+        (true, Some(service), _) => format!(
             "automatic relay: at each Claude Code session end (its SessionEnd hook), and {service}"
         ),
-        (false, Some(service)) => format!("automatic relay: {service}"),
-        (true, None) => "automatic relay: at each Claude Code session end (its SessionEnd hook); \
+        (false, Some(service), _) => format!("automatic relay: {service}"),
+        (true, None, Some(reason)) => format!(
+            "automatic relay: at each Claude Code session end (its SessionEnd hook); whether the \
+             hosted service relays this home cannot be read ({reason}), so with other local \
+             hosts run `commonmeasure relay`, and a source whose licence demands usage \
+             reporting is refused there"
+        ),
+        (true, None, None) => {
+            "automatic relay: at each Claude Code session end (its SessionEnd hook); \
                          no other local host sends the event, so with them run `commonmeasure \
                          relay`, and a source whose licence demands usage reporting is refused \
                          there"
-            .to_owned(),
-        (false, None) => format!(
+                .to_owned()
+        }
+        (false, None, Some(reason)) => format!(
+            "automatic relay: unknown, no Claude Code registration sends SessionEnd and whether \
+             the hosted service relays this home cannot be read ({reason}); sessions here are \
+             treated as having no automatic delivery, so run `commonmeasure relay`, or \
+             `commonmeasure install claude`"
+        ),
+        (false, None, None) => format!(
             "automatic relay: off, no Claude Code registration sends SessionEnd{}; run \
              `commonmeasure relay`, or `commonmeasure install claude`",
             if service.is_some() {
@@ -2000,27 +2060,27 @@ fn disconnect() -> Result<(), String> {
     let mut out = String::new();
     match &report.revoked_at_hub {
         Ok(()) => out.push_str(&format!(
-            "revoked edge key {} and its ingest key at {}\n",
-            report.key_id, report.hub
+            "revoked edge key {} and its ingest key{}\n",
+            report.key_id, report.at_hub
         )),
         Err(reason) => out.push_str(&format!(
-            "edge key {} was not revoked at {}: {reason}\n  revoke it from the hub's API keys \
-             page\n",
-            report.key_id, report.hub
+            "edge key {} and its ingest key were not revoked{}: {reason}\n  revoke both on \
+             the hub's API keys page: the edge key {} and the ingest key, each labelled {:?}\n",
+            report.key_id, report.at_hub, report.key_id, report.name
         )),
     }
     for path in &report.removed {
         out.push_str(&format!("removed {}\n", path.display()));
     }
-    if let Some(policy_url) = &report.removed_deployment {
+    if let Some(policy_at) = &report.removed_deployment {
         out.push_str(&format!(
-            "deployment.json pinned this hub's policy ({policy_url}); removed with the \
+            "deployment.json pinned this hub's policy{policy_at}; removed with the \
              enrolment, so the edge is in local mode\n"
         ));
     }
-    if let Some(policy_url) = &report.kept_deployment {
+    if let Some(policy_at) = &report.kept_deployment {
         out.push_str(&format!(
-            "deployment.json names another hub's policy ({policy_url}); kept\n"
+            "deployment.json names another hub's policy{policy_at}; kept\n"
         ));
     }
     match &report.retired_instance_sessions {
@@ -2362,7 +2422,12 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
                 .unwrap_or_default(),
             payload["failure"]
                 .as_str()
-                .map(|reason| format!("\n      no answer: {reason}"))
+                .map(|reason| match payload["http_status"].as_u64() {
+                    // The host answered and this edge could not use the
+                    // answer; the reason says why.
+                    Some(_) => format!("\n      answer not used: {reason}"),
+                    None => format!("\n      no answer: {reason}"),
+                })
                 .unwrap_or_default()
         );
     }

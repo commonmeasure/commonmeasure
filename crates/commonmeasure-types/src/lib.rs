@@ -21,7 +21,7 @@ pub use envelope::{
 pub use evidence::{AssuranceBasis, Decision, DecisionRecord, EvidenceError, Gap, GapReason};
 pub use job::{
     AccessAction, Constraint, ContextJob, EvidenceRequirement, HostPattern, JobError, Objective,
-    PolicyMode, normalised_host,
+    PolicyMode, canonical_url, normalised_host,
 };
 pub use money::Money;
 pub use plan::{ModelPlan, PlanError, ProviderCapability, ProviderRef, SupplyPlan, SupplyStep};

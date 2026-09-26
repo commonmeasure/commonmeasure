@@ -607,6 +607,114 @@ fn the_service_refuses_to_start_unenrolled_unmanaged_unconfigured_or_on_a_locked
     drop(second);
 }
 
+// Catches: a service lock the caller cannot open read as "configured, not
+// running". Another user probing a home served by its owner cannot open the
+// owner-only lock; `status` and `doctor` say whether the service runs cannot
+// be read, and why (writes-console-p3 review P3-2). Here the owner holds the
+// lock and then makes it unreadable to itself, which root would ignore.
+#[cfg(unix)]
+#[test]
+fn a_service_lock_that_cannot_be_read_is_reported_as_unknown_not_stopped() {
+    use std::os::unix::fs::PermissionsExt as _;
+    // SAFETY: `geteuid` has no arguments or memory preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let home = tempfile::tempdir().expect("tempdir");
+    write_service_config(home.path(), 300);
+    std::fs::write(
+        home.path().join("relay.json"),
+        r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+    )
+    .expect("relay configuration");
+    let path = home.path().join("hosted-service.lock");
+    let held = std::fs::File::create(&path).expect("lock file");
+    held.lock().expect("held as a running service holds it");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let (ok, status, _) = run(home.path(), &["status"]);
+    let (doctor_ok, doctor, _) = run(home.path(), &["doctor"]);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    drop(held);
+
+    assert!(ok, "{status}");
+    let unknown = format!(
+        "configured, whether it is running cannot be read (cannot open {}: Permission denied",
+        path.display()
+    );
+    assert!(
+        status.contains(&format!("service mode      {unknown}")),
+        "{status}"
+    );
+    assert!(!status.contains("not running"), "{status}");
+    assert!(doctor_ok, "{doctor}");
+    assert!(
+        doctor.contains(&format!("hosted service: {unknown}")),
+        "{doctor}"
+    );
+    assert!(
+        doctor.contains("whether the hosted service relays this home cannot be read"),
+        "{doctor}"
+    );
+    assert!(!doctor.contains("configured but not running"), "{doctor}");
+}
+
+// Catches: a service that starts, and fetches its authentication keys or
+// policy, for a home whose stored hub URL is one nothing is sent to. The
+// cleartext URL is `http://0.0.0.0:<port>` and the other carries
+// credentials; both reach the double, so a request would be counted. The
+// service's stderr is what its journal records.
+#[test]
+fn the_service_refuses_to_start_for_a_stored_hub_url_nothing_is_sent_to() {
+    for (stored, reason) in [
+        (
+            "http://0.0.0.0:{port}",
+            "neither https nor http to a loopback origin",
+        ),
+        (
+            "http://ops:ak_PLANTED@127.0.0.1:{port}",
+            "carries credentials, a query or a fragment",
+        ),
+    ] {
+        let hub = Hub::start();
+        let home = tempfile::tempdir().expect("tempdir");
+        write_service_config(home.path(), 300);
+        hub.enrol_managed(home.path());
+        let port = hub.url().rsplit(':').next().expect("port").to_owned();
+        let path = home.path().join("enrolment.json");
+        let mut record: Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("record")).expect("record JSON");
+        record["hub"] = json!(stored.replace("{port}", &port));
+        std::fs::write(&path, record.to_string()).expect("record written");
+
+        let mut child = service_command(home.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the binary should start");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("wait") {
+                break status;
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the service started for {stored}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(!status.success());
+        let mut journal = String::new();
+        std::io::Read::read_to_string(child.stderr.as_mut().expect("stderr"), &mut journal)
+            .expect("stderr");
+        assert!(journal.contains(reason), "{journal}");
+        assert!(!journal.contains("ak_PLANTED"), "{journal}");
+        assert_eq!(hub.jwks_reads.load(Ordering::SeqCst), 0, "{stored}");
+        assert_eq!(hub.policy_requests.load(Ordering::SeqCst), 0, "{stored}");
+    }
+}
+
 #[test]
 fn the_service_holds_the_private_address_floor_whatever_the_managed_policy_says() {
     let hub = Hub::start();

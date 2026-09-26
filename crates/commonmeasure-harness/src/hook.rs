@@ -380,6 +380,7 @@ pub fn capture(
         |url: &str, hash: Option<String>, tokens: Option<u64>, grounded: bool| Crossing {
             session_id: session_id.clone(),
             timestamp: Utc::now(),
+            requested_at: None,
             mode: CrossingMode::Observed,
             host: surface.id().to_owned(),
             client: None,
@@ -394,6 +395,7 @@ pub fn capture(
             content_hash: hash,
             retrieved_hash: None,
             estimated_tokens: tokens,
+            delivered: None,
             grounded,
             // No host tool reports rights, and accessibility is not permission.
             licence: LicenceState::Unknown,

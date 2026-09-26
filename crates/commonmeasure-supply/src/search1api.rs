@@ -232,6 +232,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
             // is mapped that the provider has never been seen to return.
             declared_date: None,
             promoted: &["link", "title", "snippet", "content"],
+            ..Default::default()
         })
     }))
 }

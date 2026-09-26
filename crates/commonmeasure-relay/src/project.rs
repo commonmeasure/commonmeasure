@@ -21,6 +21,8 @@
 //! redelivery after a crash carries the same ids and the receiver counts each
 //! fact once.
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_harness::declarations::MAX_CRAWL_DELAY;
@@ -180,9 +182,13 @@ fn normalise_timestamp(raw: &str) -> Option<String> {
     })
 }
 
+/// The declared licence's URL as it may appear on the wire. A licence found
+/// through `robots.txt` or a relative `Link` is resolved against the page's
+/// URL and keeps any credentials the page URL carried, so it goes through
+/// [`wire_url`] as the page URL does.
 fn license_ref(payload: &Value) -> Option<String> {
     (payload["licence"]["state"] == json!("declared"))
-        .then(|| payload["licence"]["reference"].as_str().map(str::to_owned))
+        .then(|| payload["licence"]["reference"].as_str().map(wire_url))
         .flatten()
 }
 
@@ -245,31 +251,44 @@ pub(crate) fn withhold_unissued_instances(document: &mut Value, receiver: &str) 
     withheld
 }
 
-/// The URL as it may appear on the wire: the witnessed URL with any userinfo
-/// removed. Credentials embedded in a fetched URL
-/// (`https://user:secret@host/path`) are the operator's authentication, never
-/// part of content identity, and the projection is the last point before they
-/// would be written to the spool and posted to the receiver. Only the userinfo
-/// goes: a token in a query string is indistinguishable from an ordinary
-/// parameter here, so it stays the operator's to redact through the privacy
-/// floor rather than something this function guesses at.
+/// Remove any userinfo from the `license_ref` of each event in a spooled
+/// batch document, as projection now does ([`license_ref`]). Up to and
+/// including 0.4.1 projection queued the reference as recorded, and the spool
+/// is delivered as queued, so a batch from then still holds the credentials.
+pub(crate) fn strip_licence_userinfo(document: &mut Value) {
+    let events = document.get_mut("events").and_then(Value::as_array_mut);
+    for event in events.into_iter().flatten() {
+        if let Some(reference) = event.get("license_ref").and_then(Value::as_str) {
+            event["license_ref"] = Value::String(wire_url(reference));
+        }
+    }
+}
+
+/// A URL as it may appear on the wire: the witnessed URL, or a licence
+/// reference resolved from it, with any userinfo removed. Credentials
+/// embedded in a fetched URL (`https://user:secret@host/path`) are the
+/// operator's authentication, never part of content identity, and the
+/// projection is the last point before they would be written to the spool
+/// and posted to the receiver. Only the userinfo goes: a token in a query
+/// string is indistinguishable from an ordinary parameter here, so it stays
+/// the operator's to redact through the privacy floor rather than something
+/// this function guesses at.
+///
+/// The value is read as a URL parser reads it, so `http:\\u:p@h/` loses its
+/// credentials and `http://h\@evil.example/` keeps its host `h`. A value
+/// with userinfo is sent as the parser serialises it; any other value, a
+/// URL without userinfo or a reference that is not an absolute URL, is sent
+/// byte for byte as recorded.
 fn wire_url(url: &str) -> String {
-    let Some(scheme_end) = url.find("://") else {
-        return url.to_owned();
-    };
-    let authority_start = scheme_end + "://".len();
-    let authority_end = url[authority_start..]
-        .find(['/', '?', '#'])
-        .map_or(url.len(), |offset| authority_start + offset);
-    // The last `@` in the authority delimits the userinfo; an unescaped `@`
-    // cannot appear in a host, so anything after it is the host.
-    match url[authority_start..authority_end].rfind('@') {
-        Some(at) => format!(
-            "{}{}",
-            &url[..authority_start],
-            &url[authority_start + at + 1..]
-        ),
-        None => url.to_owned(),
+    match url::Url::parse(url) {
+        Ok(mut parsed) if !parsed.username().is_empty() || parsed.password().is_some() => {
+            // They fail only for a URL that cannot have userinfo, and this
+            // one has it.
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.into()
+        }
+        _ => url.to_owned(),
     }
 }
 
@@ -324,8 +343,10 @@ pub struct SessionProjection {
     /// owning a second copy of it.
     pub event_positions: Vec<(Uuid, usize)>,
     /// The refused crossings `may_project` cleared, counted; what every
-    /// batch of this session carries as `refused`.
-    pub refused: u64,
+    /// batch of this session carries as `refused`. `None` after
+    /// [`scope_to_suppliers`]: a scoped receiver is told nothing about
+    /// refusals, and a zero would read as a fact about the session.
+    pub refused: Option<u64>,
 }
 
 /// Resolve a host observation through its admitted acquisition. Clearance and
@@ -704,8 +725,59 @@ pub fn project_session(
     SessionProjection {
         batches: into_batches(session_uuid(session_id), agent_id, events, Some(refused)),
         event_positions,
-        refused,
+        refused: Some(refused),
     }
+}
+
+/// Narrow a session's projection to the events the listed suppliers served,
+/// for a receiver scoped to them (`RelayConfig::suppliers`). An event
+/// qualifies by the supplier named on it ([`SUPPLIER_FIELD`]), which the
+/// projection sets on a supplied result's retrieval and on its grounding
+/// alike. Turn boundaries name no supplier and stay home. The refused count
+/// is removed rather than zeroed: it counts the session's refusals of every
+/// source, and a supplier's receiver is owed nothing about sources it did not
+/// serve (owner decision, 22 September 2026).
+pub fn scope_to_suppliers(projection: &mut SessionProjection, suppliers: &[String]) {
+    retain_supplied(&mut projection.batches, suppliers);
+    let kept: HashSet<Uuid> = projection
+        .batches
+        .iter()
+        .flat_map(|batch| batch.events.iter().map(|event| event.id))
+        .collect();
+    projection
+        .event_positions
+        .retain(|(id, _)| kept.contains(id));
+    projection.refused = None;
+}
+
+/// [`scope_to_suppliers`] over bare batches, as a published run projects.
+pub fn retain_supplied(batches: &mut Vec<WireBatch>, suppliers: &[String]) {
+    for batch in batches.iter_mut() {
+        batch
+            .events
+            .retain(|event| supplied_by(event.data.get(SUPPLIER_FIELD), suppliers));
+        batch.refused = None;
+    }
+    batches.retain(|batch| !batch.events.is_empty());
+}
+
+/// [`scope_to_suppliers`] over a spooled batch document. The spool is shared
+/// by every receiver the relay has been pointed at, so a batch queued
+/// unscoped, before the scope was set or under a `--receiver` override, is
+/// narrowed again before it leaves for a scoped receiver.
+pub fn scope_document(document: &mut Value, suppliers: &[String]) {
+    if let Some(events) = document["events"].as_array_mut() {
+        events.retain(|event| supplied_by(event["data"].get(SUPPLIER_FIELD), suppliers));
+    }
+    if let Some(batch) = document.as_object_mut() {
+        batch.remove("refused");
+    }
+}
+
+fn supplied_by(named: Option<&Value>, suppliers: &[String]) -> bool {
+    named
+        .and_then(Value::as_str)
+        .is_some_and(|name| suppliers.iter().any(|listed| listed == name))
 }
 
 /// The host tool the crossings were witnessed through, in the extension
@@ -962,7 +1034,7 @@ mod tests {
         for previous in &before_output.batches[0].events {
             assert_eq!(events.iter().find(|e| e.id == previous.id), Some(previous));
         }
-        assert_eq!(projected.refused, 1);
+        assert_eq!(projected.refused, Some(1));
         let wire = serde_json::to_value(&projected.batches[0]).unwrap();
         let text = wire.to_string();
         for private in [
@@ -1305,6 +1377,91 @@ mod tests {
         }
     }
 
+    /// Userinfo is what a URL parser reads as userinfo. A backslash or a
+    /// single slash after the scheme still introduces an authority in a
+    /// special scheme, so the credentials go; a backslash before an `@`
+    /// ends the host, so the host stays; an `@` in a relative reference's
+    /// query is not an authority.
+    #[test]
+    fn userinfo_is_stripped_as_a_url_parser_reads_it() {
+        for (raw, expected) in [
+            (r"http:\\u:p@h/l.xml", "http://h/l.xml"),
+            ("https:/u:p@h/l.xml", "https://h/l.xml"),
+            (
+                r"http://h\@evil.example/l.xml",
+                r"http://h\@evil.example/l.xml",
+            ),
+            (
+                "/license.xml?next=http://u:p@h/",
+                "/license.xml?next=http://u:p@h/",
+            ),
+        ] {
+            assert_eq!(wire_url(raw), expected, "projecting {raw}");
+        }
+        let host = url::Url::parse(&wire_url(r"http://h\@evil.example/l.xml")).expect("parses");
+        assert_eq!(host.host_str(), Some("h"));
+    }
+
+    /// A URL the projection receives without userinfo leaves byte for byte,
+    /// whatever its shape: every licence reference found through `robots.txt`
+    /// or a `Link` is a URL parser's serialisation, and none may change.
+    #[test]
+    fn a_serialised_url_without_userinfo_is_sent_as_it_is() {
+        for raw in [
+            "http://publisher.example/license.xml",
+            "https://u:p@publisher.example:8443/a/b?c=d@e#f@g",
+            "https://publisher.example",
+            "http://[::1]:8080/l.xml",
+            "HTTPS://P.EXAMPLE./n/?",
+            r"http:\\u@h/l%20x.xml",
+            "terms://legal@acme/contract-7",
+            "mailto:licensing@publisher.example",
+            "urn:example:licence:7",
+            "file:///srv/licence.xml",
+        ] {
+            let mut parsed = url::Url::parse(raw).expect("parses");
+            parsed.set_username("").ok();
+            parsed.set_password(None).ok();
+            let serialised = parsed.as_str();
+            assert_eq!(wire_url(serialised), serialised, "projecting {raw}");
+        }
+    }
+
+    /// A licence URL resolved against a page URL that carried credentials
+    /// carries them too; they are stripped from `license_ref` as from
+    /// `content_url`, on session and run events alike.
+    #[test]
+    fn embedded_credentials_are_stripped_from_the_projected_licence_reference() {
+        let licence = json!({"state": "declared",
+                             "reference": "http://u:p@publisher.example/license.xml"});
+        let mut fetch = crossing(
+            "crossing_observed",
+            "http://u:p@publisher.example/story",
+            true,
+        );
+        fetch["payload"]["licence"] = licence.clone();
+        let session = project_session(None, "s", &[fetch], &[], &|_| true).batches;
+        let summary = json!({
+            "run": {"id": "6e0f9b3a-4c1d-4f2e-8a5b-9d7c2e1f0a3b",
+                    "started_at": "2026-08-20T10:00:00Z"},
+            "plans": [{"id": "p", "sources": [
+                {"admitted": true, "url": "http://u:p@publisher.example/story",
+                 "retrieval_rank": 1, "content_hash": "sha256:00", "licence": licence}]}],
+        });
+        let run = project_run(&summary, &[]).expect("project run");
+        let references: Vec<Option<&str>> = session[0]
+            .events
+            .iter()
+            .chain(&run[0].events)
+            .map(|event| event.license_ref.as_deref())
+            .collect();
+        assert_eq!(
+            references,
+            [Some("http://publisher.example/license.xml"); 4],
+            "session and run, retrieved and grounded"
+        );
+    }
+
     /// A fetch the origin refused, or that nothing answered, retrieved
     /// nothing and is never reported as a retrieval; a search result, which
     /// carries no status, still is.
@@ -1400,6 +1557,62 @@ mod tests {
                 (WireEventKind::ContentRetrieved, json!("ozone")),
                 (WireEventKind::ContentGrounded, json!("ozone")),
             ]
+        );
+    }
+
+    /// A receiver scoped to one supplier is sent that supplier's events and
+    /// nothing else: not the operator's own fetches, not another supplier's
+    /// results, and not the session's refused count, which counts refusals of
+    /// sources this supplier never served. The event positions the relay
+    /// records clearances from are narrowed with the events. The count is
+    /// absent, not zero.
+    #[test]
+    fn a_supplier_scope_keeps_that_suppliers_events_and_drops_the_rest() {
+        let mut supplied = crossing("crossing_mediated", "https://a.example/served", true);
+        supplied["payload"]["supplier"] = json!("ozone");
+        let mut other = crossing("crossing_mediated", "https://b.example/served", true);
+        other["payload"]["supplier"] = json!("exa");
+        let mut fetched = crossing("crossing_mediated", "https://a.example/fetched", true);
+        fetched["payload"]["http_status"] = json!(200);
+        let refused = crossing("crossing_refused", "https://a.example/refused", false);
+        let records = [supplied, other, fetched, refused];
+
+        let mut projection = project_session(None, "s", &records, &[], &|_| true);
+        assert!(
+            projection.refused.is_some_and(|count| count > 0),
+            "the unscoped projection counts it"
+        );
+        scope_to_suppliers(&mut projection, &["ozone".to_owned()]);
+
+        let events = &projection.batches[0].events;
+        assert!(
+            events
+                .iter()
+                .all(|event| event.data[SUPPLIER_FIELD] == json!("ozone")),
+            "only the scoped supplier's events leave"
+        );
+        assert_eq!(
+            events.iter().map(|event| event.kind).collect::<Vec<_>>(),
+            vec![
+                WireEventKind::ContentRetrieved,
+                WireEventKind::ContentGrounded
+            ],
+            "the supplier's retrieval and the grounding of what it served"
+        );
+        assert_eq!(
+            projection
+                .event_positions
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>(),
+            events.iter().map(|event| event.id).collect::<Vec<_>>()
+        );
+        assert_eq!(projection.refused, None);
+        assert!(
+            projection
+                .batches
+                .iter()
+                .all(|batch| batch.refused.is_none())
         );
     }
 
@@ -1632,7 +1845,7 @@ mod tests {
             refused("https://paywall.example/three"),
         ];
         let projection = project_session(None, "s", &records, &[], &|_| true);
-        assert_eq!(projection.refused, 3);
+        assert_eq!(projection.refused, Some(3));
         assert_eq!(projection.batches.len(), 1);
         assert_eq!(projection.batches[0].refused, Some(3));
         let text = serde_json::to_string(&projection.batches[0]).unwrap();
@@ -1643,12 +1856,12 @@ mod tests {
         // The same clearance filter: a refusal at a position the caller did
         // not clear is not counted.
         let projection = project_session(None, "s", &records, &[], &|position| position != 3);
-        assert_eq!(projection.refused, 2);
+        assert_eq!(projection.refused, Some(2));
         assert_eq!(projection.batches[0].refused, Some(2));
 
         // Nothing admitted: no batch, so the count does not cross.
         let projection = project_session(None, "s", &records[1..], &[], &|_| true);
-        assert_eq!(projection.refused, 3);
+        assert_eq!(projection.refused, Some(3));
         assert!(projection.batches.is_empty());
 
         // A run has no refused crossings to count.

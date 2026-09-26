@@ -127,14 +127,15 @@ invoke_skill(candidate, input, constraints) -> result envelope
 
 A provider may implement only a subset, and an adapter declares only what it
 implements, never what its vendor documents. `crates/commonmeasure-supply` holds
-fifteen provider adapters (`docs/contracts/provider.md`): `search` for
+sixteen provider adapters (`docs/contracts/provider.md`): `search` for
 the twelve open-web providers, six of which also declare `fetch` (a named
 URL, dispatched only when a job declares a `fetch_target`); `query` for the
 operator's own internal corpus; `search` and `quote` for Redpine, a licensed
-supplier bought by quote then confirm; and `search` and `fetch` for Ozone
-Live, retrieval over a licensed publisher corpus. The skill adapter, `invoke` for catalogued local skills,
-is separate from the provider list. No other
-capability is declared. The runtime validates a plan against the declared
+supplier bought by quote then confirm; `search` and `fetch` for Ozone
+Live, retrieval over a licensed publisher corpus; and `search` alone for
+Dataville, returning one Wikipedia or arXiv record per request. The skill
+adapter, `invoke` for catalogued local skills, is separate from the provider
+list. No other capability is declared. The runtime validates a plan against the declared
 capabilities before execution, so a plan cannot discover during execution
 that it planned an operation nobody offers. Each adapter's verification
 grade is in `docs/contracts/provider.md`.
@@ -180,8 +181,9 @@ fidelity verifier and judge run after inference and the output provenance
 labeller on the answer. The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
 screens rule on the text the agent would read; its record carries the hash
-of the bytes the origin served beside the hash of the text delivered, and
-the crossing carries both. The governor runs only when a job declares a `governance`
+of the bytes the origin served beside the hash of the extracted text, and
+the crossing carries both. A fetch result may carry only a part of that
+text; the crossing's `delivered` names the part. The governor runs only when a job declares a `governance`
 block, a sealed support-status rule set and entitlement grant
 (`docs/contracts/run-output.md` §Manifest), demonstrated by the governed
 specialist slice (`demo/specialist/README.md`). Each invocation writes its
@@ -242,7 +244,10 @@ purpose-limited projection at the operator boundary: witnessed retrieval and
 grounding facts only, as wire types proven against the schemas pinned in
 `schema/` (pinned copies from the standard's own repository, consumed, not
 forked). Projected batches are spooled durably before any delivery attempt
-and delivered only to an explicitly configured receiver; event identity is
+and delivered only to an explicitly configured receiver, which may be scoped
+to named suppliers so a supplier's own telemetry server receives its events
+and nothing else (`relay.json` `suppliers`, a local narrowing of what the
+supplier's grant allows); event identity is
 derived from the evidence record each event projects, so redelivery after a
 crash cannot double-count. The relay persists a claim before each HTTP
 attempt, applies bounded retry deadlines (ten attempts, 60 seconds doubling
@@ -321,7 +326,11 @@ Local acquisition needs no continuously running Common Measure service:
   route (`plugin/README.md`), and the standalone archive from
   `plugin/package.sh` installs with no repository and no toolchain.
 - The console serves on loopback only; the inference gateway is a sidecar
-  launched by image digest (`demo/gateway/tensorzero/`).
+  launched by image digest (`demo/gateway/tensorzero/`). On macOS,
+  `commonmeasure service install console` keeps the console running as a
+  LaunchAgent that starts this binary by absolute path with the installing
+  shell's Edge home; acquisition does not use it (`docs/GETTING-STARTED.md`
+  §5).
 - State is `~/.commonmeasure/` plus the append-only evidence logs. Nothing
   from those records is reported by default; reporting goes to an explicitly
   configured receiver, spooled durably first. Supplier requests still send the
@@ -333,6 +342,95 @@ separate credentials, records or tenant boundaries.
 
 Every process using an Edge home runs the same release. Upgrade by stopping
 all of them, including `commonmeasure hosted service`.
+
+`commonmeasure update` enforces part of this. Before it stops or downloads
+anything, it reads the process table and refuses while other processes of
+the same user run the binary file it replaces (the path the kernel reports
+for the executable is the file's canonical path, or the image is the same
+inode), naming each one with its `COMMONMEASURE_HOME` where readable. A
+process whose executable the kernel does not identify, such as one running
+an old release whose last link was removed, is refused when its process
+name is the file's name. A read of the process table that cannot be
+completed refuses the update. It stops the console service it manages and
+starts it again with the service's own Edge home. It does not detect:
+
+- processes running another copy of the binary on the same Edge home;
+- a copy under another name whose executable the kernel does not identify:
+  on macOS one whose file has been removed, on Linux one that is not
+  dumpable;
+- a process started between the check and the rename that replaces the
+  binary;
+- other users' processes.
+
+No lock is shared by the processes of a home, so these remain the operator's
+to stop.
+
+When the installer fails, `update` compares the binary's device, inode,
+size and SHA-256 with those it recorded before the installer ran. Each read
+hashes an open descriptor, then describes the descriptor again and looks
+the path up again; metadata that moved, or a path that names another file than the
+one read, makes the outcome unknown. This is a sequential check, not an
+atomic snapshot: a writer that changes the binary and restores it between
+the reads is not seen, and the comparison does not say which writer changed
+it. A replacement is asked for its version only after the attempt to start
+the console service again, whether or not that attempt succeeded. The
+question runs as its own process group with standard error discarded; after
+5 seconds, or past 4 KiB of output, the group is killed. The 5 seconds bound
+the wait for its output and exit, not the system calls that start it and
+reap it. A process that leaves the group is not killed and can hold the
+output open; `update` does not wait for it. `service status` asks the
+`commonmeasure` on `PATH` for its version within the same bounds.
+
+Limits of the process inspection on macOS:
+
+- The managed console is left out only when launchd reports the same pid
+  before and after the scan, and the process at that pid is launchd's child
+  and started before launchd was first asked. An orphaned process, whose
+  parent is also launchd, that takes the console's pid after that is
+  counted. Start times are wall-clock, so a clock set back during the update
+  can defeat the comparison.
+- A process the kernel refuses to describe (`proc_pidinfo` EPERM) is not
+  taken to be another user's on that alone, since a security policy can
+  refuse a process of the same user. Its owner is read from `sysctl`
+  `KERN_PROC_PID`: the same user's is refused by process name, and one whose
+  owner cannot be read is refused and listed as not inspected, not as a
+  process known to run the binary.
+- `COMMONMEASURE_HOME` is read from `KERN_PROCARGS2`. The arguments begin
+  after the executable path and the kernel's padding to eight bytes, which
+  is XNU's layout, not an interface. A layout that added NUL bytes before
+  the arguments would pass the padding check and could read an argument as
+  an environment entry, so the home shown would be wrong or missing; the
+  listing would still show only an exact subcommand name and the home. The
+  leading argument count does not settle it, since an empty argument zero
+  looks the same. An environment read empty, as macOS returns for a
+  restricted process, is shown as unknown.
+- `KERN_PROCARGS2` is read from the process's own memory. After the
+  environment come NULs and the strings XNU passes a process beside it
+  (`apple[]`: `pfz=`, `stack_guard=`, `malloc_entropy=`, `ptr_munge=`,
+  `main_stack=`, `executable_file=`, `dyld_file=`, `executable_cdhash=`,
+  `executable_boothash=`, `arm64e_abi=`, `th_port=` and `security_config=`,
+  some of which the process clears as it runs). The environment ends at the
+  first of those keys that follows an empty string; a key the parser does
+  not know leaves the end unfound. An environment entry that follows an
+  empty one and starts with one of those keys also ends it, early. No
+  `apple[]` key is `COMMONMEASURE_HOME`, so a string starting
+  `COMMONMEASURE_HOME=` after that end, with none before it, shows the end
+  may be wrong, and the home is shown as unknown. `COMMONMEASURE_HOME`
+  found in the environment is shown. The home is shown as not set or empty
+  in two cases: `COMMONMEASURE_HOME` is found with an empty or
+  whitespace-only value, which the Edge itself reads as unset and resolves
+  to its default home; or no string from the start of the environment to
+  the end of the read starts with `COMMONMEASURE_HOME=`, wherever the end
+  falls, and no empty entry inside the environment is followed by another
+  entry. Otherwise it is unknown, never unset.
+- A mapped image is matched by device and inode over every executable
+  region, not only the first.
+
+Releases are not signed. `install.sh` and `update` check a binary against
+the `SHA256SUMS` published on the same origin, which shows that the bytes
+match that list, not who published it. A release build of `update` always
+uses the public release origin and prints it before changing anything
+(`docs/GETTING-STARTED.md` §1, Updating).
 
 ### Hosted integration
 

@@ -1516,6 +1516,52 @@ fn a_kept_attempt_is_not_resent_to_another_hub() {
     hub.stop();
 }
 
+// Catches: the refusal quoting a kept attempt's hub URL, which an attempt
+// made under 0.4.1 holds as that release's `connect` stored it, with any
+// credentials in it. Both hubs are named by origin alone.
+#[test]
+fn a_kept_attempt_for_another_hub_names_both_by_origin_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let (double, mut hub) = edge_and_double(home.path());
+    let asked = request("s-1", &[], Duration::hours(1));
+    client::register(home.path(), &asked, "create-1", Utc::now()).unwrap();
+    let sent = double.lock().unwrap().requests;
+    let first_hub = EnrolmentRecord::load(home.path()).unwrap().unwrap().hub;
+    let planted = first_hub.replace("http://", "http://ops:ak_PLANTED@");
+    let attempt = commonmeasure_harness::instance::directory(home.path())
+        .join("attempts")
+        .join("create-1.json");
+    let kept = std::fs::read_to_string(&attempt).unwrap();
+    assert!(kept.contains(&first_hub), "{kept}");
+    std::fs::write(&attempt, kept.replace(&first_hub, &planted)).unwrap();
+
+    // The same origin: another URL of it.
+    let error = client::register(home.path(), &asked, "create-1", Utc::now()).unwrap_err();
+    assert!(
+        error.contains(&format!(
+            "was used for a request to another URL of the hub at {first_hub}, and this edge is \
+             now enrolled with the hub at {first_hub}; choose another key"
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("ak_PLANTED"), "{error}");
+
+    let mut record = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+    record.hub = "http://127.0.0.1:9".to_owned();
+    record.store(home.path()).unwrap();
+    let error = client::register(home.path(), &asked, "create-1", Utc::now()).unwrap_err();
+    assert!(
+        error.contains(&format!(
+            "was used for a request to the hub at {first_hub}, and this edge is now enrolled \
+             with the hub at http://127.0.0.1:9; choose another key"
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("ak_PLANTED"), "{error}");
+    assert_eq!(double.lock().unwrap().requests, sent);
+    hub.stop();
+}
+
 // Catches: `disconnect` leaving sessions pointed at instances the next key
 // cannot read, so that every crossing is refused `not_found`; the records
 // going with the pointers.
@@ -1660,4 +1706,139 @@ fn an_operation_recorded_during_a_send_is_kept() {
         ["register", "check", "renew"]
     );
     hub.stop();
+}
+
+/// Point the enrolment and an instance record at the double through
+/// `http://0.0.0.0:<port>`: a cleartext hub URL that still reaches the
+/// double, so a request a guard failed to stop would be counted.
+fn store_cleartext_hub(home: &Path, hub: &ServerHandle, instance: &str) -> String {
+    let port = hub
+        .url()
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .trim_end_matches('/')
+        .to_owned();
+    let cleartext = format!("http://0.0.0.0:{port}");
+    let mut record = EnrolmentRecord::load(home).unwrap().unwrap();
+    record.hub = cleartext.clone();
+    record.store(home).unwrap();
+    Retained::update(home, instance, |held| {
+        held.hub = cleartext.clone();
+        held.online_validation_required = true;
+    })
+    .unwrap();
+    cleartext
+}
+
+// Catches: a register, renew, close or status request, or the check before
+// a mediated crossing, sent to a stored cleartext hub; a register that keeps
+// an attempt for a request it refused to send.
+#[test]
+fn a_stored_cleartext_hub_is_sent_no_instance_request() {
+    let home = tempfile::tempdir().unwrap();
+    let (double, mut hub) = edge_and_double(home.path());
+    let (hits, mut origin) = page();
+    let url = format!("{}/doc", origin.url().trim_end_matches('/'));
+    let held = client::register(
+        home.path(),
+        &request("s-1", &[], Duration::hours(1)),
+        "create-1",
+        Utc::now(),
+    )
+    .unwrap()
+    .retained
+    .unwrap();
+    store_cleartext_hub(home.path(), &hub, &held.instance);
+    let before = double.lock().unwrap().requests;
+
+    let error = client::register(
+        home.path(),
+        &request("s-2", &[], Duration::hours(1)),
+        "create-2",
+        Utc::now(),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("neither https nor http to a loopback"),
+        "{error}"
+    );
+    assert!(
+        !home
+            .path()
+            .join("instances/attempts/create-2.json")
+            .exists(),
+        "a refused registration kept an attempt"
+    );
+    let error = client::renew(
+        home.path(),
+        &held.instance,
+        Utc::now() + Duration::hours(2),
+        "renew-1",
+        Utc::now(),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("neither https nor http to a loopback"),
+        "{error}"
+    );
+    assert!(!home.path().join("instances/attempts/renew-1.json").exists());
+    let error = client::status(home.path(), &held.instance, Utc::now()).unwrap_err();
+    assert!(
+        error.contains("neither https nor http to a loopback"),
+        "{error}"
+    );
+
+    // The check the binding requires before a crossing cannot be made, so
+    // the crossing is unavailable, as for a hub that cannot be reached.
+    let mut server = mediating_server(home.path(), "s-1");
+    let (is_error, text) = fetch(&mut server, &url);
+    assert!(is_error, "{text}");
+    assert!(text.contains("instance_check_unavailable"), "{text}");
+    assert!(
+        text.contains("neither https nor http to a loopback"),
+        "{text}"
+    );
+    assert_eq!(*hits.lock().unwrap(), 0, "nothing reached the page");
+    assert_eq!(double.lock().unwrap().requests, before, "nothing was sent");
+    hub.stop();
+    origin.stop();
+}
+
+// Catches: a session that loaded its key before the revocation was learnt
+// signing on after it (docs/contracts/bot-identity.md §Revocation).
+#[test]
+fn an_open_session_stops_signing_once_another_process_records_a_revocation() {
+    let home = tempfile::tempdir().unwrap();
+    let (_double, mut hub) = edge_and_double(home.path());
+    let (hits, mut origin) = page();
+    let url = format!("{}/doc", origin.url().trim_end_matches('/'));
+    let mut server = mediating_server(home.path(), "open");
+    let (is_error, text) = fetch(&mut server, &url);
+    assert!(!is_error, "{text}");
+    let signed = *hits.lock().unwrap();
+    assert!(signed > 0);
+
+    // What a relay run or a session start in another process records on a
+    // 401 for the enrolled ingest key.
+    let mut record = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+    record
+        .record_refusal(home.path(), "the member was removed")
+        .unwrap();
+    let (is_error, text) = fetch(&mut server, &url);
+    assert!(is_error, "{text}");
+    assert!(
+        text.contains("could not be signed")
+            && text.contains(
+                "revoked by the hub: the member was removed after this session loaded it"
+            ),
+        "{text}"
+    );
+    assert_eq!(
+        *hits.lock().unwrap(),
+        signed,
+        "the request was not sent unsigned"
+    );
+    hub.stop();
+    origin.stop();
 }

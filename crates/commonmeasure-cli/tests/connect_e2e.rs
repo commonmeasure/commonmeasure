@@ -38,6 +38,8 @@ const SIGNER_PUBLIC_KEY: &str = "3d6b4ad857f44f933254d7b5b4199800db753f9ec8183f4
 /// What the loopback hub saw and how it answers.
 #[derive(Default)]
 struct HubState {
+    /// Every request received, on any route.
+    requests: usize,
     /// The exchange request body, verbatim.
     exchange_bodies: Vec<Value>,
     /// The key id the hub assigned (the thumbprint of the registered key).
@@ -54,6 +56,10 @@ struct HubState {
     /// which is what a key revoked at the hub or a closed organisation
     /// answers.
     refuse_key: bool,
+    status_error: Option<(u16, &'static str)>,
+    /// A raw status answer, as an ingress or proxy in front of the hub
+    /// writes one, with no media type unless one is given.
+    status_raw: Option<(u16, String, Option<&'static str>)>,
     /// When set, the signer route answers 401 to the edge, as a hub whose
     /// signer route takes an owner's session and not an ingest key does.
     refuse_signer: bool,
@@ -82,6 +88,9 @@ struct HubState {
     upload_decision: Option<(bool, Option<&'static str>)>,
     /// The proof the hub holds: the params, the signature and the expiry.
     held: Option<(String, String, i64)>,
+    /// When set, the exchange answers this `telemetry_path` in place of
+    /// `/api/v1/telemetry`.
+    telemetry_path: Option<&'static str>,
 }
 
 /// The lifetime this hub states and accepts, seconds.
@@ -160,6 +169,7 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
         .unwrap()
         .spawn(move |request: Request| {
             let mut state = state.lock().unwrap();
+            state.requests += 1;
             let api_key = request.headers.get("X-API-Key").map(str::to_owned);
             match (request.method.as_str(), request.target.as_str()) {
                 ("POST", "/api/v1/enrolment/exchange") => {
@@ -196,7 +206,7 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                         },
                         "api_key_id": "22222222-2222-2222-2222-222222222222",
                         "api_key": API_KEY,
-                        "telemetry_path": "/api/v1/telemetry",
+                        "telemetry_path": state.telemetry_path.unwrap_or("/api/v1/telemetry"),
                     });
                     if let Some(statement) = state.statement() {
                         answer["directory_proof"] = statement;
@@ -282,6 +292,16 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                 }
                 ("GET", "/api/v1/enrolment/status") => {
                     state.status_keys.push(api_key.clone());
+                    if let Some((status, body, media)) = &state.status_raw {
+                        let mut response = Response::new(*status, body.as_bytes().to_vec());
+                        if let Some(media) = media {
+                            response.headers.set("Content-Type", media);
+                        }
+                        return response;
+                    }
+                    if let Some((status, detail)) = state.status_error {
+                        return Response::json(status, &json!({"detail": detail}).to_string());
+                    }
                     if api_key.as_deref() != Some(API_KEY) || state.refuse_key {
                         return Response::json(401, r#"{"detail":"a valid credential is required"}"#);
                     }
@@ -1074,7 +1094,6 @@ fn the_hubs_unlisted_reason_survives_enrolment_renewal_and_local_reads() {
         session_start(home.path(), "s-unlisted");
         let identity = &edge_identity_records(home.path(), "s-unlisted")[0]["payload"];
         assert_eq!(identity["unlisted"], format!("hub: {REASON}"));
-        assert!(identity.get("listed_until").is_none());
         let output = commonmeasure(home.path(), &["status"]);
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("hub: {REASON}")));
@@ -1251,8 +1270,24 @@ fn a_400_or_422_proof_refusal_preserves_a_current_listing_and_records_the_failur
     }
 }
 
+/// Connect, then make the held proof due only because the release changed,
+/// so the next start or relay run uploads.
+fn connected_with_upload_due(state: &Arc<Mutex<HubState>>, home: &Path) -> ServerHandle {
+    let server = hub(state.clone());
+    assert!(
+        commonmeasure(home, &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    change_recorded_release(home);
+    server
+}
+
+/// A 401, 404 or 409 in the hub's own error shape: the edge concludes the key
+/// is unlisted, stores that as its conclusion beside the hub's statement, and
+/// never presents it as something the hub stated.
 #[test]
-fn upload_refusals_of_401_404_and_409_still_mark_the_key_unlisted() {
+fn upload_refusals_of_401_404_and_409_from_the_hub_are_stored_as_the_edges_conclusion() {
     const REASON: &str = "the hub refused this key";
     for status in [401, 404, 409] {
         let home = tempfile::tempdir().unwrap();
@@ -1260,25 +1295,41 @@ fn upload_refusals_of_401_404_and_409_still_mark_the_key_unlisted() {
             proof_authority: Some("hub.example"),
             ..HubState::default()
         }));
-        let mut server = hub(state.clone());
-        assert!(
-            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-                .status
-                .success()
-        );
-        let mut listing = directory_listing(home.path());
-        listing["last_uploaded_release"] = json!("0.0.0");
-        std::fs::write(
-            home.path().join("directory-listing.json"),
-            listing.to_string(),
-        )
-        .unwrap();
+        let mut server = connected_with_upload_due(&state, home.path());
         state.lock().unwrap().refuse_upload = Some((status, REASON));
         session_start(home.path(), "s-key-refused");
         assert_eq!(state.lock().unwrap().uploads.len(), 2);
         let identity = &edge_identity_records(home.path(), "s-key-refused")[0]["payload"];
-        assert_eq!(identity["unlisted"], format!("hub: {REASON}"));
+        let unlisted = identity["unlisted"].as_str().expect("unlisted").to_owned();
+        assert!(unlisted.contains(REASON), "{unlisted}");
+        if status == 401 {
+            assert_eq!(identity["standing"], "revoked");
+            assert!(
+                commonmeasure_harness::identity::Identity::load(home.path())
+                    .unwrap()
+                    .signer()
+                    .is_none()
+            );
+        } else {
+            assert_eq!(identity["standing"], "enrolled");
+            assert!(!unlisted.starts_with("hub:"), "{unlisted}");
+            assert!(unlisted.contains("this edge concluded"), "{unlisted}");
+            assert!(unlisted.contains(&format!("({status})")), "{unlisted}");
+            let output = commonmeasure(home.path(), &["status", "--json"]);
+            assert!(output.status.success());
+            let local: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(local["directory_listing"]["unlisted"], unlisted.as_str());
+        }
+        assert!(identity.get("listed_until").is_none());
         let listing = directory_listing(home.path());
+        assert_eq!(
+            listing["stated"]["edge_conclusion"],
+            json!({"status": status, "detail": REASON})
+        );
+        // Repeated for a reader of 0.4.2 or earlier, which ignores the
+        // conclusion member and must still read the key as unlisted.
+        assert_eq!(listing["stated"]["listed"], false);
+        assert_eq!(listing["stated"]["unlisted_reason"], REASON);
         assert_eq!(listing["last_uploaded_release"], "0.0.0");
         assert_eq!(
             listing["failure"],
@@ -1288,49 +1339,343 @@ fn upload_refusals_of_401_404_and_409_still_mark_the_key_unlisted() {
     }
 }
 
-/// Make a current held proof due only because this release has not uploaded.
-fn change_recorded_release(home: &Path) {
-    let mut listing = directory_listing(home);
-    listing["last_uploaded_release"] = json!("0.0.0");
-    std::fs::write(home.join("directory-listing.json"), listing.to_string()).unwrap();
+/// A 401 or 404 the hub did not write, such as an ingress or proxy page, is
+/// a failure to reach the hub: the listing stays as the hub last stated it,
+/// and a 401 neither records revocation nor stops signing.
+#[test]
+fn a_401_or_404_not_in_the_hubs_shape_is_a_failure_to_reach_it_and_leaves_the_listing() {
+    // The 2 KiB boundary falls inside a multi-byte character.
+    let html = format!("<html>{}</html>", "界".repeat(4_000));
+    let truncated = format!("{}… (truncated, {} bytes)", &html[..2046], html.len());
+    let answers = [(html, truncated), (String::new(), "no body".to_owned())];
+    for (status, (body, shown)) in [401, 404]
+        .into_iter()
+        .flat_map(|status| answers.clone().map(|answer| (status, answer)))
+    {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = connected_with_upload_due(&state, home.path());
+        let before = directory_listing(home.path());
+        state.lock().unwrap().upload_error = Some((status, body));
+        session_start(home.path(), "s-ingress");
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        let listing = directory_listing(home.path());
+        assert_eq!(listing["stated"], before["stated"]);
+        assert!(listing["stated"].get("edge_conclusion").is_none());
+        assert_eq!(listing["last_uploaded_release"], "0.0.0");
+        let failure = listing["failure"].as_str().expect("failure");
+        assert!(failure.starts_with("the hub was not reached"), "{failure}");
+        assert!(failure.contains(&format!("answered {status}")), "{failure}");
+        assert!(failure.ends_with(&shown), "{failure}");
+        let identity = &edge_identity_records(home.path(), "s-ingress")[0]["payload"];
+        assert_eq!(identity["standing"], "enrolled", "{identity}");
+        assert!(
+            commonmeasure_harness::identity::Identity::load(home.path())
+                .unwrap()
+                .signer()
+                .is_some()
+        );
+        assert!(
+            !commonmeasure_harness::EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert!(identity["listed_until"].is_string(), "{identity}");
+        assert!(identity.get("unlisted").is_none(), "{identity}");
+        let output = commonmeasure(home.path(), &["status", "--json"]);
+        assert!(output.status.success());
+        let local: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(local["directory_listing"]["listed_until"].is_string());
+        session_start(home.path(), "s-ingress-backoff");
+        assert_eq!(
+            state.lock().unwrap().uploads.len(),
+            2,
+            "the failure retry delay still applies"
+        );
+        server.stop();
+    }
 }
 
-#[test]
-fn a_large_html_upload_refusal_is_bounded_in_the_listing_session_and_status() {
-    let home = tempfile::tempdir().unwrap();
+const INGRESS_PAGE: &str = "<html><head><title>401 Authorization Required</title></head></html>";
+
+/// Connect, then have the status route answered `status` with `body`, of
+/// media type `media` when given, by something in front of the hub, and ask
+/// for standing on a relay run or, `at_start`, on a session start whose
+/// proof is due. Returns the relay's output or the listing's `failure`,
+/// whichever carries the reason.
+fn status_answered_in_front(
+    home: &Path,
+    status: u16,
+    body: &str,
+    media: Option<&'static str>,
+    at_start: bool,
+) -> String {
     let state = Arc::new(Mutex::new(HubState {
         proof_authority: Some("hub.example"),
         ..HubState::default()
     }));
     let mut server = hub(state.clone());
     assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+        commonmeasure(home, &["connect", &server.url(), "--token", TOKEN])
             .status
             .success()
     );
-    change_recorded_release(home.path());
-    // The 2 KiB boundary falls inside a multi-byte character.
-    let html = format!("<html>{}</html>", "界".repeat(4_000));
-    let expected = format!("{}… (truncated, {} bytes)", &html[..2046], html.len());
-    state.lock().unwrap().upload_error = Some((404, html));
-    session_start(home.path(), "s-html-refusal");
-    let listing = directory_listing(home.path());
-    assert_eq!(listing["stated"]["unlisted_reason"], expected);
+    state.lock().unwrap().status_raw = Some((status, body.to_owned(), media));
+    let reason = if at_start {
+        change_recorded_release(home);
+        session_start(home, "s-status-ingress");
+        directory_listing(home)["failure"]
+            .as_str()
+            .expect("failure")
+            .to_owned()
+    } else {
+        let output = commonmeasure(home, &["relay"]);
+        assert!(output.status.success());
+        session_start(home, "s-status-ingress");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
     assert_eq!(
-        listing["failure"],
-        format!("the hub refused the proof (404): {expected}")
+        state.lock().unwrap().uploads.len(),
+        1,
+        "only connect's upload"
     );
-    let identity = &edge_identity_records(home.path(), "s-html-refusal")[0]["payload"];
-    assert_eq!(identity["unlisted"], format!("hub: {expected}"));
-    let output = commonmeasure(home.path(), &["status", "--json"]);
-    assert!(output.status.success());
-    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        status["directory_listing"]["unlisted"],
-        format!("hub: {expected}")
-    );
-    assert_eq!(state.lock().unwrap().uploads.len(), 2);
     server.stop();
+    reason
+}
+
+/// A 401 on the status route that the hub did not write, such as an ingress
+/// page, an empty answer from a wall in front of every route or an API
+/// gateway's JSON, says nothing about the key: the edge stays enrolled and
+/// signing.
+fn a_401_not_in_the_hubs_shape_revokes_nothing(at_start: bool) {
+    for (body, media, shown) in [
+        (INGRESS_PAGE, None, INGRESS_PAGE),
+        ("", None, "no body"),
+        (
+            r#"{"message":"Unauthorized"}"#,
+            Some("application/json"),
+            "Unauthorized",
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let reason = status_answered_in_front(home.path(), 401, body, media, at_start);
+        assert!(
+            reason.contains(&format!(
+                "the hub was not reached: the status request was answered 401 by something in \
+                 front of it, in a shape the hub does not answer in: {shown}"
+            )),
+            "{reason}"
+        );
+        assert_standing_unchanged(home.path());
+    }
+}
+
+/// The edge is still enrolled, signing and not revoked after a standing
+/// check that `status_answered_in_front` ran.
+fn assert_standing_unchanged(home: &Path) {
+    let identity = &edge_identity_records(home, "s-status-ingress")[0]["payload"];
+    assert_eq!(identity["standing"], "enrolled", "{identity}");
+    let record = commonmeasure_harness::EnrolmentRecord::load(home)
+        .unwrap()
+        .unwrap();
+    assert!(!record.is_revoked());
+    assert!(record.revocation.is_none());
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home)
+            .unwrap()
+            .signer()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_401_on_the_status_route_not_in_the_hubs_shape_revokes_nothing_on_a_relay_run() {
+    a_401_not_in_the_hubs_shape_revokes_nothing(false);
+}
+
+#[test]
+fn a_401_on_the_status_route_not_in_the_hubs_shape_revokes_nothing_at_session_start() {
+    a_401_not_in_the_hubs_shape_revokes_nothing(true);
+}
+
+/// An answer on the status route other than 200 is the hub's own only in
+/// its shape; in any other, whatever its status, it is described as the hub
+/// not reached. Neither changes standing.
+#[test]
+fn an_answer_on_the_status_route_is_credited_to_the_hub_only_in_its_shape() {
+    for at_start in [false, true] {
+        for status in [403, 404, 502, 503] {
+            for (body, shown) in [(INGRESS_PAGE, INGRESS_PAGE), ("", "no body")] {
+                let home = tempfile::tempdir().unwrap();
+                let reason = status_answered_in_front(home.path(), status, body, None, at_start);
+                assert!(
+                    reason.contains(&format!(
+                        "the hub was not reached: the status request was answered {status} by \
+                         something in front of it, in a shape the hub does not answer in: {shown}"
+                    )),
+                    "{status} {reason}"
+                );
+                assert_standing_unchanged(home.path());
+            }
+        }
+        // The hub's own answers, in its shape and media type.
+        for (status, detail) in [
+            (403, "this credential lacks the telemetry:ingest scope"),
+            (404, "no edge key is enrolled under this credential"),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let state = Arc::new(Mutex::new(HubState {
+                proof_authority: Some("hub.example"),
+                ..HubState::default()
+            }));
+            let mut server = hub(state.clone());
+            assert!(
+                commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+                    .status
+                    .success()
+            );
+            state.lock().unwrap().status_error = Some((status, detail));
+            let reason = if at_start {
+                change_recorded_release(home.path());
+                session_start(home.path(), "s-status-ingress");
+                directory_listing(home.path())["failure"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            } else {
+                let output = commonmeasure(home.path(), &["relay"]);
+                assert!(output.status.success());
+                session_start(home.path(), "s-status-ingress");
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            };
+            assert!(
+                reason.contains(&format!("the hub answered {status}: {detail}")),
+                "{reason}"
+            );
+            assert!(!reason.contains("not reached"), "{reason}");
+            assert_standing_unchanged(home.path());
+            server.stop();
+        }
+    }
+}
+
+/// On the upload, any status the hub did not write in its own shape, such
+/// as a WAF's 403 or a proxy's 502, is described as the hub not reached;
+/// the hub's own 4xx keeps its wording as a refusal, and its own 429 or 5xx
+/// is described as a fault from which nothing is concluded.
+#[test]
+fn an_upload_answer_not_in_the_hubs_shape_is_not_a_refusal_by_the_hub() {
+    let answers = [
+        (403, INGRESS_PAGE, INGRESS_PAGE),
+        (502, "<html>Bad Gateway</html>", "<html>Bad Gateway</html>"),
+        (503, "", "no body"),
+    ];
+    for (status, body, shown) in answers {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = connected_with_upload_due(&state, home.path());
+        state.lock().unwrap().upload_error = Some((status, body.to_owned()));
+        session_start(home.path(), "s-upload-ingress");
+        assert_eq!(state.lock().unwrap().uploads.len(), 2);
+        assert_eq!(
+            directory_listing(home.path())["failure"],
+            format!(
+                "the hub was not reached: the upload was answered {status} by something in \
+                 front of it, in a shape the hub does not answer in: {shown}"
+            )
+        );
+        server.stop();
+    }
+    for (status, detail) in [
+        (403, "the credential lacks the telemetry:ingest scope"),
+        (429, "too many requests for this credential"),
+        (500, "internal server error"),
+        (503, "the identity documents need IDENTITY_ORIGIN"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = connected_with_upload_due(&state, home.path());
+        state.lock().unwrap().refuse_upload = Some((status, detail));
+        session_start(home.path(), "s-upload-hub");
+        // A 429 or a 5xx rules on nothing; a 4xx is the hub's refusal.
+        let failure = if status == 429 || status >= 500 {
+            format!(
+                "the hub could not take the proof ({status}): {detail}; nothing was concluded \
+                 from it"
+            )
+        } else {
+            format!("the hub refused the proof ({status}): {detail}")
+        };
+        assert_eq!(directory_listing(home.path())["failure"], failure);
+        server.stop();
+    }
+}
+
+/// The next status answer is the hub's statement and replaces the edge's
+/// conclusion, whichever way the hub decides.
+#[test]
+fn a_later_status_answer_replaces_the_edges_conclusion() {
+    for (decision, shown) in [
+        (
+            (false, Some("the hub withheld this key")),
+            Some("hub: the hub withheld this key"),
+        ),
+        ((true, None), None),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = connected_with_upload_due(&state, home.path());
+        state.lock().unwrap().refuse_upload = Some((409, "the edge key is revoked"));
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        assert_eq!(
+            directory_listing(home.path())["stated"]["edge_conclusion"]["status"],
+            409
+        );
+        state.lock().unwrap().listing_decision = Some(decision);
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        assert_eq!(
+            state.lock().unwrap().uploads.len(),
+            2,
+            "within the retry delay"
+        );
+        let listing = directory_listing(home.path());
+        assert!(
+            listing["stated"].get("edge_conclusion").is_none(),
+            "{listing}"
+        );
+        assert_eq!(listing["stated"]["listed"], decision.0);
+        let output = commonmeasure(home.path(), &["status", "--json"]);
+        assert!(output.status.success());
+        let local: Value = serde_json::from_slice(&output.stdout).unwrap();
+        match shown {
+            Some(shown) => assert_eq!(local["directory_listing"]["unlisted"], shown),
+            None => assert!(
+                local["directory_listing"]["listed_until"].is_string(),
+                "{local}"
+            ),
+        }
+        server.stop();
+    }
+}
+
+/// Make a current held proof due only because this release has not uploaded.
+fn change_recorded_release(home: &Path) {
+    let mut listing = directory_listing(home);
+    listing["last_uploaded_release"] = json!("0.0.0");
+    std::fs::write(home.join("directory-listing.json"), listing.to_string()).unwrap();
 }
 
 #[test]
@@ -1551,10 +1896,17 @@ fn disconnect_with_the_hub_unreachable_removes_the_files_and_says_the_key_must_b
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains(&format!("edge key {key_id} was not revoked at {hub_url}")),
+        stdout.contains(&format!(
+            "edge key {key_id} and its ingest key were not revoked at {hub_url}"
+        )),
         "{stdout}"
     );
-    assert!(stdout.contains("revoke it from the hub"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "revoke both on the hub's API keys page: the edge key {key_id} and the ingest key"
+        )),
+        "{stdout}"
+    );
     for file in ["relay.json", "edge-key.json", "enrolment.json"] {
         assert!(
             !home.path().join(file).exists(),
@@ -1719,8 +2071,8 @@ fn connect_with_managed_refuses_a_plain_http_policy_url_off_the_machine() {
     assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
     assert!(
         stderr.contains(
-            "policy_url \"http://hub.internal/api/v1/policy/desired\" must be an https URL, or \
-             http to a loopback origin"
+            "policy_url at http://hub.internal must be an https URL, or http to a loopback \
+             origin"
         ),
         "{stderr}"
     );
@@ -1865,6 +2217,79 @@ fn a_refused_exchange_writes_nothing() {
     for file in ["relay.json", "edge-key.json", "enrolment.json"] {
         assert!(!home.path().join(file).exists(), "{file} was written");
     }
+    server.stop();
+}
+
+/// `connect` writes only a `relay.json` the relay loads. A hub URL with
+/// credentials, a query or a fragment is refused before any request; a
+/// telemetry path from the hub that makes such a receiver is refused after
+/// the exchange and before anything is stored. Either way the home is left
+/// empty, and a clean hub URL enrols with a configuration that loads.
+#[test]
+fn connect_writes_only_a_relay_config_the_relay_loads() {
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state.clone());
+    let clean = server.url();
+    for (hub_url, fault) in [
+        (clean.replacen("http://", "http://user@", 1), "credentials"),
+        (
+            clean.replacen("http://", "http://user:pass@", 1),
+            "credentials",
+        ),
+        (format!("{clean}/?tenant=a"), "query or fragment"),
+        (format!("{clean}#hub"), "query or fragment"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let output = commonmeasure(home.path(), &["connect", &hub_url, "--token", TOKEN]);
+        assert!(!output.status.success(), "{hub_url} enrolled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(fault), "{hub_url}: {stderr}");
+        assert!(
+            stderr
+                .contains("Give the hub's address alone, with no credentials, query or fragment."),
+            "{hub_url}: {stderr}"
+        );
+        assert!(!stderr.contains("api_key"), "{hub_url}: {stderr}");
+        // The refusal names the hub's origin, never the parts it refuses.
+        for part in ["user@", "pass@", "tenant=a", "#hub"] {
+            assert!(!stderr.contains(part), "{hub_url}: {stderr}");
+        }
+        assert!(
+            stderr.contains("nothing was written"),
+            "{hub_url}: {stderr}"
+        );
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+    assert_eq!(state.lock().unwrap().requests, 0);
+
+    for (path, fault) in [
+        ("/api/v1/telemetry?tenant=a", "query or fragment"),
+        ("/api/v1/telemetry#x", "query or fragment"),
+    ] {
+        state.lock().unwrap().telemetry_path = Some(path);
+        let home = tempfile::tempdir().unwrap();
+        let output = commonmeasure(home.path(), &["connect", &clean, "--token", TOKEN]);
+        assert!(!output.status.success(), "{path} enrolled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(fault), "{path}: {stderr}");
+        assert!(stderr.contains("Nothing was stored"), "{path}: {stderr}");
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+    state.lock().unwrap().telemetry_path = None;
+
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(home.path(), &["connect", &clean, "--token", TOKEN]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = commonmeasure_harness::relay_config::RelayConfig::load(home.path())
+        .expect("the relay loads what connect wrote")
+        .expect("connect wrote relay.json");
+    assert_eq!(config.receiver, format!("{clean}/api/v1/telemetry"));
+    assert_eq!(config.api_key.as_deref(), Some(API_KEY));
+    assert_eq!(config.suppliers, None);
     server.stop();
 }
 
@@ -2110,6 +2535,650 @@ fn managed_connect_still_fails_on_errors_and_keeps_the_local_policy() {
             std::fs::read(home.path().join("policy.json")).unwrap(),
             policy
         );
+        assert!(
+            !commonmeasure_harness::EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
         assert!(!home.path().join("managed/last-known-good.json").exists());
     }
+}
+
+/// Fault injection at the HTTP boundary models member removal. It establishes
+/// edge handling of the hub's 401, not the hub's member-removal transaction.
+#[test]
+fn member_removal_stops_signing_on_relay_and_start_time_standing_checks() {
+    const DETAIL: &str = "the member was removed";
+    for at_start in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(HubState {
+            proof_authority: Some("hub.example"),
+            ..HubState::default()
+        }));
+        let mut server = hub(state.clone());
+        assert!(
+            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+                .status
+                .success()
+        );
+        assert!(
+            commonmeasure_harness::identity::Identity::load(home.path())
+                .unwrap()
+                .signer()
+                .is_some()
+        );
+        state.lock().unwrap().status_error = Some((401, DETAIL));
+        if at_start {
+            change_recorded_release(home.path());
+        } else {
+            let output = commonmeasure(home.path(), &["relay"]);
+            assert!(String::from_utf8_lossy(&output.stdout).contains(DETAIL));
+        }
+        session_start(home.path(), "s-member-removed");
+        let identity = &edge_identity_records(home.path(), "s-member-removed")[0]["payload"];
+        assert_eq!(identity["standing"], "revoked");
+        assert_eq!(identity["revocation"], format!("hub: {DETAIL}"));
+        assert!(
+            identity["revoked_at"].is_null(),
+            "the hub supplied no revocation time"
+        );
+        let record = commonmeasure_harness::EnrolmentRecord::load(home.path())
+            .unwrap()
+            .unwrap();
+        assert!(record.revocation_learnt_at.is_some());
+        assert!(
+            commonmeasure_harness::identity::Identity::load(home.path())
+                .unwrap()
+                .signer()
+                .is_none()
+        );
+        let output = commonmeasure(home.path(), &["status", "--json"]);
+        assert!(output.status.success());
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(status["egress"]["key_standing"], "revoked");
+        assert!(
+            status["directory_listing"]["unlisted"]
+                .as_str()
+                .unwrap()
+                .contains(DETAIL)
+        );
+        let output = commonmeasure(home.path(), &["status"]);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("revoked") && text.contains(DETAIL), "{text}");
+        let learnt = record.revocation_learnt_at;
+        commonmeasure(home.path(), &["relay"]);
+        assert_eq!(
+            commonmeasure_harness::EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .revocation_learnt_at,
+            learnt
+        );
+        server.stop();
+    }
+}
+
+#[test]
+fn server_and_transport_failures_leave_the_enrolled_key_signing() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    for status in [403, 404, 500, 503] {
+        state.lock().unwrap().status_error = Some((status, "standing unavailable"));
+        assert!(commonmeasure(home.path(), &["relay"]).status.success());
+        assert!(
+            !commonmeasure_harness::EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert!(
+            commonmeasure_harness::identity::Identity::load(home.path())
+                .unwrap()
+                .signer()
+                .is_some()
+        );
+    }
+    server.stop();
+    assert!(commonmeasure(home.path(), &["relay"]).status.success());
+    assert!(
+        !commonmeasure_harness::EnrolmentRecord::load(home.path())
+            .unwrap()
+            .unwrap()
+            .is_revoked()
+    );
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home.path())
+            .unwrap()
+            .signer()
+            .is_some()
+    );
+}
+
+#[test]
+fn cleartext_remote_connect_is_refused_before_any_request_or_local_write() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let local_unspecified = format!("http://0.0.0.0:{}", listener.local_addr().unwrap().port());
+    for url in ["http://hub.example", local_unspecified.as_str()] {
+        let home = tempfile::tempdir().unwrap();
+        let output = commonmeasure(home.path(), &["connect", url, "--token", TOKEN]);
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("must be https"), "{error}");
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+/// A home enrolled before `connect` applied the transport rule, holding a
+/// cleartext hub. The stored URL is `http://0.0.0.0:<port>`, which reaches
+/// the loopback double, so a guard that stopped refusing would show up as a
+/// request here rather than as a lookup failure.
+fn legacy_cleartext_home() -> (
+    tempfile::TempDir,
+    Arc<Mutex<HubState>>,
+    ServerHandle,
+    String,
+) {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let server = hub(state.clone());
+    assert!(
+        commonmeasure(
+            home.path(),
+            &["connect", &server.url(), "--token", TOKEN, "--managed"]
+        )
+        .status
+        .success()
+    );
+    let port = server
+        .url()
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .trim_end_matches('/')
+        .to_owned();
+    let cleartext = format!("http://0.0.0.0:{port}");
+    let mut record = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    record.hub = cleartext.clone();
+    record.store(home.path()).unwrap();
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": format!("{cleartext}/api/v1/telemetry"), "api_key": API_KEY})
+            .to_string(),
+    )
+    .unwrap();
+    (home, state, server, cleartext)
+}
+
+#[test]
+fn a_legacy_cleartext_hub_is_refused_on_every_enrolment_request_path() {
+    let (home, state, mut server, cleartext) = legacy_cleartext_home();
+    let before = state.lock().unwrap().requests;
+
+    // The relay refuses before it opens the spool or its state.
+    std::fs::remove_dir_all(home.path().join("relay")).unwrap();
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("neither https nor http to a loopback origin")
+            && error.contains("run `commonmeasure connect` with an https hub"),
+        "{error}"
+    );
+    assert!(
+        !home.path().join("relay").exists(),
+        "a refused relay left relay state"
+    );
+
+    let error = commonmeasure_relay::check_standing(home.path(), Some(API_KEY))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("https"));
+    let proof = commonmeasure_relay::refresh_directory_proof(
+        home.path(),
+        API_KEY,
+        &json!({"directory_proof": state.lock().unwrap().statement()}),
+        std::time::Duration::from_secs(1),
+    );
+    assert!(
+        matches!(proof.action, commonmeasure_relay::ProofAction::NotSent(ref reason) if reason.contains("https"))
+    );
+    let output = commonmeasure(home.path(), &["policy", "sync"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("https"));
+    assert_eq!(state.lock().unwrap().requests, before, "nothing was sent");
+
+    // Disconnect asks nothing, says why, and names both keys to revoke.
+    let key_id = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap()
+        .key_id;
+    let output = commonmeasure(home.path(), &["disconnect"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "edge key {key_id} and its ingest key were not revoked at {cleartext}: the hub was \
+             not asked, because the stored hub URL at {cleartext} is neither https nor http to \
+             a loopback origin"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "the edge key {key_id} and the ingest key, each labelled \"laptop-7\""
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("run `commonmeasure disconnect`"),
+        "{stdout}"
+    );
+    assert_eq!(state.lock().unwrap().requests, before, "nothing was sent");
+    server.stop();
+}
+
+#[test]
+fn a_stored_cleartext_hub_is_stated_by_status_doctor_and_session_start() {
+    let (home, state, mut server, cleartext) = legacy_cleartext_home();
+    let before = state.lock().unwrap().requests;
+
+    let output = commonmeasure(home.path(), &["status", "--json"]);
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["egress"]["key_standing"], "cleartext_hub");
+    let refused = status["egress"]["hub_refused"].as_str().unwrap();
+    assert!(
+        refused.contains(&cleartext)
+            && refused.contains("relay, standing checks, directory proofs")
+            && refused.contains("run `commonmeasure connect` with an https hub"),
+        "{refused}"
+    );
+    for args in [&["status"][..], &["doctor"][..]] {
+        let output = commonmeasure(home.path(), args);
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            text.contains(&format!("hub URL refused: {refused}")),
+            "{args:?}: {text}"
+        );
+    }
+
+    session_start(home.path(), "s-cleartext");
+    let identity = &edge_identity_records(home.path(), "s-cleartext")[0]["payload"];
+    assert_eq!(identity["standing"], "cleartext_hub");
+    assert_eq!(identity["hub_refused"], refused);
+    assert_eq!(state.lock().unwrap().requests, before, "nothing was sent");
+    server.stop();
+}
+
+/// A home 0.4.1's `connect` enrolled with credentials in a loopback hub URL,
+/// which passes the transport rule as an https one does. It wrote the same
+/// URL into the receiver and, under `--managed`, into the policy URL. Nothing
+/// is sent to the hub, and no output names more than its origin.
+#[test]
+fn a_stored_hub_url_with_credentials_is_refused_and_named_by_its_origin_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let hub_url = server.url().trim_end_matches('/').to_owned();
+    assert!(
+        commonmeasure(
+            home.path(),
+            &["connect", &hub_url, "--token", TOKEN, "--managed"]
+        )
+        .status
+        .success()
+    );
+    let planted = hub_url.replace("http://", "http://ops:ak_PLANTED@");
+    for file in ["enrolment.json", "relay.json", "deployment.json"] {
+        let path = home.path().join(file);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&hub_url), "{file}: {text}");
+        std::fs::write(&path, text.replace(&hub_url, &planted)).unwrap();
+    }
+    let key_id = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap()
+        .key_id;
+    let before = state.lock().unwrap().requests;
+    let refused = format!(
+        "the enrolled hub URL at {hub_url} carries credentials, a query or a fragment, so \
+         nothing is sent to it"
+    );
+
+    for args in [&["relay"][..], &["policy", "sync"][..]] {
+        let output = commonmeasure(home.path(), args);
+        assert!(!output.status.success(), "{args:?}");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(&refused), "{args:?}: {error}");
+        assert!(!error.contains("ak_PLANTED"), "{args:?}: {error}");
+    }
+    let output = commonmeasure(home.path(), &["status", "--json"]);
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["egress"]["key_standing"], "unusable_hub_url");
+    assert!(
+        status["egress"]["hub_refused"]
+            .as_str()
+            .unwrap()
+            .starts_with(&refused),
+        "{status}"
+    );
+    for args in [&["status"][..], &["doctor"][..], &["status", "--json"][..]] {
+        let output = commonmeasure(home.path(), args);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("ak_PLANTED"), "{args:?}: {text}");
+    }
+    let output = commonmeasure(home.path(), &["connect", &hub_url, "--token", TOKEN]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains(&format!(
+            "already enrolled with the hub at {hub_url} as key {key_id}"
+        )),
+        "{error}"
+    );
+    assert!(!error.contains("ak_PLANTED"), "{error}");
+    assert_eq!(state.lock().unwrap().requests, before, "nothing was sent");
+
+    let output = commonmeasure(home.path(), &["disconnect"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "edge key {key_id} and its ingest key were not revoked at {hub_url}: the hub was \
+             not asked, because the stored hub URL at {hub_url} carries credentials, a query or \
+             a fragment\n"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "deployment.json pinned this hub's policy at {hub_url}; removed"
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("ak_PLANTED"), "{stdout}");
+    assert_eq!(state.lock().unwrap().requests, before, "nothing was sent");
+    server.stop();
+}
+
+/// A 401 for a key other than the enrolled ingest key says nothing about
+/// the enrolment: a mistyped `--api-key` must not revoke it.
+#[test]
+fn a_mistyped_api_key_leaves_the_edge_enrolled_and_signing() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    let output = commonmeasure(home.path(), &["relay", "--api-key", "ak_typo"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .contains("standing not checked this run (the hub refused the key this run presented")
+            && stdout.contains("given with --api-key"),
+        "{stdout}"
+    );
+    let record = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    assert!(!record.is_revoked(), "{record:?}");
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home.path())
+            .unwrap()
+            .signer()
+            .is_some()
+    );
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(": enrolled"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        state.lock().unwrap().status_keys,
+        [
+            Some(API_KEY.to_owned()),
+            Some("ak_typo".to_owned()),
+            Some(API_KEY.to_owned())
+        ]
+    );
+    server.stop();
+}
+
+/// A 401 on the enrolled key is recorded as revocation. The hub never
+/// answers 200 for a revoked key, so a later 200 for the same key id with no
+/// revocation withdraws it, and the edge signs again.
+#[test]
+fn a_401_revocation_is_withdrawn_when_the_hub_answers_for_the_key_again() {
+    const DETAIL: &str = "an auth proxy refused the request";
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    state.lock().unwrap().status_error = Some((401, DETAIL));
+    let output = commonmeasure(home.path(), &["relay"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "revoked (hub: {DETAIL}): the hub refused the enrolled ingest key"
+        )) && !stdout.contains("it is out of the key directory"),
+        "{stdout}"
+    );
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home.path())
+            .unwrap()
+            .signer()
+            .is_none()
+    );
+
+    state.lock().unwrap().status_error = None;
+    let output = commonmeasure(home.path(), &["relay"]);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(": enrolled"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let record = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    assert!(!record.is_revoked(), "{record:?}");
+    assert!(record.revocation.is_none());
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home.path())
+            .unwrap()
+            .signer()
+            .is_some()
+    );
+    server.stop();
+}
+
+/// A revocation the hub states after a 401 was recorded is kept with the
+/// first learnt time, and makes the revocation permanent: a later clean 200,
+/// which would withdraw a 401-only revocation, leaves the edge revoked and
+/// not signing.
+#[test]
+fn a_revocation_stated_after_a_401_keeps_the_first_learnt_time() {
+    const DETAIL: &str = "the member was removed";
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    state.lock().unwrap().status_error = Some((401, DETAIL));
+    commonmeasure(home.path(), &["relay"]);
+    let first = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    assert!(first.revocation_learnt_at.is_some());
+    assert!(first.revoked_at.is_none());
+
+    {
+        let mut state = state.lock().unwrap();
+        state.status_error = None;
+        state.revoked = Some(("2026-09-25T09:00:00Z", "owner"));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let output = commonmeasure(home.path(), &["relay"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("revoked at 2026-09-25T09:00:00Z by the owner"),
+        "{stdout}"
+    );
+    let stated = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stated.revocation_learnt_at, first.revocation_learnt_at);
+    assert_eq!(stated.revoked_at.as_deref(), Some("2026-09-25T09:00:00Z"));
+    assert_eq!(stated.revocation.as_deref(), Some("owner"));
+
+    state.lock().unwrap().revoked = None;
+    let output = commonmeasure(home.path(), &["relay"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(": enrolled"), "{stdout}");
+    let after = commonmeasure_harness::EnrolmentRecord::load(home.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, stated);
+    assert!(
+        commonmeasure_harness::identity::Identity::load(home.path())
+            .unwrap()
+            .signer()
+            .is_none()
+    );
+    server.stop();
+}
+
+/// A proof upload refused with 401 revokes only when the key it was sent
+/// under is the enrolled ingest key. Here `relay.json` holds another key
+/// than the one presented.
+#[test]
+fn an_upload_401_for_a_key_other_than_the_enrolled_one_revokes_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    let relay = home.path().join("relay.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&relay).unwrap()).unwrap();
+    config["api_key"] = json!("ak_rotated");
+    std::fs::write(&relay, config.to_string()).unwrap();
+    let statement = {
+        let mut state = state.lock().unwrap();
+        state.refuse_upload = Some((401, "a valid credential is required"));
+        state.held = None;
+        state.statement()
+    };
+    let uploads = state.lock().unwrap().uploads.len();
+    let proof = commonmeasure_relay::refresh_directory_proof(
+        home.path(),
+        API_KEY,
+        &json!({"directory_proof": statement}),
+        std::time::Duration::from_secs(5),
+    );
+    assert!(
+        matches!(proof.action, commonmeasure_relay::ProofAction::Failed(_)),
+        "{:?}",
+        proof.action
+    );
+    assert_eq!(state.lock().unwrap().uploads.len(), uploads + 1);
+    assert!(
+        !commonmeasure_harness::EnrolmentRecord::load(home.path())
+            .unwrap()
+            .unwrap()
+            .is_revoked()
+    );
+    server.stop();
+}
+
+/// `disconnect` removes the enrolment record under the record's lock, so a
+/// process that read the record earlier and is writing a revocation back
+/// cannot bring it back afterwards. Here the test holds the lock as such a
+/// writer would: the record stays until it is released.
+#[test]
+fn disconnect_waits_for_a_writer_holding_the_enrolment_record() {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state);
+    assert!(
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
+            .status
+            .success()
+    );
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(home.path().join("enrolment.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .arg("disconnect")
+        .env("COMMONMEASURE_HOME", home.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // `relay.json` goes just before the record; once it has gone,
+    // `disconnect` is at the record.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while home.path().join("relay.json").exists() {
+        assert!(std::time::Instant::now() < deadline, "disconnect never ran");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(child.try_wait().unwrap().is_none());
+    assert!(
+        home.path().join("enrolment.json").exists(),
+        "disconnect removed the record while another writer held it"
+    );
+    drop(lock);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!home.path().join("enrolment.json").exists());
+    server.stop();
 }

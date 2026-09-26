@@ -51,6 +51,40 @@ mints, and the two are joined by the host process that started both
 ([`docs/contracts/session-evidence.md`](session-evidence.md) §Host process).
 Every record carries which path wrote it (§Crossing).
 
+### The parts of a fetch
+
+`context_fetch` takes `url` and two optional arguments, both non-negative
+integers:
+
+- `offset`: the character of the extracted text to start from. Default 0.
+- `max_chars`: the most characters the result carries. Default 60,000,
+  about 15,000 tokens at four characters to a token, which with the rest of
+  the result stays under the 25,000-token limit Claude Code sets on one MCP
+  tool result by default. A value above 200,000 is clamped to 200,000; 0 is
+  refused, since a part of no characters would still be a request to the
+  site.
+
+Characters are Unicode scalar values, and a part never splits one. The
+result carries `content_range` (`offset`, `chars`, `total_chars`) and
+`truncated`, true where more text follows. A truncated result carries
+`next`, one sentence naming the URL as asked and the offset to ask for. An
+`offset` above 0 and at or past the end of the text returns an error naming
+the offset and the text's length in characters, and the crossing is recorded
+as refused, not grounded. Each part is a new request to the site, checked
+and recorded as a crossing of its own; a result whose page changed since the
+previous part carries `changed`, naming both hashes. The previous part is
+looked up under the URL asked for and, after a redirect, under the final URL
+the result names as `url`. Where both hold a part, the one under the URL
+asked for is used, since `next` names that URL: two URLs that redirect to one
+page, read in turn, each continue from their own earlier part.
+`content_hash` and `retrieved_hash` in the result identify the whole
+extracted text and the body as served, not the part; `estimated_tokens`
+counts the part ([session evidence](session-evidence.md#crossing),
+`delivered`).
+
+The input schema sets `additionalProperties: false`. The server does not
+enforce it: an argument it does not know is ignored.
+
 ### The hosted path
 
 The same server, served over HTTP to the hosts that reach an MCP server
@@ -72,6 +106,27 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
   the directory the server runs in, which a hosted session does not have.
   An `initialize` asking for another revision is answered with
   `2025-11-25`.
+- The tenant can act on none of the operator's files, so they are named
+  relative to the operator home. `recorded_in`, the session record a
+  `context_fetch` or `context_search` result was written to, is
+  `sessions/<id>.ndjson`, where over stdio it is the full path, and a
+  refusal names "the operator's policy" with no path. Before any answer is
+  sent, the endpoint rewrites the operator home, as given (made absolute)
+  and as resolved, in every string of its JSON body and in every response
+  header: an occurrence not preceded by a name character or separator and
+  not followed by a name character becomes the path relative to the home.
+  A body that is not JSON is not sent. The fields that carry what a
+  supplier sent are served as received: a fetch's `content`, `url` and
+  `next` and its `declarations.robots` `requested_url`, `robots_url` and
+  `final_url`, and a search result's `url`, `title` and `text` and a
+  refused result's `url`. A page that quotes the operator home reaches the
+  tenant as sent and still matches its `content_hash`. Every other string
+  is rewritten, including `declarations.robots.explanation`, which quotes
+  the asked URL. An
+  internal corpus kept under the home is served by its full `file://` URLs.
+  The service's standard error names the token file by its full path
+  ([`docs/contracts/session-evidence.md`](session-evidence.md) §Source
+  declarations).
 - `initialize` without `Mcp-Session-Id` mints a session,
   `hosted-<milliseconds>-<128 random bits in hex>`, returned in that
   header and bound to the bearer that opened it. `initialize`,
@@ -87,8 +142,8 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
   |---|---|
   | the path names a served host word | `404`, naming the endpoints |
   | the method is `POST` or `DELETE` | `405` with `Allow: POST, DELETE` |
-  | `Origin`, when present, is the edge's origin or one the operator listed | `403` |
-  | a `Bearer` token is present and verifies (§The bearer token) | `401` with `WWW-Authenticate` naming the resource metadata and the check that failed |
+  | `Origin`, when present, is the edge's origin or one the operator listed | `403`, quoting the header only when it is an origin (scheme and authority, no path) |
+  | a `Bearer` token is present and verifies (§The bearer token) | `401` with `WWW-Authenticate` naming the resource metadata and the check that failed; a check before the signature quotes no value from the token |
   | `MCP-Protocol-Version`, when present, is `2025-06-18` or `2025-11-25` | `400` naming the revisions served |
   | a request other than `initialize` names a session in `Mcp-Session-Id` | `400` |
   | the session is known, not ended, opened by this bearer on this endpoint | `404` with one wording for all four, so no session's existence is disclosed |
@@ -115,7 +170,8 @@ acquisition succeeds; that configuration is not verified. The Microsoft 365
 Copilot verification (§6) used top-level policy with no principal bindings or
 scopes. The service refuses to start
 without that file, unenrolled, under local deployment mode, or while
-another process holds `~/.commonmeasure/hosted-service.lock`, and it holds
+another process holds `~/.commonmeasure/hosted-service.lock` (created
+readable by the owner only), and it holds
 the private-address floor whatever the policy says: `allow_private_hosts`
 and `record_internal_prefixes`
 ([`docs/contracts/source-policy.md`](source-policy.md) §Fields) admit no loopback,
@@ -125,8 +181,10 @@ it. On its interval it ends idle sessions, refreshes managed policy, runs the
 relay ([`docs/contracts/policy-envelope.md`](policy-envelope.md) §Cadence
 and staleness) and refetches the issuer's keys. `commonmeasure doctor` and
 `commonmeasure status` print the service line: not configured, configured
-and not running, or running with the lock held, with the origin, the
-endpoints and the interval. `commonmeasure hosted serve --listen <addr>
+and not running, running with the lock held, or configured with whether it
+is running unknown, with the reason, where the lock file cannot be opened
+(as for another user, since the service creates it owner-only), with the
+origin, the endpoints and the interval. `commonmeasure hosted serve --listen <addr>
 --origin <origin> [--allow-origin <origin>]... [--host <word>]...` is the
 command-line form: the same transport, the floor left to the policy, no
 lock and no interval work.
@@ -156,7 +214,11 @@ not checked. Keys are read from the JWKS at the `jwks_uri` the issuer's
 refetched for an unknown `kid` at most once a minute and, under `hosted
 service`, once per interval. A key the hub withdraws therefore verifies
 until the next refetch; no revocation list is read, and no request is made
-to the hub while a crossing is ruled on.
+to the hub while a crossing is ruled on. The cache file is replaced whole
+after each fetch. A cache that cannot be written is logged on standard
+error (`issuer keys held in memory only`) and verification continues under
+the keys just fetched; the next process starts from the earlier cache, so a
+key withdrawn since verifies there until its first refetch.
 
 An **edge token** is issued by the edge itself for a host with no OAuth
 (the Copilot cloud agent): `commonmeasure hosted token issue <label>
@@ -167,7 +229,16 @@ on that endpoint alone, and a presentation elsewhere is refused naming the
 binding; without it the token is accepted on every endpoint. `revoke
 <label>` refuses the token at its next request, with no restart, and a
 label is issued once. `list` prints each label, its issue time, its
-standing and its binding.
+standing and its binding. `issue` and `revoke` hold `hosted-tokens.lock`
+beside the file (created readable by the owner only) while they read and
+rewrite it, so an `issue` in another
+process cannot write back a revoked token as standing; one that waits more
+than two seconds for the lock is refused and changes nothing. Each writes
+the file whole: a temporary file readable by the owner only from its
+creation, renamed over the old one, then the directory synced on Unix, so a
+reader sees one version or the other and a `revoke` that returned survives
+a crash. A write that fails leaves the file as it was and no temporary file
+beside it.
 
 Under `observe` mode the mediated tools record everything and refuse
 nothing; that is the state with no policy file
@@ -202,8 +273,10 @@ The binary writes, checks and removes its own registration with a host
 Before the per-host lines, `doctor` prints the relay's delivery state for the
 operator home: queued, dead and delivered batches; the last delivery from
 `relay/receipts.json` with its age (`last delivery: 2026-09-16T10:00:00.000Z,
-6d 2h ago`, `none recorded`, or why it is unknown), naming the receiver only
-where it is not the configured one the egress lines already name; and whether
+6d 2h ago`, `none recorded`, or why it is unknown), naming the receiver, by
+its origin alone, only where it does not reach the configured one the egress
+lines already name ([telemetry projection §One receiver](telemetry-projection.md#one-receiver));
+and whether
 the relay runs without a person. That last line is `at each Claude Code
 session end` only where `relay.json` names a receiver, the marker file
 `relay/manual` is absent, and a Claude Code registration that fires the

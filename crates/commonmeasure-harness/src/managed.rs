@@ -175,9 +175,14 @@ pub struct Signer {
 /// names, hosts. It travels under TLS, except to a loopback origin, which
 /// stays on the machine. The rule is applied when a deployment is read and
 /// when `connect --managed` pins one, so a URL the runtime would refuse at
-/// synchronisation time is never written.
+/// synchronisation time is never written. The refusal names the URL by its
+/// origin: a hand-written `policy_url` can carry credentials, and the
+/// refusal is recorded as a `policy_sync` reason. A value that does not
+/// parse has no origin and is refused with the parser's reason, which
+/// quotes no part of it.
 pub fn policy_url_accepted(policy_url: &str) -> Result<(), String> {
     match url::Url::parse(policy_url) {
+        Err(parse_error) => Err(format!("policy_url is not a URL: {parse_error}")),
         Ok(url) if url.scheme() == "https" => Ok(()),
         Ok(url)
             if url.scheme() == "http"
@@ -189,7 +194,8 @@ pub fn policy_url_accepted(policy_url: &str) -> Result<(), String> {
             Ok(())
         }
         _ => Err(format!(
-            "policy_url {policy_url:?} must be an https URL, or http to a loopback origin"
+            "policy_url{} must be an https URL, or http to a loopback origin",
+            crate::enrolment::at_hub_origin(policy_url)
         )),
     }
 }
@@ -234,7 +240,11 @@ impl Deployment {
                 ));
             }
             if let Err(reason) = policy_url_accepted(policy_url) {
-                return Err(format!("{}: {reason}", source.display()));
+                return Err(format!(
+                    "{}: {reason}; correct it by hand, or run `commonmeasure disconnect`, then \
+                     `commonmeasure connect --managed` to pin the hub's",
+                    source.display()
+                ));
             }
             if organisation.is_empty() {
                 return Err(format!("{}: organisation is empty", source.display()));
@@ -679,6 +689,9 @@ pub fn sync_within(
             Deployment::path(home).display()
         ));
     };
+    if let Some(record) = crate::EnrolmentRecord::load(home)? {
+        crate::enrolment::hub_url_accepted(&record.hub)?;
+    }
     let now = clock();
     let at = now.to_rfc3339_opts(SecondsFormat::Millis, true);
 
@@ -990,23 +1003,41 @@ pub fn sync_within(
 /// exchange. The standard resolver has no timeout of its own, so it runs on
 /// a thread that is left behind if it has not answered in time; a resolver
 /// that does not answer within the budget is the hub not reached, recorded
-/// like any other unreachable outcome.
+/// like any other unreachable outcome. Errors name the policy URL by its
+/// origin, since it can carry credentials; the transport's own errors name
+/// only the host or the authority of a URL that has already parsed.
 fn send_within(
     url: &str,
     request: commonmeasure_http::Request,
     budget: Duration,
 ) -> Result<commonmeasure_http::Response, String> {
+    send_resolving_within(url, request, budget, commonmeasure_http::resolve)
+}
+
+/// [`send_within`] with the resolver passed in, so a test can hold one past
+/// the budget without a name lookup leaving the machine.
+fn send_resolving_within<E>(
+    url: &str,
+    request: commonmeasure_http::Request,
+    budget: Duration,
+    resolve: impl FnOnce(&str) -> Result<Vec<std::net::SocketAddr>, E> + Send + 'static,
+) -> Result<commonmeasure_http::Response, String>
+where
+    E: std::fmt::Display + Send + 'static,
+{
     let started = std::time::Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     let target = url.to_owned();
     std::thread::spawn(move || {
-        let _ = tx.send(commonmeasure_http::resolve(&target));
+        let _ = tx.send(resolve(&target));
     });
     let addresses = match rx.recv_timeout(budget) {
         Ok(resolved) => resolved.map_err(|error| format!("{error:#}"))?,
         Err(_) => {
             return Err(format!(
-                "name resolution for {url} did not complete within {} s: timed out",
+                "name resolution for {} did not complete within {} s: timed out",
+                crate::relay_config::receiver_origin(url)
+                    .unwrap_or_else(|| "the policy URL".to_owned()),
                 budget.as_secs_f32()
             ));
         }
@@ -1466,6 +1497,57 @@ mod tests {
         )
         .unwrap();
         assert!(Deployment::read(home.path()).is_ok());
+    }
+
+    /// A `policy_url` can carry userinfo (written by hand, or built from a
+    /// 0.4.1 hub URL), in either spelling the parser accepts. The reasons
+    /// below are recorded in the session log, the timeout in the state file
+    /// too, and the console serves them, so they name the policy URL by its
+    /// origin.
+    #[test]
+    fn a_recorded_reason_names_the_policy_url_by_its_origin() {
+        let leaks = |text: &str| text.contains("PLANTED") || text.contains("op:");
+        for url in [
+            "https://op:ak_PLANTED@hub.example/api/v1/policy/desired",
+            "https:/op:ak_PLANTED@hub.example/api/v1/policy/desired",
+        ] {
+            let error = send_resolving_within(
+                url,
+                commonmeasure_http::Request::get("/"),
+                Duration::from_millis(20),
+                |_| -> Result<Vec<std::net::SocketAddr>, String> {
+                    std::thread::sleep(Duration::from_secs(2));
+                    Err("not asked".to_owned())
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("did not complete within"), "{error}");
+            assert!(error.contains("https://hub.example "), "{error}");
+            assert!(!leaks(&error), "{error}");
+        }
+        for url in [
+            "http://op:ak_PLANTED@hub.example/api/v1/policy/desired",
+            "http:/op:ak_PLANTED@hub.example/api/v1/policy/desired",
+        ] {
+            let error = policy_url_accepted(url).unwrap_err();
+            assert!(error.contains("http://hub.example"), "{error}");
+            assert!(!leaks(&error), "{error}");
+        }
+        // A value that does not parse has no origin and is named by no part
+        // of itself.
+        let error = policy_url_accepted("https://op:ak_PLANTED@[hub.example/policy").unwrap_err();
+        assert!(!leaks(&error), "{error}");
+    }
+
+    /// A `policy_url` that does not parse is refused with the parser's
+    /// reason, which quotes no part of the value, so the operator can see
+    /// the mistake without the value being recorded.
+    #[test]
+    fn a_policy_url_that_does_not_parse_is_refused_with_the_parsers_reason() {
+        let error =
+            policy_url_accepted("https://op:ak_PLANTED@hub.example:99999/api/v1/policy/desired")
+                .unwrap_err();
+        assert_eq!(error, "policy_url is not a URL: invalid port number");
     }
 
     #[test]

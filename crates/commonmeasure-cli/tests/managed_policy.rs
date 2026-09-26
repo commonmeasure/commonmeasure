@@ -794,10 +794,8 @@ fn the_printed_pre_image_recomputes_to_the_recorded_identity() {
 #[test]
 fn a_hub_that_accepts_and_never_answers_costs_a_session_start_its_budget_and_nothing_else() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let policy_url = format!(
-        "http://{}/api/v1/policy/desired",
-        listener.local_addr().expect("address")
-    );
+    let hub_url = format!("http://{}", listener.local_addr().expect("address"));
+    let policy_url = format!("{hub_url}/api/v1/policy/desired");
     // Accepted connections are held open, so the client waits rather than
     // being reset.
     let held: Arc<Mutex<Vec<std::net::TcpStream>>> = Arc::new(Mutex::new(Vec::new()));
@@ -819,7 +817,7 @@ fn a_hub_that_accepts_and_never_answers_costs_a_session_start_its_budget_and_not
     write_deployment(home.path(), &signer, &policy_url);
     webbotauth::enrol(
         home.path(),
-        "http://hub.example",
+        &hub_url,
         "https://hub.example",
         &mut directory.lock().expect("lock"),
     );
@@ -885,6 +883,58 @@ fn a_hub_that_accepts_and_never_answers_costs_a_session_start_its_budget_and_not
     assert_eq!(sync["payload"]["outcome"], "unreachable");
     assert_eq!(policy_mode(home.path()), "strict", "nothing relaxed");
     drop(held);
+}
+
+/// A deployment whose `policy_url` carries userinfo and is refused (plain
+/// http off the machine), in both spellings the parser accepts. The refusal
+/// is the session record's `reason`, which the console serves, so it names
+/// the policy URL by its origin.
+#[test]
+fn a_refused_policy_url_is_recorded_by_its_origin() {
+    let signer = Signer::new("hub-policy-1");
+    for (session, policy_url) in [
+        (
+            "refused-slashes",
+            "http://op:ak_PLANTED@hub.example/api/v1/policy/desired",
+        ),
+        (
+            "refused-slashless",
+            "http:/op:ak_PLANTED@hub.example/api/v1/policy/desired",
+        ),
+    ] {
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        write_deployment(home.path(), &signer, policy_url);
+        let mut child = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["hook", "session-start"])
+            .env("COMMONMEASURE_HOME", home.path())
+            .current_dir(workspace.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the hook starts");
+        writeln!(
+            child.stdin.as_mut().expect("stdin"),
+            "{}",
+            json!({"session_id": session, "hook_event_name": "SessionStart",
+                   "source": "startup", "cwd": workspace.path()})
+        )
+        .expect("write");
+        let hook = child.wait_with_output().expect("wait");
+        assert!(hook.status.success());
+        let sync = session_records(home.path(), session)
+            .into_iter()
+            .find(|record| record["event"] == "policy_sync")
+            .expect("the refusal is recorded");
+        assert_eq!(sync["payload"]["outcome"], "unavailable", "{sync}");
+        let reason = sync["payload"]["reason"].as_str().expect("reason");
+        assert!(reason.contains("http://hub.example"), "{reason}");
+        assert!(
+            !reason.contains("PLANTED") && !reason.contains("op:"),
+            "{reason}"
+        );
+    }
 }
 
 /// Drive the signed transport and policy save with independently pinned

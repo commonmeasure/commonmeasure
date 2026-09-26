@@ -583,6 +583,7 @@ pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Di
             expires_at: chrono::DateTime::from_timestamp(proof.expires, 0).map(timestamp),
             listed: None,
             unlisted_reason: None,
+            concluded: None,
         }),
         failure: None,
     }

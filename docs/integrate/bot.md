@@ -37,6 +37,32 @@ A `robots.txt` that answers `429` or `5xx`, or cannot be reached, is
 treated as RFC 9309 §2.3.1 says: the last copy the edge holds governs, and
 with none held the edge refuses the page as a complete disallow.
 
+The same rules govern the requests the edge makes on its own account. It
+requests `/.well-known/content-telemetry.json`, and a licence that only a
+page's `Link` header names, only where `robots.txt` at that URL's origin
+allows it for `CommonMeasureBot`. It follows a redirect from either only
+where `robots.txt` at the target's origin allows the target, and only in
+the target host's `Crawl-delay` turn; where that turn does not fit the
+fetch, it does not follow the redirect. A licence that a `License:` line in
+your `robots.txt` names at the origin of the page being fetched is requested
+without that check, because your file could have refused it; a redirect from
+it is still checked. A licence your `License:` line names at any other
+origin, including the one your `robots.txt` redirects to (from `http` to
+`https`, say), is checked against `robots.txt` at that origin; where that
+file refuses it, the edge treats your page as having no readable licence and
+does not fetch it, unless the operator has recorded its own assessment of
+your terms.
+
+The edge asks for the manifest at the page's own host. Where that answers
+404, it asks once more, at the registrable domain (`example.com` for
+`news.example.com`), after reading that domain's `robots.txt`, and asks no
+other host. That second request never goes to a public suffix such as
+`co.uk` or `pages.dev`: for a page on `x.pages.dev` or `bbc.co.uk` the
+manifest is asked only at the page's own host. A public suffix host is
+asked for its manifest only when the page is on that host, or when a
+redirect you serve leads there, and then only where its own `robots.txt`
+allows it.
+
 ## 2. What a signed request carries
 
 | Header | Value |
@@ -172,7 +198,13 @@ key also drops out when the edge's directory proof lapses. A verifier that
 cached the directory can accept a revoked key for at most its cache age,
 one hour. The edge learns of an owner's revocation at its next relay run
 and then stops signing; until then its requests fail verification once
-directory copies expire.
+directory copies expire. The hub's own `401` on a standing check or
+directory-proof upload also records revocation and stops signing, including
+after member removal or organisation closure; a `401` written by something
+in front of the hub, such as an ingress page, does not. The edge retains the hub's refusal text.
+A session already open refuses each signature while the edge's record says
+revoked or cannot be read, and its fetches fail rather than go unsigned
+([bot identity §Revocation](../contracts/bot-identity.md#revocation)).
 
 ## 6. Raise a complaint about a key
 

@@ -94,20 +94,6 @@ fn filesystem_id(_path: &Path) -> Result<String, String> {
     Err("this platform cannot bind a directory to an authenticated OS user".into())
 }
 
-fn private_replace(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    crate::identity::write_private(&temp, bytes)?;
-    if let Err(error) = std::fs::rename(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(error.to_string());
-    }
-    #[cfg(unix)]
-    std::fs::File::open(path.parent().ok_or("missing parent")?)
-        .and_then(|file| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 fn binding(root: &Path, user: u32, git: &Option<PathBuf>, nonce: &str) -> String {
     canonical_digest(
         &json!({"schema": "commonmeasure-directory-binding/v1", "nonce": nonce, "filesystem_id": filesystem_id(root).ok(), "root": root, "os_user": user, "git_common": git}),
@@ -175,11 +161,11 @@ impl Registry {
         }
         // Persist the mode before any directory can authorise reporting. This
         // marker survives registry loss and every supported opt-out operation.
-        private_replace(
+        crate::declaration::replace_private(
             &home.join("directory-selection.json"),
             b"{\"schema\":\"commonmeasure-directory-selection/v1\"}\n",
         )?;
-        private_replace(
+        crate::declaration::replace_private(
             &home.join("directories.json"),
             &serde_json::to_vec_pretty(&registry).map_err(|e| e.to_string())?,
         )?;
@@ -324,7 +310,7 @@ pub fn verify(home: &Path, value: &Value, require_fresh: bool) -> Result<(), Str
     let edge = EnrolmentRecord::load(home)?.ok_or("connect to a named hub first")?;
     let payload = &value["payload"];
     if signer.algorithm != "ed25519"
-        || edge.revoked_at.is_some()
+        || edge.is_revoked()
         || edge.organization.id != organisation
         || payload["schema"] != FORMAT
         || payload["organisation"] != organisation
@@ -386,7 +372,7 @@ pub fn accept(home: &Path, value: &Value) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
     }
-    private_replace(
+    crate::declaration::replace_private(
         &path,
         &serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?,
     )
@@ -397,11 +383,11 @@ pub fn accept(home: &Path, value: &Value) -> Result<(), String> {
 fn hub_request(home: &Path, path: &str, body: Option<Value>) -> Result<Value, String> {
     let edge = EnrolmentRecord::load(home)?
         .ok_or("not connected: run commonmeasure connect <named-hub> --token <token> --managed")?;
-    if edge.revoked_at.is_some() {
+    if edge.is_revoked() {
         return Err("edge enrolment is revoked".into());
     }
     let url = format!("{}{path}", edge.hub.trim_end_matches('/'));
-    crate::managed::policy_url_accepted(&url)?;
+    crate::enrolment::hub_url_accepted(&edge.hub)?;
     let key = edge.hub_ingest_key(home)?.ok_or(
         "connected ingest credential is missing: relay.json holds no key for the enrolled hub",
     )?;
@@ -456,13 +442,24 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
     let registry = Registry::read(home)?;
     let project = registry.as_ref().and_then(|r| r.matching(cwd));
     let enrolment = EnrolmentRecord::load(home)?;
-    let management = crate::managed::management(home, Utc::now());
-    let receiver = match std::fs::read(home.join("relay.json")) {
-        Ok(bytes) => {
-            serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string())?["receiver"].clone()
+    // The hub by its origin alone: a hub URL stored by 0.4.1's `connect` can
+    // carry credentials, and status reaches MCP `context_enrol`. The whole
+    // URL stays in `enrolment.json`.
+    let edge = match &enrolment {
+        Some(record) => {
+            let mut edge = serde_json::to_value(record).map_err(|error| error.to_string())?;
+            edge["hub"] = json!(crate::relay_config::receiver_origin(&record.hub));
+            edge
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Err(e) => return Err(e.to_string()),
+        None => Value::Null,
+    };
+    let management = crate::managed::management(home, Utc::now());
+    // Read with the relay's parser: a file the relay refuses names no
+    // receiver here either, and its error is shown beside the local
+    // permission rather than in place of the whole status.
+    let (receiver, relay_config_error) = match crate::relay_config::RelayConfig::load(home) {
+        Ok(config) => (json!(config.map(|config| config.receiver)), None),
+        Err(error) => (Value::Null, Some(error)),
     };
     let mut witnessed = 0usize;
     for path in crate::SessionLog::list(home).map_err(|e| e.to_string())? {
@@ -488,6 +485,7 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
     let reporting = match project {
         None => "not_enrolled",
         Some(p) if !p.reporting => "local_only",
+        Some(_) if relay_config_error.is_some() => "relay_config_invalid",
         Some(_) if receiver.is_null() => "receiver_missing",
         Some(_) if resolved.allows_telemetry_egress() => "permitted",
         Some(_) if resolved.describe()["fail_closed"].is_string() => "policy_refused",
@@ -507,10 +505,10 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
     };
     Ok(json!({
         "directory": root, "coverage": "this canonical directory and descendants; related worktrees require separate enrolment",
-        "project": project, "edge": enrolment,
+        "project": project, "edge": edge,
         "deployment_mode": management.mode, "applied_revision": management.applied_revision,
         "policy_digest": document.digest(), "policy": resolved.describe(),
-        "reporting": reporting, "receiver": receiver, "approvals": approvals,
+        "reporting": reporting, "receiver": receiver, "relay_config_error": relay_config_error, "approvals": approvals,
         "historical_evidence": "reporting includes existing eligible witnessed evidence under this root; previously delivered evidence is not recalled",
         "first_evidence": {"state": if witnessed == 0 { "no_witnessed_crossing" } else { "witnessed_locally" }, "witnessed_crossings": witnessed, "delivery": "run commonmeasure relay --dry-run, then commonmeasure relay; delivery totals distinguish eligible and accepted events"},
         "connect": if enrolment.is_none() { Some("commonmeasure connect <named-hub> --token <token> --managed") } else { None },
@@ -572,6 +570,50 @@ mod tests {
         ));
         value
     }
+    // EGR-130. Catches: a private record written into an existing file in
+    // place, which keeps that file's wider mode; a private record written
+    // under the umask; a temporary left behind.
+    #[cfg(unix)]
+    #[test]
+    fn private_records_replace_a_wider_file_with_an_owner_only_one() {
+        crate::test_umask::under_umask_022(
+            "directory::tests::private_records_replace_a_wider_file_with_an_owner_only_one",
+            private_records_replace_a_wider_file_with_an_owner_only_one_body,
+        );
+    }
+    #[cfg(unix)]
+    fn private_records_replace_a_wider_file_with_an_owner_only_one_body() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (home, key, project) = home();
+        let widen = |name: &str| {
+            std::fs::set_permissions(
+                home.path().join(name),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        };
+        let approvals = json!([{"project_id":project.id,"binding":project.binding}]);
+        accept(home.path(), &signed(&key, 1, approvals.clone(), false)).unwrap();
+        let names = ["directories.json", "directory-selection.json", FILE];
+        names.into_iter().for_each(widen);
+
+        Registry::enrol(home.path(), &project.root, "Project", true).unwrap();
+        accept(home.path(), &signed(&key, 2, approvals, false)).unwrap();
+
+        for name in names {
+            let mode = std::fs::metadata(home.path().join(name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{name}");
+        }
+        let left: Vec<_> = std::fs::read_dir(home.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
     #[test]
     fn signed_approvals_bind_edge_org_project_and_preserve_monotonic_revocation() {
         let (home, key, project) = home();
@@ -597,7 +639,7 @@ mod tests {
         );
         assert!(accept(home.path(), &signed(&key, 3, approvals.clone(), true)).is_err());
         let expired = signed(&key, 3, approvals, true);
-        private_replace(
+        crate::declaration::replace_private(
             &home.path().join(FILE),
             &serde_json::to_vec(&expired).unwrap(),
         )
@@ -668,6 +710,125 @@ mod tests {
         assert!(refusal.contains("HTTP 503"), "{refusal}");
         hub.stop();
         assert_eq!(*seen.lock().unwrap(), vec![Some("hub-key".to_owned())]);
+    }
+    // Status reads `relay.json` as the relay does. A supplier list the relay
+    // refuses shows the load error and no receiver, while the policy's own
+    // clearance for the directory is still reported.
+    #[test]
+    fn status_shows_a_relay_config_the_relay_refuses() {
+        let (home, _, project) = home();
+        // A local edge, whose own policy clears the directory.
+        std::fs::remove_file(home.path().join("deployment.json")).unwrap();
+        std::fs::write(
+            home.path().join("policy.json"),
+            json!({"scopes":[{"match":project.root,"engagement":"personal","allow_telemetry_egress":true}]})
+                .to_string(),
+        )
+        .unwrap();
+        let receiver = "https://receiver.example/v1";
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver":receiver,"suppliers":["ozone"]}).to_string(),
+        )
+        .unwrap();
+        let loaded = status(home.path(), &project.root).unwrap();
+        assert_eq!(loaded["reporting"], "permitted", "{loaded}");
+        assert_eq!(loaded["receiver"], receiver);
+        assert_eq!(loaded["relay_config_error"], Value::Null);
+
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver":receiver,"suppliers":"ozone"}).to_string(),
+        )
+        .unwrap();
+        let refused = status(home.path(), &project.root).unwrap();
+        assert_eq!(refused["reporting"], "relay_config_invalid", "{refused}");
+        assert_eq!(refused["receiver"], Value::Null);
+        let error = refused["relay_config_error"].as_str().unwrap();
+        assert!(error.contains("not a valid relay config"), "{error}");
+        assert!(error.contains("invalid type: string"), "{error}");
+        assert_eq!(refused["policy"]["allow_telemetry_egress"], true);
+
+        // A file that is not JSON at all is shown the same way, rather than
+        // failing the whole status.
+        std::fs::write(home.path().join("relay.json"), "{").unwrap();
+        let broken = status(home.path(), &project.root).unwrap();
+        assert_eq!(broken["reporting"], "relay_config_invalid", "{broken}");
+        assert_eq!(broken["receiver"], Value::Null);
+        let error = broken["relay_config_error"].as_str().unwrap();
+        assert!(error.contains("not a valid relay config"), "{error}");
+        assert!(error.contains("EOF while parsing"), "{error}");
+        assert_eq!(broken["policy"]["allow_telemetry_egress"], true);
+
+        // A refused receiver is named by its origin alone: a key held in its
+        // credentials, query or path is in neither the error nor any other
+        // field, and the status names no receiver for the refused file.
+        for (planted, fault, _) in crate::relay_config::PLANTED_RECEIVERS {
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver":planted,"api_key":"ak"}).to_string(),
+            )
+            .unwrap();
+            let refused = status(home.path(), &project.root).unwrap();
+            assert_eq!(refused["reporting"], "relay_config_invalid", "{refused}");
+            assert_eq!(refused["receiver"], Value::Null);
+            let error = refused["relay_config_error"].as_str().unwrap();
+            assert!(error.contains(fault), "{planted}: {error}");
+            assert!(!refused.to_string().contains("ak_PLANTED"), "{refused}");
+        }
+    }
+    // A home 0.4.1 enrolled with credentials in a cleartext remote hub URL,
+    // which its `connect` accepted. Every hub request is refused before it
+    // is sent, and the refusal, which MCP `context_enrol` returns for `sync`
+    // and `enrol`, names the hub by origin.
+    #[test]
+    fn a_refused_hub_request_names_the_hub_by_its_origin_alone() {
+        let (home, _, project) = home();
+        let mut enrolment: Value =
+            serde_json::from_slice(&std::fs::read(home.path().join("enrolment.json")).unwrap())
+                .unwrap();
+        enrolment["hub"] = json!("http://user:ak_PLANTED@hub.remote.example");
+        std::fs::write(home.path().join("enrolment.json"), enrolment.to_string()).unwrap();
+        for refusal in [
+            sync(home.path()).unwrap_err(),
+            request(home.path(), &project).unwrap_err(),
+        ] {
+            assert!(
+                refusal.contains("the enrolled hub URL at http://hub.remote.example is neither"),
+                "{refusal}"
+            );
+            assert!(!refusal.contains("ak_PLANTED"), "{refusal}");
+        }
+    }
+    // Status, which MCP `context_enrol` returns for every action, names the
+    // enrolled hub by its origin; `enrolment.json` keeps the URL as stored.
+    #[test]
+    fn status_names_the_enrolled_hub_by_its_origin_alone() {
+        let (home, _, project) = home();
+        let path = home.path().join("enrolment.json");
+        let mut enrolment: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for (hub, origin) in [
+            (
+                "https://ops:ak_PLANTED@hub.example/base",
+                json!("https://hub.example"),
+            ),
+            (
+                "https://hub.example/t?api_key=ak_PLANTED",
+                json!("https://hub.example"),
+            ),
+            (
+                "http://user:ak_PLANTED@hub.remote.example",
+                json!("http://hub.remote.example"),
+            ),
+            ("hub.example/ak_PLANTED", Value::Null),
+        ] {
+            enrolment["hub"] = json!(hub);
+            std::fs::write(&path, enrolment.to_string()).unwrap();
+            let status = status(home.path(), &project.root).unwrap();
+            assert_eq!(status["edge"]["hub"], origin, "{hub}: {status}");
+            assert_eq!(status["edge"]["key_id"], enrolment["key_id"], "{status}");
+            assert!(!status.to_string().contains("ak_PLANTED"), "{status}");
+        }
     }
     #[test]
     fn another_local_binding_or_recreated_folder_does_not_inherit_an_approval() {

@@ -53,7 +53,12 @@ An enrolled edge signs, with the tag `web-bot-auth`:
 - each mediated page fetch, and each redirect hop, signed again for its own
   authority;
 - the `robots.txt`, licence and Content Telemetry manifest probes a fetch
-  makes;
+  makes. Each probe other than `robots.txt`, and each redirect from one, is
+  ruled by `robots.txt` at its own origin before it is sent, except a
+  licence a `License:` line names at the origin of the page being fetched;
+  the manifest probe after a 404 asks the registrable domain once, and that
+  fallback never chooses a public suffix
+  ([session evidence](session-evidence.md#manifest-discovery));
 - the managed policy fetch from its hub
   ([`docs/contracts/policy-envelope.md`](policy-envelope.md));
 - the supplier credential release request
@@ -223,14 +228,58 @@ it signs nothing and `edge_identity` reads `revoked`. Until that run it goes on
 signing with the revoked key, and verifiers refuse those requests once their
 copy of the directory has expired.
 
+Removing a member or closing the organisation also revokes the ingest key.
+A `401` in the hub's error shape for the enrolled ingest key on the
+standing check, whether at relay or start-time proof renewal, records
+revocation with the hub's text and stops signing. A `401` in that shape on
+proof upload does the same. A `401` in any other shape, such as an ingress
+page, is reported as the hub not reached and, as when the hub cannot be
+reached, changes no standing. `edge_identity` and
+`status` say revoked; the edge records when it learnt the refusal and leaves
+the hub's revocation time unknown. A `401` for another key, such as one
+given with `relay --api-key`, changes nothing, and a `200` for the key with
+no revocation, requested after the `401` was learnt, withdraws a revocation
+learnt only from a `401`
+([enrolment §Standing and revocation](enrolment.md#standing-and-revocation)).
+Transport failures and 5xx leave the recorded standing unchanged.
+
+"Stops signing" covers sessions already open. An MCP server or a hosted
+service session loads the key when it starts, and reads `enrolment.json`
+again before each signature, whether for a mediated request, a signed
+instance request or a directory proof:
+
+- While the record says revoked, or cannot be read, the session refuses that
+  signature and the fetch fails. It never falls back to an unsigned request.
+  A record that is gone, or that names another key, is refused the same way.
+- The refusal lasts only while that state holds. A read that fails once
+  refuses that signature only; the next signature reads the record again. A
+  withdrawn 401-only revocation
+  ([enrolment §Standing and revocation](enrolment.md#standing-and-revocation))
+  lets the same session sign again. A revocation the hub stated is permanent.
+- The MCP server and the hosted service return the refusal as a tool error
+  and do not retry it.
+- A new session reads the record when it starts, and what it does depends
+  on the record:
+  - missing or revoked: the session runs unsigned;
+  - a new enrolment that `commonmeasure connect` wrote, with its key: the
+    session signs under the new key;
+  - a record that cannot be read: the session runs unsigned, with the read
+    error as its reason ([§Signed requests](#signed-requests)). Relay
+    runs, standing checks, directory-proof renewal, instance registration,
+    supplier credentials and managed policy sync load the identity and fail
+    with that error. `connect` and `disconnect` read the record first and
+    refuse too, so neither repairs it. The operator repairs the file or
+    moves it aside; with it moved aside, `connect` enrols a new key.
+    `disconnect` cannot revoke the old key or its ingest key without the
+    record, so an owner revokes them on the hub's API keys page.
+
+The edge's bound is therefore the time until one of its processes records the
+revocation: the next relay run, or the next session or server start that
+asks for standing. The hosted service's interval relay runs every 300
+seconds by default.
+
 Known gaps:
 
-- Removing a member or closing the organisation also revokes the edge's ingest
-  key, so the standing request is refused (`401`). The relay run reports that
-  the hub refused its ingest key, and a start-time proof refresh records it as
-  the listing's failure; neither records the revocation, and the edge goes on
-  signing, with `edge_identity` reading `enrolled` and a stale `listed_until`.
-  Its requests fail verification once directories expire.
 - If the hub's identity origin changes, the edge does not sign a proof for the
   new origin, because it enrolled under the old one. The edge must disconnect
   and connect again to be listed.

@@ -902,7 +902,8 @@ fn action_decisions_never_project_as_telemetry() {
     );
     assert_eq!(projected.event_positions, without_action.event_positions);
     assert_eq!(
-        projected.refused, 0,
+        projected.refused,
+        Some(0),
         "an action refusal is not an acquisition refusal"
     );
     for batch in &projected.batches {

@@ -155,6 +155,7 @@ fn envelopes_from(body: &Value, endpoint: &str) -> Result<Vec<ContextEnvelope>, 
                     provenance: "supplier-declared: date on the SERPdive search result".to_owned(),
                 }),
             promoted: &["url", "title", "content", "date"],
+            ..Default::default()
         })
     }))
 }

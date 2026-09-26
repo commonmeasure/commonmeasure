@@ -147,7 +147,7 @@ pub fn start(options: ServeOptions) -> Result<commonmeasure_http::ServerHandle> 
 
 /// The addresses `listen` resolves to that are not loopback. Empty means the
 /// console will only be reachable from this machine.
-fn exposed_addresses(listen: &str) -> Result<Vec<SocketAddr>> {
+pub fn exposed_addresses(listen: &str) -> Result<Vec<SocketAddr>> {
     use std::net::ToSocketAddrs;
     let resolved: Vec<SocketAddr> = listen
         .to_socket_addrs()
@@ -406,6 +406,16 @@ fn route(
             forecast_route(state, home, sessions_dir, request)
         }
         "/api/providers" => json_value(200, &json!(providers)),
+        // Read by `commonmeasure service status` to tell a console still
+        // running an old binary from one running the binary on PATH.
+        "/api/version" => json_value(
+            200,
+            &json!({
+                "product": "commonmeasure",
+                "version": env!("CARGO_PKG_VERSION"),
+                "pid": std::process::id(),
+            }),
+        ),
         "/app/budget" => app_page(
             state,
             home,

@@ -9,8 +9,9 @@ Secure, safe, legal and transparent AI agent content usage.
 
 Common Measure applies your rules on sources, licences and spend to the
 content an AI agent reads. It records where each piece came from, its cost
-or an explicit unknown, and a hash of the text that entered the agent's
-context, and it measures whether that content helped.
+or an explicit unknown, hashes of the text extracted from what it fetched
+and of the part handed to the agent, and it measures whether that content
+helped.
 
 It is one binary that runs on your machine and registers with Claude Code,
 Codex, Pi, Claude Desktop, Cursor, the Copilot CLI, VS Code and Chrome. The

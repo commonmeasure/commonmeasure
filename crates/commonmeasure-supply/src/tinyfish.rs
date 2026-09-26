@@ -175,6 +175,7 @@ fn envelopes_from(
             // with the offered order unless the provider ever reorders),
             // `site_name`, and any news/academic extras.
             promoted: &["url", "title", "snippet", "date"],
+            ..Default::default()
         })
     }))
 }

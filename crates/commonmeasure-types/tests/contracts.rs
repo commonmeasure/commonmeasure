@@ -453,3 +453,48 @@ fn a_pattern_and_a_host_entry_are_normalised_alike() {
     assert_eq!(normalised_host("not a host"), "not a host");
     assert!(HostPattern::parse("not a host").is_err());
 }
+
+/// A whole URL is compared with its host in the same form and without
+/// credentials: every spelling of one resource serialises alike, and what
+/// names another resource does not.
+#[test]
+fn a_url_is_compared_with_its_host_normalised_and_nothing_else_widened() {
+    use commonmeasure_types::canonical_url;
+    let canonical = |raw: &str| canonical_url(&url::Url::parse(raw).unwrap()).to_string();
+    for spelling in [
+        "https://publisher.example/a?b=1",
+        "https://publisher.example./a?b=1",
+        "https://publisher.example../a?b=1",
+        "HTTPS://Publisher.EXAMPLE./a?b=1",
+        "https://publisher.example:443/a?b=1",
+        "https://publisher.example.:443/a?b=1",
+        "https://u:p@publisher.example/a?b=1",
+        "https://u@Publisher.example.:443/a?b=1",
+    ] {
+        assert_eq!(
+            canonical(spelling),
+            "https://publisher.example/a?b=1",
+            "{spelling}"
+        );
+    }
+    assert_eq!(
+        canonical("http://bänned.example./"),
+        "http://xn--bnned-gra.example/"
+    );
+    for (raw, kept) in [
+        ("http://publisher.example:80/", "http://publisher.example/"),
+        (
+            "http://publisher.example:443/",
+            "http://publisher.example:443/",
+        ),
+        (
+            "https://publisher.example.:8443/A",
+            "https://publisher.example:8443/A",
+        ),
+        ("http://127.0.0.1:8/x", "http://127.0.0.1:8/x"),
+        ("http://[::1]/x", "http://[::1]/x"),
+        ("file:///corp/kb/", "file:///corp/kb/"),
+    ] {
+        assert_eq!(canonical(raw), kept, "{raw}");
+    }
+}

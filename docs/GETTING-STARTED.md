@@ -8,9 +8,11 @@ section: get-started
 # Getting started: from the installer to your own evidence
 
 From the installer to an operator console showing the first crossing your
-own agent made. Only §8 needs a checkout or a toolchain. Every
-command was run against release 0.4.0 on macOS, from an empty home
-directory; quoted output is what it printed. Terms such as crossing, run,
+own agent made. Only §8 needs a checkout or a toolchain. The release
+downloads and version checks in §1 were run against release 0.4.1 on macOS
+(Apple silicon), from empty home directories. The remaining walkthrough
+commands and quoted output were checked on 0.4.0; the update and
+login-service instructions require 0.4.2. Terms such as crossing, run,
 admission and engagement are defined in [`docs/GLOSSARY.md`](GLOSSARY.md).
 
 - **Nothing needs configuring first.** With no credentials and no policy
@@ -44,9 +46,12 @@ Each release on GitHub holds:
 
 The installer needs `curl` and `sha256sum` or `shasum`, and no account or
 token. It downloads the binary for your platform, verifies it against
-`SHA256SUMS`, places it in `~/.local/bin`, checks that it reports the
-release's version, and prints the line to add when that directory is not on
-`PATH`. A binary that fails either check is removed.
+`SHA256SUMS` and places it in `~/.local/bin`, printing the line to add when
+that directory is not on `PATH`. The 0.4.1 installer checks the version after
+placement; a mismatch removes the installed binary. The 0.4.2 installer
+checks both checksum and version before placement, leaving an installed
+binary intact if either check fails. In 0.4.2, `commonmeasure update` runs
+the copy of this script compiled into the binary.
 
 ```sh
 curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh
@@ -72,15 +77,15 @@ commands that install it into Claude Code:
 
 ```sh
 curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs \
-  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.0/install.sh
-sh /tmp/commonmeasure-release/install.sh --tag v0.4.0 --plugin ~/commonmeasure-plugin
+  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/install.sh
+sh /tmp/commonmeasure-release/install.sh --tag v0.4.1 --plugin ~/commonmeasure-plugin
 ```
 
 To check a download by hand, fetch `SHA256SUMS` beside it:
 
 ```sh
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.0/SHA256SUMS
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.0/commonmeasure-darwin-arm64
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/SHA256SUMS
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.1/commonmeasure-darwin-arm64
 shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
@@ -92,7 +97,8 @@ The installer stops and says why when `curl` or a checksum tool is missing,
 the release does not exist, or the release has no binary for your platform;
 in the last case it lists the binaries the release holds.
 `COMMONMEASURE_RELEASE_URL` points it at a mirror with the same asset names
-and address shape.
+and address shape; a release build of `commonmeasure update` ignores it
+(Updating, below).
 
 The one-line form and the pinned form with `--plugin` have been run on macOS
 (Apple silicon). Each release is also installed by its own workflow in a
@@ -101,6 +107,156 @@ The installer's refusals are each driven against a loopback origin standing
 where the release stands (`crates/commonmeasure-cli/tests/installer.rs`).
 The Windows binary is built and checksummed by the release run; the
 installer has not been run on Windows.
+
+### Updating
+
+Requires 0.4.2. For 0.4.1, rerun the release installer above.
+
+```sh
+commonmeasure update --check        # the installed and latest versions; changes nothing
+commonmeasure update                # install the latest release over this binary
+commonmeasure update --tag vX.Y.Z   # a named release, older or newer
+```
+
+`update` runs the installer compiled into the binary, so the checks are the
+installer's: the checksum from the release's `SHA256SUMS` and the new
+binary's version, both before it replaces this one. A failure before the new
+binary is moved into place leaves this binary as it was. The installer can
+also fail after that, for instance when it cannot print its last message, so
+when it exits non-zero `update` compares the binary with the device, inode,
+size and SHA-256 it recorded before the installer ran, and says one of:
+
+- the binary is unchanged;
+- the binary was replaced, with the version the new binary reports. It is
+  asked only after `update` has tried to start the console service again,
+  whether or not that succeeded, and given 15 seconds and 4 KiB of output.
+  Past either, it and the processes it started in its process group are
+  stopped; a process that leaves that group is not stopped. Past either, or
+  when it exits non-zero, the version is not known and `update` prints the
+  command that shows it. A non-zero exit stops nothing it left running;
+- whether the binary was replaced is not known, because it could not be
+  read, or changed or was replaced while it was read, with the command that
+  shows its version.
+
+The version check’s five-second bound covers the wait for output and exit,
+not the system calls that spawn and reap the child or the whole `update`
+command.
+
+The comparison reads the binary twice, before and after the installer; it
+is not a snapshot. A process writing the binary at the same time can change
+it between or during those reads without being told apart from the
+installer, and nothing locks the binary against other writers.
+
+A failure restarting the console service is described below. It replaces the
+binary it was run as. On macOS it refuses when it was run through a symbolic
+link, which belongs to whatever installed it. On Linux it does not detect
+the link: the system reports the file the link points to, and `update`
+replaces that file. It contacts the release location only when run; nothing
+checks for updates in the background. macOS and Linux only.
+
+The first line `update` prints is the release origin. A release build always
+uses `https://github.com/commonmeasure/commonmeasure/releases`, ignores
+`COMMONMEASURE_RELEASE_URL` and passes that origin to the installer, so an
+inherited variable cannot redirect an update. A debug build honours the
+variable; the tests use it to serve a release from loopback. `install.sh`
+run by hand honours it in either case.
+
+The checksum shows that the binary matches the `SHA256SUMS` published beside
+it on the same origin. It does not show who published them: releases are not
+signed, and `update` trusts the release origin exactly as the installer run
+by hand does. Whoever can replace both files on the origin, or answer for it
+with a certificate this machine trusts, can make `update` run their binary,
+which it does when the installer checks the binary's version.
+
+Release tags have the form `vX.Y.Z`: three numbers, no suffix. When the tag
+the origin's `latest` points to has any other form, `update` and
+`update --check` exit non-zero and change nothing. `--tag` takes the same
+form and installs the named release even when its version is lower than
+this binary's.
+
+Before stopping anything or downloading release assets, `update` refuses
+while other processes of yours run the same binary file, and lists each
+one's pid, its executable, its subcommand (such as `mcp`) and its
+`COMMONMEASURE_HOME`, or `COMMONMEASURE_HOME unknown` when its environment
+cannot be read. macOS withholds the environment of a restricted process, so
+an empty one is reported as unknown rather than unset, as is an environment
+of zero bytes on Linux, and one with an empty entry followed by more entries
+that do not include `COMMONMEASURE_HOME`. On macOS, where the kernel's own
+strings follow the environment, it is also unknown when `COMMONMEASURE_HOME`
+appears only past where the environment was taken to end (`ARCHITECTURE.md`
+§What runs where). It prints no other argument or environment variable,
+since either can hold a credential. The console service's own process is
+left out only when launchd names the same pid before and after the check,
+the process is launchd's child, and it started before `update` first asked
+launchd. A process whose executable the system does not identify is listed
+by its process name when that name is `commonmeasure`: on macOS, a process
+that still runs a binary whose file has since been removed. Close them and
+run `update` again: quit the host app that started an MCP server, and stop
+`commonmeasure hosted service` and `commonmeasure relay`. It does not stop
+them itself and has no option to skip the check.
+
+Two other cases also refuse, with their own remedy:
+
+- On macOS, a process the system refuses to describe, whose owner and name
+  cannot be read either, is counted, since nothing shows it does not run the
+  binary. It is listed as not inspected, with the `ps` command that checks
+  it; run `update` again once it has exited.
+- When the console service restarts or stops while `update` checks it,
+  `update` cannot tell its process from another one running the binary. It
+  says the console restarted during the check; run `update` again.
+
+Looking up the latest release tag can precede this check. An empty or
+whitespace-only `COMMONMEASURE_HOME` is reported as `not set or empty`,
+as is an environment that does not set it; these use the default home.
+
+The check does not find:
+
+- processes running another copy of `commonmeasure` on the same Edge home;
+- a copy under another name whose executable the system does not identify,
+  such as one whose file has since been removed;
+- a process started after the check and before the new binary is moved into
+  place;
+- other users' processes.
+
+Those remain the operator's to stop (one release per Edge home,
+`ARCHITECTURE.md` §What runs where).
+
+A console service (§5) is handled as follows:
+
+- A loaded service running this binary is stopped before the installer runs,
+  and started again afterwards with the configuration in its plist: its
+  address, Edge home, log and working directory, whatever the shell running
+  `update` selects.
+- It is started again whenever it was stopped: on the new binary after a
+  successful install, and on whatever binary is then in place when the
+  installer fails. The message names which, as above. A replacement is
+  asked for its version only after this restart has been attempted, also
+  when it fails.
+- When it cannot be started again, `update` exits non-zero, says whether the
+  new binary was already moved into place and which version it is, and
+  prints the command that installs the service again with its own Edge home.
+- `update` refuses before stopping anything or downloading release assets,
+  and names the commands that remove or reinstall the service, when launchd
+  cannot be asked about the service, or the service is loaded and:
+  - its plist is missing or not in the form `service install` writes;
+  - its plist has been edited since `service install` wrote it, including
+    settings `update` does not read, such as `KeepAlive`, which starting it
+    again would overwrite;
+  - its plist differs from the job launchd loaded;
+  - launchd's report of the job's environment cannot be read, so its Edge
+    home is not known;
+  - launchd passes it `COMMONMEASURE_HOME` from the domain's environment
+    (`launchctl setenv`), which `service install` never does. The recovery
+    removes the domain variable first (`launchctl unsetenv
+    COMMONMEASURE_HOME`), then installs the service again with the Edge home
+    it runs with: its plist's own value when the plist sets one, since
+    launchd applies the job's environment over the inherited one, or else
+    the inherited value. When neither gives a home, such as an inherited
+    value that is empty and no value of its own, `update` names the values
+    it saw and, after removing the domain variable, asks you to choose the
+    home.
+- When the service cannot be stopped, nothing is installed.
+- A service running another binary is left running.
 
 ### Register with the host
 
@@ -498,6 +654,63 @@ reload. The door-walkthrough session is under **Record**, with its two
 refusals as refused cards carrying the reasons quoted above. Each section
 is described in [The console](CONSOLE.md).
 
+### Keep the console running (macOS)
+
+Requires 0.4.2.
+
+```sh
+commonmeasure service install console     # --listen 127.0.0.1:4173 by default
+commonmeasure service status
+commonmeasure service uninstall console
+```
+
+`install` writes a LaunchAgent to
+`~/Library/LaunchAgents/ai.commonmeasure.console.plist` that runs this binary's
+`serve` by its absolute path at login, with `RunAtLoad` and `KeepAlive`,
+logging to `logs/console.log` in the Edge home: `~/.commonmeasure` unless the
+installing shell sets `COMMONMEASURE_HOME`, in which case the plist sets it
+for the service too. It loads the agent with
+`launchctl bootstrap gui/<uid>`, starts it with `launchctl kickstart`, and
+waits for the console to answer. It refuses a `--listen` that is not loopback,
+and refuses when another process already listens on the address, naming its
+pid and command; stop that process and install again. `uninstall` runs
+`launchctl bootout` and removes the plist; the log stays.
+
+Installing again rewrites the plist and restarts the console. That is how the
+service picks up an upgrade: `KeepAlive` restarts a console that exits, not
+one whose binary was replaced while it ran. Installing again takes the Edge
+home from the shell that runs it. `commonmeasure update` stops the service
+before it replaces the binary the service runs and starts it again afterwards
+with the Edge home and log in its plist (§1, Updating); after an upgrade by
+any other route, `status` names the command.
+
+`status` reports whether the plist is installed, the Edge home and log it
+names, whether launchd has it loaded and its pid, what listens on the port
+and the version it reports (`GET /api/version`), and the `commonmeasure` on
+`PATH` and its version, asked within 15 seconds and 4 KiB of output; past
+either, or when it does not answer with a version, `status` says the version
+is unknown and why. This time bound covers the wait for version output and
+exit, not the system calls that spawn and reap the child or the rest of
+`status` (launchd, `lsof`, `ps`). When launchd cannot be asked, it says so
+rather than reporting the service as not loaded. It names the restart
+command when the version the service runs differs from the one on `PATH`, or
+when its binary changed after it started. It also names a console on the
+port that the service did not start, such as one left running from a
+terminal, with the `kill` that stops it. For a console that does not report
+its version, status says so and does not guess one.
+
+On macOS 26.4 on battery power, launchd was seen leaving the agent pending
+("pended nondemand spawn" in `launchctl print`) instead of starting it at load
+or after it exited. `install` starts it explicitly for that reason; if
+`status` says the service is loaded but not running, run `install` again.
+
+On Linux and other platforms `commonmeasure service` refuses and names the
+equivalent systemd command:
+
+```sh
+systemd-run --user --unit=commonmeasure-console "$(command -v commonmeasure)" serve --listen 127.0.0.1:4173
+```
+
 ## 6. Import history from before Common Measure
 
 Work done before the plugin was installed left host transcripts behind.
@@ -544,6 +757,11 @@ count on its session. A session's crossings leave only when the scope that
 matched their working directory carries `allow_telemetry_egress: true`
 (§4). What may leave, under whose clearance, and the wire format are
 [`docs/contracts/telemetry-projection.md`](contracts/telemetry-projection.md).
+For a supplier's own receiver, `"suppliers": ["<name>"]` in `relay.json`
+sends it only that supplier's events
+([§Supplier scope](contracts/telemetry-projection.md#supplier-scope)).
+Requires 0.4.2: 0.4.1 refuses a `relay.json` with `suppliers` and sends
+nothing.
 
 The first run reads every session log in the home, including sessions
 recorded before a receiver was configured, and decides each crossing under
@@ -684,8 +902,10 @@ commonmeasure enrol --directory /path/to/project --name "My project" --reporting
 ```
 
 Each prints the directory's enrolment as JSON. Its `reporting` field is the
-state: `not_enrolled`, `local_only`, `receiver_missing` (reporting chosen,
-no receiver configured), `permitted`, or a reason reporting is held.
+state: `not_enrolled`, `local_only`, `relay_config_invalid` (reporting
+chosen, and `relay.json` is one the relay refuses; `relay_config_error` says
+why; requires 0.4.2), `receiver_missing` (reporting chosen, no receiver configured),
+`permitted`, or a reason reporting is held.
 
 - Hub reporting covers the directory and everything below it, including
   eligible witnessed evidence recorded there before; `--include-history`
