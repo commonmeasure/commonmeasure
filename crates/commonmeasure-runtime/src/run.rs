@@ -34,7 +34,6 @@ use crate::coverage::{self, CoverageRubric};
 use crate::evaluate;
 use crate::evidence::{EvidenceLog, RunDirectory};
 use crate::freshness::{self, AsOf, DeclaredDate};
-use crate::governance::Governance;
 use crate::policy::{self, Ruling, TOKEN_BASIS, fit_context_budget};
 use crate::processor;
 use crate::processor::provenance::{self, Grade, OutputProvenance, SigningIdentity};
@@ -54,11 +53,8 @@ use crate::selection::{self, Candidate, MeasuredCoverage, Selection};
 /// (the v3 record, unchanged in shape), `coverage` and `freshness` — because
 /// three evaluators now run per plan and each section carries its own
 /// identity, basis and unmeasured reason. Suites may opt into
-/// `coverage_rubric` and `as_of`, both sealed by the manifest. Suites may
-/// also opt into `governance` — a support-status rule set and entitlement
-/// grant evaluated at admission — sealed by the manifest
-/// (contextops-manifest/v4); the record shapes above are unchanged, the
-/// governance verdicts riding the existing processor-invocation records.
+/// `coverage_rubric` and `as_of`, both sealed by the manifest
+/// (contextops-manifest/v4).
 /// v5: quote-then-buy is a run shape. A plan whose provider declares the
 /// `quote` capability prices the acquisition first: `acquisition.quote`
 /// carries the sealed quote legs (their refs and hashes), the quoted charge,
@@ -129,14 +125,6 @@ pub struct Suite {
     /// unmeasured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub as_of: Option<AsOf>,
-    /// The support-status rule set and entitlement grant this run admits
-    /// sources under (`crate::governance`). Opt-in like the rubric, and
-    /// sealed by the manifest for the same reason: a suite that declares
-    /// governance — or flips one rule — is a different experiment by hash.
-    /// Without one, no governance processor runs and no invocation is
-    /// recorded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub governance: Option<Governance>,
     /// A single URL to retrieve rather than a web to search. When present, the
     /// run is a fetch comparison: each provider that declares the `fetch`
     /// capability retrieves this exact URL (`crate` dispatches `fetch`, not
@@ -155,7 +143,7 @@ pub struct Suite {
     #[serde(default)]
     pub fidelity_judge: bool,
     /// The operator's declaration for the run's own outputs: what may be done
-    /// with them (`crate::processor::provenance`). Opt-in like governance and
+    /// with them (`crate::processor::provenance`). Opt-in like the rubric and
     /// sealed by the manifest for the same reason. When declared, every
     /// answered plan is labelled with a C2PA manifest built from its source
     /// record, signed with the operator's certificate; without one, no
@@ -298,22 +286,6 @@ pub fn execute(suite: &Suite, options: &RunOptions) -> Result<RunReport, RunErro
     if let Some(as_of) = &suite.as_of {
         as_of.validate().map_err(RunError::Suite)?;
     }
-    if let Some(governance) = &suite.governance {
-        governance.validate().map_err(RunError::Suite)?;
-        // Rules take effect at dates and the reference date is suite input,
-        // never a clock. A governed suite with no as_of could not know which
-        // rules are in force, and guessing would govern by a date nobody
-        // declared.
-        if suite.as_of.is_none() {
-            return Err(RunError::Suite(format!(
-                "the suite declares governance {} but no as_of; rules take effect at dates, \
-                 and without a declared reference date which rules are in force cannot be \
-                 known",
-                governance.identity()
-            )));
-        }
-    }
-
     if let Some(provenance) = &suite.output_provenance {
         provenance.validate().map_err(RunError::Suite)?;
     }
@@ -898,76 +870,22 @@ impl Execution<'_> {
             })
             .collect();
 
-        // The admit-stage support governor runs only when the suite declares
-        // governance, over every source the checks above would let cross:
-        // the suite's sealed rule set against the source's declared
-        // metadata, before the model sees it. An ungoverned suite records no
-        // invocation at all — the grounding evaluator's opt-in precedent.
-        let mut support_rulings: Vec<Option<Ruling>> =
-            Vec::with_capacity(acquisition.envelopes.len());
-        for (envelope, admission) in acquisition.envelopes.iter().zip(&admissions) {
-            let ruling = match (&self.suite.governance, &self.suite.as_of) {
-                (Some(governance), Some(as_of))
-                    if !admission.is_refusal() && !cost.is_refusal() =>
-                {
-                    let (invocation, ruling) = processor::support::invoke(
-                        self.suite.job.policy_mode,
-                        &envelope.source_url,
-                        envelope.content_hash.as_deref(),
-                        &envelope.native_metadata,
-                        governance,
-                        &as_of.date,
-                    );
-                    self.record_invocation(&mut plan, &invocation);
-                    plan.apply(
-                        &ruling,
-                        self.run_id,
-                        &self.suite.job,
-                        Some(&envelope.source_url),
-                    );
-                    Some(ruling)
-                }
-                _ => None,
-            };
-            support_rulings.push(ruling);
-        }
-
         // The admit-stage screens scan every source the checks above would let
         // cross: the PII detector, then the injection screen. Each verdict
-        // takes the same `Ruling` shape as every other admission constraint —
-        // strict refuses the source before the model sees it, observe and
-        // prefer record the finding and carry on. They run in a fixed order so
-        // the invocation records land deterministically; either refusing keeps
-        // the source out of the window.
+        // takes the same `Ruling` shape as every other admission constraint.
+        // A PII finding is a breach the source carries in every mode; an
+        // injection match refuses the source before the model sees it under
+        // strict, and observe and prefer record it and carry on. They run in
+        // a fixed order so the invocation records land deterministically.
         let mut pii_rulings: Vec<Option<Ruling>> = Vec::with_capacity(acquisition.envelopes.len());
         let mut injection_rulings: Vec<Option<Ruling>> =
             Vec::with_capacity(acquisition.envelopes.len());
-        for (index, (envelope, admission)) in
-            acquisition.envelopes.iter().zip(&admissions).enumerate()
-        {
-            let governed_out = support_rulings[index]
-                .as_ref()
-                .is_some_and(Ruling::is_refusal);
-            let screenable = (!admission.is_refusal() && !cost.is_refusal() && !governed_out)
+        for (envelope, admission) in acquisition.envelopes.iter().zip(&admissions) {
+            let screenable = (!admission.is_refusal() && !cost.is_refusal())
                 .then_some(envelope.text.as_deref())
                 .flatten();
             let pii_ruling = screenable.map(|text| {
-                // A run's sources come from a supply adapter: the operator's
-                // own corpus is internal, and so is anything a supplier
-                // handed back at a local or private address, by the same
-                // floor the harness applies. Everything else is public. A
-                // job declares no `refuse_on_pii`, so the switch is off here.
-                let source = if acquisition.provider == commonmeasure_supply::INTERNAL_PROVIDER
-                    || commonmeasure_types::address::is_private_address(&envelope.source_url)
-                {
-                    processor::pii::SourceClass::Internal
-                } else {
-                    processor::pii::SourceClass::Public
-                };
                 let (invocation, ruling) = processor::pii::invoke(
-                    self.suite.job.policy_mode,
-                    source,
-                    false,
                     &envelope.source_url,
                     &envelope.source_url,
                     text,
@@ -1002,15 +920,12 @@ impl Execution<'_> {
             pii_rulings.push(pii_ruling);
             injection_rulings.push(injection_ruling);
         }
+        // The PII ruling is not consulted here: a finding never refuses, so
+        // it cannot make a source unusable; it reaches the source's reason
+        // and the plan's gaps through `admission_reason` and `plan.apply`.
         let usable = |index: usize| {
             !admissions[index].is_refusal()
                 && !cost.is_refusal()
-                && support_rulings[index]
-                    .as_ref()
-                    .is_none_or(|ruling| !ruling.is_refusal())
-                && pii_rulings[index]
-                    .as_ref()
-                    .is_none_or(|ruling| !ruling.is_refusal())
                 && injection_rulings[index]
                     .as_ref()
                     .is_none_or(|ruling| !ruling.is_refusal())
@@ -1065,7 +980,6 @@ impl Execution<'_> {
                 &self.suite.job,
                 Some(&envelope.source_url),
             );
-            let support = support_rulings[index].as_ref();
             let pii = pii_rulings[index].as_ref();
             let injection = injection_rulings[index].as_ref();
             let original_tokens = envelope
@@ -1083,7 +997,6 @@ impl Execution<'_> {
                     false,
                     admission_reason(
                         admission,
-                        support,
                         pii,
                         injection,
                         "Not admitted; the acquisition was refused before any source could cross.",
@@ -1141,7 +1054,6 @@ impl Execution<'_> {
                         false,
                         admission_reason(
                             admission,
-                            support,
                             pii,
                             injection,
                             "Not admitted; the source's text is entirely whitespace, so there \
@@ -1157,7 +1069,6 @@ impl Execution<'_> {
                         false,
                         admission_reason(
                             admission,
-                            support,
                             pii,
                             injection,
                             &format!("Not admitted; {detail}"),
@@ -1168,7 +1079,6 @@ impl Execution<'_> {
                         outcome.admitted,
                         admission_reason(
                             admission,
-                            support,
                             pii,
                             injection,
                             "Admitted; no constraint excluded it.",
@@ -1869,19 +1779,17 @@ impl PlanUnderConstruction {
 
 /// The reason published against one source. A recorded breach speaks first —
 /// it is the constraint the operator declared — in stage order: the job's
-/// own admission policy, then the governance verdict, then the PII finding.
+/// own admission policy, then the PII finding, then the injection screen.
 /// `otherwise` carries what the caller knows about a source no breach
 /// decided.
 fn admission_reason(
     admission: &Ruling,
-    support: Option<&Ruling>,
     pii: Option<&Ruling>,
     injection: Option<&Ruling>,
     otherwise: &str,
 ) -> String {
     admission
         .reason()
-        .or_else(|| support.and_then(Ruling::reason))
         .or_else(|| pii.and_then(Ruling::reason))
         .or_else(|| injection.and_then(Ruling::reason))
         .unwrap_or(otherwise)
@@ -2190,15 +2098,11 @@ fn manifest(
         // reference (both null when undeclared) — they are what the coverage
         // and freshness evaluators measure against, so a suite that declares
         // either is a different experiment by hash.
-        // v4: it seals the suite's declared governance block (null when
-        // undeclared) — the support-status rule set and entitlement grant
-        // admission is decided under, so flipping one rule is a different
-        // experiment by hash. That traceability is what the revocation
-        // demonstration rests on: nothing else names the rules, because the
-        // internal corpus itself is not sealed here.
+        // v4: it sealed the suite's declared governance block.
+        // v5: the `governance` member is removed with the support governor.
         // A `fetch_target` key appears only in a fetch run (below), so search
-        // manifests keep their v4 shape and hashes.
-        "manifest_version": "contextops-manifest/v4",
+        // manifests keep their v5 shape and hashes.
+        "manifest_version": "contextops-manifest/v5",
         "suite_version": suite.suite_version,
         "label": suite.label,
         "job": suite.job,
@@ -2208,7 +2112,6 @@ fn manifest(
         "system_prompt": suite.system_prompt(),
         "coverage_rubric": suite.coverage_rubric,
         "as_of": suite.as_of,
-        "governance": suite.governance,
         "adapter_version": commonmeasure_supply::ADAPTER_VERSION,
         // The installed processors are part of what is frozen: their rule
         // sets shape what enters the window, so their identity and

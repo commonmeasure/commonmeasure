@@ -18,8 +18,7 @@ use chrono::{DateTime, Utc};
 use commonmeasure_http::{Request, Response};
 use commonmeasure_runtime::allowance::{AllowanceContext, GateDecision, Reservation};
 use commonmeasure_runtime::policy::Ruling;
-use commonmeasure_runtime::processor::pii::SourceClass;
-use commonmeasure_supply::{Acquisition, INTERNAL_PROVIDER, SupplyError, supplier_with_released};
+use commonmeasure_supply::{Acquisition, SupplyError, supplier_with_released};
 use commonmeasure_types::{
     AcquisitionCharge, ContextEnvelope, ContextJob, Gap, GapReason, LicenceState, PolicyMode,
     ProviderCapability,
@@ -28,7 +27,7 @@ use serde_json::{Value, json};
 
 use crate::crawl_delay::CrawlDelayStore;
 use crate::declarations::{Effective, TELEMETRY_PROFILE};
-use crate::discovery::{self, DeclarationCache, Declarations, Governing, ManifestCache};
+use crate::discovery::{self, DeclarationCache, Declarations, ManifestCache};
 use crate::fetched_file::{self, BodyKind};
 use crate::grounding;
 use crate::identity::{Identity, PresentedIdentity, SigningIdentity};
@@ -1640,21 +1639,15 @@ impl McpServer {
         }
 
         // The admit-stage screens run after the bytes exist and before
-        // anything is returned or recorded as grounded: the one point where a
-        // finding can still keep the text out of the agent's context. Each
-        // verdict follows the same mode discipline as host policy — strict
-        // refuses the crossing, observe and prefer carry it with the finding
-        // recorded either way. The PII detector runs first, then the injection
-        // screen; either refusing keeps the bytes out.
-        let (pii_invocation, pii) = commonmeasure_runtime::processor::pii::invoke(
-            self.policy.mode(),
-            source_class(&self.policy, &final_url, None),
-            self.policy.refuse_on_pii(),
-            &final_url,
-            &basis,
-            &text,
-            Some(&hash),
-        );
+        // anything is returned or recorded as grounded. The PII detector runs
+        // first and records its finding as a breach the crossing carries in
+        // every mode; the injection screen runs second under the same mode
+        // discipline as host policy — strict refuses the crossing, observe
+        // and prefer carry it with the match recorded either way — and is
+        // the one screen that can still keep the text out of the agent's
+        // context here.
+        let (pii_invocation, pii) =
+            commonmeasure_runtime::processor::pii::invoke(&final_url, &basis, &text, Some(&hash));
         let _ = self.session.record_processor(pii_invocation.to_value());
         let (injection_invocation, injection) = commonmeasure_runtime::processor::injection::invoke(
             self.policy.mode(),
@@ -1667,13 +1660,7 @@ impl McpServer {
             .session
             .record_processor(injection_invocation.to_value());
         let declared_breach = merge_breaches(host_breach, breaches_of(&after).as_deref());
-        if let Some(reason) = [&pii, &injection]
-            .into_iter()
-            .find_map(|ruling| match ruling {
-                Ruling::Refused { reason, .. } => Some(reason.clone()),
-                _ => None,
-            })
-        {
+        if let Ruling::Refused { reason, .. } = &injection {
             let mut facts = FetchFacts::refused(&final_url, reason.clone());
             facts.http_status = Some(response.status);
             facts.content_hash = Some(hash);
@@ -2141,9 +2128,7 @@ impl McpServer {
     /// robots.txt access rule for the product token, a disallowed AI-input
     /// statement, a licence whose AI-input permission is conditional on a
     /// payment this edge cannot make, and a reporting demand this session
-    /// cannot meet. An applicable operator assessment within its content
-    /// and use scope governs source preferences and licence terms; its
-    /// reporting duty still applies.
+    /// cannot meet.
     ///
     /// Every ruling here follows the session's mode except the access rule
     /// and a licence's reporting demand, which refuse the crossing in every
@@ -2180,178 +2165,134 @@ impl McpServer {
         if let Some(breach) = self.robots_redirect_breach(&declarations.robots) {
             rulings.push(breach);
         }
-        match declarations.governing {
-            Governing::OperatorTerms => {
-                let terms = declarations.terms.as_ref();
-                if terms.is_some_and(|terms| terms.requires_reporting) {
-                    let ruling = self.reporting_ruling_for(url, None, None);
-                    if let Some(reason) = &ruling.reason {
-                        rulings.push(breach(
-                            mode,
-                            format!(
-                                "The operator's terms {} require usage reporting, and the duty \
-                                 cannot be met: {reason}.",
-                                terms.map(|t| t.reference.as_str()).unwrap_or_default()
-                            ),
-                            "A reporting duty the operator declared cannot be met by this session.",
-                        ));
-                    }
-                    reporting = Some(ruling);
-                }
-            }
-            Governing::Statements => {
-                // A licence the source names that could not be read has terms
-                // nobody knows, not no terms. It may carry a reporting demand,
-                // which binds in every policy mode, so the page is not admitted
-                // under it in any mode (owner decision, 22 September 2026:
-                // content whose reporting and licence requirements are not
-                // respected is not had). A failed read is remembered for the
-                // failure age and asked again after it. A licence that answered
-                // 404 or 410 is missing, not unread: it has no terms, the
-                // crossing proceeds, and its gap is on the record.
-                for licence in declarations
-                    .licences
-                    .iter()
-                    .filter(|licence| licence.unread)
-                {
-                    rulings.push(Ruling::Refused {
-                        reason: format!(
-                            "The source names the licence {}, which could not be read ({}), so \
-                             its terms, including any reporting demand, are unknown and the page \
-                             is not admitted under them in any policy mode.",
-                            licence.url,
-                            licence
-                                .unavailable
-                                .as_deref()
-                                .unwrap_or("no reason recorded")
-                        ),
-                        gap: Gap::new(
-                            GapReason::PolicyRefused,
-                            "A licence the source names could not be read, so its terms could not \
-                             be kept.",
-                        ),
-                    });
-                }
-                if declarations.ai_input() == Effective::Disallow {
-                    let sources: Vec<String> = declarations
-                        .ai_input_disallowed_by()
-                        .iter()
-                        .map(|statement| statement.detail.clone())
-                        .collect();
-                    rulings.push(breach(
-                        mode,
-                        format!(
-                            "The source disallows AI input ({}); no operator terms override it.",
-                            sources.join("; ")
-                        ),
-                        "The source's declared preference disallows the use this crossing makes.",
-                    ));
-                }
-                if let Some((licence, terms)) = declarations.licence_terms()
-                    && declarations.ai_input() == Effective::Allow
-                {
-                    if let Some(payment) = terms.payment.as_ref().filter(|p| p.is_monetary()) {
-                        rulings.push(breach(
-                            mode,
-                            format!(
-                                "The licence {} permits AI input under payment type {}{}, and \
-                                 this edge holds no settlement rail, so the payment term is unmet.",
-                                licence.url,
-                                payment.kind.as_deref().unwrap_or("unstated"),
-                                payment
-                                    .amount
-                                    .as_ref()
-                                    .map(|amount| format!(
-                                        " ({} {})",
-                                        amount.decimal, amount.currency
-                                    ))
-                                    .unwrap_or_default()
-                            ),
-                            "A payment the licence requires cannot be made: no settlement rail is \
-                             configured (unavailable dependency).",
-                        ));
-                    } else if terms.server.is_some() {
-                        rulings.push(breach(
-                            mode,
-                            format!(
-                                "The licence {} names a licence server ({}) a client must obtain a \
-                                 licence from before access, and this edge holds no rail to do so.",
-                                licence.url,
-                                terms.server.as_deref().unwrap_or_default()
-                            ),
-                            "A licence token the licence requires cannot be obtained: no rail is \
-                             configured (unavailable dependency).",
-                        ));
-                    }
-                }
-                // A licence's reporting demands are ruled on whatever the
-                // combined AI-use preference: a Disallow from robots.txt or a
-                // `Content-Usage` header beside a licence that demands
-                // reporting is carried as a breach outside `strict`, and the
-                // bytes it lets through are still bound by the demand (owner
-                // decision, 22 September 2026). Which demands apply is
-                // settled in `declarations::licence_terms`.
-                if let Some((licence, terms)) = declarations.licence_terms() {
-                    for demand in &terms.reporting {
-                        // RSL 1.0 §3.12: a client satisfies every applicable
-                        // demand or treats the activity as unlicensed. This
-                        // runtime reports Content Telemetry events and
-                        // nothing else, so a demand of any other type,
-                        // stated or not, is unmet whatever the session
-                        // clears. `declarations.reporting` stays the
-                        // telemetry ruling; the breach names this one.
-                        if demand.kind != "telemetry" {
-                            let unstated = |value: &str| {
-                                if value.is_empty() {
-                                    "unstated".to_owned()
-                                } else {
-                                    value.to_owned()
-                                }
-                            };
-                            rulings.push(binding_breach(
-                                format!(
-                                    "The licence {} requires reporting of type {} (profile {}) and \
-                                     the demand cannot be met: this runtime reports telemetry \
-                                     only.",
-                                    licence.url,
-                                    unstated(&demand.kind),
-                                    unstated(&demand.profile)
-                                ),
-                                "A reporting demand the licence carries cannot be met by this session.",
-                            ));
-                            continue;
-                        }
-                        let ruling = self.reporting_ruling(url, demand);
-                        if let Some(reason) = &ruling.reason {
-                            rulings.push(binding_breach(
-                                format!(
-                                    "The licence {} requires telemetry reporting (profile {}) and the \
-                                     demand cannot be met: {reason}.",
-                                    licence.url, demand.profile
-                                ),
-                                "A reporting demand the licence carries cannot be met by this session.",
-                            ));
-                        }
-                        reporting = Some(ruling);
-                    }
-                }
+        // A licence the source names that could not be read has terms
+        // nobody knows, not no terms. It may carry a reporting demand,
+        // which binds in every policy mode, so the page is not admitted
+        // under it in any mode (owner decision, 22 September 2026:
+        // content whose reporting and licence requirements are not
+        // respected is not had). A failed read is remembered for the
+        // failure age and asked again after it. A licence that answered
+        // 404 or 410 is missing, not unread: it has no terms, the
+        // crossing proceeds, and its gap is on the record.
+        for licence in declarations
+            .licences
+            .iter()
+            .filter(|licence| licence.unread)
+        {
+            rulings.push(Ruling::Refused {
+                reason: format!(
+                    "The source names the licence {}, which could not be read ({}), so \
+                         its terms, including any reporting demand, are unknown and the page \
+                         is not admitted under them in any policy mode.",
+                    licence.url,
+                    licence
+                        .unavailable
+                        .as_deref()
+                        .unwrap_or("no reason recorded")
+                ),
+                gap: Gap::new(
+                    GapReason::PolicyRefused,
+                    "A licence the source names could not be read, so its terms could not \
+                         be kept.",
+                ),
+            });
+        }
+        if declarations.ai_input() == Effective::Disallow {
+            let sources: Vec<String> = declarations
+                .ai_input_disallowed_by()
+                .iter()
+                .map(|statement| statement.detail.clone())
+                .collect();
+            rulings.push(breach(
+                mode,
+                format!("The source disallows AI input ({}).", sources.join("; ")),
+                "The source's declared preference disallows the use this crossing makes.",
+            ));
+        }
+        if let Some((licence, terms)) = declarations.licence_terms()
+            && declarations.ai_input() == Effective::Allow
+        {
+            if let Some(payment) = terms.payment.as_ref().filter(|p| p.is_monetary()) {
+                rulings.push(breach(
+                    mode,
+                    format!(
+                        "The licence {} permits AI input under payment type {}{}, and \
+                             this edge holds no settlement rail, so the payment term is unmet.",
+                        licence.url,
+                        payment.kind.as_deref().unwrap_or("unstated"),
+                        payment
+                            .amount
+                            .as_ref()
+                            .map(|amount| format!(" ({} {})", amount.decimal, amount.currency))
+                            .unwrap_or_default()
+                    ),
+                    "A payment the licence requires cannot be made: no settlement rail is \
+                         configured (unavailable dependency).",
+                ));
+            } else if terms.server.is_some() {
+                rulings.push(breach(
+                    mode,
+                    format!(
+                        "The licence {} names a licence server ({}) a client must obtain a \
+                             licence from before access, and this edge holds no rail to do so.",
+                        licence.url,
+                        terms.server.as_deref().unwrap_or_default()
+                    ),
+                    "A licence token the licence requires cannot be obtained: no rail is \
+                         configured (unavailable dependency).",
+                ));
             }
         }
-        if let Some(decision) = &mut declarations.assessment_decision {
-            decision.mode = Some(mode);
-            decision.outcome = Some(
-                if first_refusal(&rulings).is_some() {
-                    "refused"
-                } else if rulings
-                    .iter()
-                    .any(|r| matches!(r, Ruling::AllowedWithBreach { .. }))
-                {
-                    "allowed_with_breach"
-                } else {
-                    "allowed"
+        // A licence's reporting demands are ruled on whatever the
+        // combined AI-use preference: a Disallow from robots.txt or a
+        // `Content-Usage` header beside a licence that demands
+        // reporting is carried as a breach outside `strict`, and the
+        // bytes it lets through are still bound by the demand (owner
+        // decision, 22 September 2026). Which demands apply is
+        // settled in `declarations::licence_terms`.
+        if let Some((licence, terms)) = declarations.licence_terms() {
+            for demand in &terms.reporting {
+                // RSL 1.0 §3.12: a client satisfies every applicable
+                // demand or treats the activity as unlicensed. This
+                // runtime reports Content Telemetry events and
+                // nothing else, so a demand of any other type,
+                // stated or not, is unmet whatever the session
+                // clears. `declarations.reporting` stays the
+                // telemetry ruling; the breach names this one.
+                if demand.kind != "telemetry" {
+                    let unstated = |value: &str| {
+                        if value.is_empty() {
+                            "unstated".to_owned()
+                        } else {
+                            value.to_owned()
+                        }
+                    };
+                    rulings.push(binding_breach(
+                        format!(
+                            "The licence {} requires reporting of type {} (profile {}) and \
+                                 the demand cannot be met: this runtime reports telemetry \
+                                 only.",
+                            licence.url,
+                            unstated(&demand.kind),
+                            unstated(&demand.profile)
+                        ),
+                        "A reporting demand the licence carries cannot be met by this session.",
+                    ));
+                    continue;
                 }
-                .to_owned(),
-            );
+                let ruling = self.reporting_ruling(url, demand);
+                if let Some(reason) = &ruling.reason {
+                    rulings.push(binding_breach(
+                        format!(
+                            "The licence {} requires telemetry reporting (profile {}) and the \
+                                 demand cannot be met: {reason}.",
+                            licence.url, demand.profile
+                        ),
+                        "A reporting demand the licence carries cannot be met by this session.",
+                    ));
+                }
+                reporting = Some(ruling);
+            }
         }
         declarations.reporting = reporting;
         rulings
@@ -2423,9 +2364,8 @@ impl McpServer {
     /// `<home>/relay.json` is read here, by the relay's own parser, at each
     /// ruling: a server can outlive many changes to it (Claude Desktop keeps
     /// one for the life of the app), and a demand ruled on a receiver since
-    /// removed or scoped to suppliers would be admitted with nothing to
-    /// report it. A file the relay refuses, no receiver, or a receiver scoped
-    /// to suppliers (a fetched page names none) leaves the demand unmet.
+    /// removed would be admitted with nothing to report it. A file the relay
+    /// refuses or no receiver leaves the demand unmet.
     ///
     /// Egress clearance is likewise the session's AND that of the source
     /// policy as it stands now, read and resolved against this session's
@@ -2502,19 +2442,6 @@ impl McpServer {
             Some(format!(
                 "no telemetry receiver is configured in {}, so nothing would be reported",
                 self.path_named(&self.policy.source().with_file_name("relay.json"))
-            ))
-        } else if let Some(scope) = relay
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .and_then(crate::relay_config::RelayConfig::scope)
-        {
-            // Every caller rules on a fetched page, and a fetch names no
-            // supplier, so a scoped receiver is never sent its events.
-            Some(format!(
-                "the receiver in {} is scoped to {scope} and a fetched page is served by none of \
-                 them, so nothing would be reported",
-                self.path_named(&self.policy.source().with_file_name("relay.json")),
             ))
         } else {
             crate::delivery::SessionDelivery {
@@ -2899,19 +2826,12 @@ impl McpServer {
                 .policy
                 .admit_from_provider(envelope, Some(&acquisition.provider));
             // A search snippet enters the agent's context like any other
-            // text, so the admit-stage screens scan it under the same mode
-            // discipline as a fetched page: the PII detector, then the
-            // injection screen.
+            // text, so the admit-stage screens scan it as they scan a fetched
+            // page: the PII detector records its finding as a carried breach,
+            // then the injection screen rules under the mode discipline.
             let (pii, injection) = match (ruling.is_refusal(), envelope.text.as_deref()) {
                 (false, Some(text)) => {
                     let (pii_invocation, pii) = commonmeasure_runtime::processor::pii::invoke(
-                        self.policy.mode(),
-                        source_class(
-                            &self.policy,
-                            &envelope.source_url,
-                            Some(&acquisition.provider),
-                        ),
-                        self.policy.refuse_on_pii(),
                         &envelope.source_url,
                         &envelope.source_url,
                         text,
@@ -2941,11 +2861,10 @@ impl McpServer {
                 }
                 _ => (None, None),
             };
-            let screen_refusal = [pii.as_ref(), injection.as_ref()]
-                .into_iter()
-                .flatten()
+            let screen_refusal = injection
+                .as_ref()
                 .filter(|ruling| ruling.is_refusal())
-                .find_map(Ruling::reason)
+                .and_then(Ruling::reason)
                 .map(str::to_owned);
             let refusal = if ruling.is_refusal() {
                 Some(ruling.reason().unwrap_or_default().to_owned())
@@ -3536,14 +3455,10 @@ fn breaches_of(rulings: &[Ruling]) -> Option<String> {
 }
 
 /// The price the licence read before the request quotes for AI input, where
-/// operator terms do not govern instead and the licence's amount is one this
-/// runtime can represent exactly. A paid licence quoting no amount is a
+/// the licence's amount is one this runtime can represent exactly. A paid licence quoting no amount is a
 /// price unknown, which the allowance gate never reserves as zero; it is
 /// ruled on as an unmet payment term instead.
 fn quoted_price(declarations: &Declarations) -> Option<commonmeasure_types::Money> {
-    if declarations.governing == Governing::OperatorTerms {
-        return None;
-    }
     declarations
         .licence_terms()
         .and_then(|(_, terms)| terms.payment.as_ref())
@@ -3551,17 +3466,9 @@ fn quoted_price(declarations: &Declarations) -> Option<commonmeasure_types::Mone
         .and_then(|payment| payment.price())
 }
 
-/// The licence a crossing records: the operator's terms reference where terms
-/// govern the host, else the URL of the RSL licence whose terms were read,
-/// else unknown.
+/// The licence a crossing records: the URL of the RSL licence whose terms
+/// were read, else unknown.
 fn licence_of(declarations: &Declarations) -> LicenceState {
-    if declarations.governing == Governing::OperatorTerms
-        && let Some(terms) = &declarations.terms
-    {
-        return LicenceState::Declared {
-            reference: terms.reference.clone(),
-        };
-    }
     match declarations.licence_terms() {
         Some((licence, _)) => LicenceState::Declared {
             reference: licence.url.clone(),
@@ -3578,8 +3485,6 @@ fn declarations_summary(declarations: &Declarations) -> Value {
     json!({
         "effective": declarations.effective,
         "statements": declarations.statements,
-        "governing": declarations.governing,
-        "assessment_decision": declarations.assessment_decision,
         "terms": declarations.terms.as_ref().map(|terms| &terms.reference),
         "robots_group": declarations.robots.reading.as_ref().and_then(|r| r.group.clone()),
         "robots": robots_summary(&declarations.robots),
@@ -3686,22 +3591,6 @@ fn unavailable_credential(provider: &str, variable: &str, file: &str) -> String 
          (KEY=VALUE lines, chmod 600), or export it in the environment that launches the \
          harness — the environment wins where both name it. No search was attempted."
     )
-}
-
-/// Where a source stands for the PII detector's strict rule, from the
-/// classification policy already makes and nothing new: a named internal
-/// prefix, a loopback or private address (which the mediated path reaches
-/// only under `allow_private_hosts`) and the operator's own corpus are
-/// internal; everything else is public.
-fn source_class(policy: &SessionPolicy, url: &str, provider: Option<&str>) -> SourceClass {
-    if provider == Some(INTERNAL_PROVIDER)
-        || grounding::matches_internal_prefix(url, policy.internal_prefixes())
-        || !grounding::recordable(url)
-    {
-        SourceClass::Internal
-    } else {
-        SourceClass::Public
-    }
 }
 
 /// Two breaches on one crossing stay two sentences on one record.
@@ -5667,8 +5556,7 @@ mod tests {
 
     /// A hosted endpoint's host word sends no session-end event, so a
     /// reporting demand is met there only where the service relays the home
-    /// on its interval; the transport says so with `interval_relay`. Even
-    /// then, a receiver scoped to suppliers leaves a fetch's demand unmet.
+    /// on its interval; the transport says so with `interval_relay`.
     #[test]
     fn a_hosted_session_meets_a_reporting_demand_only_under_the_interval_relay() {
         let home = tempfile::tempdir().expect("tempdir");
@@ -5719,19 +5607,6 @@ mod tests {
             reason.contains("this host (claude-connector) sends no session-end event"),
             "{reason}"
         );
-
-        // A receiver scoped to suppliers is never sent a fetched page's
-        // events, however the page's session delivers.
-        std::fs::write(
-            home.path().join("relay.json"),
-            r#"{"receiver":"https://receiver.example/v1/events","suppliers":["ozone"]}"#,
-        )
-        .expect("relay.json");
-        let scoped =
-            open(true).reporting_ruling_for("https://publisher.example/article", None, None);
-        assert!(!scoped.met);
-        let reason = scoped.reason.expect("a reason");
-        assert!(reason.contains("scoped to suppliers (ozone)"), "{reason}");
     }
 
     /// EGR-175. The ruling asks the relay's own projectability test of the
@@ -5815,74 +5690,6 @@ mod tests {
                 .reporting_ruling_for(public, None, None)
                 .met
         );
-    }
-
-    /// The harness reads `relay.json` with the relay's parser, so a supplier
-    /// list the relay refuses leaves a reporting demand unmet with the load
-    /// error as its reason, never met on the receiver alone. Absent and null
-    /// are unscoped and met; an empty list is scoped to no supplier and, like
-    /// any scope, unmet for a fetched page. The table is the one the parser's
-    /// own test reads (`relay_config::SUPPLIER_TABLE`).
-    #[test]
-    fn a_reporting_demand_is_ruled_on_the_supplier_list_the_relay_would_read() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let work = home.path().join("reporting-cleared");
-        std::fs::create_dir_all(&work).expect("workspace");
-        std::fs::write(
-            home.path().join("policy.json"),
-            r#"{"policy_mode":"strict","scopes":[{"match":"reporting-cleared",
-                "engagement":"research","allow_telemetry_egress":true}]}"#,
-        )
-        .expect("policy");
-        let ruling = || {
-            let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
-            let log = SessionLog::open(home.path(), "test-session").expect("session log");
-            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
-                path: home
-                    .path()
-                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
-                loaded: None,
-            };
-            McpServer::new(
-                log,
-                loaded,
-                "claude-connector",
-                work.to_str().map(str::to_owned),
-                credentials,
-            )
-            .interval_relay()
-            .reporting_ruling_for("https://publisher.example/article", None, None)
-        };
-
-        for (suppliers, expected) in crate::relay_config::SUPPLIER_TABLE {
-            let file = format!(r#"{{"receiver":"https://receiver.example/v1"{suppliers}}}"#);
-            std::fs::write(home.path().join("relay.json"), &file).expect("relay.json");
-            let ruling = ruling();
-            match expected {
-                Ok(None) => {
-                    assert!(ruling.met, "{file}: {:?}", ruling.reason);
-                    assert_eq!(
-                        ruling.receiver.as_deref(),
-                        Some("https://receiver.example/v1")
-                    );
-                }
-                Ok(Some(_)) => {
-                    assert!(!ruling.met, "{file}");
-                    let reason = ruling.reason.expect("a reason");
-                    assert!(reason.contains("is scoped to"), "{file}: {reason}");
-                }
-                Err(fault) => {
-                    assert!(!ruling.met, "{file}");
-                    assert_eq!(ruling.receiver, None, "{file}");
-                    let reason = ruling.reason.expect("a reason");
-                    assert!(
-                        reason.contains("is not a valid relay config"),
-                        "{file}: {reason}"
-                    );
-                    assert!(reason.contains(fault), "{file}: {reason}");
-                }
-            }
-        }
     }
 
     /// A receiver the relay refuses leaves a reporting demand unmet with the
@@ -7156,66 +6963,6 @@ mod tests {
         assert!(detail.contains("Money moved"), "{detail}");
         assert!(detail.contains("0.007000 USD"), "{detail}");
         assert!(detail.contains(&reservation.id.to_string()), "{detail}");
-    }
-
-    /// The seam of the PII rule under strict: a public page is admitted with the finding recorded; a named
-    /// internal prefix, a private address and the operator's corpus are
-    /// refused; the switch refuses the public page too. A loopback origin
-    /// cannot stand in for a public source here, because the privacy floor
-    /// classifies it as private, so the rule is held at the classifier and
-    /// the processor, and the public case is exercised live.
-    #[test]
-    fn a_public_source_is_admitted_with_the_finding_recorded_and_the_other_classes_are_refused() {
-        use commonmeasure_runtime::processor::pii;
-        let text = "Contact the Land Registry at customersupport@landregistry.gov.uk.";
-        let public = "https://www.gov.uk/government/organisations/land-registry";
-        let (home, strict) = server(
-            r#"{"policy_mode":"strict","allow_private_hosts":true,
-                "record_internal_prefixes":["https://rag.corp.internal/"]}"#,
-        );
-        let rule = |url: &str, provider: Option<&str>| {
-            let class = source_class(&strict.policy, url, provider);
-            let (_, ruling) = pii::invoke(
-                strict.policy.mode(),
-                class,
-                strict.policy.refuse_on_pii(),
-                url,
-                url,
-                text,
-                None,
-            );
-            (class, ruling.is_refusal())
-        };
-        assert_eq!(rule(public, None), (SourceClass::Public, false));
-        assert_eq!(
-            rule("https://rag.corp.internal/contacts", None),
-            (SourceClass::Internal, true)
-        );
-        assert_eq!(
-            rule("http://127.0.0.1:8080/handbook", None),
-            (SourceClass::Internal, true)
-        );
-        assert_eq!(
-            rule("file:///corpus/contacts.md", Some(INTERNAL_PROVIDER)),
-            (SourceClass::Internal, true)
-        );
-        assert_eq!(
-            rule("https://a.example/result", Some("exa")),
-            (SourceClass::Public, false)
-        );
-
-        let (_, switched) = server(r#"{"policy_mode":"strict","refuse_on_pii":true}"#);
-        let (_, ruling) = pii::invoke(
-            switched.policy.mode(),
-            source_class(&switched.policy, public, None),
-            switched.policy.refuse_on_pii(),
-            public,
-            public,
-            text,
-            None,
-        );
-        assert!(ruling.is_refusal(), "the switch refuses the public page");
-        drop(home);
     }
 
     /// A refused connection releases the back-off reservation its request

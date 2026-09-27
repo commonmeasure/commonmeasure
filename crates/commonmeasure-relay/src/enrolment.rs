@@ -176,7 +176,6 @@ fn hub_receiver(hub: &str, telemetry_path: &str) -> std::result::Result<String, 
     let config = RelayConfig {
         receiver: receiver.clone(),
         api_key: None,
-        suppliers: None,
     };
     if let Err(error) = config.check() {
         return Err(format!("makes a receiver the relay refuses: {error}"));
@@ -333,9 +332,6 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
             )
         })?,
         api_key: Some(enrolled.api_key.clone()),
-        // Enrolment names the operator's own hub, which takes every cleared
-        // event; a supplier scope belongs to a supplier's receiver.
-        suppliers: None,
     };
     let receiver = relay_config.receiver.clone();
 

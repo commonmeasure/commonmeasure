@@ -37,16 +37,19 @@ fn provider_origin(body: Vec<u8>) -> ServerHandle {
         .expect("spawn")
 }
 
-/// A gateway that answers, and counts what it was asked. The count is the
+/// A gateway that answers, and keeps what it was asked. The count is the
 /// evidence that a refused plan really did stop before inference rather than
-/// merely omitting the answer from its record.
-fn gateway_origin() -> (ServerHandle, Arc<Mutex<u32>>) {
-    let calls = Arc::new(Mutex::new(0u32));
-    let counter = Arc::clone(&calls);
+/// merely omitting the answer from its record; the request bodies are the
+/// evidence of which text a carried source put in front of the model.
+fn gateway_origin() -> (ServerHandle, Arc<Mutex<Vec<String>>>) {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&requests);
     let handle = Server::bind("127.0.0.1:0")
         .expect("bind")
-        .spawn(move |_| {
-            *counter.lock().expect("counter") += 1;
+        .spawn(move |request| {
+            seen.lock()
+                .expect("requests")
+                .push(String::from_utf8_lossy(&request.body).into_owned());
             Response::json(
                 200,
                 r#"{"id":"tz-e2e","model":"local-test-model",
@@ -55,7 +58,7 @@ fn gateway_origin() -> (ServerHandle, Arc<Mutex<u32>>) {
             )
         })
         .expect("spawn");
-    (handle, calls)
+    (handle, requests)
 }
 
 fn suite(policy_mode: PolicyMode, constraints: Vec<Constraint>) -> Suite {
@@ -81,7 +84,6 @@ fn suite(policy_mode: PolicyMode, constraints: Vec<Constraint>) -> Suite {
         require_cited_answer: false,
         coverage_rubric: None,
         as_of: None,
-        governance: None,
         fetch_target: None,
         fidelity_judge: false,
         output_provenance: None,
@@ -89,9 +91,9 @@ fn suite(policy_mode: PolicyMode, constraints: Vec<Constraint>) -> Suite {
 }
 
 struct Harness {
-    _provider: ServerHandle,
+    _provider: Option<ServerHandle>,
     _gateway: Option<ServerHandle>,
-    gateway_calls: Arc<Mutex<u32>>,
+    gateway_requests: Arc<Mutex<Vec<String>>>,
     directory: tempfile::TempDir,
     summary: Value,
 }
@@ -106,7 +108,7 @@ impl Harness {
     /// deliberately does not contain, such as personal identifiers.
     fn run_against(suite: &Suite, body: Vec<u8>, with_gateway: bool) -> Self {
         let provider = provider_origin(body);
-        let (gateway, gateway_calls) = gateway_origin();
+        let (gateway, gateway_requests) = gateway_origin();
         let base_url = provider.url();
         let directory = tempfile::tempdir().expect("tempdir");
         let output = directory.path().join("latest");
@@ -132,9 +134,49 @@ impl Harness {
         };
         let report = execute(suite, &options).expect("the run should complete");
         Self {
-            _provider: provider,
+            _provider: Some(provider),
             _gateway: with_gateway.then_some(gateway),
-            gateway_calls,
+            gateway_requests,
+            directory,
+            summary: report.summary,
+        }
+    }
+
+    /// The operator's corpus alone, with no supplier origin: the one plan
+    /// beside the baseline is `internal-only`, served by the real adapter
+    /// from real disk.
+    fn run_internal_only(corpus: &Path, mode: PolicyMode) -> Self {
+        let (gateway, gateway_requests) = gateway_origin();
+        let corpus_root = corpus.to_path_buf();
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output = directory.path().join("latest");
+
+        let mut suite = suite(mode, vec![]);
+        suite.providers = vec!["internal".into()];
+        suite.result_limit = 3;
+
+        let options = RunOptions {
+            allow_external_acquisition: false,
+            output,
+            suppliers: Box::new(move |_provider| {
+                Ok(Box::new(commonmeasure_supply::InternalCorpusAdapter::new(
+                    &corpus_root,
+                ))
+                    as Box<dyn commonmeasure_supply::SupplyAdapter>)
+            }),
+            backend: Some(Box::new(
+                TensorZeroBackend::new(gateway.url()).expect("a loopback gateway endpoint"),
+            ) as Box<_>),
+            replay: None,
+            allowance: None,
+            provenance_signing:
+                commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
+        };
+        let report = execute(&suite, &options).expect("the run should complete");
+        Self {
+            _provider: None,
+            _gateway: Some(gateway),
+            gateway_requests,
             directory,
             summary: report.summary,
         }
@@ -154,7 +196,16 @@ impl Harness {
     }
 
     fn gateway_calls(&self) -> u32 {
-        *self.gateway_calls.lock().expect("counter")
+        u32::try_from(self.gateway_requests.lock().expect("requests").len()).expect("count")
+    }
+
+    /// Whether any request the gateway received carried `text`.
+    fn gateway_was_sent(&self, text: &str) -> bool {
+        self.gateway_requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .any(|body| body.contains(text))
     }
 
     fn gaps(&self, plan: &str) -> Vec<String> {
@@ -631,62 +682,24 @@ fn body_with_pii_at(url: &str) -> Vec<u8> {
     .expect("serialise")
 }
 
-/// A strict-mode PII hit on a source a supplier served is recorded and the
-/// source still crosses: a public page's contact details are not what the
-/// detector exists to keep out of a model. The finding is on the record
-/// exactly as a refusing one would be.
-#[test]
-fn a_strict_pii_finding_on_a_public_source_is_recorded_and_the_source_carried() {
-    let harness = Harness::run_against(&suite(PolicyMode::Strict, vec![]), body_with_pii(), true);
-    let plan = harness.plan("exa-only");
-
+/// What a carried PII finding must look like in the plan record, whatever
+/// the mode and wherever the source came from: the flagged source admitted
+/// and naming the finding as its reason, the finding on the invocation and
+/// in the plan's gaps, and the identifier itself in none of it.
+fn assert_pii_finding_carried(harness: &Harness, plan_id: &str, flagged: usize) {
+    let plan = harness.plan(plan_id);
     assert_eq!(plan["status"], "completed");
-    assert_eq!(plan["source_count"], 2, "strict admits the public source");
-    assert_eq!(plan["sources"][1]["admitted"], true);
+    assert_eq!(plan["sources"][flagged]["admitted"], true, "{plan}");
     assert!(
-        harness
-            .gaps("exa-only")
-            .contains(&"policy_refused".to_owned()),
-        "the finding is recorded whether or not it was enforced"
+        plan["sources"][flagged]["admission_reason"]
+            .as_str()
+            .unwrap()
+            .contains("PII detector"),
+        "the source names the finding it carries: {}",
+        plan["sources"][flagged]
     );
-    let detector = plan["processors"]
-        .as_array()
-        .expect("processors")
-        .iter()
-        .find(|invocation| {
-            invocation["processor"]["name"] == "pii-detector"
-                && invocation["detail"]["categories"]["email_address"] == 1
-        })
-        .expect("the finding is recorded")
-        .clone();
-    assert_eq!(detector["decision"], "admit");
     assert!(
-        !detector.to_string().contains("casework.team@example.co.uk"),
-        "the identifier itself must never enter the evidence record"
-    );
-
-    // The refused text reached no model: the only context sent was the clean
-    // source, and the baseline is the other call.
-    assert_eq!(harness.gateway_calls(), 2);
-    assert!(
-        !plan["inference"].to_string().contains("casework.team"),
-        "no fragment of the refused source may appear in the inference record"
-    );
-}
-
-/// The same finding under `observe` is carried, not hidden: the source is
-/// admitted and the finding is recorded identically.
-#[test]
-fn observe_mode_records_the_pii_finding_and_carries_the_source() {
-    let harness = Harness::run_against(&suite(PolicyMode::Observe, vec![]), body_with_pii(), true);
-    let plan = harness.plan("exa-only");
-
-    assert_eq!(plan["status"], "completed");
-    assert_eq!(plan["source_count"], 2, "observe admits the flagged source");
-    assert!(
-        harness
-            .gaps("exa-only")
-            .contains(&"policy_refused".to_owned()),
+        harness.gaps(plan_id).contains(&"policy_refused".to_owned()),
         "the finding is recorded whether or not it was enforced"
     );
     let detector = plan["processors"]
@@ -698,10 +711,44 @@ fn observe_mode_records_the_pii_finding_and_carries_the_source() {
                 && invocation["detail"]["categories"]["email_address"] == 1
         })
         .expect("the finding is recorded");
-    assert_eq!(
-        detector["decision"], "admit",
-        "observe carries the source; the record still holds the finding"
+    assert_eq!(detector["decision"], "admit");
+    assert_eq!(detector["detail"]["matched_text_recorded"], false);
+    assert!(
+        !plan["processors"]
+            .to_string()
+            .contains("casework.team@example.co.uk")
+            && !plan["gaps"]
+                .to_string()
+                .contains("casework.team@example.co.uk")
+            && !plan["sources"]
+                .to_string()
+                .contains("casework.team@example.co.uk"),
+        "the identifier itself must never enter the evidence record"
     );
+    // The flagged text did reach the model: the finding is evidence, not a
+    // refusal, so the source was in the window the gateway received.
+    assert_eq!(harness.gateway_calls(), 2, "the plan and its baseline");
+    assert!(
+        harness.gateway_was_sent("casework.team@example.co.uk"),
+        "a carried source is in the context sent to the model"
+    );
+}
+
+/// A PII hit on a public source a supplier served is recorded and the source
+/// crosses, in `strict` as in every mode.
+#[test]
+fn a_strict_pii_finding_on_a_public_source_is_recorded_and_the_source_carried() {
+    let harness = Harness::run_against(&suite(PolicyMode::Strict, vec![]), body_with_pii(), true);
+    assert_eq!(harness.plan("exa-only")["source_count"], 2);
+    assert_pii_finding_carried(&harness, "exa-only", 1);
+}
+
+/// The same finding under `observe` is carried and recorded identically.
+#[test]
+fn observe_mode_records_the_pii_finding_and_carries_the_source() {
+    let harness = Harness::run_against(&suite(PolicyMode::Observe, vec![]), body_with_pii(), true);
+    assert_eq!(harness.plan("exa-only")["source_count"], 2);
+    assert_pii_finding_carried(&harness, "exa-only", 1);
 }
 
 /// With no gateway there is no answer, and the run says so rather than
@@ -765,7 +812,7 @@ fn comparison(corpus: &Path, live: bool, with_gateway: bool) -> Harness {
 
 fn comparison_under(corpus: &Path, live: bool, with_gateway: bool, mode: PolicyMode) -> Harness {
     let provider = provider_origin(recon_exa_body());
-    let (gateway, gateway_calls) = gateway_origin();
+    let (gateway, gateway_requests) = gateway_origin();
     let base_url = provider.url();
     let corpus_root = corpus.to_path_buf();
     let directory = tempfile::tempdir().expect("tempdir");
@@ -797,49 +844,33 @@ fn comparison_under(corpus: &Path, live: bool, with_gateway: bool, mode: PolicyM
     };
     let report = execute(&suite, &options).expect("the run should complete");
     Harness {
-        _provider: provider,
+        _provider: Some(provider),
         _gateway: with_gateway.then_some(gateway),
-        gateway_calls,
+        gateway_requests,
         directory,
         summary: report.summary,
     }
 }
 
-/// A supplier can hand back a local or private address, and that source is
-/// internal by the same floor the harness applies: strict refuses a finding
-/// there, as it would on the corpus, and the record says which check did.
+/// A supplier can hand back a local or private address. A finding there is
+/// carried like one on a public page: where the text came from changes
+/// nothing about what the detector does with it.
 #[test]
-fn a_strict_pii_finding_on_a_private_address_from_a_supplier_refuses_the_source() {
+fn a_strict_pii_finding_on_a_private_address_from_a_supplier_is_carried() {
     let harness = Harness::run_against(
         &suite(PolicyMode::Strict, vec![]),
         body_with_pii_at("http://127.0.0.1/casework"),
         true,
     );
-    let plan = harness.plan("exa-only");
-    assert_eq!(plan["status"], "completed");
-    assert_eq!(
-        plan["source_count"], 1,
-        "only the public clean source crossed"
-    );
-    assert_eq!(plan["sources"][1]["admitted"], false);
-    assert!(
-        plan["sources"][1]["admission_reason"]
-            .as_str()
-            .unwrap()
-            .contains("PII detector"),
-        "the source names the check that refused it"
-    );
+    assert_eq!(harness.plan("exa-only")["source_count"], 2);
+    assert_pii_finding_carried(&harness, "exa-only", 1);
 }
 
-/// The operator's own corpus is internal supply, so a strict-mode PII hit
-/// there refuses the document before the model sees it; the other document
-/// still crosses, and the open-web plan beside it is untouched.
+/// The operator's own corpus, through the real adapter from real disk: a
+/// strict-mode PII hit on a document is recorded and the document still
+/// crosses to the model, beside the documents that carry nothing.
 #[test]
-#[cfg_attr(
-    not(evidence_recon),
-    ignore = "needs the recorded provider responses: recon/ under COMMONMEASURE_PRIVATE_EVIDENCE"
-)]
-fn a_strict_pii_finding_on_the_internal_corpus_refuses_the_source_before_inference() {
+fn a_strict_pii_finding_on_the_internal_corpus_is_carried_and_recorded() {
     let corpus = internal_corpus();
     std::fs::write(
         corpus.path().join("contacts.md"),
@@ -847,39 +878,28 @@ fn a_strict_pii_finding_on_the_internal_corpus_refuses_the_source_before_inferen
          casework.team@example.co.uk.\n",
     )
     .expect("doc");
-    let harness = comparison_under(corpus.path(), true, true, PolicyMode::Strict);
+    let harness = Harness::run_internal_only(corpus.path(), PolicyMode::Strict);
 
     let internal = harness.plan("internal-only");
-    assert_eq!(internal["status"], "completed");
-    let refused: Vec<&Value> = internal["sources"]
-        .as_array()
-        .expect("sources")
-        .iter()
-        .filter(|source| source["admitted"] == false)
-        .collect();
-    assert_eq!(refused.len(), 1, "one document carried the identifier");
+    let sources = internal["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 3, "every document matched the job's terms");
     assert!(
-        refused[0]["admission_reason"]
-            .as_str()
-            .unwrap()
-            .contains("PII detector"),
-        "the source names the check that refused it"
+        sources.iter().all(|source| source["admitted"] == true),
+        "no document is withheld: {sources:?}"
     );
-    let detector = internal["processors"]
-        .as_array()
-        .expect("processors")
+    let flagged = sources
         .iter()
-        .find(|invocation| {
-            invocation["processor"]["name"] == "pii-detector" && invocation["decision"] == "refuse"
-        })
-        .expect("the refusing invocation is recorded")
-        .clone();
-    assert_eq!(detector["detail"]["categories"]["email_address"], 1);
-    assert!(
-        !detector.to_string().contains("casework.team@example.co.uk"),
-        "the identifier itself must never enter the evidence record"
+        .position(|source| source["url"].as_str().unwrap().ends_with("/contacts.md"))
+        .expect("the flagged document is among the sources");
+    assert_pii_finding_carried(&harness, "internal-only", flagged);
+    assert_eq!(
+        sources
+            .iter()
+            .filter(|source| source["admission_reason"].as_str().unwrap().contains("PII"))
+            .count(),
+        1,
+        "only the document with the identifier carries the finding"
     );
-    assert_eq!(harness.plan("exa-only")["status"], "completed");
 }
 
 /// The internal-supply acceptance path: one job, an open-web plan and an

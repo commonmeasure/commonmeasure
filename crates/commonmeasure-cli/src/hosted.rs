@@ -43,6 +43,7 @@ use commonmeasure_harness::mcp::{
 };
 use commonmeasure_http::{Request, Response, Server};
 use commonmeasure_supply::credentials::{CredentialsStatus, ReleasedStore};
+use commonmeasure_types::{Finding, Standing};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -100,8 +101,6 @@ pub(crate) struct Options {
     /// else. Each endpoint's canonical URL, and so each token's audience,
     /// is built from it.
     pub(crate) origin: String,
-    /// `Origin` header values accepted beside `origin` itself.
-    pub(crate) allowed_origins: Vec<String>,
     /// The host words served, each one of [`HOST_WORDS`]. A path naming any
     /// other word is `404`.
     pub(crate) hosts: Vec<String>,
@@ -112,7 +111,6 @@ pub(crate) struct Options {
 
 pub(crate) struct ServiceOptions {
     pub(crate) interval: Duration,
-    pub(crate) session_directory: Option<String>,
     pub(crate) supplier_custody: bool,
 }
 
@@ -128,18 +126,12 @@ pub(crate) struct ServiceConfig {
     pub(crate) listen: String,
     /// The public origin, scheme and authority only.
     pub(crate) origin: String,
-    #[serde(default)]
-    pub(crate) allowed_origins: Vec<String>,
     /// The host words served.
     pub(crate) hosts: Vec<String>,
     /// The interval of the relay, the policy refresh, the key refresh and
     /// the idle sweep.
     #[serde(default = "default_interval")]
     pub(crate) interval_seconds: u64,
-    /// An operator-declared scope for this service's sessions. It is not a
-    /// directory reported by the remote client, and grants no reporting by itself.
-    #[serde(default)]
-    pub(crate) session_directory: Option<String>,
     /// Fetch the supplier credentials the hub releases to this edge and use
     /// one where neither the environment nor `credentials.env` supplies the
     /// provider's variable. Unset, the service makes no release request and
@@ -170,7 +162,7 @@ impl ServiceConfig {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(format!("cannot read {}: {error}", source.display())),
         };
-        let mut config: Self = serde_json::from_slice(&encoded).map_err(|error| {
+        let config: Self = serde_json::from_slice(&encoded).map_err(|error| {
             format!(
                 "{} is not a valid service configuration: {error}",
                 source.display()
@@ -188,27 +180,6 @@ impl ServiceConfig {
                 "{}: interval_seconds must be at least 1",
                 source.display()
             ));
-        }
-        if let Some(directory) = &config.session_directory {
-            if !Path::new(directory).is_absolute() {
-                return Err(
-                    "session_directory must be an absolute, explicitly enrolled directory".into(),
-                );
-            }
-            let root = commonmeasure_harness::directory::selected(Path::new(directory))?;
-            let root_text = root.to_str().ok_or("session_directory must be UTF-8")?;
-            let registry = commonmeasure_harness::directory::Registry::read(home)?
-                .ok_or("enrol session_directory locally before configuring the hosted service")?;
-            if !registry
-                .matching(root_text)
-                .is_some_and(|project| project.root == root)
-            {
-                return Err(
-                    "session_directory must be an explicitly enrolled root with a current binding"
-                        .into(),
-                );
-            }
-            config.session_directory = Some(root_text.to_owned());
         }
         Ok(Some(config))
     }
@@ -243,11 +214,9 @@ pub(crate) fn service(home: &Path, listen: Option<String>) -> Result<(), String>
     let options = Options {
         listen: listen.unwrap_or(config.listen),
         origin: config.origin,
-        allowed_origins: config.allowed_origins,
         hosts: config.hosts,
         service: Some(ServiceOptions {
             interval: Duration::from_secs(config.interval_seconds),
-            session_directory: config.session_directory,
             supplier_custody: config.supplier_custody,
         }),
     };
@@ -399,35 +368,46 @@ impl HomeLock {
 
 /// What `doctor` and `status` say about the service: whether the home is
 /// configured for it, for which origin and endpoints, and whether a service
-/// process holds the home now.
-pub(crate) fn service_line(home: &Path) -> String {
+/// process holds the home now. A home not configured for the service is a
+/// note, a configured service that holds the home is as it should be, one
+/// configured and not running needs the operator, and a configuration or
+/// lock that cannot be read is unknown.
+pub(crate) fn service_finding(home: &Path) -> Finding {
     use commonmeasure_harness::delivery::LockState;
     match ServiceConfig::read(home) {
-        Ok(None) => "hosted service: not configured (no hosted-service.json)".to_owned(),
-        Err(reason) => format!("hosted service: {reason}"),
-        Ok(Some(config)) => format!(
-            "hosted service: {} at {}, endpoints {}, every {}s{}",
-            match commonmeasure_harness::delivery::service_state(home) {
-                LockState::Running => "running (lock held)".to_owned(),
-                LockState::NotRunning => "configured, not running".to_owned(),
-                LockState::Unknown(reason) => {
-                    format!("configured, whether it is running cannot be read ({reason})")
+        Ok(None) => Finding::note("hosted service: not configured (no hosted-service.json)"),
+        Err(reason) => Finding::unknown(format!("hosted service: {reason}")),
+        Ok(Some(config)) => {
+            let (standing, state) = match commonmeasure_harness::delivery::service_state(home) {
+                LockState::Running => (Standing::Ok, "running (lock held)".to_owned()),
+                LockState::NotRunning => {
+                    (Standing::Attention, "configured, not running".to_owned())
                 }
-            },
-            config.origin,
-            config
-                .hosts
-                .iter()
-                .map(|host| format!("{ENDPOINT_PREFIX}{host}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            config.interval_seconds,
-            if config.supplier_custody {
-                format!("; {}", custody_standing(home, config.interval_seconds))
-            } else {
-                String::new()
+                LockState::Unknown(reason) => (
+                    Standing::Unknown,
+                    format!("configured, whether it is running cannot be read ({reason})"),
+                ),
+            };
+            Finding {
+                standing,
+                text: format!(
+                    "hosted service: {state} at {}, endpoints {}, every {}s{}",
+                    config.origin,
+                    config
+                        .hosts
+                        .iter()
+                        .map(|host| format!("{ENDPOINT_PREFIX}{host}"))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    config.interval_seconds,
+                    if config.supplier_custody {
+                        format!("; {}", custody_standing(home, config.interval_seconds))
+                    } else {
+                        String::new()
+                    }
+                ),
             }
-        ),
+        }
     }
 }
 
@@ -472,7 +452,6 @@ fn custody_standing(home: &Path, interval_seconds: u64) -> String {
 struct HostedEdge {
     home: PathBuf,
     origin: String,
-    allowed_origins: Vec<String>,
     hosts: Vec<&'static str>,
     organisation: String,
     credentials: CredentialsStatus,
@@ -486,7 +465,6 @@ struct HostedEdge {
     /// Whether the interval loop relays this home (`hosted service`), which
     /// is automatic delivery for every session's reporting demands.
     interval_relay: bool,
-    session_directory: Option<String>,
     /// The operator home's path in each form a served string may carry it.
     home_named: HomeNamed,
     sessions: Mutex<HashMap<String, Arc<Mutex<HostedSession>>>>,
@@ -521,14 +499,6 @@ impl HostedEdge {
         commonmeasure_harness::enrolment::hub_url_accepted(&enrolment.hub)?;
         let origin = canonical_origin(&options.origin)
             .map_err(|reason| format!("origin {:?}: {reason}", options.origin))?;
-        let allowed_origins = options
-            .allowed_origins
-            .iter()
-            .map(|allowed| {
-                canonical_origin(allowed)
-                    .map_err(|reason| format!("allowed origin {allowed:?}: {reason}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let hosts = options
             .hosts
             .iter()
@@ -545,7 +515,6 @@ impl HostedEdge {
         Ok(Self {
             home: home.to_owned(),
             origin,
-            allowed_origins,
             hosts,
             organisation: enrolment.organization.id,
             credentials,
@@ -559,10 +528,6 @@ impl HostedEdge {
             verifier,
             hold_private_floor: options.service.is_some(),
             interval_relay: options.service.is_some(),
-            session_directory: options
-                .service
-                .as_ref()
-                .and_then(|service| service.session_directory.clone()),
             home_named: HomeNamed::new(home),
             sessions: Mutex::new(HashMap::new()),
         })
@@ -811,11 +776,11 @@ impl HostedEdge {
                 self.origin
             )
         })?;
-        if canonical == self.origin || self.allowed_origins.contains(&canonical) {
+        if canonical == self.origin {
             Ok(())
         } else {
             Err(format!(
-                "Origin {canonical} is not this edge's origin {} and is not an allowed origin",
+                "Origin {canonical} is not this edge's origin {}",
                 self.origin
             ))
         }
@@ -904,13 +869,12 @@ impl HostedEdge {
                 &self.home,
                 host,
                 session_id,
-                self.session_directory.clone(),
+                None,
                 Some(session.bearer.principal()),
                 self.credentials.clone(),
                 crate::mcp_session::Transport {
                     served: HOSTED_SERVED,
                     hold_private_floor: self.hold_private_floor,
-                    declared_directory: self.session_directory.is_some(),
                     local_host: false,
                     interval_relay: self.interval_relay,
                 },

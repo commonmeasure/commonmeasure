@@ -45,13 +45,12 @@ pub fn run(args: Benchmark) -> Result<(), String> {
     // Batch Suite supports shared constraints, but not all session screening
     // and terms settings. Refuse unsupported policy rather than dropping it.
     if !canonical["fail_closed"].is_null()
-        || policy.refuse_on_pii()
         || !policy.internal_prefixes().is_empty()
         || canonical["terms"]
             .as_array()
             .is_some_and(|terms| !terms.is_empty())
     {
-        return Err("This source policy cannot be represented by the benchmark batch path (unresolved principal policy, PII override, internal-source prefixes or terms overlays). No calls were made.".into());
+        return Err("This source policy cannot be represented by the benchmark batch path (unresolved principal policy, internal-source prefixes or terms). No calls were made.".into());
     }
     let suite: Suite = serde_json::from_value(json!({
         "suite_version": "simpleqa/v1", "label": "SimpleQA",

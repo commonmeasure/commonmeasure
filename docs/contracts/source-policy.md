@@ -56,9 +56,8 @@ Top level:
 | `scopes` | array of scopes | `[]` | Overlays selected by working directory (§Scopes and principals). |
 | `principals` | array of principal bindings | `[]` | Overlays selected by authenticated identity (§Scopes and principals). |
 | `allow_private_hosts` | boolean | `false` | Whether the mediated tools may reach private addresses (§Recording). |
-| `refuse_on_pii` | boolean | `false` | Whether `strict` refuses a crossing for a personal-data finding on every source, not only on internal and private ones. A PDF, which the detector does not read, is refused under `strict` whatever this says ([a fetched file](host-integration.md#a-fetched-file)). |
 | `record_internal_prefixes` | array of URL prefixes | `[]` | Internal prefixes whose crossings may be recorded (§Recording). |
-| `terms` | array of terms | `[]` | Operator references and scoped assessments of the basis for use (§Terms). |
+| `terms` | array of terms | `[]` | Operator references for the basis of use, by host (§Terms). |
 
 A scope:
 
@@ -70,9 +69,6 @@ A scope:
 | `allow_telemetry_egress` | boolean | `false` | Whether witnessed public crossings in this scope may enter a configured telemetry projection. |
 | `policy_mode` | mode | inherited | Replaces the mode. |
 | `constraints` | array of constraints | inherited | Replaces the constraint list; it is not merged with it. |
-| `allow_private_hosts` | boolean | inherited | Replaces the setting. |
-| `refuse_on_pii` | boolean | inherited | Replaces the setting. |
-| `terms` | array of terms | inherited | Replaces the terms list. |
 
 A principal binding names exactly one of `os_user`, `subject` and
 `edge_token`; the loader refuses a binding naming more or none:
@@ -170,9 +166,8 @@ session's authenticated identity and the working directory:
    level's where present. A key matches a binding of its own kind only. The
    stdio server's identity is the process's effective user id, matched
    against `os_user`; it is read from the process, not from `USER`,
-   `LOGNAME`, `COMMONMEASURE_PRINCIPAL` or any other variable the process
-   could set, and `COMMONMEASURE_PRINCIPAL` is shown as an asserted label
-   for diagnosis and selects nothing. The hosted edge's identity is the
+   `LOGNAME` or any other variable the process could set. The hosted edge's
+   identity is the
    subject of the access token it verified, matched against `subject`, or
    the label of the edge-issued token presented, matched against
    `edge_token`; the service process's own user is never its principal. An
@@ -191,9 +186,8 @@ session's authenticated identity and the working directory:
    session's is not passed over for a later one: the session is refused
    there. A principal with `require_scope: true` whose session selects no
    scope bound to it is refused.
-4. **Overlay.** The selected scope's `policy_mode`, `constraints`,
-   `allow_private_hosts`, `refuse_on_pii` and `terms` replace the values
-   resolved so far where present. Its `engagement` and
+4. **Overlay.** The selected scope's `policy_mode` and `constraints`
+   replace the values resolved so far where present. Its `engagement` and
    `allow_telemetry_egress` apply to that scope alone and are never
    inherited.
 
@@ -267,13 +261,13 @@ the record. Nothing is ever left unrecorded because of the mode.
   scopes are matched in. Observed capture records no internal or private
   address the list does not match; the mediated tools reach and record one
   only under `allow_private_hosts`.
-- `refuse_on_pii`: the personal-data detector's finding is recorded on every
-  mediated crossing. `strict` refuses one on an internal or private source;
-  on a public source it admits the crossing with the finding recorded, because
-  a public page's published contact details are not the personal data the
-  detector exists to keep out of a model. With `refuse_on_pii` it refuses one
-  on every source. The detector does not read a PDF the edge hands over as a
-  file, so `strict` refuses every PDF with or without `refuse_on_pii`.
+- The personal-data detector's finding is recorded on every mediated
+  crossing. `strict` refuses one on an internal or private source; on a
+  public source it admits the crossing with the finding recorded, because a
+  public page's published contact details are not the personal data the
+  detector exists to keep out of a model. The detector does not read a PDF
+  the edge hands over as a file, so `strict` refuses every PDF
+  ([a fetched file](host-integration.md#a-fetched-file)).
 - A witnessed public crossing leaves the machine only where its scope names
   an `engagement` and sets `allow_telemetry_egress: true`; an absent policy,
   an unmatched directory or a scope without both keeps it local. What leaves
@@ -289,64 +283,26 @@ the record. Nothing is ever left unrecorded because of the mode.
     "host": "publisher.example",
     "reference": "agreement-42",
     "requires_reporting": true,
-    "access_context": [{"scheme": "ror", "value": "https://ror.org/013meh722"}],
-    "assessment": {
-      "basis": "agreement",
-      "applicability": "applicable",
-      "version": "2026-09",
-      "claimed_issuer": "Publisher",
-      "authority_evidence": ["agreement-42:reuse-clause"],
-      "content": ["https://publisher.example/articles/1"],
-      "intended_uses": ["ai-input"],
-      "reason": "The agreement covers AI input for this article."
-    }
+    "access_context": [{"scheme": "ror", "value": "https://ror.org/013meh722"}]
   }]
 }
 ```
 
 A terms entry names a source host and the operator's reference for an
-agreement, public licence or applicable exception. The host is compared as a
-host pattern's is, and matched exactly: a subdomain needs its own entry.
-One entry per host is accepted; `content` can name several individual URLs.
-A scope's terms replace the whole top-level list.
+agreement with it. The host is compared as a host pattern's is, and matched
+exactly: a subdomain needs its own entry. One entry per host is accepted.
 
-`assessment` is optional. An entry without it still loads and retains its
-existing policy identity, but its applicability is unresolved and it no
-longer overrides a source statement or supplies a declared licence. Supplier
-API access or a subscription reference alone supplies no reuse permission.
-The operator must add a scoped assessment for an override.
-
-| Assessment field | Meaning |
-|---|---|
-| `basis` | Required: `agreement`, `public_licence` or `exception`. The enclosing `reference` identifies that basis, including the applicable exception when that kind is selected. |
-| `applicability` | Required: the operator's conclusion, `applicable` or `unresolved`. |
-| `version` | Agreement or public licence version; required when either is assessed as applicable. Optional for an exception or unresolved basis. |
-| `claimed_issuer` | Optional claimed rights issuer; required for an applicable agreement. |
-| `authority_evidence` | References supporting issuer authority. Defaults to `[]`; at least one is required for an applicable agreement. These references are recorded without verification. |
-| `content` | Required, non-empty list of exact absolute HTTP(S) URLs on the entry's host, without credentials or fragments. The complete URL text, including scheme, port and query, must match the requested URL. Prefixes and wildcards are not supported. |
-| `intended_uses` | Required, non-empty list drawn from `train-ai`, `ai-input`, `ai-index` and `search`. |
-| `reason` | Required, non-empty operator explanation of the assessment or its unresolved applicability. |
-
-A mediated fetch makes `ai-input`; tool arguments cannot change that fact.
-Before each request, including each redirect destination, the runtime checks
-that applicability is `applicable`, the actual requested URL is in `content`
-and `intended_uses` includes `ai-input`. Only then does the assessment govern
-over source AI-use statements. Otherwise those statements and the policy
-mode govern, and unresolved applicability stays unresolved even if the mode
-allows the crossing. After receiving the response the same ruling applies to
-its declarations before any bytes enter context. A matching assessment does
-not bypass host constraints, robots access rules, screening or reporting duties.
-Search supplier credentials do not become a terms assessment for result content.
-
-`requires_reporting` says the assessed basis requires usage reporting;
-`access_context` names the institution identifiers it attributes usage to,
-never a person. When the assessment governs, the licence reference and these
-reporting duties apply. Source statements remain separately recorded, with
-the scope decision, policy mode, outcome and reason in
-[session evidence](session-evidence.md#source-declarations).
-
-The operator supplies the assessment. Common Measure applies these scope
-checks; it does not verify issuer authority or decide legal entitlement.
+The reference is recorded on every mediated crossing of the host under
+`declarations.terms` ([session evidence](session-evidence.md#source-declarations))
+and nothing more: it does not override the source's published preference, it
+supplies no declared licence, and a supplier API subscription or access
+reference alone supplies no reuse permission. `requires_reporting` says the
+agreement requires usage reporting and `access_context` names the
+institution identifiers it attributes usage to, never a person; the relay
+withholds a session under terms naming identifiers until session-document
+delivery is built. Which agreement permits what, and how an edge proves it,
+is settled by the network design (roadmap NET-14 and NET-15), which these
+fields wait on.
 
 ## What the loader refuses
 
@@ -363,7 +319,7 @@ this contract.
 **Checks.** A document that parses is then checked. Each check refuses with
 the sentence below, where `<file>` names the file as the loader was given
 it and `<list>` is `the top-level policy`, `scope "<match>"` or
-`principal "<name>"`:
+`principal "<name>"` (terms are declared at the top level only):
 
 | Check | Refused when | Refusal |
 |---|---|---|
@@ -388,22 +344,6 @@ it and `<list>` is `the top-level policy`, `scope "<match>"` or
 | `terms_reference_empty` | a terms entry names no reference | `<file> <list> terms entry <N> for host "<host>" names no reference; the reference is what the record and the wire carry` |
 | `terms_host_duplicate` | one list has two entries for one host | `<file> <list> declares terms for host "<host>" twice; one host holds one agreement` |
 | `terms_identifier_incomplete` | an institution identifier lacks a scheme or a value | `<file> <list> terms entry <N> for host "<host>" has an access_context identifier without a scheme or a value` |
-| `terms_assessment_invalid` | an assessment fails the checks below | `<file> <list> terms entry <N> for host "<host>": <reason>` |
-
-Assessment checks run after the host, reference and duplicate-host checks,
-before institution identifiers, in this order. Their refusal reasons are:
-
-1. `assessment reason is empty`
-2. `assessment must name content and intended uses`
-3. `assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment`
-4. `assessment version, issuer and authority references must be non-empty when supplied`
-5. `an applicable agreement or public licence must name its version`
-6. `an applicable agreement must name its claimed issuer and authority evidence`
-
-Unknown assessment fields, basis kinds, applicability values and use categories
-are structural errors. Optional assessment fields accept `null` as omission;
-`authority_evidence` accepts an array only. Unresolved assessments must still
-name content, intended uses and a reason, but need not assert an issuer or version.
 
 Amounts in `allowance_period_duplicate` are written as the major unit with
 six decimal places (`1.000000`). A value that is only spaces counts as empty
@@ -429,14 +369,11 @@ after parsing:
 
 - `policy_mode`, `constraints`, `scopes`, `allow_private_hosts` and
   `record_internal_prefixes` are always present;
-- `principals` and `terms` are present only when not empty, and
-  `refuse_on_pii` only when true;
+- `principals` and `terms` are present only when not empty;
 - a scope always carries `allow_telemetry_egress`, and carries its other
   optional fields only when set; a binding always carries `require_scope`,
   and `allowances` only when not empty; a terms entry always carries
-  `requires_reporting`, and `access_context` only when not empty. An
-  assessment is present only when supplied; its optional version and issuer
-  appear only when set, and its authority evidence only when not empty;
+  `requires_reporting`, and `access_context` only when not empty;
 - a host pattern is written in its compared form and a currency in upper
   case;
 - an unknown member inside a constraint is gone.
@@ -445,7 +382,7 @@ The digest of a policy is the SHA-256 of the canonical JSON of its loader's
 form ([`docs/contracts/canonical-json.md`](canonical-json.md)), which is the
 digest a fleet-status document reports for the file in force.
 `commonmeasure policy check` prints it; here `policy.json` holds the `policy`
-of the vectors' second accepted document:
+of the vector "a firm's policy as an owner writes it":
 
 ```shell
 $ commonmeasure policy check policy.json

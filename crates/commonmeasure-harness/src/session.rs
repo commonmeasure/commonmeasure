@@ -1089,21 +1089,6 @@ impl SessionLog {
         self.log.append("session_ended", record)
     }
 
-    /// The operator's declared directory for a hosted service. This records
-    /// the scope's basis without claiming a working directory on the client.
-    pub fn record_hosted_scope(&mut self, host: &str, directory: &str) -> std::io::Result<u64> {
-        self.append(
-            "hosted_scope",
-            json!({
-                "session_id": self.session_id,
-                "host": host,
-                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-                "basis": "service_configuration",
-                "directory": directory,
-            }),
-        )
-    }
-
     /// The MCP client's own name and version, as it sent them in the
     /// protocol's `initialize` request, with the protocol version it asked
     /// for and the one the server answered with. Written once, before the

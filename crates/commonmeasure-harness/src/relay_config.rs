@@ -1,5 +1,4 @@
-//! Relay configuration: who receives the projection, if anyone, and which
-//! suppliers' events that receiver takes.
+//! Relay configuration: who receives the projection, if anyone.
 //!
 //! No configuration means no egress. That is not a fallback but the shipped
 //! state: there is no default receiver, no ambient environment variable, and
@@ -31,29 +30,12 @@ pub struct RelayConfig {
     /// not prescribe an auth scheme; a conforming receiver may require one.
     #[serde(default)]
     pub api_key: Option<String>,
-    /// Suppliers whose content this receiver takes, e.g. `["ozone"]` for a
-    /// supplier's own telemetry server. When set, only events that name one
-    /// of them (`data.commonmeasure-supplier`) leave for this receiver: the
-    /// operator's own fetches, other suppliers' results and turn boundaries
-    /// stay home, and the batches carry no refused count. Absent or `null`
-    /// means every cleared event, as before. An empty list is scoped to no
-    /// supplier, so the receiver takes nothing. It scopes the configured
-    /// receiver, and a `--receiver` override naming the same endpoint
-    /// ([`same_receiver`]); an override to another receiver is not scoped by
-    /// it.
-    ///
-    /// This is a local narrowing, not the authority on what the receiver may
-    /// see. That follows the supplier's grant; the list may narrow what this
-    /// edge sends within it and never widens it (owner decision, 22 September
-    /// 2026).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub suppliers: Option<Vec<String>>,
 }
 
 impl RelayConfig {
     /// Load `<home>/relay.json`. Absent means no receiver is configured; a
-    /// file that does not parse, or whose receiver or supplier list is not
-    /// one the relay can act on, is an error naming the file and the fault.
+    /// file that does not parse, or whose receiver is not one the relay can
+    /// act on, is an error naming the file and the fault.
     pub fn load(home: &Path) -> Result<Option<Self>, String> {
         let source = home.join("relay.json");
         if !source.exists() {
@@ -66,9 +48,7 @@ impl RelayConfig {
             .map_err(|error| format!("{} is not a valid relay config: {error}", source.display()))
     }
 
-    /// Parse and check the bytes of a relay configuration. The receiver and
-    /// the supplier list are checked together, so a receiver is never read
-    /// from a file whose scope is malformed.
+    /// Parse and check the bytes of a relay configuration.
     pub fn parse(encoded: &[u8]) -> Result<Self, String> {
         let config: RelayConfig =
             serde_json::from_slice(encoded).map_err(|error| error.to_string())?;
@@ -77,32 +57,12 @@ impl RelayConfig {
     }
 
     /// Whether the relay can act on this configuration: a receiver it can
-    /// post to as named ([`receiver_endpoint`]) and a supplier list that
-    /// names suppliers. [`Self::parse`] and [`Self::store`] both hold a
-    /// configuration to it, so nothing writes a file the relay would refuse.
+    /// post to as named ([`receiver_endpoint`]). [`Self::parse`] and
+    /// [`Self::store`] both hold a configuration to it, so nothing writes a
+    /// file the relay would refuse.
     pub fn check(&self) -> Result<(), String> {
         receiver_endpoint(&self.receiver).map_err(|fault| fault.with_remedy())?;
-        if self
-            .suppliers
-            .iter()
-            .flatten()
-            .any(|supplier| supplier.is_empty())
-        {
-            return Err("`suppliers` lists an empty name, which names no supplier".to_owned());
-        }
         Ok(())
-    }
-
-    /// The supplier scope as the operator is told it: `suppliers (a, b)`,
-    /// `an empty supplier list`, or `None` for a receiver not scoped.
-    pub fn scope(&self) -> Option<String> {
-        self.suppliers.as_ref().map(|suppliers| {
-            if suppliers.is_empty() {
-                "an empty supplier list".to_owned()
-            } else {
-                format!("suppliers ({})", suppliers.join(", "))
-            }
-        })
     }
 
     /// Write `<home>/relay.json` atomically, readable by the owner only:
@@ -240,45 +200,14 @@ pub fn receiver_endpoint(receiver: &str) -> Result<url::Url, ReceiverFault> {
 
 /// Whether batches for two receiver URLs reach one endpoint
 /// ([`posted_endpoint`]). A URL the transport cannot post to matches
-/// nothing. The relay decides whether the configured supplier scope applies
-/// to the receiver it delivers to, a `--receiver` override included, by this
-/// function alone.
+/// nothing. Status decides by this function alone whether the last accepted
+/// delivery went to the receiver now configured.
 pub fn same_receiver(one: &str, other: &str) -> bool {
     matches!(
         (posted_endpoint(one), posted_endpoint(other)),
         (Some(one), Some(other)) if one == other
     )
 }
-
-/// A `suppliers` member as written, and the scope it parses to or a
-/// fragment of the load error.
-#[cfg(test)]
-pub(crate) type SupplierCase = (
-    &'static str,
-    Result<Option<&'static [&'static str]>, &'static str>,
-);
-
-#[cfg(test)]
-pub(crate) const SUPPLIER_TABLE: &[SupplierCase] = &[
-    ("", Ok(None)),
-    (r#","suppliers":null"#, Ok(None)),
-    (r#","suppliers":[]"#, Ok(Some(&[]))),
-    (r#","suppliers":["ozone"]"#, Ok(Some(&["ozone"]))),
-    (
-        r#","suppliers":["ozone","exa"]"#,
-        Ok(Some(&["ozone", "exa"])),
-    ),
-    (
-        r#","suppliers":"ozone""#,
-        Err("invalid type: string \"ozone\""),
-    ),
-    (r#","suppliers":{"ozone":true}"#, Err("invalid type: map")),
-    (
-        r#","suppliers":["ozone",1]"#,
-        Err("invalid type: integer `1`"),
-    ),
-    (r#","suppliers":[""]"#, Err("empty name")),
-];
 
 /// Refused receivers each holding the key `ak_PLANTED` somewhere a key is
 /// put: in the credentials, in the query, in a tokenised path (refused here
@@ -330,7 +259,6 @@ mod tests {
                     let config = RelayConfig {
                         receiver: "https://hub.example".to_owned(),
                         api_key: Some(format!("key-{n}-{}", "x".repeat(200 * n))),
-                        suppliers: None,
                     };
                     for _ in 0..40 {
                         if let Err(error) = config.store(home) {
@@ -365,26 +293,16 @@ mod tests {
     /// writes a file the relay would refuse, and one it does write loads.
     #[test]
     fn a_configuration_load_would_refuse_is_not_stored() {
-        for (receiver, suppliers, fault) in [
-            (
-                "http://user@127.0.0.1:9/api/v1/telemetry",
-                None,
-                "credentials",
-            ),
-            ("https://hub.example/t?tenant=a", None, "query or fragment"),
-            ("https://hub.example/t#x", None, "query or fragment"),
-            ("hub.example/t", None, "not a URL"),
-            (
-                "https://hub.example/t",
-                Some(vec![String::new()]),
-                "empty name",
-            ),
+        for (receiver, fault) in [
+            ("http://user@127.0.0.1:9/api/v1/telemetry", "credentials"),
+            ("https://hub.example/t?tenant=a", "query or fragment"),
+            ("https://hub.example/t#x", "query or fragment"),
+            ("hub.example/t", "not a URL"),
         ] {
             let home = tempfile::tempdir().unwrap();
             let config = RelayConfig {
                 receiver: receiver.to_owned(),
                 api_key: Some("ak".to_owned()),
-                suppliers,
             };
             let error = config.store(home.path()).expect_err(receiver);
             assert!(error.contains(fault), "{receiver}: {error}");
@@ -394,12 +312,11 @@ mod tests {
         RelayConfig {
             receiver: "https://hub.example/api/v1/telemetry".to_owned(),
             api_key: Some("ak".to_owned()),
-            suppliers: Some(vec!["ozone".to_owned()]),
         }
         .store(home.path())
         .unwrap();
         let loaded = RelayConfig::load(home.path()).unwrap().unwrap();
-        assert_eq!(loaded.suppliers, Some(vec!["ozone".to_owned()]));
+        assert_eq!(loaded.receiver, "https://hub.example/api/v1/telemetry");
     }
 
     /// A load error names the fault and the receiver's origin, never the
@@ -433,24 +350,6 @@ mod tests {
             Some("http://[::1]:9")
         );
         assert_eq!(receiver_origin("hub.example/p"), None);
-    }
-
-    #[test]
-    fn the_supplier_list_parses_to_a_scope_or_an_error() {
-        for (suppliers, expected) in SUPPLIER_TABLE {
-            let file = format!(r#"{{"receiver":"https://receiver.example/v1"{suppliers}}}"#);
-            let parsed = RelayConfig::parse(file.as_bytes()).map(|config| config.suppliers);
-            match expected {
-                Ok(scope) => {
-                    let scope = scope.map(|names| names.iter().map(|n| n.to_string()).collect());
-                    assert_eq!(parsed, Ok(scope), "{file}");
-                }
-                Err(fault) => {
-                    let error = parsed.expect_err(&file);
-                    assert!(error.contains(fault), "{file}: {error}");
-                }
-            }
-        }
     }
 
     /// Each normalisation the transport applies, and the two this function

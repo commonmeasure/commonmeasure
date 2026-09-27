@@ -6,6 +6,39 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.5 (27 September 2026)
+
+Upgrading: a `policy.json` that sets `refuse_on_pii`, `terms[].assessment`, a
+scope's `allow_private_hosts` or `terms`, or a `relay.json` that sets
+`suppliers`, or a `hosted-service.json` that sets `allowed_origins` or
+`session_directory`, stops loading on 0.4.5 until the key is deleted; the
+refusal names the key. The PII detector no longer refuses a crossing in any
+mode: it records its finding on the crossing, in `strict` as well as
+`observe`. A batch-run suite that declared `governance` is refused; remove
+the member.
+
+### Added
+
+- `commonmeasure console` names the operator console's address, as `service install console` recorded it or as `serve` binds by default, says whether a console answers there and which version, and lists each page's address; `commonmeasure console open <page>` opens one in the browser, and `--json` prints the same as a document. The policy's mode, denied hosts and attribution rules are edited in the console's Policy page, which `doctor` now names beside its policy findings ([the console](https://github.com/commonmeasure/commonmeasure/blob/main/docs/CONSOLE.md#from-the-command-line)).
+- `commonmeasure doctor --json` prints the report as a document, `commonmeasure-doctor/v1`: every finding with its standing, the hosts, the console and a summary ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#doctor)).
+- `--color auto|always|never` on every command, for the reports `doctor`, `status`, `credentials` and `console` print. `auto` colours a terminal only and honours `NO_COLOR`.
+
+### Changed
+
+- `commonmeasure doctor` prints one report in sections rather than a list of lines: the Edge home, the console, the relay, then each host. Every finding carries a standing chosen where the fact is established, marked `✓`, `!` (something to act on), `?` (could not be determined) or `·` (a fact), and the report ends with how many hosts are registered and how many findings need attention. In a terminal the marks are coloured and long findings wrap to the terminal's width; through a pipe each finding is one line with no escape codes, as before. The words of each finding are unchanged, except that whether the sessions directory is writable and whether the policy loads are printed once, under the Edge home, rather than under every host; `this binary:` and `operator home:` are now the `binary` and `home` rows under the heading. A console serving another version than the binary is marked as something to act on ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#doctor)).
+- `commonmeasure status` and `commonmeasure credentials` print with the same marks: the relay's egress account, the edge, the policy and the allowances in `status`, and each provider in `credentials`. The key columns and words are as they were.
+
+### Removed
+
+- The `support-governor` processor and the run manifest's `governance` member, with the `governed-*` and `revocation-*` specialist suites: 1,955 lines of source, tests and demo input removed. A batch suite declaring `governance` is now refused as an unknown field, and so is a corpus manifest (`corpus.json`) carrying the `documents` map that held per-document metadata for the governor. The manifest is `contextops-manifest/v5`; a v4 manifest's sealed object still verifies against its own hash ([run output](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/run-output.md#manifest), [processors](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/processor.md)).
+- The `refuse_on_pii` policy key, at the top level and in a scope, and the PII detector's refusal. The detector still runs on every mediated crossing and every batch source and records its finding in every mode; the finding is carried as a breach on the crossing, in `strict` as in `observe` and `prefer`, whether the source is public, a private or loopback address, a named internal prefix or the operator's corpus, and the text is delivered. A policy file that still carries the key is refused as any unknown key is, until the key is removed. The policy identity pre-image loses the field, so the identity schema is `contextops-policy-identity/v3` and every policy's identity digest moves ([source policy](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/source-policy.md#recording), [fleet status](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/fleet-status.md#policy-identity)).
+- `terms[].assessment` and the operator-terms override it switched on. A terms entry now records the operator's reference on the host's crossings and nothing more: it no longer overrides a source's AI-input statement, no longer stands in for an unread licence and no longer supplies the crossing's licence reference, and the crossing record and tool result carry no `governing` or `assessment_decision`. `requires_reporting` and `access_context` are kept for the network design (NET-14, NET-15); until it lands, `requires_reporting` raises no breach, because its breach was reached only through an applicable assessment. A policy with an `assessment` member is refused as an unknown key ([terms](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/source-policy.md#terms)).
+- The scope overlays `allow_private_hosts` and `terms`. A scope replaces the mode and the constraint list and nothing else; `allow_private_hosts` and `terms` are declared at the top level only. A policy that sets either in a scope is refused as an unknown key ([source policy](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/source-policy.md#scopes-and-principals)).
+- The `COMMONMEASURE_PRINCIPAL` environment variable, which labelled a principal for diagnosis and selected nothing, and the `asserted_principal` member of `context_status`'s policy report.
+- The relay's refusal of a spool written by 0.3.4 or earlier (`outbound.ack`, queue lines without an `index`, the hold on a batch with `queued_at: null`, and `refused_spool` in `status`, `doctor` and the console), about 900 lines. A queue line without an `index` is refused as any damaged line is ("names no index; nothing is delivered until the line is repaired"), `outbound.ack` is ignored, and a batch with no `queued_at` is delivered with its queue age reported as unknown ([telemetry projection](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#delivery-state)).
+- `relay.json` `suppliers`, the per-receiver supplier scope, about 1,000 lines: every configured receiver takes every cleared event and the session's refused count, and a reporting demand is no longer ruled unmet for a scoped receiver. A `relay.json` still carrying `suppliers` is refused as any unknown field is, so the relay sends nothing until the key is deleted ([telemetry projection](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md)).
+- The hosted service's `allowed_origins` and `session_directory` configuration keys and the `--allow-origin` option of `hosted serve`. A request's `Origin` must be the edge's own origin. A hosted session has no working directory, so no directory scope governs it; the `hosted_scope` session record is no longer written. A `hosted-service.json` that still carries either key is refused as an unknown key ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#the-hosted-path)).
+
 ## 0.4.4 (26 September 2026)
 
 ### Fixed

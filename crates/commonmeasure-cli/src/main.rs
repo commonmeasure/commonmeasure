@@ -7,6 +7,8 @@
 
 mod artifact;
 mod benchmark;
+mod console;
+mod doctor;
 mod enrol;
 mod hosted;
 mod hosted_tokens;
@@ -15,12 +17,12 @@ mod instance;
 mod mcp_session;
 mod processes;
 mod relay_loop;
+mod report;
 mod service;
 mod update;
 
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -72,6 +74,11 @@ const MCP_HOSTS: [&str; 7] = [
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// When the reports `doctor`, `status`, `credentials` and `console` print
+    /// carry colour: `auto` colours a terminal and nothing else, and honours
+    /// NO_COLOR. `--json` output never does.
+    #[arg(long, global = true, value_name = "WHEN", default_value_t = clap::ColorChoice::Auto)]
+    color: clap::ColorChoice,
 }
 
 #[derive(Subcommand)]
@@ -237,6 +244,9 @@ enum Command {
         /// naming a fake-IP proxy or a tailnet where one is answering.
         #[arg(long, value_name = "NAME")]
         resolve: Option<String>,
+        /// Print the findings as a JSON document rather than the report.
+        #[arg(long)]
+        json: bool,
     },
     /// Reconstruct crossings from host transcripts for work done before
     /// Common Measure was installed.
@@ -405,6 +415,11 @@ enum Command {
         /// Directory to write into; created if absent.
         out: PathBuf,
     },
+    /// Where the operator console is and whether it answers, the address of
+    /// each of its pages, and `console open <page>` to open one in the
+    /// browser. The policy's mode, denied hosts and attribution rules are
+    /// edited in its Policy page.
+    Console(console::Console),
     /// Serve the operator console on loopback: Overview, Record, Agents,
     /// Policy, Sources, Compare and Budget, rendered from the local evidence
     /// logs.
@@ -469,16 +484,12 @@ enum HostedCommand {
         /// and is the exact audience a token must name.
         #[arg(long)]
         origin: String,
-        /// A further Origin header value to accept beside --origin itself. A
-        /// request carrying any other Origin is refused with 403. Repeatable.
-        #[arg(long = "allow-origin")]
-        allow_origin: Vec<String>,
         /// A host word to serve; every word when none is given. Repeatable.
         #[arg(long = "host")]
         host: Vec<String>,
     },
-    /// Run as the deployed service: origin, allowed origins, host words and
-    /// interval from ~/.commonmeasure/hosted-service.json. Refuses to start
+    /// Run as the deployed service: origin, host words and interval from
+    /// ~/.commonmeasure/hosted-service.json. Refuses to start
     /// unenrolled, under local policy, or while another process holds the
     /// home. Runs the relay, the policy refresh, the issuer key refresh and
     /// the idle-session sweep on the interval, and refuses every local or
@@ -540,6 +551,7 @@ fn main() -> ExitCode {
         arguments.insert(1, "native-host".into());
     }
     let cli = Cli::parse_from(arguments);
+    let palette = report::Palette::for_stdout(cli.color);
     let result = match cli.command {
         Command::Benchmark(args) => benchmark::run(args),
         Command::Enrol(args) => enrol::run(args),
@@ -554,13 +566,17 @@ fn main() -> ExitCode {
         Command::Mcp { host, session } => serve_mcp(&host, session.as_deref()),
         Command::Hosted { command } => run_hosted(command),
         Command::NativeHost { origin: _ } => return native_host(),
-        Command::Credentials => credentials_report(),
+        Command::Credentials => credentials_report(palette),
         Command::Install { host, binary } => install_host(&host, binary.as_deref()),
         Command::Uninstall { host } => uninstall_host(&host),
-        Command::Doctor { host, resolve } => doctor(host.as_deref(), resolve.as_deref()),
+        Command::Doctor {
+            host,
+            resolve,
+            json,
+        } => doctor::run(host.as_deref(), resolve.as_deref(), json, palette),
         Command::Import { since, dry_run } => import(since.as_deref(), dry_run),
         Command::Session { session } => show_session(session.as_deref()),
-        Command::Status { json } => show_status(json),
+        Command::Status { json } => show_status(json, palette),
         Command::Policy { action } => match action {
             PolicyAction::Identity => show_policy_identity(),
             PolicyAction::Sync => sync_policy(),
@@ -623,6 +639,7 @@ fn main() -> ExitCode {
             trust_anchors.as_deref(),
             require_trusted,
         ),
+        Command::Console(args) => console::run(args, palette),
         Command::Serve {
             listen,
             allow_remote,
@@ -1223,14 +1240,12 @@ fn run_hosted(command: HostedCommand) -> Result<(), String> {
         HostedCommand::Serve {
             listen,
             origin,
-            allow_origin,
             host,
         } => hosted::serve(
             &home,
             hosted::Options {
                 listen,
                 origin,
-                allowed_origins: allow_origin,
                 hosts: if host.is_empty() {
                     hosted::HOST_WORDS
                         .iter()
@@ -1285,34 +1300,46 @@ fn run_hosted(command: HostedCommand) -> Result<(), String> {
 /// one line per provider saying configured-or-not and where the variable came
 /// from. Everything here is a name, a path or a digest; no value is read back
 /// out of the environment for printing.
-fn credentials_report() -> Result<(), String> {
+fn credentials_report(palette: report::Palette) -> Result<(), String> {
+    use commonmeasure_types::Finding;
     let home = home_dir().map_err(|error| error.to_string())?;
     let status = commonmeasure_supply::credentials::apply(&home)?;
+    let mut out = String::new();
     match &status.loaded {
         Some(loaded) => {
-            println!(
-                "credentials file: {} ({})",
-                status.path.display(),
-                loaded.sha256
-            );
+            out.push_str(&palette.finding(
+                &Finding::ok(format!(
+                    "credentials file: {} ({})",
+                    status.path.display(),
+                    loaded.sha256
+                )),
+                0,
+            ));
             if !loaded.shadowed.is_empty() {
-                println!(
-                    "  shadowed by the launching environment, which wins: {}",
-                    loaded.shadowed.join(", ")
-                );
+                out.push_str(&palette.finding(
+                    &Finding::note(format!(
+                        "shadowed by the launching environment, which wins: {}",
+                        loaded.shadowed.join(", ")
+                    )),
+                    2,
+                ));
             }
         }
-        None => println!(
-            "credentials file: {} is absent. Create it with KEY=VALUE lines and chmod 600, \
-             or export variables in the environment that launches the harness.",
-            status.path.display()
-        ),
+        None => out.push_str(&palette.finding(
+            &Finding::note(format!(
+                "credentials file: {} is absent. Create it with KEY=VALUE lines and chmod 600, \
+                 or export variables in the environment that launches the harness.",
+                status.path.display()
+            )),
+            0,
+        )),
     }
+    let _ = write!(out, "\n{}\n", palette.heading("Providers"));
     for provider in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
         let Some(variable) = commonmeasure_supply::required_variable(provider) else {
             continue;
         };
-        match commonmeasure_supply::supplier_from_environment(provider) {
+        let finding = match commonmeasure_supply::supplier_from_environment(provider) {
             Ok(_) => {
                 let from_file = status
                     .loaded
@@ -1323,15 +1350,16 @@ fn credentials_report() -> Result<(), String> {
                 } else {
                     "the environment"
                 };
-                println!("  {provider:<12} configured ({variable} from {source})");
+                Finding::ok(format!("configured ({variable} from {source})"))
             }
             Err(commonmeasure_supply::SupplyError::CredentialMissing { variable }) => {
-                println!("  {provider:<12} unavailable ({variable} is not set)");
+                Finding::note(format!("unavailable ({variable} is not set)"))
             }
-            Err(other) => println!("  {provider:<12} unavailable ({other})"),
-        }
+            Err(other) => Finding::attention(format!("unavailable ({other})")),
+        };
+        out.push_str(&palette.row(Some(finding.standing), provider, &finding.text, 13));
     }
-    Ok(())
+    write_stdout(&out)
 }
 
 fn host_named(name: &str) -> Result<HostSurface, String> {
@@ -1360,7 +1388,7 @@ fn install_host(host: &str, binary: Option<&Path>) -> Result<(), String> {
         lines.push(if running {
             "claude-desktop: a background relay holds this home, so a source whose licence \
              demands usage reporting can be admitted in its sessions where the policy scope \
-             clears telemetry egress and relay.json names a receiver not scoped to suppliers"
+             clears telemetry egress"
                 .to_owned()
         } else {
             format!(
@@ -1380,282 +1408,6 @@ fn uninstall_host(host: &str) -> Result<(), String> {
     let paths = registration::HostPaths::from_environment()?;
     let lines = registration::uninstall(surface, &paths)?;
     write_stdout(&format!("{}\n", lines.join("\n")))
-}
-
-/// Each host's registration checked against the machine. Exits zero
-/// whatever it finds: the report is the result.
-fn doctor(host: Option<&str>, resolve: Option<&str>) -> Result<(), String> {
-    use commonmeasure_harness::registration;
-    let paths = registration::HostPaths::from_environment()?;
-    let home = home_dir().map_err(|error| error.to_string())?;
-    let surfaces = match host {
-        Some(name) => vec![host_named(name)?],
-        None => vec![
-            HostSurface::ClaudeCode,
-            HostSurface::Codex,
-            HostSurface::Pi,
-            HostSurface::ClaudeDesktop,
-            HostSurface::Cursor,
-            HostSurface::CopilotCli,
-            HostSurface::VsCode,
-            HostSurface::Chrome,
-        ],
-    };
-    let mut out = format!(
-        "this binary: {} ({})\noperator home: {}\n",
-        std::env::current_exe()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "unresolved".to_owned()),
-        env!("CARGO_PKG_VERSION"),
-        home.display()
-    );
-    if let Some(line) = managed_policy_line(&home) {
-        let _ = writeln!(out, "{line}");
-    }
-    let _ = writeln!(out, "{}", hosted::service_line(&home));
-    let _ = writeln!(out, "background relay: {}", relay_loop::line(&home));
-    out.push_str(&commonmeasure_relay::state::egress_text(
-        &commonmeasure_relay::egress_report(&home),
-    ));
-    let _ = writeln!(
-        out,
-        "{}",
-        commonmeasure_relay::state::last_delivery_text(&home, chrono::Utc::now())
-    );
-    let _ = writeln!(
-        out,
-        "{}",
-        automatic_relay_line(
-            &home,
-            commonmeasure_harness::registration::session_end_registered(&paths)
-        )
-    );
-    if let Some(name) = resolve {
-        let _ = writeln!(
-            out,
-            "{}",
-            resolution_line(name, &|url| commonmeasure_http::resolve(url)
-                .map_err(|error| format!("{error:#}")))
-        );
-    }
-    for surface in surfaces {
-        let report = registration::doctor(surface, &paths, &home);
-        let _ = writeln!(
-            out,
-            "\n{:<12} {}",
-            report.host,
-            if report.registered {
-                "registered"
-            } else {
-                "not registered"
-            }
-        );
-        for line in report.lines {
-            let _ = writeln!(out, "  {line}");
-        }
-    }
-    write_stdout(&out)
-}
-
-/// What `doctor --resolve` says about one name: the addresses the system
-/// resolver gives it, and what the privacy floor makes of them. The lookup is
-/// made only when asked for, so `doctor` alone stays off the network. Two
-/// ranges are named with their remedy: `198.18.0.0/15`, which a fake-IP
-/// proxy answers every name with, and `100.64.0.0/10`, where Tailscale's
-/// MagicDNS puts tailnet names.
-fn resolution_line(
-    name: &str,
-    resolve: &dyn Fn(&str) -> Result<Vec<SocketAddr>, String>,
-) -> String {
-    use commonmeasure_types::address;
-    let url = if name.contains("://") {
-        name.to_owned()
-    } else {
-        format!("https://{name}/")
-    };
-    let host = commonmeasure_harness::grounding::host_of(&url);
-    let addresses = match resolve(&url) {
-        Ok(addresses) => addresses,
-        Err(error) => return format!("resolution: {host} did not resolve: {error}"),
-    };
-    let listed = addresses
-        .iter()
-        .map(|address| address.ip().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let ips = || addresses.iter().map(SocketAddr::ip);
-    let finding = if ips().any(address::is_fake_ip_range) {
-        "in 198.18.0.0/15, the range fake-IP proxies (Clash, Surge, sing-box and similar) \
-         answer names with: while one does, a fetch by name is refused unless \
-         \"allow_private_hosts\" is set or its prefix is named in \"record_internal_prefixes\", \
-         and always on a hosted edge. Set the proxy to return real addresses to this machine \
-         (Surge always-real-ip, Clash fake-ip-filter, a sing-box DNS rule)"
-    } else if ips().any(address::is_shared_range) {
-        "in 100.64.0.0/10, shared address space used by Tailscale and carrier-grade NAT: a \
-         fetch is refused unless its prefix is named in \"record_internal_prefixes\" or \
-         \"allow_private_hosts\" is set, and always on a hosted edge"
-    } else if ips().any(address::is_private_ip) {
-        "a local or private address: a fetch is refused unless its prefix is named in \
-         \"record_internal_prefixes\" or \"allow_private_hosts\" is set, and always on a \
-         hosted edge"
-    } else {
-        "public"
-    };
-    format!("resolution: {host} resolves to {listed}, {finding}")
-}
-
-/// What `doctor` says about relaying without a person. Three things stop it,
-/// and each stops it on its own: no receiver in `relay.json`, the
-/// `relay/manual` marker the operator writes to review each run, and no
-/// carrier. Three carriers relay by themselves: the `SessionEnd` hook of a
-/// Claude Code registration (`session_end`), and a running hosted service's
-/// or background relay's interval, each of which relays every session in the
-/// home whatever its host. The two intervals count only while their process
-/// holds its lock on the home, so a configured but stopped one reads as off.
-/// The line names the first stop that applies, or every carrier in force,
-/// and where the marker applies it names what else the marker does, because
-/// a licence demanding usage reporting is refused while automatic delivery is
-/// off (owner decision, 22 September 2026).
-fn automatic_relay_line(home: &Path, session_end: bool) -> String {
-    let scope = match commonmeasure_relay::config::RelayConfig::load(home) {
-        Err(error) => return format!("automatic relay: off, {error}"),
-        Ok(None) => return "automatic relay: off, no receiver is configured".to_owned(),
-        Ok(Some(config)) => relay_loop::scope_consequence(&config),
-    };
-    let line = carriers_line(home, session_end, scope.is_some());
-    match scope {
-        Some(consequence) => format!("{line}; {consequence}"),
-        None => line,
-    }
-}
-
-/// [`automatic_relay_line`] after the receiver: the stops and carriers.
-/// Under a receiver scoped to suppliers an interval relays whatever the host
-/// but not every session's events, so it is not said to.
-fn carriers_line(home: &Path, session_end: bool, scoped: bool) -> String {
-    use commonmeasure_harness::delivery::LockState;
-    if let Some(reason) = commonmeasure_harness::delivery::withheld_reason(home) {
-        return format!(
-            "automatic relay: off, {reason}; a source whose licence demands usage reporting is \
-             refused while the marker is there"
-        );
-    }
-    let service = hosted::ServiceConfig::read(home).ok().flatten();
-    let service_state = service
-        .as_ref()
-        .map(|_| commonmeasure_harness::delivery::service_state(home));
-    let loop_state = commonmeasure_harness::delivery::relay_loop_state(home);
-    let mut intervals = Vec::new();
-    // A lock this user cannot open says nothing either way, so the line does
-    // not call that carrier stopped; sessions still treat it as not running
-    // (`SessionDelivery::withheld_reason`).
-    let mut unknown = Vec::new();
-    match (&service, &service_state) {
-        (Some(config), Some(LockState::Running)) => intervals.push(format!(
-            "on the hosted service's interval (every {}s)",
-            config.interval_seconds
-        )),
-        (_, Some(LockState::Unknown(reason))) => unknown.push(format!(
-            "whether the hosted service relays this home cannot be read ({reason})"
-        )),
-        _ => {}
-    }
-    match &loop_state {
-        LockState::Running => intervals.push(format!(
-            "on the background relay's interval{}",
-            relay_loop::Holder::read(home)
-                .map(|holder| format!(" (every {}s)", holder.every_seconds))
-                .unwrap_or_default()
-        )),
-        LockState::Unknown(reason) => unknown.push(format!(
-            "whether a background relay holds this home cannot be read ({reason})"
-        )),
-        LockState::NotRunning => {}
-    }
-    let hook = "at each Claude Code session end (its SessionEnd hook)";
-    let start = format!(
-        "start the background relay (`commonmeasure relay --every {}`; `commonmeasure service \
-         install relay` on macOS)",
-        relay_loop::DEFAULT_EVERY_SECS
-    );
-    if !intervals.is_empty() {
-        let carriers = session_end
-            .then(|| hook.to_owned())
-            .into_iter()
-            .chain(intervals.iter().cloned())
-            .collect::<Vec<_>>()
-            .join(", and ");
-        return format!(
-            "automatic relay: {carriers}, {} {}",
-            if intervals.len() == 1 {
-                "which relays"
-            } else {
-                "each of which relays"
-            },
-            if scoped {
-                "whatever the host"
-            } else {
-                "every session in this home whatever its host"
-            }
-        );
-    }
-    match (session_end, unknown.is_empty()) {
-        (true, true) => format!(
-            "automatic relay: {hook}; no other local host sends the event, so with them {start} \
-             or run `commonmeasure relay`, and a source whose licence demands usage reporting \
-             is refused there"
-        ),
-        (true, false) => format!(
-            "automatic relay: {hook}; {}, so with other local hosts {start} or run \
-             `commonmeasure relay`, and a source whose licence demands usage reporting is \
-             refused there",
-            unknown.join("; ")
-        ),
-        (false, false) => format!(
-            "automatic relay: unknown, no Claude Code registration sends SessionEnd and {}; \
-             sessions here are treated as having no automatic delivery, so {start}, run \
-             `commonmeasure relay`, or `commonmeasure install claude`",
-            unknown.join(" and ")
-        ),
-        (false, true) => format!(
-            "automatic relay: off, no Claude Code registration sends SessionEnd{}; {start}, run \
-             `commonmeasure relay`, or `commonmeasure install claude`",
-            if service.is_some() {
-                " and the hosted service is configured but not running"
-            } else {
-                ""
-            }
-        ),
-    }
-}
-
-/// What `doctor` says about managed policy: nothing on a local edge, the
-/// revision in force and its expiry on a managed one, and since when it has
-/// been stale where the hub has not renewed it.
-fn managed_policy_line(home: &Path) -> Option<String> {
-    let management = commonmeasure_harness::managed::management(home, chrono::Utc::now());
-    match management.mode.as_str() {
-        "local" => None,
-        "managed" => Some(
-            match (management.applied_revision, management.applied_expires_at) {
-                (Some(revision), Some(expires_at)) => format!(
-                    "managed policy: revision {revision} in force, expires {expires_at}{}",
-                    stale_note(&serde_json::json!(management.stale_since))
-                ),
-                _ => format!(
-                    "managed policy: no desired revision activated yet; last sync {}",
-                    management.desired["outcome"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| "none".to_owned())
-                ),
-            },
-        ),
-        _ => Some(format!(
-            "managed policy: unavailable ({})",
-            inspect::text(&management.desired["unavailable"])
-        )),
-    }
 }
 
 /// The variable Goose sets, in the environment of every stdio server it
@@ -2635,7 +2387,7 @@ fn local_host_observations(
 /// This edge's fleet-status document, built from the same loader, resolver
 /// and ledger enforcement reads, for the directory and principal this
 /// command runs as.
-fn show_status(json: bool) -> Result<(), String> {
+fn show_status(json: bool, palette: report::Palette) -> Result<(), String> {
     use commonmeasure_harness::fleet;
     let home = home_dir().map_err(|error| error.to_string())?;
     let cwd = std::env::current_dir()
@@ -2672,63 +2424,110 @@ fn show_status(json: bool) -> Result<(), String> {
             serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?
         ));
     }
+    write_stdout(&status_text(&document, &home, host_observed, palette))
+}
+
+/// The readable summary of a fleet-status document: the relay's egress
+/// account, then the identity rows, each with a mark where the row's
+/// standing is known. The rows keep one key column so the values line up
+/// down the page.
+fn status_text(
+    document: &serde_json::Value,
+    home: &Path,
+    host_observed: Result<commonmeasure_harness::session::HostObservationSummary, String>,
+    palette: report::Palette,
+) -> String {
+    use commonmeasure_types::{Finding, Standing};
+    const KEY: usize = 18;
     let applied = &document["applied"];
-    let mut out = commonmeasure_relay::state::egress_text(&document["egress"]);
+    let mut out = palette.findings(
+        &commonmeasure_relay::egress_findings(&document["egress"]),
+        0,
+    );
     if let Some(reason) = document["directory_listing"]["unlisted"].as_str() {
-        let _ = writeln!(out, "directory listing unlisted: {reason}");
+        out.push_str(&palette.finding(
+            &Finding::note(format!("directory listing unlisted: {reason}")),
+            0,
+        ));
     } else if let Some(until) = document["directory_listing"]["listed_until"].as_str() {
-        let _ = writeln!(out, "directory listing listed until {until}");
+        out.push_str(&palette.finding(
+            &Finding::ok(format!("directory listing listed until {until}")),
+            0,
+        ));
     }
     match host_observed {
-        Ok(summary) => {
-            let _ = writeln!(out, "{}", summary.display());
-        }
-        Err(error) => {
-            let _ = writeln!(out, "host observations unavailable: {error}");
-        }
+        Ok(summary) => out.push_str(&palette.finding(&Finding::note(summary.display()), 0)),
+        Err(error) => out.push_str(&palette.finding(
+            &Finding::unknown(format!("host observations unavailable: {error}")),
+            0,
+        )),
     }
-    let _ = writeln!(
-        out,
-        "contract          {}",
-        inspect::text(&document["contract"])
+    let mut row = |standing: Option<Standing>, key: &str, value: String| {
+        out.push_str(&palette.row(standing, key, &value, KEY));
+    };
+    row(None, "contract", inspect::text(&document["contract"]));
+    match document["edge"]["key_id"].as_str() {
+        Some(key_id) => row(Some(Standing::Ok), "edge", key_id.to_owned()),
+        None => row(
+            Some(Standing::Note),
+            "edge",
+            format!("unknown ({})", inspect::text(&document["edge"]["unknown"])),
+        ),
+    }
+    row(
+        None,
+        "deployment mode",
+        inspect::text(&document["deployment_mode"]),
     );
-    let _ = writeln!(
-        out,
-        "edge              {}",
-        document["edge"]["key_id"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!(
-                "unknown ({})",
-                inspect::text(&document["edge"]["unknown"])
-            ))
+    let service = hosted::service_finding(home);
+    row(
+        Some(service.standing),
+        "service mode",
+        service
+            .text
+            .trim_start_matches("hosted service: ")
+            .to_owned(),
     );
-    let _ = writeln!(
-        out,
-        "deployment mode   {}",
-        inspect::text(&document["deployment_mode"])
+    let relay = relay_loop::finding(home);
+    row(
+        Some(relay.standing),
+        "background relay",
+        relay
+            .text
+            .trim_start_matches("background relay: ")
+            .to_owned(),
     );
-    let _ = writeln!(
-        out,
-        "service mode      {}",
-        hosted::service_line(&home).trim_start_matches("hosted service: ")
-    );
-    let _ = writeln!(out, "background relay  {}", relay_loop::line(&home));
     let desired = &document["desired"];
-    let _ = writeln!(
-        out,
-        "desired revision  {}",
-        if document["deployment_mode"] == "local" {
-            "none (local mode accepts no remote policy)".to_owned()
-        } else if let Some(reason) = desired["unavailable"].as_str() {
-            format!("unavailable: {reason}")
-        } else if desired.is_null() {
-            "none learned yet".to_owned()
-        } else {
+    if document["deployment_mode"] == "local" {
+        row(
+            None,
+            "desired revision",
+            "none (local mode accepts no remote policy)".to_owned(),
+        );
+    } else if let Some(reason) = desired["unavailable"].as_str() {
+        row(
+            Some(Standing::Attention),
+            "desired revision",
+            format!("unavailable: {reason}"),
+        );
+    } else if desired.is_null() {
+        row(
+            Some(Standing::Note),
+            "desired revision",
+            "none learned yet".to_owned(),
+        );
+    } else {
+        let revision = desired["revision"].as_u64();
+        row(
+            Some(if revision.is_some() {
+                Standing::Ok
+            } else {
+                Standing::Note
+            }),
+            "desired revision",
             format!(
                 "{}; last sync {}{}",
-                desired["revision"]
-                    .as_u64()
+                revision
                     .map(|revision| revision.to_string())
                     .unwrap_or_else(|| "none learned".to_owned()),
                 inspect::text(&desired["outcome"]),
@@ -2736,113 +2535,135 @@ fn show_status(json: bool) -> Result<(), String> {
                     .as_str()
                     .map(|reason| format!(": {reason}"))
                     .unwrap_or_default()
-            )
-        }
-    );
+            ),
+        );
+    }
     if let Some(revision) = applied["revision"].as_u64() {
-        let _ = writeln!(
-            out,
-            "applied revision  {revision}, expires {}{}",
-            inspect::text(&applied["expires_at"]),
-            stale_note(&applied["stale_since"])
+        let stale = stale_note(&applied["stale_since"]);
+        row(
+            Some(if stale.is_empty() {
+                Standing::Ok
+            } else {
+                Standing::Attention
+            }),
+            "applied revision",
+            format!(
+                "{revision}, expires {}{stale}",
+                inspect::text(&applied["expires_at"])
+            ),
         );
     }
     match applied["unavailable"].as_str() {
-        Some(reason) => {
-            let _ = writeln!(out, "policy            unavailable: {reason}");
-        }
+        Some(reason) => row(
+            Some(Standing::Attention),
+            "policy",
+            format!("unavailable: {reason}"),
+        ),
         None => {
-            let _ = writeln!(
-                out,
-                "policy digest     {}",
-                applied["policy_digest"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(
-                        || "none (no policy file; observing, refusing nothing)".to_owned()
-                    )
+            match applied["policy_digest"].as_str() {
+                Some(digest) => row(Some(Standing::Ok), "policy digest", digest.to_owned()),
+                None => row(
+                    Some(Standing::Note),
+                    "policy digest",
+                    "none (no policy file; observing, refusing nothing)".to_owned(),
+                ),
+            }
+            row(
+                None,
+                "policy identity",
+                format!(
+                    "{}  ({}, resolver {})",
+                    inspect::text(&applied["policy_identity"]["digest"]),
+                    inspect::text(&applied["policy_identity"]["schema"]),
+                    inspect::text(&applied["policy_identity"]["resolver"]),
+                ),
             );
-            let _ = writeln!(
-                out,
-                "policy identity   {}  ({}, resolver {})",
-                inspect::text(&applied["policy_identity"]["digest"]),
-                inspect::text(&applied["policy_identity"]["schema"]),
-                inspect::text(&applied["policy_identity"]["resolver"]),
-            );
-            let _ = writeln!(
-                out,
-                "principal         {} (basis {})",
-                inspect::text(&applied["principal"]["name"]),
-                inspect::text(&applied["principal"]["basis"]),
+            row(
+                None,
+                "principal",
+                format!(
+                    "{} (basis {})",
+                    inspect::text(&applied["principal"]["name"]),
+                    inspect::text(&applied["principal"]["basis"]),
+                ),
             );
         }
     }
-    let _ = writeln!(
-        out,
-        "last enforcement  {}",
-        document["last_enforcement"]["at"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!(
+    match document["last_enforcement"]["at"].as_str() {
+        Some(at) => row(None, "last enforcement", at.to_owned()),
+        None => row(
+            Some(Standing::Note),
+            "last enforcement",
+            format!(
                 "unknown ({})",
                 inspect::text(&document["last_enforcement"]["unknown"])
-            ))
-    );
+            ),
+        ),
+    }
     match document["allowances"].as_array() {
         Some(periods) if periods.is_empty() => {
-            let _ = writeln!(out, "allowances        none declared");
+            row(
+                Some(Standing::Note),
+                "allowances",
+                "none declared".to_owned(),
+            );
         }
         Some(periods) => {
-            let _ = writeln!(out, "allowances");
+            row(None, "allowances", String::new());
             for period in periods {
                 match period["unavailable"].as_str() {
-                    Some(reason) => {
-                        let _ = writeln!(
-                            out,
-                            "  {}  unavailable: {reason}",
-                            inspect::text(&period["principal"])
-                        );
-                    }
+                    Some(reason) => row(
+                        Some(Standing::Unknown),
+                        &format!("  {}", inspect::text(&period["principal"])),
+                        format!("unavailable: {reason}"),
+                    ),
                     None => {
-                        let _ = writeln!(
-                            out,
-                            "  {}  {} {}  remaining {} {}{}",
-                            inspect::text(&period["principal"]),
-                            inspect::text(&period["period"]),
-                            inspect::text(&period["period_key"]),
-                            inspect::text(&period["remaining"]["currency"]),
-                            period["remaining"]["micros"]
-                                .as_u64()
-                                .map(|micros| format!(
-                                    "{}.{:06}",
-                                    micros / 1_000_000,
-                                    micros % 1_000_000
-                                ))
-                                .unwrap_or_else(|| "unknown".to_owned()),
-                            if period["exceeded"] == serde_json::Value::Bool(true) {
-                                " (exceeded)"
+                        let exceeded = period["exceeded"] == serde_json::Value::Bool(true);
+                        row(
+                            Some(if exceeded {
+                                Standing::Attention
                             } else {
-                                ""
-                            }
+                                Standing::Ok
+                            }),
+                            &format!("  {}", inspect::text(&period["principal"])),
+                            format!(
+                                "{} {}  remaining {} {}{}",
+                                inspect::text(&period["period"]),
+                                inspect::text(&period["period_key"]),
+                                inspect::text(&period["remaining"]["currency"]),
+                                period["remaining"]["micros"]
+                                    .as_u64()
+                                    .map(|micros| format!(
+                                        "{}.{:06}",
+                                        micros / 1_000_000,
+                                        micros % 1_000_000
+                                    ))
+                                    .unwrap_or_else(|| "unknown".to_owned()),
+                                if exceeded { " (exceeded)" } else { "" }
+                            ),
                         );
                     }
                 }
             }
         }
-        None => {
-            let _ = writeln!(
-                out,
-                "allowances        unavailable: {}",
+        None => row(
+            Some(Standing::Unknown),
+            "allowances",
+            format!(
+                "unavailable: {}",
                 inspect::text(&document["allowances"]["unavailable"])
-            );
-        }
+            ),
+        ),
     }
-    let _ = writeln!(
+    let _ = write!(
         out,
-        "\nThe identity and digest are drift evidence, not proof that this edge \
-         enforced the policy; `commonmeasure status --json` prints the document."
+        "\n{}\n",
+        palette.dim(
+            "The identity and digest are drift evidence, not proof that this edge enforced the \
+             policy; `commonmeasure status --json` prints the document."
+        )
     );
-    write_stdout(&out)
+    out
 }
 
 /// The key id minted at enrolment is this edge's identity. An edge with no
@@ -3242,47 +3063,6 @@ mod tests {
 
     use super::crossing_outcome;
 
-    fn resolved_line(name: &str, answer: &str) -> String {
-        let answer: std::net::SocketAddr = answer.parse().expect("an address");
-        super::resolution_line(name, &move |_| Ok(vec![answer]))
-    }
-
-    /// `doctor --resolve` names the fake-IP range and the proxy-side remedy,
-    /// the tailnet range and how to allow one host, and says public for a
-    /// public answer. The resolver is injected: the line is about what the
-    /// floor makes of an answer, and a test makes no lookup.
-    #[test]
-    fn doctor_resolve_names_fake_ip_and_shared_space_answers() {
-        let fake = resolved_line("www.gov.uk", "198.18.0.7:443");
-        assert!(
-            fake.starts_with("resolution: www.gov.uk resolves to 198.18.0.7, in 198.18.0.0/15"),
-            "{fake}"
-        );
-        assert!(fake.contains("fake-IP proxies"), "{fake}");
-        assert!(fake.contains("fake-ip-filter"), "{fake}");
-        assert!(fake.contains("\"allow_private_hosts\" is set"), "{fake}");
-        assert!(fake.contains("\"record_internal_prefixes\""), "{fake}");
-        assert!(fake.contains("always on a hosted edge"), "{fake}");
-        let tailnet = resolved_line("https://nas.tailnet.example/admin", "100.101.1.2:443");
-        assert!(
-            tailnet.contains("nas.tailnet.example resolves to 100.101.1.2, in 100.64.0.0/10"),
-            "{tailnet}"
-        );
-        assert!(tailnet.contains("record_internal_prefixes"), "{tailnet}");
-        let nat64 = resolved_line("v6.example", "[64:ff9b::a00:5]:443");
-        assert!(nat64.contains("a local or private address"), "{nat64}");
-        let public = resolved_line("www.gov.uk", "151.101.0.144:443");
-        assert!(
-            public.ends_with("resolves to 151.101.0.144, public"),
-            "{public}"
-        );
-        let failed = super::resolution_line("nowhere.example", &|_| Err("no answer".to_owned()));
-        assert_eq!(
-            failed,
-            "resolution: nowhere.example did not resolve: no answer"
-        );
-    }
-
     /// A managed home's forecast names the revision on disk, and where the
     /// hub has not renewed it, since when it has been stale; before any
     /// revision is applied it says so. The state is written as the sync
@@ -3358,139 +3138,5 @@ mod tests {
             crossing_outcome(&json!({"url": "https://example.com/x", "grounded": false})),
             "retrieved"
         );
-    }
-
-    /// `doctor`'s automatic relay line names the hosted service as a carrier
-    /// only while it holds the home's lock, and names both carriers where
-    /// both apply.
-    #[test]
-    fn the_automatic_relay_line_counts_a_running_hosted_service() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let home = home.path();
-        std::fs::write(
-            home.join("relay.json"),
-            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
-        )
-        .unwrap();
-        let off = super::automatic_relay_line(home, false);
-        assert!(
-            off.starts_with("automatic relay: off, no Claude Code registration sends SessionEnd;"),
-            "{off}"
-        );
-        std::fs::write(
-            home.join("hosted-service.json"),
-            r#"{"origin":"https://edge.example","hosts":["chatgpt"],"interval_seconds":60}"#,
-        )
-        .unwrap();
-        let stopped = super::automatic_relay_line(home, false);
-        assert!(
-            stopped.contains("and the hosted service is configured but not running"),
-            "{stopped}"
-        );
-        let lock = std::fs::File::create(home.join("hosted-service.lock")).unwrap();
-        lock.lock().expect("held as a running service holds it");
-        assert_eq!(
-            super::automatic_relay_line(home, false),
-            "automatic relay: on the hosted service's interval (every 60s), which relays every \
-             session in this home whatever its host"
-        );
-        let both = super::automatic_relay_line(home, true);
-        assert!(
-            both.starts_with(
-                "automatic relay: at each Claude Code session end (its SessionEnd hook), and on \
-                 the hosted service's interval (every 60s)"
-            ),
-            "{both}"
-        );
-        drop(lock);
-        let hook = crate::service::testing::settle(
-            || super::automatic_relay_line(home, true),
-            |hook| hook.contains("no other local host sends the event"),
-        );
-        assert!(
-            hook.contains("no other local host sends the event"),
-            "{hook}"
-        );
-    }
-
-    /// The background relay is a carrier for every host while it holds its
-    /// lock, beside the hook and the hosted service.
-    #[test]
-    fn the_automatic_relay_line_counts_a_running_background_relay() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let home = home.path();
-        std::fs::write(
-            home.join("relay.json"),
-            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
-        )
-        .unwrap();
-        let lock = std::fs::File::create(home.join("relay-loop.lock")).unwrap();
-        lock.lock().expect("held as a running loop holds it");
-        std::fs::write(
-            home.join("relay-loop.lock"),
-            r#"{"pid":7,"every_seconds":300}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            super::automatic_relay_line(home, true),
-            "automatic relay: at each Claude Code session end (its SessionEnd hook), and on the \
-             background relay's interval (every 300s), which relays every session in this home \
-             whatever its host"
-        );
-        std::fs::write(
-            home.join("hosted-service.json"),
-            r#"{"origin":"https://edge.example","hosts":["chatgpt"],"interval_seconds":60}"#,
-        )
-        .unwrap();
-        let service = std::fs::File::create(home.join("hosted-service.lock")).unwrap();
-        service.lock().expect("held");
-        let both = super::automatic_relay_line(home, false);
-        assert!(
-            both.starts_with(
-                "automatic relay: on the hosted service's interval (every 60s), and on the \
-                 background relay's interval (every 300s), each of which relays"
-            ),
-            "{both}"
-        );
-        drop(service);
-        drop(lock);
-        let off = crate::service::testing::settle(
-            || super::automatic_relay_line(home, true),
-            |off| off.contains("start the background relay (`commonmeasure relay --every 300`"),
-        );
-        assert!(
-            off.contains("start the background relay (`commonmeasure relay --every 300`"),
-            "{off}"
-        );
-    }
-
-    /// Review P2-4. With `relay.json` scoped to suppliers, the line names the
-    /// suppliers and the reporting consequence and does not say every
-    /// session is relayed, whichever carriers are in force.
-    #[test]
-    fn the_automatic_relay_line_names_a_receiver_scoped_to_suppliers() {
-        let home = tempfile::tempdir().expect("tempdir");
-        let home = home.path();
-        std::fs::write(
-            home.join("relay.json"),
-            r#"{"receiver":"http://127.0.0.1:9/telemetry","suppliers":["ozone","acme"]}"#,
-        )
-        .unwrap();
-        let consequence = "the receiver is scoped to suppliers (ozone, acme), so only their \
-                           events leave and a source whose licence demands usage reporting is \
-                           refused on this home";
-        let hook = super::automatic_relay_line(home, true);
-        assert!(hook.ends_with(consequence), "{hook}");
-        let lock = std::fs::File::create(home.join("relay-loop.lock")).unwrap();
-        lock.lock().expect("held as a running loop holds it");
-        let running = super::automatic_relay_line(home, false);
-        assert_eq!(
-            running,
-            format!(
-                "automatic relay: on the background relay's interval, which relays whatever the \
-                 host; {consequence}"
-            )
-        );
-        assert!(!running.contains("every session"), "{running}");
     }
 }

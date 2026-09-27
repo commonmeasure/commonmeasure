@@ -141,7 +141,6 @@ where
         || benchmark.suite.fetch_target.is_some()
         || benchmark.suite.coverage_rubric.is_some()
         || benchmark.suite.as_of.is_some()
-        || benchmark.suite.governance.is_some()
         || benchmark.suite.output_provenance.is_some()
         || benchmark.suite.fidelity_judge
     {

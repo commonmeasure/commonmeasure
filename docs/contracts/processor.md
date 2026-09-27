@@ -117,10 +117,10 @@ processors receive only fields permitted by egress policy.
 ## Status
 
 The in-process implementation exists: `crates/commonmeasure-runtime/src/processor.rs`
-and eight processors behind it, plus the SimpleQA benchmark's
+and seven processors behind it, plus the SimpleQA benchmark's
 `simpleqa-correctness` ([`docs/contracts/simpleqa-benchmark.md`](simpleqa-benchmark.md)).
-Each declares its determinism in its manifest. Five declare `deterministic`:
-the two detectors, the governor, the optimiser and the fidelity verifier.
+Each declares its determinism in its manifest. Four declare `deterministic`:
+the two detectors, the optimiser and the fidelity verifier.
 Four declare `non_deterministic`: the HTML text extractor, because credential
 validation depends on the verification time; the output provenance labeller,
 because its signed bytes differ on each run; and the fidelity judge and
@@ -128,18 +128,18 @@ because its signed bytes differ on each run; and the fidelity judge and
 gateway. None declares `seeded`. The two detectors
 run in every batch run and mediated session; the optimiser in every batch
 run; the HTML text extractor on every mediated fetch that received a body;
-the governor
-runs only in batch runs whose suite declares `governance`; the fidelity
+the fidelity
 verifier runs on every batch answer, the fidelity judge only in batch runs
 whose suite declares `fidelity_judge`, and the output provenance labeller
 only in batch runs whose suite declares `output_provenance`.
 
 - **`pii-detector` (admit).** Pattern rules over a source's text before it can
-  reach a model. In `strict` a finding refuses the crossing; in `observe` and
-  `prefer` it is recorded identically and carried. The finding's mode
-  discipline is `commonmeasure_runtime::policy::Ruling`, the same switch every other
-  policy uses. Findings are categories and byte offsets only; the matched text
-  never enters the record.
+  reach a model. A finding is recorded in the invocation and carried on the
+  crossing as a breach, in every mode and whatever the source; it refuses
+  nothing. Findings are categories and byte offsets only; the matched text
+  never enters the record. A body the edge does not read (a PDF) gets no
+  finding: the detector records that it did not rule, and that unknown
+  verdict is a breach `strict` refuses.
 - **`injection-screen` (admit).** Pattern rules over a source's text for known
   indirect-prompt-injection phrasings — instruction override, role
   reassignment, system-prompt exfiltration, tool directives — before that text
@@ -151,16 +151,6 @@ only in batch runs whose suite declares `output_provenance`.
   comprehension-grade defence. A source matching no rule is recorded as
   clean under these rules, not as safe. The rules state the most the screen
   can claim, and they are the canonical text the configuration digest covers.
-- **`support-governor` (admit).** The suite's sealed governance rule set
-  ([`docs/contracts/run-output.md`](run-output.md) §Manifest) evaluated against each source's
-  operator-declared metadata: an unentitled tier, a deprecated path in force
-  at the suite's `as_of`, a path no rule speaks for, or a source with no
-  declared metadata each refuse in `strict` and are recorded identically in
-  `observe` and `prefer`, through the same `Ruling` switch. It runs only when
-  the suite declares `governance`; an ungoverned suite records no invocation.
-  The rule set's identity and content are in the manifest, not in this
-  processor's configuration digest, so changing a rule changes the
-  experiment's hash and leaves the processor identity unchanged.
 - **`html-text-extractor` version 2 (transform).** The readable text of a mediated
   fetch. A response whose content type is `text/html` or
   `application/xhtml+xml` is decoded as UTF-8 and reduced to its text:

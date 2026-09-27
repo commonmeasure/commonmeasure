@@ -118,12 +118,11 @@ A processor's verdict is under the same discipline, with one stated
 exception. The injection screen's match refuses the crossing in `strict` and
 is carried as a recorded breach in `observe` and `prefer`, recorded
 identically, because it reaches the decision through the same `Ruling` every
-other constraint uses. The PII detector's finding does the same on an
-internal or private source; on a public source `strict` records the finding
-and admits the crossing, because a public page's published contact details
-are not the personal data the detector exists to keep out of a model, unless
-the policy sets `refuse_on_pii`. The finding is recorded the same way
-whichever way it is ruled.
+other constraint uses. The PII detector's finding is the exception: it is
+carried as a recorded breach in every mode, `strict` included, for every
+source, and refuses nothing. What the detector establishes is evidence, the
+finding's categories and offsets on the invocation record; keeping a source
+out of a model is the work of the operator's constraints and the mode.
 
 A PDF the edge hands over as a file is not read, so neither screen rules on
 it: each records a `capability_unavailable` gap, and the unknown verdict is
@@ -137,12 +136,11 @@ breach and the gap recorded (§5, §7)
 - `strict_source_policy_refuses_a_disallowed_host_before_inference`,
   `observe_mode_carries_the_same_breach_it_does_not_lose_it`,
   `a_strict_pii_finding_on_a_public_source_is_recorded_and_the_source_carried`,
-  `a_strict_pii_finding_on_the_internal_corpus_refuses_the_source_before_inference`,
-  `a_strict_pii_finding_on_a_private_address_from_a_supplier_refuses_the_source`,
+  `a_strict_pii_finding_on_the_internal_corpus_is_carried_and_recorded`,
+  `a_strict_pii_finding_on_a_private_address_from_a_supplier_is_carried`,
   `observe_mode_records_the_pii_finding_and_carries_the_source`
   (`crates/commonmeasure-runtime/tests/end_to_end.rs`)
-- `a_public_source_carries_a_pii_finding_in_strict_and_an_internal_one_is_refused`,
-  `refuse_on_pii_refuses_a_public_source_in_strict`
+- `a_finding_is_carried_as_a_breach_and_never_refuses`
   (`crates/commonmeasure-runtime/src/processor/pii.rs`)
 - `observe_mode_records_the_breach_it_does_not_enforce`,
   `a_source_without_text_is_refused_in_every_mode`,
@@ -150,14 +148,10 @@ breach and the gap recorded (§5, §7)
   (`crates/commonmeasure-runtime/tests/policy_and_selection.rs`)
 - `observe_mode_carries_the_crossing_and_still_records_it`,
   `a_compliant_crossing_records_no_breach`,
-  `a_fetch_carrying_pii_from_a_private_address_is_refused_in_strict_mode_and_recorded`,
-  `a_fetch_carrying_pii_from_a_named_internal_prefix_is_refused_in_strict_mode`,
-  `refuse_on_pii_is_loaded_reported_and_refuses_with_the_processor_wording`,
+  `a_fetch_carrying_pii_from_a_private_address_is_carried_in_strict_mode_and_recorded`,
+  `a_fetch_carrying_pii_from_a_named_internal_prefix_is_carried_in_strict_mode`,
   `observe_mode_carries_a_pii_finding_and_records_it`
-  (`crates/commonmeasure-cli/tests/mediated_e2e.rs`);
-  `a_public_source_is_admitted_with_the_finding_recorded_and_the_other_classes_are_refused`
-  (`crates/commonmeasure-harness/src/mcp.rs`) for the public case, which no
-  loopback origin can stand in for
+  (`crates/commonmeasure-cli/tests/mediated_e2e.rs`)
 
 ## 7. Unknown is never zero
 
@@ -284,9 +278,9 @@ trail that repeats an identifier has disclosed the data it exists to detect.
   `an_html_page_is_delivered_as_extracted_text_with_both_hashes_recorded`,
   `a_gzip_page_is_carried_with_the_retrieved_hash_over_the_coded_bytes`
   (`crates/commonmeasure-cli/tests/mediated_e2e.rs`)
-- `strict_refuses_and_observe_carries_the_same_finding`
+- `a_finding_is_carried_as_a_breach_and_never_refuses`
   (`crates/commonmeasure-runtime/src/processor/pii.rs`),
-  `a_fetch_carrying_pii_from_a_private_address_is_refused_in_strict_mode_and_recorded`
+  `a_fetch_carrying_pii_from_a_private_address_is_carried_in_strict_mode_and_recorded`
   (`crates/commonmeasure-cli/tests/mediated_e2e.rs`) — the identifier itself appears in
   no record.
 

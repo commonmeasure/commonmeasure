@@ -136,7 +136,6 @@ fn suite(mode: PolicyMode, constraints: Vec<Constraint>) -> Suite {
         require_cited_answer: false,
         coverage_rubric: None,
         as_of: None,
-        governance: None,
         fetch_target: None,
         fidelity_judge: false,
         output_provenance: None,

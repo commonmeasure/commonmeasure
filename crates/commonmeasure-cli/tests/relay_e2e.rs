@@ -1520,80 +1520,6 @@ fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
     );
 }
 
-/// A queue line 0.3.4 or earlier wrote, with or without
-/// `directory_selection` and with or without its final newline, is refused
-/// by every command that reads the spool. No byte in the home changes: the
-/// line is not taken for an enqueue cut short and truncated, and no
-/// `delivery.lock` is created. `sessions/` exists beforehand, as in a home
-/// that has recorded a session, because `doctor` creates it.
-#[test]
-fn every_command_refuses_a_spool_line_written_before_indices_and_changes_nothing() {
-    let receiver = "http://127.0.0.1:1";
-    let commands: [&[&str]; 5] = [
-        &["status"],
-        &["doctor"],
-        &["relay", "--receiver", receiver],
-        &["relay", "--dry-run", "--receiver", receiver],
-        &["relay", "requeue"],
-    ];
-    for directory_selection in [true, false] {
-        for newline in [true, false] {
-            for args in commands {
-                let home = tempfile::tempdir().unwrap();
-                let spool = home.path().join("relay/spool");
-                std::fs::create_dir_all(&spool).unwrap();
-                std::fs::create_dir_all(home.path().join("sessions")).unwrap();
-                let mut line = json!({
-                    "origin": "earlier relay",
-                    "document": {"events": [{"id": "6f1c1c52-5d9e-4a5e-9d7e-2b0f3f1d7a10"}]},
-                });
-                if directory_selection {
-                    line["directory_selection"] = json!(true);
-                }
-                let queue = format!("{line}{}", if newline { "\n" } else { "" });
-                std::fs::write(spool.join("outbound.ndjson"), queue).unwrap();
-                let before = home_snapshot(home.path());
-
-                let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
-                    .args(args)
-                    .env("COMMONMEASURE_HOME", home.path())
-                    .output()
-                    .expect("the binary should run");
-                let case = format!(
-                    "{args:?}, directory_selection {directory_selection}, newline {newline}"
-                );
-                let text = format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                assert!(
-                    text.contains(
-                        "spool line 0 (counted from zero) was written by commonmeasure 0.3.4 or \
-                         earlier"
-                    ) && text.contains("(CHANGELOG.md, 0.4.1, Upgrading)"),
-                    "{case}: {text}"
-                );
-                let reads_only = matches!(args[0], "status" | "doctor");
-                assert_eq!(output.status.success(), reads_only, "{case}: {text}");
-                if reads_only {
-                    assert!(
-                        text.contains(
-                            "refused spool: 0 batches are queued or dead in lines with an \
-                             index; 1 line without an index is not read"
-                        ),
-                        "{case}: {text}"
-                    );
-                }
-                assert!(
-                    home_snapshot(home.path()) == before,
-                    "{case}: the home is left as found"
-                );
-            }
-        }
-    }
-}
-
 /// `commonmeasure relay --every <seconds>` on `home`, its streams in files
 /// beside `journal`. Killed if the test ends first.
 struct BackgroundRelay {
@@ -1678,8 +1604,15 @@ fn doctor_text(home: &Path, hosts: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The finding whose text starts with `prefix`, without the indent and the
+/// standing mark `doctor` prints before it.
 fn line_of<'a>(text: &'a str, prefix: &str) -> &'a str {
     text.lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches(['✓', '!', '?', '·'])
+                .trim_start()
+        })
         .find(|line| line.starts_with(prefix))
         .unwrap_or_else(|| panic!("no {prefix:?} line in:\n{text}"))
 }

@@ -21,8 +21,6 @@
 //! redelivery after a crash carries the same ids and the receiver counts each
 //! fact once.
 
-use std::collections::HashSet;
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_harness::declarations::MAX_CRAWL_DELAY;
@@ -396,9 +394,7 @@ pub struct SessionProjection {
     /// owning a second copy of it.
     pub event_positions: Vec<(Uuid, usize)>,
     /// The refused crossings `may_project` cleared, counted; what every
-    /// batch of this session carries as `refused`. `None` after
-    /// [`scope_to_suppliers`]: a scoped receiver is told nothing about
-    /// refusals, and a zero would read as a fact about the session.
+    /// batch of this session carries as `refused`.
     pub refused: Option<u64>,
 }
 
@@ -805,57 +801,6 @@ pub fn project_session(
         event_positions,
         refused: Some(refused),
     }
-}
-
-/// Narrow a session's projection to the events the listed suppliers served,
-/// for a receiver scoped to them (`RelayConfig::suppliers`). An event
-/// qualifies by the supplier named on it ([`SUPPLIER_FIELD`]), which the
-/// projection sets on a supplied result's retrieval and on its grounding
-/// alike. Turn boundaries name no supplier and stay home. The refused count
-/// is removed rather than zeroed: it counts the session's refusals of every
-/// source, and a supplier's receiver is owed nothing about sources it did not
-/// serve (owner decision, 22 September 2026).
-pub fn scope_to_suppliers(projection: &mut SessionProjection, suppliers: &[String]) {
-    retain_supplied(&mut projection.batches, suppliers);
-    let kept: HashSet<Uuid> = projection
-        .batches
-        .iter()
-        .flat_map(|batch| batch.events.iter().map(|event| event.id))
-        .collect();
-    projection
-        .event_positions
-        .retain(|(id, _)| kept.contains(id));
-    projection.refused = None;
-}
-
-/// [`scope_to_suppliers`] over bare batches, as a published run projects.
-pub fn retain_supplied(batches: &mut Vec<WireBatch>, suppliers: &[String]) {
-    for batch in batches.iter_mut() {
-        batch
-            .events
-            .retain(|event| supplied_by(event.data.get(SUPPLIER_FIELD), suppliers));
-        batch.refused = None;
-    }
-    batches.retain(|batch| !batch.events.is_empty());
-}
-
-/// [`scope_to_suppliers`] over a spooled batch document. The spool is shared
-/// by every receiver the relay has been pointed at, so a batch queued
-/// unscoped, before the scope was set or under a `--receiver` override, is
-/// narrowed again before it leaves for a scoped receiver.
-pub fn scope_document(document: &mut Value, suppliers: &[String]) {
-    if let Some(events) = document["events"].as_array_mut() {
-        events.retain(|event| supplied_by(event["data"].get(SUPPLIER_FIELD), suppliers));
-    }
-    if let Some(batch) = document.as_object_mut() {
-        batch.remove("refused");
-    }
-}
-
-fn supplied_by(named: Option<&Value>, suppliers: &[String]) -> bool {
-    named
-        .and_then(Value::as_str)
-        .is_some_and(|name| suppliers.iter().any(|listed| listed == name))
 }
 
 /// The host tool the crossings were witnessed through, in the extension
@@ -2030,62 +1975,6 @@ mod tests {
                 (WireEventKind::ContentRetrieved, json!("ozone")),
                 (WireEventKind::ContentGrounded, json!("ozone")),
             ]
-        );
-    }
-
-    /// A receiver scoped to one supplier is sent that supplier's events and
-    /// nothing else: not the operator's own fetches, not another supplier's
-    /// results, and not the session's refused count, which counts refusals of
-    /// sources this supplier never served. The event positions the relay
-    /// records clearances from are narrowed with the events. The count is
-    /// absent, not zero.
-    #[test]
-    fn a_supplier_scope_keeps_that_suppliers_events_and_drops_the_rest() {
-        let mut supplied = crossing("crossing_mediated", "https://a.example/served", true);
-        supplied["payload"]["supplier"] = json!("ozone");
-        let mut other = crossing("crossing_mediated", "https://b.example/served", true);
-        other["payload"]["supplier"] = json!("exa");
-        let mut fetched = crossing("crossing_mediated", "https://a.example/fetched", true);
-        fetched["payload"]["http_status"] = json!(200);
-        let refused = crossing("crossing_refused", "https://a.example/refused", false);
-        let records = [supplied, other, fetched, refused];
-
-        let mut projection = project_session(None, "s", &records, &[], &|_| true);
-        assert!(
-            projection.refused.is_some_and(|count| count > 0),
-            "the unscoped projection counts it"
-        );
-        scope_to_suppliers(&mut projection, &["ozone".to_owned()]);
-
-        let events = &projection.batches[0].events;
-        assert!(
-            events
-                .iter()
-                .all(|event| event.data[SUPPLIER_FIELD] == json!("ozone")),
-            "only the scoped supplier's events leave"
-        );
-        assert_eq!(
-            events.iter().map(|event| event.kind).collect::<Vec<_>>(),
-            vec![
-                WireEventKind::ContentRetrieved,
-                WireEventKind::ContentGrounded
-            ],
-            "the supplier's retrieval and the grounding of what it served"
-        );
-        assert_eq!(
-            projection
-                .event_positions
-                .iter()
-                .map(|(id, _)| *id)
-                .collect::<Vec<_>>(),
-            events.iter().map(|event| event.id).collect::<Vec<_>>()
-        );
-        assert_eq!(projection.refused, None);
-        assert!(
-            projection
-                .batches
-                .iter()
-                .all(|batch| batch.refused.is_none())
         );
     }
 

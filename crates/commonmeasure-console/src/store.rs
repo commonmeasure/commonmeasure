@@ -1220,12 +1220,11 @@ fn served_sync_reason(payload: &Value) -> Value {
 /// Events a session start writes before any work. A log holding nothing else
 /// is configured and never seen working (§Host process). `nudge_issued` is
 /// in the set because the session-start hook writes it beside the others.
-const START_EVENTS: [&str; 5] = [
+const START_EVENTS: [&str; 4] = [
     "policy_sync",
     "edge_identity",
     "host_process",
     "nudge_issued",
-    "hosted_scope",
 ];
 
 /// One log's facts for the agents projection.

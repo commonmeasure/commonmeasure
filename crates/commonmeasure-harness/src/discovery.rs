@@ -40,7 +40,7 @@ use crate::declarations::{
     self, Category, Effective, LicenceTerms, PRODUCT_TOKEN, RobotsReading, Statement,
     StatementSource,
 };
-use crate::policy::{AssessedApplicability, TermsDeclaration};
+use crate::policy::TermsDeclaration;
 use commonmeasure_types::PolicyMode;
 
 /// How long a `robots.txt` copy is used before it is fetched again.
@@ -1112,17 +1112,6 @@ pub struct LicenceOutcome {
     pub refused_by: Option<String>,
 }
 
-/// What decided the AI-input question for this crossing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Governing {
-    /// An applicable operator assessment covers this content and AI input.
-    /// Source preferences remain recorded; its assessed terms govern.
-    OperatorTerms,
-    /// The combined statements.
-    Statements,
-}
-
 /// The declarations record on a mediated crossing: what was read, from
 /// where, and what it adds up to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1148,72 +1137,14 @@ pub struct Declarations {
     pub statements: Vec<Statement>,
     /// Most-restrictive-wins per category over `statements`.
     pub effective: BTreeMap<Category, Effective>,
-    /// The operator's terms for the host, where declared.
+    /// The operator's terms reference for the host, where declared. Recorded
+    /// beside the source's statements; it does not override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terms: Option<TermsDeclaration>,
-    pub governing: Governing,
-    /// Scope evaluation and policy outcome, separate from source statements
-    /// and the operator's assessment retained in `terms`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assessment_decision: Option<AssessmentDecision>,
     /// How a telemetry reporting demand was ruled on, where the licence or
     /// the terms carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporting: Option<ReportingRuling>,
-}
-
-/// Application of an operator assessment to one actual acquisition.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssessmentDecision {
-    /// The policy rule that compares the terms assessment with the crossing.
-    pub rule: String,
-    /// Actual content requested at this hop.
-    pub url: String,
-    /// The use made by the tool, rather than an agent's claimed use.
-    pub intended_use: Category,
-    /// `applied`, `out_of_scope` or `unresolved`.
-    pub applicability: String,
-    /// Why the assessment governs or falls back to source statements.
-    pub reason: String,
-    /// The policy mode used when ruling on declarations.
-    pub mode: Option<PolicyMode>,
-    /// `allowed`, `refused` or `allowed_with_breach` after declaration checks.
-    pub outcome: Option<String>,
-}
-
-impl AssessmentDecision {
-    fn for_fetch(terms: &TermsDeclaration, page_url: &str) -> Self {
-        let (applicability, reason) = match &terms.assessment {
-            None => (
-                "unresolved",
-                "No scoped operator assessment accompanies this reference.",
-            ),
-            Some(a) if a.applicability == AssessedApplicability::Unresolved => {
-                ("unresolved", "The operator left applicability unresolved.")
-            }
-            Some(a) if !a.content.iter().any(|content| content == page_url) => (
-                "out_of_scope",
-                "The requested content is outside the assessment's exact URL scope.",
-            ),
-            Some(a) if !a.intended_uses.contains(&Category::AiInput) => (
-                "out_of_scope",
-                "AI input is outside the assessment's intended uses.",
-            ),
-            Some(_) => (
-                "applied",
-                "The operator assessed this basis as applicable to the requested content and AI input.",
-            ),
-        };
-        Self {
-            rule: format!("terms ({}) assessment", terms.host),
-            url: page_url.to_owned(),
-            intended_use: Category::AiInput,
-            applicability: applicability.to_owned(),
-            reason: reason.to_owned(),
-            mode: None,
-            outcome: None,
-        }
-    }
 }
 
 /// The ruling on a reporting demand: what was demanded, the receiver the
@@ -1963,7 +1894,6 @@ pub fn read_declared(
         }
     }
     cache.save(&key, &record);
-    let assessment_decision = terms.map(|terms| AssessmentDecision::for_fetch(terms, page_url));
     let mut declarations = Declarations {
         backoff: if backoff_refused {
             pacing.map_or_else(Vec::new, Pacing::backoff_events)
@@ -1977,15 +1907,6 @@ pub fn read_declared(
         statements,
         effective: BTreeMap::new(),
         terms: terms.cloned(),
-        governing: if assessment_decision
-            .as_ref()
-            .is_some_and(|d| d.applicability == "applied")
-        {
-            Governing::OperatorTerms
-        } else {
-            Governing::Statements
-        },
-        assessment_decision,
         reporting: None,
     };
     declarations.recombine();

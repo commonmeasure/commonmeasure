@@ -40,15 +40,9 @@ a grant to an instance
 ([`instance-registration.md`](instance-registration.md#entitlement-binding));
 held unbound, a grant authorises nothing.
 
-The experiment runtime already has a narrower entitlement: a suite's
-governance declares ordered tiers and the tier the run holds
-(`granted_entitlement` in `crates/commonmeasure-runtime/src/governance.rs`,
-sealed in the run manifest, [`run-output.md`](run-output.md)), and a source
-declaring a higher tier is refused at admission. With the internal adapter it
-is the starting point for the first internal route. It has no issuer, grantee,
-validity or binding, and this contract leaves it as it is. How a tier and a
-grant combine on the internal route is settled with the adapter's grant gate
-(§What a later increment must add).
+The experiment runtime has no entitlement of its own. How a grant applies on
+the internal route is settled with the adapter's grant gate (§What a later
+increment must add).
 
 ## The document
 
@@ -438,8 +432,7 @@ exists, so that duty cannot reach `delivered` until one is agreed.
   edge's activation of them and the applied `grants_digest` in the
   fleet-status document.
 - Evaluation at the edge, its session-evidence members and the internal
-  adapter's grant gate and principal pass-through, including how the gate
-  combines with the governance entitlement tier.
+  adapter's grant gate and principal pass-through.
 - Resolution of `entitlements` at registration and renewal in place of
   `503 entitlement_authority`.
 - An engagement work reference, so the hub can verify engagement narrowing.

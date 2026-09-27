@@ -2289,7 +2289,6 @@ fn connect_writes_only_a_relay_config_the_relay_loads() {
         .expect("connect wrote relay.json");
     assert_eq!(config.receiver, format!("{clean}/api/v1/telemetry"));
     assert_eq!(config.api_key.as_deref(), Some(API_KEY));
-    assert_eq!(config.suppliers, None);
     server.stop();
 }
 

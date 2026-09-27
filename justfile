@@ -103,7 +103,7 @@ specialist-examples: fixtures
         name=$(basename "$suite" .json)
         COMMONMEASURE_INTERNAL_CORPUS=demo/specialist/corpus cargo run -p commonmeasure-cli -- run "$suite" --output "{{evidence}}/output/specialist/$name"
     done
-    cargo run -p commonmeasure-cli -- inspect {{evidence}}/output/specialist/governed-restraint
+    cargo run -p commonmeasure-cli -- inspect {{evidence}}/output/specialist/retrieval-restraint
 
 # Regenerate the committed commerce comparison runs (gateway; demo/commerce/README.md)
 commerce-examples: fixtures

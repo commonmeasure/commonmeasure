@@ -24,8 +24,8 @@ explicit. Terms like suite, run, plan and manifest are defined in
 - evaluator set, versions and rubrics — sealed in the run manifest as
   `evaluators` (today: grounding, coverage and freshness,
   [`docs/contracts/run-output.md`](run-output.md) §Plans), with the suite's declared
-  coverage rubric, as-of reference and governance block sealed beside them
-  as `coverage_rubric`, `as_of` and `governance`;
+  coverage rubric and as-of reference sealed beside them as
+  `coverage_rubric` and `as_of`;
 - retry, timeout and cache policy;
 - aggregation and ranking method.
 

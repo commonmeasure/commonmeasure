@@ -9,7 +9,7 @@ section: get-started
 
 From the installer to an operator console showing the first crossing your
 own agent made. Only §8 needs a checkout or a toolchain. The release
-downloads and version checks in §1 were run against release 0.4.2 on macOS
+downloads and version checks in §1 were run against release 0.4.4 on macOS
 (Apple silicon), from empty home directories. The remaining walkthrough
 commands and quoted output were checked on 0.4.0; the update and
 login-service instructions require 0.4.2. Terms such as crossing, run,
@@ -77,15 +77,15 @@ commands that install it into Claude Code:
 
 ```sh
 curl -fsSL -o /tmp/commonmeasure-release/install.sh --create-dirs \
-  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/install.sh
-sh /tmp/commonmeasure-release/install.sh --tag v0.4.2 --plugin ~/commonmeasure-plugin
+  https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.4/install.sh
+sh /tmp/commonmeasure-release/install.sh --tag v0.4.4 --plugin ~/commonmeasure-plugin
 ```
 
 To check a download by hand, fetch `SHA256SUMS` beside it:
 
 ```sh
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/SHA256SUMS
-curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.2/commonmeasure-darwin-arm64
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.4/SHA256SUMS
+curl -fsSLO https://github.com/commonmeasure/commonmeasure/releases/download/v0.4.4/commonmeasure-darwin-arm64
 shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
@@ -314,13 +314,20 @@ The installer registers every host listed above.
 commonmeasure doctor claude
 ```
 
-`doctor` prints, for the host: which of the five hooks are registered and in
-which file, whether the MCP server is registered and its command, the binary
-each names and the version that binary reports when run, whether a plugin is
-installed beside the registration, whether the sessions directory can be
-written, and whether the policy file loads. A registration whose binary has
-gone is reported as not found, which is the one state in which every hook
-exits without recording and nothing in the session says so.
+`doctor` prints one report: the Edge home (whether the sessions directory
+can be written, whether the policy file loads), the console (whether one
+answers and where its Policy page is), the relay, and then the host: which
+of the five hooks are registered and in which file, whether the MCP server
+is registered and its command, the binary each names and the version that
+binary reports when run, and whether a plugin is installed beside the
+registration. Each finding is marked `✓`, `!` (something to act on), `?`
+(could not be determined) or `·` (a fact), and the report ends with what
+needs attention. A registration whose binary has gone is reported as not
+found and marked `!`, which is the one state in which every hook exits
+without recording and nothing in the session says so. `commonmeasure doctor`
+with no host reports every host; `--json` prints the same findings as a
+document for a script or a support thread; `--color never` drops the colour
+in a terminal.
 
 If every fetch is refused with a name that "resolves to a local or private
 address", `commonmeasure doctor --resolve <name>` looks the name up and says
@@ -386,8 +393,7 @@ recorded. Of the in-process processors, the PII detector and
 the injection screen run at this crossing, judging the text before the model
 sees it, and each invocation is recorded as a `processor_invoked` event
 beside the crossing it judged ([`docs/contracts/processor.md`](contracts/processor.md)); the context
-optimiser runs at the batch runner's transform stage, the support governor
-only in batch runs whose job declares `governance`, the fidelity verifier on
+optimiser runs at the batch runner's transform stage, the fidelity verifier on
 every batch answer, the fidelity judge only in batch runs whose job declares
 `fidelity_judge`, and the output provenance labeller only in batch runs
 whose job declares `output_provenance`. One limitation:
@@ -502,7 +508,7 @@ enrolled with a hub, so every request went out unsigned (§7).
  "http_status": 200,
  "licence": {"state": "unknown"},
  "declarations": {"effective": {"train-ai": "unknown", "ai-input": "unknown", "ai-index": "unknown", "search": "unknown"},
-                  "statements": [], "governing": "statements", "assessment_decision": null, "terms": null,
+                  "statements": [], "terms": null,
                   "robots_group": "*", "robots": {…, "outcome": "allowed"}, "redirects": [], "licences": []},
  "policy": "Admitted; no constraint excluded it.",
  "breach": null,
@@ -667,6 +673,18 @@ reload. The door-walkthrough session is under **Record**, with its two
 refusals as refused cards carrying the reasons quoted above. Each section
 is described in [The console](CONSOLE.md).
 
+```sh
+commonmeasure console               # where it is, whether it answers, each page's address
+commonmeasure console open policy   # open the Policy page in the browser
+```
+
+`console` looks for the console where `service install console` put it, or
+at `serve`'s default address, and says whether one answers there and which
+version. The policy's mode, a scope's denied hosts and the attribution rules
+are edited in the console's Policy page; `console open policy` opens it,
+and `doctor` names the same page in its Console section. Nothing here starts
+a console: where none answers, `open` refuses and names `serve`.
+
 ### Keep the console running (macOS)
 
 Requires 0.4.2.
@@ -774,11 +792,6 @@ count on its session. A session's crossings leave only when the scope that
 matched their working directory carries `allow_telemetry_egress: true`
 (§4). What may leave, under whose clearance, and the wire format are
 [`docs/contracts/telemetry-projection.md`](contracts/telemetry-projection.md).
-For a supplier's own receiver, `"suppliers": ["<name>"]` in `relay.json`
-sends it only that supplier's events
-([§Supplier scope](contracts/telemetry-projection.md#supplier-scope)).
-Requires 0.4.2: 0.4.1 refuses a `relay.json` with `suppliers` and sends
-nothing.
 
 The first run reads every session log in the home, including sessions
 recorded before a receiver was configured, and decides each crossing under
@@ -847,7 +860,7 @@ relay --every 300` under your own service manager; `service` names a
 login), as for the console above. While it runs, `status` and `doctor` show
 `background relay: running`, and a Claude Desktop session may use a source
 whose licence demands usage reporting, where its policy scope clears
-telemetry egress and `relay.json` names a receiver not scoped to suppliers. A
+telemetry egress and `relay.json` names a receiver. A
 second one on the same home is refused. Each run sends what a session-end run
 would send, no more.
 

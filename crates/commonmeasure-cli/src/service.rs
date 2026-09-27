@@ -33,7 +33,7 @@ pub const LABEL: &str = "ai.commonmeasure.console";
 pub const RELAY_LABEL: &str = "ai.commonmeasure.relay";
 
 /// Where `serve` listens unless told otherwise.
-const DEFAULT_LISTEN: &str = "127.0.0.1:4173";
+pub(crate) const DEFAULT_LISTEN: &str = "127.0.0.1:4173";
 
 /// How long install waits for the previous process to release the port and
 /// for the new one to answer.
@@ -58,8 +58,7 @@ pub enum ServiceCommand {
     /// until installed again. It sends to the receiver in relay.json with
     /// nobody running a command, which is what lets a host with no session-end
     /// event (Claude Desktop) use a source whose licence demands usage
-    /// reporting, where relay.json names a receiver not scoped to suppliers
-    /// and the policy scope clears telemetry egress. Refuses without a
+    /// reporting, where the policy scope clears telemetry egress. Refuses without a
     /// receiver in relay.json, and while a background relay started by hand
     /// holds the home.
     Install {
@@ -620,6 +619,16 @@ pub fn context() -> Result<Context, String> {
     })
 }
 
+/// The `--listen` the console service on this machine was installed with,
+/// read from its plist, or `None` where no service is installed, the plist
+/// is not in the form install writes, or this platform has no LaunchAgent.
+/// `commonmeasure console` and `doctor` look for the console here first.
+pub(crate) fn installed_listen() -> Option<String> {
+    let context = context().ok()?;
+    let text = std::fs::read_to_string(context.plist()).ok()?;
+    read_plist(&text).map(|installed| installed.listen)
+}
+
 /// The background relay's context: the console's, with its own label and
 /// log. In a debug build a `COMMONMEASURE_SERVICE_LABEL` override moves the
 /// relay's label with it, to `<override>.relay`, so a test that redirects
@@ -1165,7 +1174,7 @@ fn changed(path: &Path) -> Option<SystemTime> {
 
 /// What answered on the address.
 #[derive(Debug, PartialEq)]
-enum Answer {
+pub(crate) enum Answer {
     Nothing,
     /// A Common Measure console reporting its version and process.
     Console {
@@ -1177,7 +1186,7 @@ enum Answer {
     Unreported,
 }
 
-fn probe(address: SocketAddr) -> Answer {
+pub(crate) fn probe(address: SocketAddr) -> Answer {
     let timeout = Duration::from_secs(2);
     let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
         return Answer::Nothing;
@@ -1661,18 +1670,14 @@ pub fn install_relay(
     let label = &context.label;
     let home = &context.edge_home;
     crate::relay_loop::check_every(every)?;
-    let scope = match commonmeasure_relay::config::RelayConfig::load(home) {
-        Err(error) => return Err(error),
-        Ok(None) => {
-            return Err(format!(
-                "no telemetry receiver is configured in {}, so the background relay would send \
-                 nothing. Name one there, or enrol with commonmeasure connect, then install \
-                 again.",
-                home.join("relay.json").display()
-            ));
-        }
-        Ok(Some(config)) => crate::relay_loop::scope_consequence(&config),
-    };
+    if commonmeasure_relay::config::RelayConfig::load(home)?.is_none() {
+        return Err(format!(
+            "no telemetry receiver is configured in {}, so the background relay would send \
+             nothing. Name one there, or enrol with commonmeasure connect, then install \
+             again.",
+            home.join("relay.json").display()
+        ));
+    }
     let lock = crate::relay_loop::lock_path(home);
     let loaded = loaded(context, commands)?;
     match relay_loop_state(home) {
@@ -1766,13 +1771,10 @@ pub fn install_relay(
     }
     Ok(format!(
         "{label} {verb}\nplist      {}\nrelaying   {}, every {every}s, to the receiver in {}\n\
-         {}log        {}\n",
+         log        {}\n",
         path.display(),
         home.display(),
         home.join("relay.json").display(),
-        scope
-            .map(|scope| format!("scope      {scope}\n"))
-            .unwrap_or_default(),
         log.display(),
     ))
 }
@@ -3285,37 +3287,6 @@ mod tests {
                 && text.contains("every      120s")
                 && text.contains("loaded     yes, running, pid 77")
                 && text.contains("relaying   not running; "),
-            "{text}"
-        );
-    }
-
-    // Review P2-4: installing against a receiver scoped to suppliers says
-    // so, and what it means for reporting demands.
-    #[test]
-    fn install_relay_names_a_receiver_scoped_to_suppliers() {
-        let home = tempfile::tempdir().unwrap();
-        let context = super::testing::relay_context(home.path());
-        std::fs::create_dir_all(&context.edge_home).unwrap();
-        std::fs::write(
-            context.edge_home.join("relay.json"),
-            r#"{"receiver":"http://127.0.0.1:9/telemetry","suppliers":["ozone"]}"#,
-        )
-        .unwrap();
-        let kickstart = format!("launchctl kickstart gui/501/{RELAY_LABEL}");
-        let commands = Recorder::default()
-            .answer(
-                &format!("launchctl bootstrap gui/501 {}", context.plist().display()),
-                true,
-                "",
-            )
-            .answer(&kickstart, true, "")
-            .relay_on(&kickstart, &context.edge_home);
-        let text = install_relay(&context, &commands, 300).unwrap();
-        assert!(
-            text.contains(
-                "scope      the receiver is scoped to suppliers (ozone), so only their events \
-                 leave and a source whose licence demands usage reporting is refused on this home\n"
-            ),
             "{text}"
         );
     }

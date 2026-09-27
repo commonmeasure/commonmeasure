@@ -14,7 +14,6 @@ pub mod declaration;
 pub mod evaluate;
 pub mod evidence;
 pub mod freshness;
-pub mod governance;
 pub mod policy;
 pub mod processor;
 pub mod replay;

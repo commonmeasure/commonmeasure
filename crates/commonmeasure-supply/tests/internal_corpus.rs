@@ -201,86 +201,6 @@ fn a_date_declared_for_an_unscannable_file_is_an_error_not_a_silent_absence() {
     }
 }
 
-/// The operator's governance metadata travels from the manifest through the
-/// sealed response onto exactly the envelope it was declared for; a document
-/// with no declaration carries none — absent, never defaulted.
-#[test]
-fn declared_governance_metadata_reaches_the_envelope_and_absence_stays_absent() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let root = directory.path();
-    write(
-        root,
-        "corpus.json",
-        r#"{"documents": {"flux.md": {
-              "edition": "orchestrator", "version_range": "4.x",
-              "integration_path": "flux-connector",
-              "support_status": "deprecated", "entitlement": "standard"}}}"#,
-    );
-    write(root, "flux.md", "# Flux\n\nthe cap on flux throughput\n");
-    write(root, "plain.md", "# Plain\n\nthe cap on plain throughput\n");
-
-    let acquisition = InternalCorpusAdapter::new(root)
-        .query("cap throughput", 5)
-        .expect("query");
-    assert_eq!(acquisition.envelopes.len(), 2);
-    let by_path = |name: &str| {
-        acquisition
-            .envelopes
-            .iter()
-            .find(|envelope| envelope.native_metadata["path"] == name)
-            .expect("envelope present")
-    };
-
-    let governance = &by_path("flux.md").native_metadata["governance"];
-    assert_eq!(governance["edition"], "orchestrator");
-    assert_eq!(governance["version_range"], "4.x");
-    assert_eq!(governance["integration_path"], "flux-connector");
-    assert_eq!(governance["support_status"], "deprecated");
-    assert_eq!(governance["entitlement"], "standard");
-    assert!(
-        by_path("plain.md").native_metadata["governance"].is_null(),
-        "an undeclared document carries no governance metadata"
-    );
-
-    // Re-derivable from the sealed response, like every envelope field.
-    let sealed: Value = serde_json::from_slice(&acquisition.raw_response).expect("sealed JSON");
-    let sealed_governance = sealed["matches"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|matched| matched["path"] == "flux.md")
-        .expect("match present")["governance"]
-        .clone();
-    assert_eq!(&sealed_governance, governance);
-}
-
-/// Governance metadata declared for a document that is not in the corpus is
-/// a declaration lost, exactly as a dangling date is: an error, never a
-/// silent absence.
-#[test]
-fn governance_metadata_declared_for_a_missing_document_is_an_error() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    write(
-        directory.path(),
-        "corpus.json",
-        r#"{"documents": {"gone.md": {
-              "edition": "orchestrator", "version_range": "4.x",
-              "integration_path": "flux-connector",
-              "support_status": "deprecated", "entitlement": "standard"}}}"#,
-    );
-    write(directory.path(), "note.md", "the cap applies");
-    let error = InternalCorpusAdapter::new(directory.path())
-        .query("cap", 1)
-        .expect_err("a dangling governance declaration must refuse the query");
-    match error {
-        SupplyError::Malformed { detail } => assert!(
-            detail.contains("gone.md") && detail.contains("governance"),
-            "the error names the path and the kind of declaration lost: {detail}"
-        ),
-        other => panic!("expected a malformed manifest error, got {other:?}"),
-    }
-}
-
 /// A per-document licence declaration travels from the manifest through the
 /// sealed response onto exactly the envelope it was declared for; a document
 /// without one falls back to the corpus-wide state. One corpus can then
@@ -404,19 +324,16 @@ fn a_licence_declared_for_a_missing_document_is_an_error() {
     }
 }
 
-/// A misspelled field inside a governance declaration is a declaration lost,
-/// not an absent one: unknown fields are load errors all the way down.
+/// A manifest key the adapter does not define is a load error, not an
+/// ignored key: a declaration under a misspelled or retired name would
+/// otherwise be lost silently.
 #[test]
-fn an_unknown_field_in_a_governance_declaration_is_an_error() {
+fn an_unknown_manifest_key_is_an_error() {
     let directory = tempfile::tempdir().expect("tempdir");
     write(
         directory.path(),
         "corpus.json",
-        r#"{"documents": {"note.md": {
-              "edition": "orchestrator", "version_range": "4.x",
-              "integration_path": "flux-connector",
-              "support_status": "deprecated", "entitlement": "standard",
-              "entitelment": "premier"}}}"#,
+        r#"{"dates": {"note.md": "2026-05-01"}, "documents": {"note.md": {}}}"#,
     );
     write(directory.path(), "note.md", "the cap applies");
     let result = InternalCorpusAdapter::new(directory.path()).query("cap", 1);
@@ -424,10 +341,10 @@ fn an_unknown_field_in_a_governance_declaration_is_an_error() {
 }
 
 /// The committed specialist bundle (`demo/specialist/corpus/`) loads through
-/// the real adapter: its manifest validates, its licence is declared, and
-/// its governance declarations attach where they were written. This is the
-/// corpus the governed specialist runs are made from, so a dangling declaration
-/// must fail here, not in a run.
+/// the real adapter: its manifest validates, its licence is declared and
+/// every document carries its declared date. This is the corpus the
+/// specialist runs are made from, so a dangling declaration must fail here,
+/// not in a run.
 #[test]
 fn the_committed_specialist_bundle_loads_and_carries_its_declarations() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/specialist/corpus");
@@ -439,22 +356,6 @@ fn the_committed_specialist_bundle_loads_and_carries_its_declarations() {
         LicenceState::Declared {
             reference: "fictive-systems/doc-licence-v1".to_owned()
         }
-    );
-    let governance = |name: &str| {
-        acquisition
-            .envelopes
-            .iter()
-            .find(|envelope| envelope.native_metadata["path"] == name)
-            .unwrap_or_else(|| panic!("{name} should match this query"))
-            .native_metadata["governance"]
-            .clone()
-    };
-    let deprecated = governance("flux-connector-4x-migration.md");
-    assert_eq!(deprecated["support_status"], "deprecated");
-    assert_eq!(deprecated["integration_path"], "flux-connector");
-    assert!(
-        governance("orchestrator-overview.md").is_null(),
-        "the overview deliberately declares no governance metadata"
     );
     for envelope in &acquisition.envelopes {
         assert!(

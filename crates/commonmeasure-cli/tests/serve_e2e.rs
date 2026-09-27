@@ -1069,11 +1069,8 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         "local-details",
         &format!("{}/article", origin.url()),
     );
-    policy["terms"] = json!([{"host":"127.0.0.1", "reference":"operator-agreement", "requires_reporting":true,
-        "assessment":{"basis":"agreement", "applicability":"applicable", "version":"2026-09",
-            "claimed_issuer":"Local publication", "authority_evidence":["operator-agreement:reuse-clause"],
-            "content":[format!("{}/terms-article", origin.url())], "intended_uses":["ai-input"],
-            "reason":"The agreement covers AI input for this article."}}]);
+    policy["terms"] =
+        json!([{"host":"127.0.0.1", "reference":"operator-agreement", "requires_reporting":true}]);
     write_policy(home.path(), &policy.to_string());
     record_mediated_crossing(
         home.path(),
@@ -1094,10 +1091,9 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
     assert_eq!(first["allowance"]["decision"], "reserved", "{first}");
     assert_eq!(first["allowance"]["settlement"]["reconciled"], true);
     assert_eq!(
-        crossings[1]["payload"]["declarations"]["governing"],
-        "operator_terms"
+        crossings[1]["payload"]["declarations"]["terms"]["reference"],
+        "operator-agreement"
     );
-    assert!(crossings[1]["payload"].get("allowance").is_none());
     let manifest = records
         .as_array()
         .unwrap()
@@ -1112,15 +1108,11 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         "CommonMeasureBot",
         "ai-input",
         "disallow",
-        "operator_terms",
         "operator-agreement",
         "Named by",
         "Manifest record",
         "verified",
         "probes",
-        "reporting",
-        "receiver",
-        "absent",
         "Content-Telemetry-ID",
         "Allowance",
         "reserved",

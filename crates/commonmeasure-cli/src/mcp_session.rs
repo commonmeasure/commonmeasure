@@ -23,8 +23,6 @@ pub(crate) struct Transport {
     /// (`SessionPolicy::hold_private_floor`): the service's setting. The
     /// stdio server leaves the floor to the policy.
     pub(crate) hold_private_floor: bool,
-    /// The directory comes from the operator's hosted-service configuration.
-    pub(crate) declared_directory: bool,
     /// The session was started by a host process on this machine, so its
     /// log records that process for the join with the hook log
     /// (`docs/contracts/session-evidence.md` §Host process). A hosted
@@ -41,7 +39,6 @@ impl Transport {
     pub(crate) const STDIO: Self = Self {
         served: Served::DEFAULT,
         hold_private_floor: false,
-        declared_directory: false,
         local_host: true,
         interval_relay: false,
     };
@@ -55,9 +52,8 @@ impl Transport {
 /// a hosted edge answers several hosts from one process, one session each.
 /// `cwd` is the directory the session's policy scope is resolved against and
 /// the one its crossings record; the stdio server inherits the harness's own,
-/// and an unscoped transport passes none. A hosted service may pass its
-/// explicitly declared directory and sets `declared_directory` so its basis
-/// is recorded. `principal` is the
+/// and an unscoped transport passes none; a hosted session has no working
+/// directory. `principal` is the
 /// identity the policy is resolved for when a transport authenticated one
 /// (the hosted edge's verified token); the stdio server passes none and the
 /// policy reads the process's own user, as it always has. `transport` says
@@ -142,13 +138,6 @@ pub(crate) fn open(
                     log.path().display()
                 )
             })?;
-    }
-    if transport.declared_directory {
-        let directory = cwd
-            .as_deref()
-            .ok_or("declared hosted directory is missing")?;
-        log.record_hosted_scope(host, directory)
-            .map_err(|error| format!("could not record hosted scope: {error}"))?;
     }
     // Where each credential came from is evidence — path, digest and names,
     // never a value — and the server records it before the first record a

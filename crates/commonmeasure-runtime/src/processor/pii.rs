@@ -1,16 +1,11 @@
 //! The PII detector: a deterministic `admit`-stage processor.
 //!
 //! Pattern rules over the text of a source, before that text can reach a
-//! model. The verdict is evidence, not deletion: the finding is recorded the
-//! same way whatever is done with it. In `observe` and `prefer` the crossing
-//! carries on with the finding recorded, as every breach does. In `strict`
-//! the finding refuses the crossing when the source is internal or private,
-//! or when the policy sets `refuse_on_pii`; on a public source `strict`
-//! records the finding and admits the crossing, because a public page's
-//! published contact details are not the personal data the detector exists
-//! to keep out of a model (`docs/FAIL-POLICY.md`, clause 6). This is the one
-//! processor whose strict disposition depends on where the text came from,
-//! and the caller says which, from the classification policy already makes.
+//! model. The verdict is evidence, not deletion: a finding is recorded in the
+//! invocation and carried on the crossing as a breach, in every mode and for
+//! every source, and refuses nothing (`docs/FAIL-POLICY.md`, clause 6). The
+//! one refusal this module can produce is `not_read`: a body the edge did not
+//! read has no verdict, and an unknown verdict fails closed under `strict`.
 //!
 //! The matched text is deliberately never recorded. A finding names its
 //! category and byte offsets; copying an identifier into the evidence trail
@@ -102,16 +97,6 @@ impl PiiCategory {
     }
 }
 
-/// Where the scanned text came from, as the operator's policy already
-/// classifies it. `Internal` covers a named internal prefix, a loopback or
-/// private address reached under `allow_private_hosts`, and the operator's
-/// own corpus; `Public` is everything else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceClass {
-    Public,
-    Internal,
-}
-
 /// One identifier found in the text, by category and byte offsets only.
 #[derive(Debug, Clone, Serialize)]
 pub struct PiiFinding {
@@ -121,20 +106,16 @@ pub struct PiiFinding {
 }
 
 /// Scan one source's text and turn the verdict into the shared `Ruling`
-/// shape.
+/// shape: `Allowed` where nothing was found, otherwise `AllowedWithBreach`
+/// with the finding as the reason. The mode is not consulted: a finding
+/// refuses nothing, so the same text gives the same ruling and the same
+/// record in `strict`, `prefer` and `observe`.
 ///
-/// `source` is the caller's classification of where the text came from and
-/// `refuse_on_pii` the policy's switch; together with `mode` they decide
-/// whether a finding refuses (`strict`, and the source is internal or the
-/// switch is set) or is carried with the finding recorded. `source_ref`
-/// names the source in the record; `basis` names what was scanned in the
-/// refusal sentence — the extracted text of a page, or the unextracted body
-/// with its content type — so a reader of the sentence knows which text the
-/// finding's offsets index.
+/// `source_ref` names the source in the record; `basis` names what was
+/// scanned in the breach sentence — the extracted text of a page, or the
+/// unextracted body with its content type — so a reader of the sentence
+/// knows which text the finding's offsets index.
 pub fn invoke(
-    mode: PolicyMode,
-    source: SourceClass,
-    refuse_on_pii: bool,
     source_ref: &str,
     basis: &str,
     text: &str,
@@ -163,28 +144,13 @@ pub fn invoke(
                  finding is recorded in the plan's processor invocations."
             ),
         );
-        // The one departure from `Ruling::breach`: strict refuses a finding
-        // on an internal or private source, or everywhere under the switch,
-        // and otherwise carries it. The finding is recorded identically
-        // whichever way it is ruled.
-        let refuses =
-            mode == PolicyMode::Strict && (refuse_on_pii || source == SourceClass::Internal);
-        if refuses {
-            Ruling::Refused { reason, gap }
-        } else {
-            Ruling::AllowedWithBreach { reason, gap }
-        }
+        Ruling::AllowedWithBreach { reason, gap }
     };
 
-    let decision = if ruling.is_refusal() {
-        Decision::Refuse
-    } else {
-        Decision::Admit
-    };
     let invocation = Invocation::new(
         manifest(),
         started_at,
-        decision,
+        Decision::Admit,
         "one deterministic pass of the pattern rules the configuration digest pins",
         vec![ArtefactRef {
             reference: source_ref.to_owned(),
@@ -579,121 +545,56 @@ mod tests {
         assert!(scan(text).is_empty());
     }
 
+    /// A finding is a breach the crossing carries, whatever the source: an
+    /// internal address and a public page get the same ruling, the same
+    /// record and no refusal, and the identifier itself is in neither.
     #[test]
-    fn strict_refuses_and_observe_carries_the_same_finding() {
-        let text = "contact jane@example.com";
-        let (_, strict) = invoke(
-            PolicyMode::Strict,
-            SourceClass::Internal,
-            false,
-            "https://rag.corp.internal/x",
-            "https://rag.corp.internal/x",
-            text,
-            None,
-        );
-        assert!(strict.is_refusal());
-        let (invocation, observe) = invoke(
-            PolicyMode::Observe,
-            SourceClass::Internal,
-            false,
-            "https://rag.corp.internal/x",
-            "https://rag.corp.internal/x",
-            text,
-            None,
-        );
-        assert!(!observe.is_refusal());
-        assert_eq!(
-            strict.gap(),
-            observe.gap(),
-            "the mode decides what happens to a finding, never how it is recorded"
-        );
-        let record = invocation.to_value();
-        assert_eq!(record["detail"]["matched_text_recorded"], false);
-        assert!(
-            !record.to_string().contains("jane@example.com"),
-            "the identifier itself must never enter the evidence record"
-        );
-    }
-
-    /// Where the text came from decides what strict does with a finding:
-    /// a public source is carried with the finding recorded, an internal
-    /// one is refused, and the record is the same either way.
-    #[test]
-    fn a_public_source_carries_a_pii_finding_in_strict_and_an_internal_one_is_refused() {
+    fn a_finding_is_carried_as_a_breach_and_never_refuses() {
         let text = "Contact the Land Registry at customersupport@landregistry.gov.uk.";
-        let public = "https://www.gov.uk/government/organisations/land-registry";
-        let (public_invocation, public_ruling) = invoke(
-            PolicyMode::Strict,
-            SourceClass::Public,
-            false,
-            public,
-            public,
-            text,
-            None,
-        );
-        assert!(
-            matches!(public_ruling, Ruling::AllowedWithBreach { .. }),
-            "strict carries a public source with the finding recorded"
-        );
-        assert_eq!(public_invocation.to_value()["decision"], "admit");
-        assert_eq!(
-            public_invocation.to_value()["detail"]["categories"]["email_address"],
-            1
-        );
-        let internal = "https://rag.corp.internal/contacts";
-        let (internal_invocation, internal_ruling) = invoke(
-            PolicyMode::Strict,
-            SourceClass::Internal,
-            false,
-            internal,
-            internal,
-            text,
-            None,
-        );
-        assert!(internal_ruling.is_refusal());
-        assert_eq!(internal_invocation.to_value()["decision"], "refuse");
-        for ruling in [&public_ruling, &internal_ruling] {
+        for source in [
+            "https://rag.corp.internal/contacts",
+            "https://www.gov.uk/government/organisations/land-registry",
+        ] {
+            let (invocation, ruling) = invoke(source, source, text, None);
+            assert!(
+                matches!(ruling, Ruling::AllowedWithBreach { .. }),
+                "{source}: {ruling:?}"
+            );
             assert!(
                 ruling
                     .reason()
                     .unwrap()
                     .contains("1 structured personal identifier (email_address ×1)"),
-                "the finding reads the same whichever way it is ruled"
+                "{source}"
             );
-        }
-        assert_eq!(
-            public_ruling.gap().map(|gap| &gap.reason),
-            internal_ruling.gap().map(|gap| &gap.reason)
-        );
-        for record in [public_invocation.to_value(), internal_invocation.to_value()] {
-            assert!(!record.to_string().contains("customersupport@"));
+            assert_eq!(
+                ruling.gap().map(|gap| gap.reason),
+                Some(GapReason::PolicyRefused)
+            );
+            let record = invocation.to_value();
+            assert_eq!(record["decision"], "admit");
+            assert_eq!(record["detail"]["categories"]["email_address"], 1);
+            assert_eq!(record["detail"]["matched_text_recorded"], false);
+            assert!(
+                !record.to_string().contains("customersupport@"),
+                "the identifier itself must never enter the evidence record"
+            );
         }
     }
 
-    /// The switch restores the refusal on every source; observe and prefer
-    /// carry a finding on every source, switch or not.
+    /// Text with nothing in it is allowed outright, and the record says so
+    /// with an empty finding list rather than no record.
     #[test]
-    fn refuse_on_pii_refuses_a_public_source_in_strict() {
-        let text = "contact jane@example.com";
-        let public = "https://www.gov.uk/x";
-        let (_, switched) = invoke(
-            PolicyMode::Strict,
-            SourceClass::Public,
-            true,
-            public,
-            public,
-            text,
+    fn clean_text_is_allowed_with_an_empty_finding_list_recorded() {
+        let (invocation, ruling) = invoke(
+            "https://a.example/x",
+            "https://a.example/x",
+            "no identifiers here",
             None,
         );
-        assert!(switched.is_refusal());
-        for mode in [PolicyMode::Observe, PolicyMode::Prefer] {
-            for source in [SourceClass::Public, SourceClass::Internal] {
-                let (_, ruling) = invoke(mode, source, true, public, public, text, None);
-                assert!(
-                    matches!(ruling, Ruling::AllowedWithBreach { .. }),
-                    "{mode:?} carries every finding"
-                );
-            }
-        }
+        assert!(matches!(ruling, Ruling::Allowed));
+        let record = invocation.to_value();
+        assert_eq!(record["decision"], "admit");
+        assert_eq!(record["detail"]["findings"], serde_json::json!([]));
     }
 }

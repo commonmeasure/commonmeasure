@@ -1677,10 +1677,7 @@ fn an_unknown_path_a_foreign_origin_a_get_a_bad_version_and_a_stale_session_are_
     let issuer = Issuer::start();
     let home = tempfile::tempdir().expect("tempdir");
     enrol(home.path(), &issuer);
-    let edge = Edge::start_with(
-        home.path(),
-        &["--allow-origin", "https://console.edge.test"],
-    );
+    let edge = Edge::start(home.path());
     let authorization = issuer.bearer("user-1", "chatgpt");
     let auth = [("Authorization", authorization.as_str())];
 
@@ -1691,8 +1688,8 @@ fn an_unknown_path_a_foreign_origin_a_get_a_bad_version_and_a_stale_session_are_
     assert!(text(&unknown).contains("/mcp/chatgpt"));
     assert_eq!(edge.post("/", &auth, &initialize(None)).status, 404);
 
-    // An Origin that is not this edge's own nor an allowed one is 403,
-    // before the token is even read.
+    // An Origin that is not this edge's own is 403, before the token is
+    // even read.
     let foreign = edge.post(
         "/mcp/chatgpt",
         &[("Origin", "https://evil.test")],
@@ -1702,14 +1699,12 @@ fn an_unknown_path_a_foreign_origin_a_get_a_bad_version_and_a_stale_session_are_
     assert!(text(&foreign).contains("evil.test"));
     let null_origin = edge.post("/mcp/chatgpt", &[("Origin", "null")], &initialize(None));
     assert_eq!(null_origin.status, 403);
-    for allowed in [ORIGIN, "https://console.edge.test"] {
-        let own = edge.post(
-            "/mcp/chatgpt",
-            &[("Authorization", &authorization), ("Origin", allowed)],
-            &initialize(None),
-        );
-        assert_eq!(own.status, 200, "Origin {allowed}: {}", text(&own));
-    }
+    let own = edge.post(
+        "/mcp/chatgpt",
+        &[("Authorization", &authorization), ("Origin", ORIGIN)],
+        &initialize(None),
+    );
+    assert_eq!(own.status, 200, "Origin {ORIGIN}: {}", text(&own));
 
     // GET offers no event stream here.
     let get = edge.request("GET", "/mcp/chatgpt", &auth, None);

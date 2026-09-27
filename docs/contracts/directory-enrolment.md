@@ -198,9 +198,7 @@ registry and persistent mode marker disappear. In that case relay returns an
 explicit error and keeps the batch pending across retries until directory
 consent is restored; it cannot acknowledge the batch and later reproject its
 events under scope clearances. A spool line without the field is damage and
-nothing is delivered until it is repaired; the relay never defaults it. A
-batch with `queued_at: null` is held and never sent, because a rewrite of the
-spool may have filled the field in
+nothing is delivered until it is repaired; the relay never defaults it
 ([telemetry projection](telemetry-projection.md) §Delivery state). Current
 directory selection requires revalidation of every batch.
 Deleting consent files is not an opt-out operation; use `enrol --remove`.
@@ -228,7 +226,7 @@ wire events. No successful setup message implies a delivered first batch.
 - `crates/commonmeasure-cli/tests/directory_enrolment.rs`: real CLI/MCP input,
   filesystem writes, repeat selection, path boundaries, worktree restrictions,
   symlinks, nested Git/submodule ancestor vetoes, host-config preservation,
-  queued opt-out, missing registry/marker and legacy spool compatibility.
+  queued opt-out and a missing registry or marker.
 - `crates/commonmeasure-cli/tests/hosted_service/reporting.rs`: signed
   approvals against a loopback hub through the real hook and relay; a batch
   held under a revoked approval and sent once after re-approval, and a batch in

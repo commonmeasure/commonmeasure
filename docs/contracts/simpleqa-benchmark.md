@@ -37,10 +37,10 @@ records what the adapter and gateway actually report.
 The CLI resolves the process principal and working-directory source policy
 before constructing each job. Mode and constraints are copied without
 reordering access rules, and the existing principal allowance is consulted by
-the runtime. Policies with terms overlays, unresolved principal policy,
-`refuse_on_pii` or named internal-source prefixes are refused before dispatch
-because the batch path cannot represent those settings. This preserves the
-session policy's stronger PII and internal-source screening requirements.
+the runtime. Policies with terms, unresolved principal policy or named
+internal-source prefixes are refused before dispatch because the batch path
+cannot represent those settings. This preserves the session policy's
+internal-source screening requirements.
 Internal providers and skill invocation are excluded. The runtime's existing
 batch admission, privacy and PII behaviour applies; this command does not
 claim parity with every mediated-session feature.

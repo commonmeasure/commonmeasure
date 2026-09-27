@@ -27,7 +27,6 @@ pub mod judge;
 pub mod optimise;
 pub mod pii;
 pub mod provenance;
-pub mod support;
 
 /// The invocation-record contract version. Any change to the record shape
 /// changes this.
@@ -153,11 +152,10 @@ const NO_AMBIENT_AUTHORITY: Permissions = Permissions {
 /// Every processor compiled into this binary. In-process processors are
 /// installed by being built in; there is no separate installation step to
 /// drift from what the binary actually does.
-pub fn installed() -> [&'static ProcessorManifest; 8] {
+pub fn installed() -> [&'static ProcessorManifest; 7] {
     [
         pii::manifest(),
         injection::manifest(),
-        support::manifest(),
         extract::manifest(),
         optimise::manifest(),
         fidelity::manifest(),

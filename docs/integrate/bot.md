@@ -97,8 +97,7 @@ it is still checked. A licence your `License:` line names at any other
 origin, including the one your `robots.txt` redirects to (from `http` to
 `https`, say), is checked against `robots.txt` at that origin; where that
 file refuses it, the edge treats your page as having no readable licence and
-does not fetch it, unless the operator has recorded its own assessment of
-your terms.
+does not fetch it.
 
 The edge asks for the manifest at the page's own host. Where that answers
 404, it asks once more, at the registrable domain (`example.com` for

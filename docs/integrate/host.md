@@ -17,9 +17,9 @@ terms such as crossing, host and edge are in [`docs/GLOSSARY.md`](../GLOSSARY.md
 
 You need `commonmeasure` 0.4.0 or later on `PATH`
 ([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). The release download and
-`commonmeasure --version` were checked on 0.4.2 on macOS (Apple silicon). The integration commands below were run on 0.4.0
-with loopback servers standing in for the web; they were not rerun for
-0.4.1 or 0.4.2.
+`commonmeasure --version` were checked on 0.4.4 on macOS (Apple silicon). The integration commands below were run on 0.4.0
+with loopback servers standing in for the web; they have not been rerun
+since.
 
 ## 1. A host the binary already knows
 
@@ -228,5 +228,5 @@ count. Elsewhere such a source is refused unless `commonmeasure hosted
 service` or a background relay (`commonmeasure relay --every`, or
 `commonmeasure service install relay` on macOS) runs on the same home. In
 every case the session's policy scope must clear telemetry egress and
-`relay.json` must name a receiver not scoped to suppliers ([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
+`relay.json` must name a receiver ([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
 §Source declarations).

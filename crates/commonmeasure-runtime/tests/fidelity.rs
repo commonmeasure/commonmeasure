@@ -154,7 +154,6 @@ fn suite(fidelity_judge: bool) -> Suite {
         require_cited_answer: true,
         coverage_rubric: None,
         as_of: None,
-        governance: None,
         fetch_target: None,
         output_provenance: None,
         fidelity_judge,

@@ -444,9 +444,6 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
                     @if let Some(error) = egress["unavailable"].as_str() {
                         p class="callout" { "Delivery state unavailable: " (error) }
                     }
-                    @if let Some(line) = commonmeasure_relay::refused_spool_line(&egress) {
-                        p class="callout" { (line.trim_end()) "." }
-                    }
                     @if let Some(error) = egress["close_error"].as_str() {
                         p class="callout" {
                             "The last spool close did not fold the delivery journal: " (error)
@@ -2073,58 +2070,6 @@ mod tests {
             ),
             "{page}"
         );
-    }
-
-    /// A refused spool is stated in the sentence `status` and `doctor`
-    /// print, and an incomplete count reads as unknown, never as zero.
-    #[test]
-    fn the_hub_card_states_what_a_refused_spool_still_owes() {
-        // The page and the line the relay gives `status` and `doctor` for
-        // the same report; the relay owns the wording.
-        let page = |refused: Value| {
-            let egress = json!({"unavailable": "spool written by 0.3.4 or earlier",
-                                "refused_spool": refused});
-            let line = commonmeasure_relay::refused_spool_line(&egress)
-                .map(|line| html! { (line.trim_end()) }.into_string());
-            (
-                overview_page(&json!({ "egress": egress }), &json!([]), READ),
-                line,
-            )
-        };
-        let states_line = |(page, line): &(String, Option<String>)| {
-            let line = line.as_deref().unwrap();
-            assert!(
-                page.contains(&format!("<p class=\"callout\">{line}.</p>")),
-                "{page}"
-            );
-        };
-        let complete = page(json!({"outstanding": 0, "unknown": 0, "unindexed": 0}));
-        assert!(
-            complete
-                .0
-                .contains("Delivery state unavailable: spool written by 0.3.4 or earlier"),
-            "{}",
-            complete.0
-        );
-        states_line(&complete);
-
-        let owed = page(json!({"outstanding": 2, "unknown": 1, "unindexed": 0}));
-        states_line(&owed);
-
-        let incomplete = page(json!({"outstanding": 0, "unknown": 0, "unindexed": 0,
-                                     "incomplete": "line 3 <is> damaged"}));
-        states_line(&incomplete);
-        // An incomplete count reads as unknown, never as zero, and the
-        // relay's reason is escaped.
-        let said = incomplete.1.as_deref().unwrap();
-        assert!(said.contains("unknown"), "{said}");
-        assert!(said.contains("&lt;is&gt;"), "{said}");
-        assert!(!incomplete.0.contains("<is>"), "{}", incomplete.0);
-        assert!(!incomplete.0.contains("0 batches"), "{}", incomplete.0);
-
-        let (absent, line) = page(Value::Null);
-        assert_eq!(line, None);
-        assert!(!absent.contains("refused spool"), "{absent}");
     }
 
     #[test]

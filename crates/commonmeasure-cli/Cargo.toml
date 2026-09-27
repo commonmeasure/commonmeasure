@@ -15,6 +15,10 @@ commonmeasure-harness.workspace = true
 commonmeasure-supply.workspace = true
 chrono.workspace = true
 clap.workspace = true
+# The marks, headings and wrapping of the reports `doctor`, `status`,
+# `credentials` and `console` print (`src/report.rs`).
+anstyle.workspace = true
+anstream.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # The hosted edge (`src/hosted.rs`): the listener that answers Streamable

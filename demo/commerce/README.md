@@ -6,7 +6,7 @@ audience: contributor
 # The commerce demonstration bundle
 
 A fictional retail bundle for the commerce demonstration. It follows the
-same discipline as the governed specialist bundle (`demo/specialist/`): a
+same discipline as the specialist bundle (`demo/specialist/`): a
 comparison a sceptic can replay, assets that are obviously
 fictional, and rubrics declared before any plan runs. Everything here is
 synthetic: the retailer (**Fictive Retail**), its brands (Aurelio, Northglade), the

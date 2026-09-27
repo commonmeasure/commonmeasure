@@ -67,6 +67,7 @@ Start a new Claude Code session and ask it to read a web page. Then:
 ```sh
 commonmeasure session      # what the most recent session recorded
 commonmeasure serve        # the local console, on 127.0.0.1
+commonmeasure console      # where the console is, and each page's address
 ```
 
 A session that fetched one page prints, among other lines:

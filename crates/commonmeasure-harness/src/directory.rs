@@ -757,9 +757,9 @@ mod tests {
         hub.stop();
         assert_eq!(*seen.lock().unwrap(), vec![Some("hub-key".to_owned())]);
     }
-    // Status reads `relay.json` as the relay does. A supplier list the relay
-    // refuses shows the load error and no receiver, while the policy's own
-    // clearance for the directory is still reported.
+    // Status reads `relay.json` as the relay does. A file the relay refuses
+    // shows the load error and no receiver, while the policy's own clearance
+    // for the directory is still reported.
     #[test]
     fn status_shows_a_relay_config_the_relay_refuses() {
         let (home, _, project) = home();
@@ -774,7 +774,7 @@ mod tests {
         let receiver = "https://receiver.example/v1";
         std::fs::write(
             home.path().join("relay.json"),
-            json!({"receiver":receiver,"suppliers":["ozone"]}).to_string(),
+            json!({"receiver":receiver}).to_string(),
         )
         .unwrap();
         let loaded = status(home.path(), &project.root).unwrap();
@@ -784,7 +784,7 @@ mod tests {
 
         std::fs::write(
             home.path().join("relay.json"),
-            json!({"receiver":receiver,"suppliers":"ozone"}).to_string(),
+            json!({"receiver":receiver,"api_key":7}).to_string(),
         )
         .unwrap();
         let refused = status(home.path(), &project.root).unwrap();
@@ -792,7 +792,7 @@ mod tests {
         assert_eq!(refused["receiver"], Value::Null);
         let error = refused["relay_config_error"].as_str().unwrap();
         assert!(error.contains("not a valid relay config"), "{error}");
-        assert!(error.contains("invalid type: string"), "{error}");
+        assert!(error.contains("invalid type: integer"), "{error}");
         assert_eq!(refused["policy"]["allow_telemetry_egress"], true);
 
         // A file that is not JSON at all is shown the same way, rather than

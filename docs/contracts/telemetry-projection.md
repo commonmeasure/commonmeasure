@@ -161,8 +161,8 @@ either case a directory the policy cannot resolve safely does not clear: an
 unbound principal, a scope owned by another principal, or a symbolic link or
 linked worktree that resolves to another scope. Managed reporting approvals also apply
 where directory reporting is configured. A session any of whose cleared
-crossings falls under operator terms naming institution identifiers is
-withheld whole ([session evidence §Source declarations](session-evidence.md#source-declarations)). A run explicitly named to the relay contributes its admitted
+crossings falls under operator terms naming institution identifiers
+(`access_context`) is withheld whole ([session evidence §Source declarations](session-evidence.md#source-declarations)). A run explicitly named to the relay contributes its admitted
 sources. Both paths exclude private addresses and named internal prefixes.
 A session also excludes crossings marked internal, reconstructed crossings,
 failed fetches and non-2xx responses. Refused sources leave only as the existing
@@ -244,58 +244,14 @@ prints the warning after the failure, because the accepted batches' events
 are recorded delivered whatever happened to the rest. The count does not cover events projected for a receiver that was not
 the issuer, which never carried the member.
 
-## Supplier scope
-
-A receiver may be scoped to named suppliers: `relay.json` takes a `suppliers`
-list, such as `["ozone"]` for a supplier's own telemetry server.
-
-- Only events whose `data.commonmeasure-supplier` names a listed supplier
-  leave for that receiver: the supplier's retrievals and any recorded
-  grounding of what it served. The operator's own fetches, other suppliers'
-  results and turn boundaries stay home.
-- A scoped receiver gets grounding only where the source record holds it.
-  Mediated search records a supplier's results as retrievals and records no
-  grounding for them, so from mediated search a scoped receiver gets
-  retrieval events only.
-- A batch for a scoped receiver has no `refused` field. The count covers the
-  session's refusals of every source, and a supplier is owed nothing about
-  sources it did not serve; a zero would state a fact about the session that
-  is not true (§The refused count on the wire). No batch is sent to a scoped
-  receiver only to carry a moved count.
-- An absent list, or `null`, means every cleared event and the refused
-  count, as for any receiver. Enrolment writes no list, so the operator's own
-  hub is unscoped.
-- An empty list, `[]`, is scoped to no supplier: the receiver is sent
-  nothing, and nothing is queued or recorded delivered for it.
-- Any other value is a load error, and the relay sends nothing until it is
-  corrected: a string, an object, a list holding anything but names, or an
-  empty name. The harness reads `relay.json` with the relay's parser, so the
-  same file leaves a reporting demand unmet with the load error as the
-  reason ([session evidence §Source declarations](session-evidence.md#source-declarations)).
-- The scope belongs to the receiver `relay.json` names, however a
-  `--receiver` override spells it. The two are one receiver when they reach
-  one endpoint (below); an override to another endpoint is not scoped.
-- The spool is shared by every receiver the relay has been pointed at. A
-  queued batch is narrowed again on the document each delivery posts to a
-  scoped receiver, as the instance reference is; a batch left with no event
-  is held undelivered for a later unscoped receiver. The spooled file stays
-  as queued. Events narrowed out are not recorded delivered, so a later
-  unscoped relay projects them from the session log again.
-- A page this edge or the host fetched names no supplier, so a scoped
-  receiver never carries it. A run's fetch through a supplier's `fetch` names
-  that supplier, and its receiver gets the retrieval and any recorded
-  grounding. A reporting demand on a fetched page's licence or the
-  operator's terms is ruled unmet while `relay.json` sets `suppliers`
-  ([session evidence §Source declarations](session-evidence.md#source-declarations)).
-
-### One receiver
+## One receiver
 
 The relay posts each batch to the receiver with its trailing slashes
 removed, followed by `/events`, and parses that URL with the WHATWG URL
 rules. Two receiver URLs are one receiver when the URLs posted to are equal
 after that parse (`commonmeasure_harness::relay_config::same_receiver`).
-Scope selection uses this comparison alone. These spellings are one
-receiver:
+Status uses this comparison to say whether the last accepted delivery went to
+the receiver now configured. These spellings are one receiver:
 
 | Difference | Example | Handled by |
 |---|---|---|
@@ -478,27 +434,6 @@ has the gap as its one sign, so in those two cases it reads zero once its
 journal is missing. A spool index is never given to a second batch while the
 journal exists.
 
-The relay does not read a spool that holds `relay/spool/outbound.ack` or a
-queue line without an `index`. A queue line that is a whole entry without an
-`index`, the final line included whether or not it ends in a newline, or an
-`outbound.ack` beside the queue, stops the relay,
-`relay requeue`, a dry run and status with an error naming the line or the
-file and the remedy; nothing is sent and nothing on disk changes. Status and
-doctor then report `refused_spool`, read from the lines that carry an index
-and their recorded states: `outstanding`, the batches recorded as queued or
-dead (and, with no `outbound.ack`, those with no recorded state); `unknown`,
-the batches with no recorded state beside an `outbound.ack`, which may
-record them as accepted; and `unindexed`, the lines without an index.
-Neither that file nor those lines is read to count them. `incomplete` is null
-when every indexed line and every recorded state was accounted for.
-Otherwise it says why not: the recorded states name a batch no indexed line
-carries (as the ordinary read's check finds; the position of a line without
-an index may be such a batch), a line is neither a whole indexed entry nor
-one without an index, or a file did not read. The three counts then cover
-only what was read and are lower bounds. Status and doctor state that no
-indexed batch is outstanding only when all three counts are zero and
-`incomplete` is null. `refused_spool` is null for any other spool.
-
 When `relay/spool` is moved aside, the next relay run that names no
 `--session` projects again, from every session log under `sessions/` that
 reads and under the consent, approvals and policy in force, every event
@@ -511,12 +446,6 @@ session log or run input is gone is not sent again: the relay exits
 successfully, status and doctor do not count the event, and it stays in the
 saved spool, undelivered. The batch counts start again from the new spool; the
 delivered event count, which `delivered.idx` holds, does not.
-
-A batch with `queued_at: null` is held with a reason naming it and never
-sent: a rewrite of the spool may have filled in its `directory_selection`, so
-its consent provenance is unknown. Once no other batch is queued or dead,
-moving the spool aside projects its events again under current consent where
-its session log remains.
 
 Before sending, the relay durably claims the attempt and its next deadline.
 The first retry waits 60 seconds, which exceeds the HTTP client's 30-second
@@ -564,8 +493,7 @@ no automatic grace period. `commonmeasure status`, `commonmeasure doctor` and
 the console show queued, dead and delivered **batch** counts, oldest queued age,
 next attempt and last error. The existing delivered and pending **event** counts
 remain separate; pending includes dead batches. Unreadable delivery state is
-reported as unavailable, with unknown counts. A batch held for having no
-`queued_at` has an unknown queue age.
+reported as unavailable, with unknown counts.
 `next_attempt_at` reports only a persisted deadline for an unheld queued batch;
 it remains null when none exists. Status and doctor distinguish due batches
 from policy holds, and report the hold reason separately from delivery errors.
@@ -697,17 +625,13 @@ SIGTERM or SIGINT, which end it once the run in progress has finished. Each run 
 one a session end starts: every session log and every due spooled batch, to
 the receiver in `relay.json` only (`--every` takes none of `--receiver`,
 `--api-key`, `--run`, `--session`, `--dry-run` or `--policy`), under the same
-clearance, supplier scope, reporting approvals, backoff and spool lock, with
+clearance, reporting approvals, backoff and spool lock, with
 the managed policy synced first as `commonmeasure relay` syncs it. It sends
 nothing a session-end run over the same home would not send. It does not
 start without a receiver in `relay.json`, with a `relay.json` that does not
 load, or while another background relay holds the home; it says why and
 exits 0. It skips a run while the receiver is gone or `relay/manual` is
-present, each time with a journal line naming why. Where `relay.json` has
-`suppliers` (§Supplier scope), its first journal line, the `service install
-relay` output and `doctor`'s `automatic relay` line name the list and say
-that only those suppliers' events leave and that a source whose licence
-demands usage reporting is refused on the home.
+present, each time with a journal line naming why.
 
 For as long as it runs it holds `relay-loop.lock` in the home, created
 readable by its owner only, and writes its pid and interval into it. A
@@ -836,8 +760,7 @@ session, the highest count a receiver has accepted, whatever the receiver
 spool as sent. Its summary states the totals it queued for the wire this run and nothing
 more. A session that was refused and admitted nothing produces no batch and
 its count does not cross; a batch without the field comes from an edge that
-does not report it, or was sent to a receiver scoped to suppliers
-(§Supplier scope), which is not the same as a count of zero.
+does not report it, which is not the same as a count of zero.
 `conformance/session-refused.json` is the vector.
 
 ## Verification
@@ -853,13 +776,7 @@ whose origin is its issuer, on content events only, at each source record's
 revision, that an unregistered session's batch carries none, and that a batch
 spooled for the issuer and delivered to another receiver is posted without
 the member; the receivers there record what the relay posts and are not hubs.
-The supplier scope tests there post to loopback receivers and assert on the
-JSON received: a scoped receiver gets its supplier's retrieval and grounding
-and no `refused` member, also when the override spells the configured URL
-with a trailing slash, when the batch was spooled unscoped, and when a
-directory selection's recheck has rewritten the count; a list that does not
-parse sends nothing, `null` is unscoped and `[]` sends nothing. The URL
-comparison and the parser's table are unit-tested in
+The receiver URL comparison is unit-tested in
 `crates/commonmeasure-harness/src/relay_config.rs`.
 `crates/commonmeasure-relay/tests/conformance.rs` validates the corpus against
 the pinned schemas, including rejection of missing or invalid turn privacy

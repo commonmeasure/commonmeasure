@@ -36,7 +36,7 @@ pub use enrolment::{
     ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, disconnect,
     refresh_directory_proof, refresh_directory_proof_if_due,
 };
-pub use state::{egress_report, enrolment_error_line, refused_spool_line};
+pub use state::{egress_findings, egress_report, enrolment_error_line};
 
 #[derive(Debug, Default)]
 pub struct RelayOptions {
@@ -448,13 +448,6 @@ pub fn relay_with_clock(
         );
     };
     let api_key = key_for(&receiver, &receiver, options, configured.as_ref());
-    // A supplier scope belongs to the receiver relay.json names, however the
-    // override spells it; a `--receiver` override to another endpoint is not
-    // scoped by it.
-    let supplier_scope: Option<Vec<String>> = configured
-        .as_ref()
-        .filter(|config| config::same_receiver(&config.receiver, &receiver))
-        .and_then(|config| config.suppliers.clone());
 
     // The same policy.json the capture paths read, held for the whole
     // invocation: every egress decision below is taken against these bytes, so
@@ -635,16 +628,13 @@ pub fn relay_with_clock(
             sessions_withheld_access_context += 1;
             continue;
         }
-        let mut projected = project::project_session(
+        let projected = project::project_session(
             Some(&receiver),
             session_id,
             &records,
             &internal_prefixes,
             &|at| cleared.contains_key(&at),
         );
-        if let Some(suppliers) = &supplier_scope {
-            project::scope_to_suppliers(&mut projected, suppliers);
-        }
         for (event, position) in &projected.event_positions {
             // Every projected event comes from a record this filter cleared,
             // and a crossing is cleared only under a named governing
@@ -697,11 +687,8 @@ pub fn relay_with_clock(
                 .with_context(|| format!("read {}", summary_path.display()))?,
         )
         .with_context(|| format!("{} is not valid JSON", summary_path.display()))?;
-        let mut projected = project::project_run(&summary, &internal_prefixes)
+        let projected = project::project_run(&summary, &internal_prefixes)
             .with_context(|| format!("project {}", run_dir.display()))?;
-        if let Some(suppliers) = &supplier_scope {
-            project::retain_supplied(&mut projected, suppliers);
-        }
         if !projected.is_empty() {
             runs_projected += 1;
         }
@@ -795,14 +782,6 @@ pub fn relay_with_clock(
                 continue;
             }
         }
-        // A batch queued by 0.3.4 or earlier may carry consent provenance a
-        // later prune filled in, so it is held whatever the consent in force.
-        if entry.queued_at.is_none() {
-            if !options.dry_run {
-                spool.hold(index, spool::PRE_0_3_5_HOLD)?;
-            }
-            continue;
-        }
         // Re-read consent, approval expiry and source policy before every delivery.
         // Hold selection's lock across the send: opt-out completes after any
         // already-running delivery, and every subsequent send sees the opt-out.
@@ -843,20 +822,6 @@ pub fn relay_with_clock(
                     spool.hold(
                         index,
                         "Held by current directory consent or source policy; undelivered.",
-                    )?;
-                }
-                continue;
-            }
-        }
-        if let Some(suppliers) = &supplier_scope {
-            // After the directory recheck, which rewrites the refused count
-            // from an unscoped projection of the origin log.
-            project::scope_document(&mut entry.document, suppliers);
-            if event_ids(&entry.document).is_empty() {
-                if !options.dry_run {
-                    spool.hold(
-                        index,
-                        "Held by the receiver's supplier scope: no event in it is from a listed supplier; undelivered.",
                     )?;
                 }
                 continue;

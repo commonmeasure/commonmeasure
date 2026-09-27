@@ -10,6 +10,7 @@ mod allowance;
 pub mod canonical;
 mod envelope;
 mod evidence;
+pub mod finding;
 mod job;
 mod money;
 mod plan;
@@ -19,6 +20,7 @@ pub use envelope::{
     AcquisitionCharge, ChargeBasis, ContextEnvelope, DeclaredDate, LicenceState, NativeCharge,
 };
 pub use evidence::{AssuranceBasis, Decision, DecisionRecord, EvidenceError, Gap, GapReason};
+pub use finding::{Finding, Standing};
 pub use job::{
     AccessAction, Constraint, ContextJob, EvidenceRequirement, HostPattern, JobError,
     MAX_PAGE_READINGS, Objective, PolicyMode, TooManyReadings, canonical_url, matching_pattern,

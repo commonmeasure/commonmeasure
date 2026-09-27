@@ -48,10 +48,10 @@ makes no network request.
     "stale_since": null,
     "policy_declared": true,
     "policy_digest": "sha256:…",
-    "policy_identity": {"schema": "contextops-policy-identity/v2", "resolver": "1", "digest": "sha256:…"},
+    "policy_identity": {"schema": "contextops-policy-identity/v3", "resolver": "2", "digest": "sha256:…"},
     "principal": {"name": "os-user:1000", "basis": "os_user"}
   },
-  "versions": {"commonmeasure": "0.2.0", "resolver": "1", "identity_schema": "contextops-policy-identity/v2"},
+  "versions": {"commonmeasure": "0.2.0", "resolver": "2", "identity_schema": "contextops-policy-identity/v3"},
   "last_enforcement": {"at": "2026-09-06T09:58:12.411Z", "basis": "the latest mediated or refused crossing in this edge's session logs"},
   "allowances": [
     {"principal": "research-agent", "period": "day", "period_key": "2026-09-06",
@@ -152,13 +152,12 @@ The pre-image is the result of that resolution and nothing else:
 
 | Field | What it carries |
 |---|---|
-| `schema` | `contextops-policy-identity/v2` |
-| `resolver` | the resolver version, `1` |
+| `schema` | `contextops-policy-identity/v3` |
+| `resolver` | the resolver version, `2` |
 | `mode` | the effective policy mode |
 | `constraints` | the effective set-semantics constraints (every kind but `access_rule`), each as its canonical object with hosts normalised the way admission normalises them, sorted by canonical text, duplicates removed |
 | `access_rules` | the effective access rules in declaration order, each with its `position`, because the first matching rule decides and their order is the policy |
 | `allow_private_hosts` | the effective value |
-| `refuse_on_pii` | the effective value |
 | `record_internal_prefixes` | sorted, duplicates removed |
 | `scope` | the matched scope's `match` string, or `null` |
 | `governing_engagement` | the matched scope's engagement, or `null` |
@@ -167,7 +166,7 @@ The pre-image is the result of that resolution and nothing else:
 | `fail_closed` | the refusal reason when the resolution fails closed, else `null` |
 | `allowances` | the bound principal's declarations (`period`, `amount`, `timezone`), sorted by canonical text |
 | `addons` | the active add-on set with its settings; `"unknown"`, because every processor compiled into the binary runs and there is no active set to represent; add-on management is not built |
-| `terms` | the effective terms declarations (host normalised the way admission normalises it, `reference`, `requires_reporting`, `access_context` where declared), sorted by canonical text, duplicates removed, because terms govern over a source's published preference |
+| `terms` | the terms declarations (host normalised the way admission normalises it, `reference`, `requires_reporting`, `access_context` where declared), sorted by canonical text, duplicates removed |
 
 Left out on purpose: the policy file's path, the asserted principal label,
 the authenticated subject id, the working directory, and every scope the

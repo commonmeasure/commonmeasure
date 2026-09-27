@@ -101,7 +101,6 @@ fn suite(providers: Vec<String>, objective: Objective, constraints: Vec<Constrai
             ],
         }),
         as_of: None,
-        governance: None,
         fetch_target: None,
         fidelity_judge: false,
         output_provenance: None,

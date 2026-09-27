@@ -126,7 +126,6 @@ fn suite(require_cited_answer: bool) -> Suite {
         require_cited_answer,
         coverage_rubric: None,
         as_of: None,
-        governance: None,
         fetch_target: None,
         fidelity_judge: false,
         output_provenance: None,
@@ -516,66 +515,4 @@ fn the_directive_and_the_evaluator_are_sealed_in_the_manifest() {
             "an evaluator identity is its name, its version and its configuration digest"
         );
     }
-}
-
-/// The governance block is part of experiment identity, and so is every rule
-/// in it: an ungoverned suite, a governed suite and the same governed suite
-/// with one rule's effective date flipped are three different experiments by
-/// hash. This is the traceability the revocation demonstration rests on —
-/// the manifest names nothing inside the internal corpus, so the rules must
-/// be sealed here or a flipped rule would move no hash at all.
-#[test]
-#[cfg_attr(
-    not(evidence_recon),
-    ignore = "needs the recorded provider responses: recon/ under COMMONMEASURE_PRIVATE_EVIDENCE"
-)]
-fn the_governance_block_and_each_rule_are_sealed_in_the_manifest() {
-    let governance = |effective_date: &str| {
-        serde_json::from_value::<commonmeasure_runtime::governance::Governance>(serde_json::json!({
-            "name": "fictive-support-rules",
-            "version": "1",
-            "entitlement_tiers": ["standard", "premier"],
-            "granted_entitlement": "standard",
-            "rules": [{
-                "edition": "orchestrator",
-                "version_range": "4.x",
-                "integration_path": "flux-connector",
-                "support_status": "deprecated",
-                "effective_date": effective_date
-            }]
-        }))
-        .expect("a well-formed governance block")
-    };
-    let as_of = || {
-        serde_json::from_value::<commonmeasure_runtime::freshness::AsOf>(serde_json::json!({
-            "date": "2026-08-06",
-            "maximum_age_days": 365
-        }))
-        .expect("a well-formed as_of")
-    };
-    // One cloned suite throughout, so a fresh job id cannot stand in for the
-    // difference the assertions are about.
-    let ungoverned_suite = suite(false);
-    let mut governed_suite = ungoverned_suite.clone();
-    governed_suite.as_of = Some(as_of());
-    governed_suite.governance = Some(governance("2026-03-01"));
-    let mut revoked_suite = governed_suite.clone();
-    revoked_suite.governance = Some(governance("2026-09-01"));
-
-    let ungoverned = sealed_manifest(&ungoverned_suite);
-    let governed = sealed_manifest(&governed_suite);
-    let revoked = sealed_manifest(&revoked_suite);
-
-    assert_eq!(
-        ungoverned["manifest"]["job"]["id"], revoked["manifest"]["job"]["id"],
-        "the three suites must differ in the governance block alone"
-    );
-    assert_ne!(
-        ungoverned["hash"], governed["hash"],
-        "declaring governance must not claim to be the same experiment"
-    );
-    assert_ne!(
-        governed["hash"], revoked["hash"],
-        "flipping one rule's effective date must move the manifest hash"
-    );
 }

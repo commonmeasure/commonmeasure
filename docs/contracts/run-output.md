@@ -152,13 +152,13 @@ environment.
 
 ## Manifest
 
-`manifest.json` holds `hash` and `manifest` (`contextops-manifest/v4`). The
+`manifest.json` holds `hash` and `manifest` (`contextops-manifest/v5`). The
 hash is SHA-256 over the canonical JSON of the manifest
 ([`docs/contracts/canonical-json.md`](canonical-json.md)), so a reviewer recomputes it from the
 sealed object with any conforming serialiser.
 
 Manifest keys: `acquisition_mode`, `adapter_version`, `as_of`,
-`cache_control`, `coverage_rubric`, `evaluators`, `governance`,
+`cache_control`, `coverage_rubric`, `evaluators`,
 `inference_gateway`, `inference_request_shape`, `job`, `label`,
 `manifest_version`, `model_plan`, `processors`, `replay_recordings`,
 `result_limit`, `retry_policy`, `suite_version`, `supply_plans`,
@@ -180,9 +180,7 @@ comparison. `system_prompt` is the composed prompt: the fixed instruction,
 plus the citation directive when the job sets `require_cited_answer`.
 `coverage_rubric` and `as_of` are the job's declarations, null when
 undeclared, and are what the coverage and freshness evaluators measure
-against. `governance` is the job's declared support-status rule set and
-entitlement grant, null when undeclared, sealed here rather than in the
-corpus so that changing one rule changes the hash. `acquisition_mode` says
+against. `acquisition_mode` says
 whether the supply was live, replayed or not acquired at all, and
 `replay_recordings` digests the recordings a replay run served.
 `adapter_version` is the supply crate's. `processors` are the installed

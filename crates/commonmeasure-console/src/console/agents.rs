@@ -303,7 +303,7 @@ fn coverage(host_sessions: &Value) -> Value {
             let mut show = |path: &'static str, evidence: String| {
                 paths.entry(path).or_insert(evidence);
             };
-            if id.starts_with("hosted-") || has("hosted_scope") {
+            if id.starts_with("hosted-") {
                 show("hosted", format!("hosted session log {id}"));
             } else if id.starts_with("local-") {
                 show("mediated", format!("MCP server log {id}"));

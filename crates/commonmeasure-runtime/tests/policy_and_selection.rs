@@ -1102,7 +1102,6 @@ fn plan_over(envelopes: Vec<ContextEnvelope>, constraints: Vec<Constraint>) -> V
         require_cited_answer: false,
         coverage_rubric: None,
         as_of: None,
-        governance: None,
         fetch_target: None,
         fidelity_judge: false,
         output_provenance: None,

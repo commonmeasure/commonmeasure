@@ -74,28 +74,6 @@ struct CorpusManifest {
     /// lost, otherwise indistinguishable from one never made.
     #[serde(default)]
     dates: std::collections::BTreeMap<String, String>,
-    /// Operator-declared governance metadata, corpus-relative document path
-    /// to declaration, under the same attachment rule as `dates`. The
-    /// adapter carries these declarations verbatim; what they mean is the
-    /// business of whatever admission policy reads them downstream.
-    #[serde(default)]
-    documents: std::collections::BTreeMap<String, DocumentMeta>,
-}
-
-/// What the operator declares about one document for governance to read:
-/// which edition, version range and integration path it documents, the
-/// support status it claims, and the entitlement tier it belongs to. Plain
-/// strings throughout — a rule set matches them; this adapter never
-/// interprets them. Unknown fields are load errors for the same reason they
-/// are on the manifest: a misspelled declaration is a declaration lost.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct DocumentMeta {
-    edition: String,
-    version_range: String,
-    integration_path: String,
-    support_status: String,
-    entitlement: String,
 }
 
 pub struct InternalCorpusAdapter {
@@ -218,10 +196,6 @@ struct Match {
     /// `licences` map; `None` where none was written down, in which case the
     /// corpus-wide declaration (or unknown) speaks for this document.
     licence: Option<LicenceState>,
-    /// The operator's declared governance metadata, from the manifest's
-    /// `documents` map; `None` where none was written down — absent, never
-    /// defaulted, because an invented declaration is not the operator's.
-    governance: Option<DocumentMeta>,
     distinct_terms: u32,
     occurrences: u32,
 }
@@ -236,7 +210,6 @@ impl Match {
             "content_hash": sha256_digest(self.text.as_bytes()),
             "declared_date": self.declared_date,
             "licence": self.licence,
-            "governance": self.governance,
             "distinct_terms": self.distinct_terms,
             "occurrences": self.occurrences,
         })
@@ -306,7 +279,6 @@ fn envelopes_from(response: &Value) -> Result<Vec<ContextEnvelope>, SupplyError>
                 "path": item.get("path"),
                 "distinct_terms": item.get("distinct_terms"),
                 "occurrences": item.get("occurrences"),
-                "governance": item.get("governance"),
             }),
             retrieval_rank: index as u32 + 1,
             source_url: url,
@@ -354,18 +326,12 @@ fn manifest(root: &Path) -> Result<CorpusManifest, SupplyError> {
     // is the only state a reader can distinguish from "never declared". The
     // scan only ever annotates files it will scan, so an existing file the
     // scanner skips — the manifest itself, an image — is the same loss one
-    // step over and fails the same way. `dates` and `documents`
-    // attach by the same rule and fail the same way.
+    // step over and fails the same way. `dates` and `licences` attach by
+    // the same rule and fail the same way.
     let declarations = parsed
         .dates
         .keys()
         .map(|declared| (declared, "a date"))
-        .chain(
-            parsed
-                .documents
-                .keys()
-                .map(|declared| (declared, "governance metadata")),
-        )
         .chain(
             parsed
                 .licences
@@ -600,7 +566,6 @@ fn score(
         text,
         declared_date: manifest.dates.get(&relative).cloned(),
         licence: manifest.licences.get(&relative).cloned(),
-        governance: manifest.documents.get(&relative).cloned(),
         relative,
         distinct_terms,
         occurrences,

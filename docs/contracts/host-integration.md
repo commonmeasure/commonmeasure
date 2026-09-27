@@ -242,17 +242,13 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
 
 `commonmeasure hosted service` is the deployed form. It reads
 `~/.commonmeasure/hosted-service.json`: `origin`, `hosts` (the words
-served), and optionally `listen` (default `127.0.0.1:8765`),
-`allowed_origins`, `interval_seconds` (default 300) and `session_directory`.
-The last is an absolute existing directory explicitly enrolled locally under
-the service account, with a current binding. It is the operator-declared scope
-for every session on this service, never client-supplied. A `hosted_scope`
-record states that basis. It enables no reporting by itself: local reporting
-opt-in, a current signed Hub owner reporting approval and the source-policy/privacy checks
-remain necessary. Omission preserves no-directory sessions. Relay clearance
-still resolves under the service OS principal. Policies restricted to bearer
-principals or their owned scopes can therefore withhold reporting even when
-acquisition succeeds; that configuration is not verified. The Microsoft 365
+served), and optionally `listen` (default `127.0.0.1:8765`) and
+`interval_seconds` (default 300). A hosted session has no working directory,
+so no directory scope matches it and its crossings remain private. Relay
+clearance for the home's own sessions resolves under the service OS
+principal. Policies restricted to bearer principals or their owned scopes can
+therefore withhold reporting even when acquisition succeeds; that
+configuration is not verified. The Microsoft 365
 Copilot verification (§6) used top-level policy with no principal bindings or
 scopes. The service refuses to start
 without that file, unenrolled, under local deployment mode, or while
@@ -273,7 +269,7 @@ and not running, running with the lock held, or configured with whether it
 is running unknown, with the reason, where the lock file cannot be opened
 (as for another user, since the service creates it owner-only), with the
 origin, the endpoints and the interval. `commonmeasure hosted serve --listen <addr>
---origin <origin> [--allow-origin <origin>]... [--host <word>]...` is the
+--origin <origin> [--host <word>]...` is the
 command-line form: the same transport, the floor left to the policy, no
 lock and no interval work.
 
@@ -356,7 +352,7 @@ The binary writes, checks and removes its own registration with a host
 |---|---|---|---|
 | `commonmeasure install <host> [--binary PATH]` | the five hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; the state file is written first and restored if the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured), naming the binary, `mcp --host codex`, and `default_tools_approval_mode = "approve"`, without which Codex asks before every call and its non-interactive runs refuse the tools; the table is read by the Codex CLI, the ChatGPT desktop app and the Codex IDE extension | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
 | `commonmeasure uninstall <host>` | exactly those entries removed; every other key keeps its value | exactly that table removed; every other table, key and comment kept byte for byte | the extension and its directory removed |
-| `commonmeasure doctor [<host>] [--resolve <name>]` | with `--resolve`, the addresses a name resolves to and whether the privacy floor calls them private, naming a fake-IP proxy's or a tailnet's range; per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration), whether the sessions directory is writable, whether the policy file loads | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
+| `commonmeasure doctor [<host>] [--resolve <name>] [--json]` | one report of findings, each marked by its standing (§Doctor below); with `--resolve`, the addresses a name resolves to and whether the privacy floor calls them private, naming a fake-IP proxy's or a tailnet's range; per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration) | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
 
 Every host file these commands write, for every host below as well, is
 replaced whole: a temporary file of the writer's own beside it, renamed over
@@ -372,7 +368,44 @@ files. A host file that is a symbolic link is replaced by a regular file
 with the mode of the file the link named, and that file is left as it was
 (`crates/commonmeasure-runtime/src/declaration.rs` `replace_keeping_mode`).
 
-Before the per-host lines, `doctor` prints the relay's delivery state for the
+#### Doctor
+
+`doctor` is one report in sections, printed before the hosts: the Edge
+home (whether the sessions directory is writable, whether the policy file
+loads, and on a managed edge the revision in force), the console (whether
+one answers on the address the service installed or `serve` binds by
+default, its version and process, and the address of the Policy page where
+a console answers), the relay (below), and with `--resolve` the resolution
+of the name given. Every finding carries a standing chosen where the fact
+is established, never read back out of the words: `ok`, `attention`
+(something for the operator: a registered binary that has gone, a policy
+that does not load, a service configured and not running, dead relay
+batches, a console of another version than the binary), `unknown` (a file
+or lock that could not be read; never reported as either of the two
+above), or `note` (a fact with nothing to act on: a host nobody
+registered, a host with no hook surface). The text form prints a mark
+before each finding (`✓`, `!`, `?`, `·`), a section heading above each
+group, the host's name and `registered` or `not registered` above its
+findings, and ends with a count: how many hosts are registered and how
+many findings need attention. In a terminal the marks are coloured and long
+findings wrap to the terminal's width; through a pipe every finding is one
+line with no escape codes, and `--color always|never` overrides the
+terminal detection (`NO_COLOR` is honoured). `doctor` exits zero whatever it
+finds: the report is the result.
+
+`--json` prints the same findings as a document: `contract`
+(`commonmeasure-doctor/v1`), `generated_at`, `version`, `binary`, `home`,
+`console` (`url`, `answering`, `version` and `pid` where a console answers,
+`standing`, `text`, and `pages`, the address of each page by name),
+`sections` (each with `id`, `title` and `findings`), `hosts` (each with
+`host`, `registered`, `standing` and `findings`) and `summary` (the counts
+by standing, `hosts_registered`, `hosts`, the overall `standing` and the
+closing sentence as `text`). A finding is `{"standing", "text"}`. The
+console is probed on loopback with a two-second bound; nothing else is
+contacted, and the one lookup `--resolve` makes is made only when asked
+for.
+
+Under Relay, `doctor` prints the relay's delivery state for the
 operator home: queued, dead and delivered batches; the last delivery from
 `relay/receipts.json` with its age (`last delivery: 2026-09-16T10:00:00.000Z,
 6d 2h ago`, `none recorded`, or why it is unknown), naming the receiver, by
@@ -800,10 +833,8 @@ its own contract in this directory.
   edge does. Its relay and policy refresh run in the process on an
   interval. Where the machine sits beside a cloud metadata service the
   private-address floor is held whatever the policy says (§1). A hosted
-  session has no client working directory. With no declared
-  `session_directory`, no directory scope matches and its crossings remain
-  private. An explicitly enrolled service directory uses the existing signed
-  reporting-approval path (§1); it creates no automatic egress permission.
+  session has no working directory, so no directory scope matches and its
+  crossings remain private.
 - **Local policy remains authoritative.** Common Measure Hub receives cleared
   records and coordinates managed policy. Current acquisition does not require
   Hub entitlement issuance. The planned organisational entitlement route may

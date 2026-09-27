@@ -173,20 +173,17 @@ produced it; they are kept out of git apart from one stated exception
 explicit gap record, written by the next successful write, and a run is
 published atomically or not at all (`docs/FAIL-POLICY.md`).
 
-Eight add-on processors run in-process (`docs/contracts/processor.md`
-§Status). Five run at the crossings the runtime carries: a PII detector, an
-injection screen and a support-status governor at the admit stage, and an
-HTML text extractor and a context optimiser at the transform stage. The
+Seven add-on processors run in-process (`docs/contracts/processor.md`
+§Status). Four run at the crossings the runtime carries: a PII detector and
+an injection screen at the admit stage, and an HTML text extractor and a
+context optimiser at the transform stage. The
 fidelity verifier and judge run after inference and the output provenance
 labeller on the answer. The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
 screens rule on the text the agent would read; its record carries the hash
 of the bytes the origin served beside the hash of the extracted text, and
 the crossing carries both. A fetch result may carry only a part of that
-text; the crossing's `delivered` names the part. The governor runs only when a job declares a `governance`
-block, a sealed support-status rule set and entitlement grant
-(`docs/contracts/run-output.md` §Manifest), demonstrated by the governed
-specialist slice (`demo/specialist/README.md`). Each invocation writes its
+text; the crossing's `delivered` names the part. Each invocation writes its
 own evidence record (processor identity and configuration digest,
 input/output hashes and token counts, decision and method, assurance basis
 and blind spots: `docs/contracts/processor.md`), and findings stay
@@ -244,10 +241,7 @@ purpose-limited projection at the operator boundary: witnessed retrieval and
 grounding facts only, as wire types proven against the schemas pinned in
 `schema/` (pinned copies from the standard's own repository, consumed, not
 forked). Projected batches are spooled durably before any delivery attempt
-and delivered only to an explicitly configured receiver, which may be scoped
-to named suppliers so a supplier's own telemetry server receives its events
-and nothing else (`relay.json` `suppliers`, a local narrowing of what the
-supplier's grant allows); event identity is
+and delivered only to an explicitly configured receiver; event identity is
 derived from the evidence record each event projects, so redelivery after a
 crash cannot double-count. The relay persists a claim before each HTTP
 attempt, applies bounded retry deadlines (ten attempts, 60 seconds doubling
@@ -447,9 +441,8 @@ integration uses this path. The cloud machine runs Edge, its private records,
 console and background management/reporting; Word and the host's model run
 elsewhere. It must be reachable when the host calls its tools.
 
-Each MCP session binds to its authenticated principal. The configured
-`session_directory`, when present, is the service's declared scope for all its
-sessions; it is not a client's document path or an automatically isolated matter.
+Each MCP session binds to its authenticated principal and has no working
+directory, so no directory scope governs it.
 User identity remains in the private record; the Content Telemetry projection
 identifies the enrolled Edge and separates eligible sessions without exporting
 their authenticated subjects. Separately registered working instances follow

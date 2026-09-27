@@ -1,135 +1,40 @@
-//! The declared directory uses real directory selection; it creates no reporting approval.
+//! Reporting from a hosted home: the relay projects what the hook recorded
+//! under a locally enrolled directory, and only under a current signed
+//! owner approval. A hosted session itself has no working directory.
 use super::*;
 use commonmeasure_harness::directory::Registry;
 
-fn configure(home: &Path, directory: &Path) {
+fn configure(home: &Path) {
     std::fs::write(
         home.join("hosted-service.json"),
         json!({
             "listen": "127.0.0.1:0", "origin": ORIGIN, "hosts": ["m365-copilot"],
-            "interval_seconds": 300, "session_directory": directory,
+            "interval_seconds": 300,
         })
         .to_string(),
     )
     .expect("configuration");
 }
 
-#[test]
-fn a_declared_directory_needs_a_current_explicit_local_selection() {
-    let hub = Hub::start();
-    let home = tempfile::tempdir().expect("home");
-    let root = tempfile::tempdir().expect("root");
-    hub.enrol_managed(home.path());
-    for directory in [Path::new("relative"), Path::new("/"), root.path()] {
-        configure(home.path(), directory);
-        let output = service_command(home.path()).output().expect("process");
-        assert!(
-            !output.status.success(),
-            "unselected directory started the service"
-        );
-    }
-    Registry::enrol(home.path(), root.path(), "Hosted test", false).expect("local selection");
-    let child = root.path().join("child");
-    std::fs::create_dir(&child).expect("child");
-    configure(home.path(), &child);
-    let output = service_command(home.path()).output().expect("process");
-    assert!(
-        !output.status.success(),
-        "a descendant is not the declared root"
-    );
-    configure(home.path(), root.path());
-    std::fs::remove_file(home.path().join("directories.json")).expect("remove selection");
-    let output = service_command(home.path()).output().expect("process");
-    assert!(
-        !output.status.success(),
-        "a missing registry must not fall back to scope clearances"
-    );
-}
-
-#[test]
-fn the_operator_directory_is_recorded_without_claiming_client_context_or_permitting_egress() {
-    let hub = Hub::start();
-    let home = tempfile::tempdir().expect("home");
-    let root = tempfile::tempdir().expect("root");
-    hub.enrol_managed(home.path());
-    Registry::enrol(home.path(), root.path(), "Hosted test", true).expect("requested reporting");
-    configure(home.path(), root.path());
-    let service = Service::start(home.path());
-    let authorization = hub.bearer("user-1", "m365-copilot");
-    let session = service.open_session("m365-copilot", &authorization);
-    let response = service.call(
-        "m365-copilot",
-        &authorization,
-        &session,
-        1,
-        "context_status",
-        json!({}),
-    );
-    let status = payload(&response);
-    let expected = root.path().canonicalize().expect("canonical root");
-    assert_eq!(status["cwd"], expected.to_str().expect("UTF-8"));
-    assert_eq!(status["policy"]["private_floor"], "held");
-    let policy = commonmeasure_harness::policy::SessionPolicy::load(home.path(), expected.to_str())
-        .expect("policy");
-    assert!(
-        !policy.allows_telemetry_egress(),
-        "requesting reporting cannot replace a signed owner approval"
-    );
-    let records = commonmeasure_harness::SessionLog::read(
-        &home
-            .path()
-            .join("sessions")
-            .join(format!("{session}.ndjson")),
-    )
-    .expect("record");
-    let scope = records
-        .iter()
-        .find(|r| r["event"] == "hosted_scope")
-        .expect("scope basis");
-    assert_eq!(scope["payload"]["basis"], "service_configuration");
-    assert_eq!(
-        scope["payload"]["directory"],
-        expected.to_str().expect("UTF-8")
-    );
-    let listed = service.post(
-        "/mcp/m365-copilot",
-        &[
-            ("Authorization", &authorization),
-            ("Mcp-Session-Id", &session),
-        ],
-        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-    );
-    assert!(
-        !text(&listed).contains("context_enrol"),
-        "a remote client cannot enrol or approve its scope"
-    );
-}
-
 /// This is a synthetic observed-source fixture through the real hook and
 /// relay, not evidence of a live Copilot acquisition or answer use.
 #[test]
-fn the_declared_scope_reports_only_with_a_signed_approval_and_stops_after_revocation() {
+fn an_enrolled_directory_reports_only_with_a_signed_approval_and_stops_after_revocation() {
     let hub = Hub::start();
     let home = tempfile::tempdir().expect("home");
     let root = tempfile::tempdir().expect("root");
     hub.enrol_managed(home.path());
     let project =
         Registry::enrol(home.path(), root.path(), "Hosted test", true).expect("selection");
-    configure(home.path(), root.path());
-    let service = Service::start(home.path());
-    let auth = hub.bearer("user-1", "m365-copilot");
-    let session = service.open_session("m365-copilot", &auth);
-    let status = payload(&service.call(
-        "m365-copilot",
-        &auth,
-        &session,
-        1,
-        "context_status",
-        json!({}),
-    ));
-    drop(service);
+    configure(home.path());
 
-    let cwd = status["cwd"].as_str().expect("cwd").to_owned();
+    let cwd = root
+        .path()
+        .canonicalize()
+        .expect("canonical root")
+        .to_str()
+        .expect("UTF-8")
+        .to_owned();
     let observe = |session: &str| observe(home.path(), &cwd, session, FIXTURE_URL);
     let approve = |revision: u64, approvals: Value| approve(&hub, home.path(), revision, approvals);
     let relay = || relay_ok(home.path());
@@ -701,113 +606,4 @@ fn a_hub_that_does_not_answer_delays_the_start_by_the_budget_and_the_demand_is_r
         "the snapshot is kept"
     );
     server.stop();
-}
-
-/// Hold `page`'s origin's `robots.txt`, which names a licence demanding
-/// grounding telemetry reporting, and that licence, current in the
-/// declaration cache, so a crossing is ruled on them with no request made.
-fn hold_reporting_declarations(home: &Path, page: &str) {
-    use commonmeasure_harness::discovery;
-    let now = chrono::Utc::now();
-    let licence = format!(
-        "{}/license.xml",
-        page.trim_end_matches(|c| c != '/').trim_end_matches('/')
-    );
-    let probe = |url: &str, body: &str| {
-        json!({"url": url, "fetched_at": now, "expires_at": now + chrono::Duration::hours(1),
-               "status": 200, "body": body})
-    };
-    let record: discovery::HostRecord = serde_json::from_value(json!({
-        "robots": probe(
-            &discovery::robots_url_of(page),
-            &format!("License: {licence}\nUser-agent: *\nAllow: /\n"),
-        ),
-        "licences": {licence.clone(): probe(&licence, REPORTING_LICENCE)},
-    }))
-    .expect("a host record");
-    discovery::DeclarationCache::open(home)
-        .save(&commonmeasure_harness::grounding::host_of(page), &record);
-}
-
-/// EGR-180 (review P3-1). A hosted tenant whose fetch meets a reporting
-/// demand after the operator's `deployment.json` stopped loading is told
-/// the file by its name in the home, never by the operator's path, and the
-/// ruling the crossing records names it the same way: the server names it
-/// by pace, as it names `policy.json` and `relay.json`, and does not rely
-/// on the transport's rewrite of the answer. The declarations are held, so
-/// the ruling is reached with no request; the demand is unmet, which
-/// refuses the crossing in every mode.
-#[test]
-fn a_deployment_file_that_stops_loading_is_named_to_a_tenant_by_no_path() {
-    let hub = Hub::start();
-    let home = tempfile::tempdir().expect("home");
-    let root = tempfile::tempdir().expect("root");
-    hub.enrol_managed(home.path());
-    let project =
-        Registry::enrol(home.path(), root.path(), "Hosted test", true).expect("selection");
-    relay_ok(home.path());
-    approve(
-        &hub,
-        home.path(),
-        1,
-        json!([{"project_id": project.id, "binding": project.binding}]),
-    );
-    configure(home.path(), root.path());
-    let page = "https://publisher.example/article";
-    hold_reporting_declarations(home.path(), page);
-    let service = Service::start(home.path());
-    let authorization = hub.bearer("user-1", "m365-copilot");
-    let session = service.open_session("m365-copilot", &authorization);
-    let status = service.call(
-        "m365-copilot",
-        &authorization,
-        &session,
-        1,
-        "context_status",
-        json!({}),
-    );
-    assert_eq!(
-        payload(&status)["policy"]["allow_telemetry_egress"],
-        true,
-        "{}",
-        text(&status)
-    );
-
-    std::fs::write(home.path().join("deployment.json"), "{").expect("break deployment.json");
-    let response = service.call(
-        "m365-copilot",
-        &authorization,
-        &session,
-        2,
-        "context_fetch",
-        json!({"url": page}),
-    );
-    let answer = text(&response);
-    assert!(
-        answer.contains("deployment.json is not a valid deployment"),
-        "{answer}"
-    );
-    let operator = home.path().display().to_string();
-    assert!(!answer.contains(&operator), "{answer}");
-    let session_log = std::fs::read_dir(home.path().join("sessions"))
-        .expect("sessions")
-        .map(|entry| entry.expect("entry").path())
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "ndjson")
-        })
-        .expect("the session log");
-    let refused = commonmeasure_harness::SessionLog::read(&session_log)
-        .expect("session log")
-        .into_iter()
-        .find(|record| record["event"] == "crossing_refused")
-        .expect("the refused crossing");
-    let reason = refused["payload"]["declarations"]["reporting"]["reason"]
-        .as_str()
-        .expect("a reason")
-        .to_owned();
-    assert!(
-        reason.starts_with("deployment.json is not a valid deployment"),
-        "{reason}"
-    );
 }

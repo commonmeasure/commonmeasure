@@ -1953,11 +1953,8 @@ fn write_mixed_supplier_session(home: &Path, session: &str) {
     );
 }
 
-fn relay_json(home: &Path, receiver: &str, suppliers: Option<&[&str]>) {
-    let mut config = json!({"receiver": receiver, "api_key": "key"});
-    if let Some(suppliers) = suppliers {
-        config["suppliers"] = json!(suppliers);
-    }
+fn relay_json(home: &Path, receiver: &str) {
+    let config = json!({"receiver": receiver, "api_key": "key"});
     std::fs::write(home.join("relay.json"), config.to_string()).unwrap();
 }
 
@@ -1983,45 +1980,15 @@ fn received(bodies: &Mutex<Vec<Value>>) -> (Vec<SuppliedEvent>, bool) {
     (events, refused)
 }
 
-/// A receiver scoped to `ozone` in relay.json is sent ozone's retrieval and
-/// grounding and nothing else: no turn boundary, no other supplier's result,
-/// no fetch of the operator's own, and no refused field at all, where an
-/// unscoped receiver of the same session is told the count.
+/// The configured receiver takes every cleared event and the session's
+/// refused count.
 #[test]
-fn a_scoped_receiver_gets_its_suppliers_events_and_no_refused_count() {
+fn the_configured_receiver_gets_every_cleared_event_and_the_refused_count() {
     let home = tempfile::tempdir().unwrap();
     write_mixed_supplier_session(home.path(), "s1");
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let mut receiver = accepting_receiver(bodies.clone());
-    relay_json(home.path(), &receiver.url(), Some(&["ozone"]));
-
-    let report =
-        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
-            .expect("relay");
-    receiver.stop();
-
-    let (events, refused) = received(&bodies);
-    let ozone = Some("ozone".to_owned());
-    assert_eq!(
-        events,
-        vec![
-            ("content_retrieved".to_owned(), ozone.clone()),
-            ("content_grounded".to_owned(), ozone),
-        ]
-    );
-    assert!(!refused, "a scoped receiver is told nothing about refusals");
-    assert_eq!(report.refused_reported, 0);
-}
-
-/// Without `suppliers`, the configured receiver takes every cleared event and
-/// the session's refused count, as before the option existed.
-#[test]
-fn an_unscoped_receiver_gets_every_cleared_event_and_the_refused_count() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut receiver = accepting_receiver(bodies.clone());
-    relay_json(home.path(), &receiver.url(), None);
+    relay_json(home.path(), &receiver.url());
 
     commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
         .expect("relay");
@@ -2042,395 +2009,6 @@ fn an_unscoped_receiver_gets_every_cleared_event_and_the_refused_count() {
     );
     assert!(refused);
     assert_eq!(bodies.lock().unwrap()[0]["refused"], json!(1));
-}
-
-/// The scope belongs to the receiver relay.json names: a `--receiver`
-/// override to another receiver is sent the whole cleared session.
-#[test]
-fn a_receiver_override_is_not_scoped_by_the_configured_suppliers() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    relay_json(home.path(), "http://127.0.0.1:9/unused", Some(&["ozone"]));
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut receiver = accepting_receiver(bodies.clone());
-
-    commonmeasure_relay::relay(
-        home.path(),
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(receiver.url()),
-            ..Default::default()
-        },
-    )
-    .expect("relay");
-    receiver.stop();
-
-    let (events, refused) = received(&bodies);
-    assert_eq!(events.len(), 6, "the override takes every cleared event");
-    assert!(refused);
-}
-
-/// The spool is shared by every receiver the relay is pointed at. A batch
-/// queued unscoped under an override that failed, and delivered later to the
-/// scoped configured receiver, is narrowed at the send: the supplier still
-/// sees only its own events and no refused count.
-#[test]
-fn a_batch_spooled_unscoped_is_narrowed_before_it_reaches_a_scoped_receiver() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    let failing = fixed_answer_receiver(503, "text/plain", "try later");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut scoped = accepting_receiver(bodies.clone());
-    relay_json(home.path(), &scoped.url(), Some(&["ozone"]));
-
-    commonmeasure_relay::relay(
-        home.path(),
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(failing.url()),
-            ..Default::default()
-        },
-    )
-    .expect_err("the override refuses the batch, which stays spooled");
-
-    // Past the retry deadline the failed attempt set.
-    let later = chrono::Utc::now() + chrono::Duration::days(1);
-    commonmeasure_relay::relay_with_clock(
-        home.path(),
-        &commonmeasure_relay::RelayOptions::default(),
-        &|| later,
-    )
-    .expect("relay");
-    scoped.stop();
-
-    let (events, refused) = received(&bodies);
-    assert!(!events.is_empty());
-    assert!(
-        events
-            .iter()
-            .all(|(_, supplier)| supplier.as_deref() == Some("ozone")),
-        "only ozone's events leave for ozone: {events:?}"
-    );
-    assert!(!refused);
-
-    // The events narrowed out were not recorded delivered, so an unscoped
-    // receiver is sent them from the session log, with the count.
-    let rest = Arc::new(Mutex::new(Vec::new()));
-    let mut unscoped = accepting_receiver(rest.clone());
-    relay_json(home.path(), &unscoped.url(), None);
-    commonmeasure_relay::relay_with_clock(
-        home.path(),
-        &commonmeasure_relay::RelayOptions::default(),
-        &|| later,
-    )
-    .expect("relay");
-    unscoped.stop();
-    let (events, refused) = received(&rest);
-    assert_eq!(events.len(), 4, "{events:?}");
-    assert!(
-        events
-            .iter()
-            .all(|(_, supplier)| supplier.as_deref() != Some("ozone")),
-        "{events:?}"
-    );
-    assert!(refused);
-}
-
-/// Configured and overridden receiver URLs that differ by a trailing slash
-/// (`/telemetry/` and `/telemetry`) post to one endpoint,
-/// `/telemetry/events`, so the configured scope applies to the override.
-/// Session s1 is spooled unscoped first, under an override to another
-/// receiver that fails; s2 is projected in the run that delivers. The scoped
-/// receiver gets exactly each session's ozone retrieval and grounding, and no
-/// body carries `refused`.
-#[test]
-fn an_override_spelling_the_configured_receiver_differently_keeps_its_scope() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    let failing = fixed_answer_receiver(503, "text/plain", "try later");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut scoped = accepting_receiver(bodies.clone());
-    relay_json(
-        home.path(),
-        &format!("{}/telemetry/", scoped.url()),
-        Some(&["ozone"]),
-    );
-
-    commonmeasure_relay::relay(
-        home.path(),
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(failing.url()),
-            ..Default::default()
-        },
-    )
-    .expect_err("the other receiver refuses the batch, which stays spooled");
-    write_mixed_supplier_session(home.path(), "s2");
-
-    let later = chrono::Utc::now() + chrono::Duration::days(1);
-    let report = commonmeasure_relay::relay_with_clock(
-        home.path(),
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(format!("{}/telemetry", scoped.url())),
-            ..Default::default()
-        },
-        &|| later,
-    )
-    .expect("relay");
-    scoped.stop();
-
-    let bodies = bodies.lock().unwrap();
-    let ozone = |kind: &str| (kind.to_owned(), Some("ozone".to_owned()));
-    let mut by_session: Vec<(String, Vec<SuppliedEvent>)> = bodies
-        .iter()
-        .map(|body| {
-            let events = body["events"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|event| {
-                    (
-                        event["type"].as_str().unwrap().to_owned(),
-                        event["data"][commonmeasure_relay::project::SUPPLIER_FIELD]
-                            .as_str()
-                            .map(str::to_owned),
-                    )
-                })
-                .collect();
-            (body["session_id"].as_str().unwrap().to_owned(), events)
-        })
-        .collect();
-    by_session.sort();
-    assert_eq!(by_session.len(), 2, "one batch per session: {by_session:?}");
-    for (_, events) in &by_session {
-        assert_eq!(
-            events,
-            &vec![ozone("content_retrieved"), ozone("content_grounded")]
-        );
-    }
-    assert!(
-        bodies.iter().all(|body| body.get("refused").is_none()),
-        "no refused count reaches a scoped receiver: {bodies:?}"
-    );
-    assert_eq!(report.refused_reported, 0);
-}
-
-/// An override naming the configured host with its trailing root dot
-/// (`localhost.` for `localhost`) resolves to the same loopback receiver,
-/// so the configured scope applies: ozone's retrieval and grounding, no
-/// `refused`.
-#[test]
-fn an_override_with_a_trailing_dot_on_the_host_keeps_the_scope() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut scoped = accepting_receiver(bodies.clone());
-    let port = url::Url::parse(&scoped.url()).unwrap().port().unwrap();
-    relay_json(
-        home.path(),
-        &format!("http://localhost:{port}/telemetry"),
-        Some(&["ozone"]),
-    );
-
-    commonmeasure_relay::relay(
-        home.path(),
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(format!("http://localhost.:{port}/telemetry")),
-            ..Default::default()
-        },
-    )
-    .expect("relay");
-    scoped.stop();
-
-    let (events, refused) = received(&bodies);
-    let ozone = Some("ozone".to_owned());
-    assert_eq!(
-        events,
-        vec![
-            ("content_retrieved".to_owned(), ozone.clone()),
-            ("content_grounded".to_owned(), ozone),
-        ]
-    );
-    assert!(!refused);
-}
-
-/// The relay reads `suppliers` with the harness's parser. A string, an
-/// object and a mixed-type array are each refused before anything is
-/// projected or sent.
-#[test]
-fn a_supplier_list_that_does_not_parse_refuses_the_run_and_sends_nothing() {
-    for suppliers in [json!("ozone"), json!({"ozone": true}), json!(["ozone", 1])] {
-        let home = tempfile::tempdir().unwrap();
-        write_mixed_supplier_session(home.path(), "s1");
-        let bodies = Arc::new(Mutex::new(Vec::new()));
-        let mut receiver = accepting_receiver(bodies.clone());
-        std::fs::write(
-            home.path().join("relay.json"),
-            json!({"receiver": receiver.url(), "suppliers": suppliers}).to_string(),
-        )
-        .unwrap();
-
-        let error =
-            commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
-                .expect_err("a malformed supplier list is refused");
-        receiver.stop();
-        let text = format!("{error:#}");
-        assert!(text.contains("not a valid relay config"), "{text}");
-        assert!(text.contains("invalid type"), "{text}");
-        assert!(bodies.lock().unwrap().is_empty(), "{suppliers}");
-        assert!(!home.path().join("relay").exists(), "{suppliers}");
-    }
-}
-
-/// `"suppliers": null` is an absent list: the receiver takes every cleared
-/// event and the refused count. An empty list is scoped to no supplier: the
-/// receiver is sent nothing and nothing is queued or recorded delivered, so
-/// once the list is removed the same session is projected and sent whole.
-#[test]
-fn a_null_supplier_list_is_unscoped_and_an_empty_one_takes_nothing() {
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut receiver = accepting_receiver(bodies.clone());
-    std::fs::write(
-        home.path().join("relay.json"),
-        json!({"receiver": receiver.url(), "suppliers": null}).to_string(),
-    )
-    .unwrap();
-    commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
-        .expect("relay");
-    let (events, refused) = received(&bodies);
-    assert_eq!(events.len(), 6, "{events:?}");
-    assert!(refused);
-
-    let home = tempfile::tempdir().unwrap();
-    write_mixed_supplier_session(home.path(), "s1");
-    bodies.lock().unwrap().clear();
-    relay_json(home.path(), &receiver.url(), Some(&[]));
-    let report =
-        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
-            .expect("relay");
-    assert!(bodies.lock().unwrap().is_empty());
-    assert_eq!((report.batches_delivered, report.batches_queued), (0, 0));
-    assert!(burned_ids(home.path()).is_empty());
-
-    relay_json(home.path(), &receiver.url(), None);
-    commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
-        .expect("relay");
-    receiver.stop();
-    let (events, refused) = received(&bodies);
-    assert_eq!(events.len(), 6, "{events:?}");
-    assert!(refused);
-}
-
-/// Under a directory selection the recheck before delivery rewrites a
-/// queued batch's `refused` from an unscoped projection of its origin log,
-/// so the supplier scope must be applied after it. A cleared session in the
-/// selected directory with an ozone result and a refusal is spooled unscoped
-/// under a failing override, then delivered to the scoped configured
-/// receiver: the received JSON has ozone's events and no `refused` member.
-#[test]
-fn a_scope_is_applied_after_the_directory_recheck_rewrites_the_refused_count() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let root = temp.path().join("project");
-    std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&root).unwrap();
-    let root = root.canonicalize().unwrap();
-    std::fs::write(
-        home.join("policy.json"),
-        json!({"policy_mode": "observe", "scopes": []}).to_string(),
-    )
-    .unwrap();
-    commonmeasure_harness::directory::Registry::enrol(&home, &root, "Project", true).unwrap();
-    let cwd = root.to_str().unwrap();
-    let mut supplied: Value = serde_json::from_str(&crossing_in_cwd(
-        "crossing_mediated",
-        "s1",
-        "https://host.example/ozone",
-        true,
-        cwd,
-    ))
-    .unwrap();
-    supplied["payload"]["supplier"] = json!("ozone");
-    write_session(
-        &home,
-        "s1",
-        &[
-            supplied.to_string(),
-            crossing_in_cwd(
-                "crossing_mediated",
-                "s1",
-                "https://host.example/fetched",
-                true,
-                cwd,
-            ),
-            crossing_in_cwd(
-                "crossing_refused",
-                "s1",
-                "https://host.example/refused",
-                false,
-                cwd,
-            ),
-        ],
-    );
-    let failing = fixed_answer_receiver(503, "text/plain", "try later");
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut scoped = accepting_receiver(bodies.clone());
-    relay_json(&home, &scoped.url(), Some(&["ozone"]));
-
-    commonmeasure_relay::relay(
-        &home,
-        &commonmeasure_relay::RelayOptions {
-            receiver: Some(failing.url()),
-            ..Default::default()
-        },
-    )
-    .expect_err("the other receiver refuses the batch, which stays spooled");
-    let spooled = commonmeasure_relay::spool::Spool::read_only(&home)
-        .pending()
-        .unwrap();
-    assert_eq!(spooled.len(), 1);
-    assert!(spooled[0].1.directory_selection);
-    assert_eq!(
-        spooled[0].1.document["refused"],
-        json!(1),
-        "queued unscoped"
-    );
-
-    let later = chrono::Utc::now() + chrono::Duration::days(1);
-    commonmeasure_relay::relay_with_clock(
-        &home,
-        &commonmeasure_relay::RelayOptions::default(),
-        &|| later,
-    )
-    .expect("relay");
-    scoped.stop();
-
-    let bodies = bodies.lock().unwrap();
-    assert_eq!(bodies.len(), 1, "{bodies:?}");
-    let body = bodies[0].as_object().unwrap();
-    assert!(
-        !body.contains_key("refused"),
-        "the recheck's count reached a scoped receiver: {body:?}"
-    );
-    let events: Vec<(&str, &str)> = body["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|event| {
-            (
-                event["type"].as_str().unwrap(),
-                event["data"][commonmeasure_relay::project::SUPPLIER_FIELD]
-                    .as_str()
-                    .unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        events,
-        [
-            ("content_retrieved", "ozone"),
-            ("content_grounded", "ozone")
-        ]
-    );
 }
 
 fn registered_line(url: &str, grounded: bool, issuer: &str, revision: i64) -> String {
@@ -4102,11 +3680,11 @@ fn a_session_under_terms_naming_institution_identifiers_is_withheld_and_said_so(
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
         home.path().join("policy.json"),
-        r#"{"scopes":[{"match":"/work/personal","engagement":"personal","allow_telemetry_egress":true,
+        r#"{"scopes":[{"match":"/work/personal","engagement":"personal","allow_telemetry_egress":true}],
             "terms":[
               {"host":"host.example","reference":"consortium-4471",
                "access_context":[{"scheme":"ror","value":"https://ror.org/013meh722"}]},
-              {"host":"plain.example","reference":"agreement-7"}]}]}"#,
+              {"host":"plain.example","reference":"agreement-7"}]}"#,
     )
     .unwrap();
     write_session(
@@ -4693,16 +4271,15 @@ fn refusing_receiver(
         .unwrap()
 }
 
-/// 0.3.4 and earlier acknowledged batches by an offset in `outbound.ack`,
-/// which 0.3.5 and 0.4.0 read and never removed. A home that still carries
-/// it is refused before anything is sent, and the error names the file and
-/// the remedy. Where every session log survives, a spool moved aside is
-/// rebuilt from the logs: each event the receiver has not accepted is sent
-/// once, and no accepted event again.
+/// A spool moved aside while owing batches whose session logs partly
+/// survive: a relay run without `--session` projects again from every
+/// surviving log, not only the latest, and sends no event `delivered.idx`
+/// records as accepted. The batch whose log is gone is not sent: its events
+/// stay only in the saved spool.
 #[test]
-fn a_spool_carrying_outbound_ack_is_refused_and_a_spool_moved_aside_resends_no_accepted_event() {
+fn a_spool_moved_aside_is_rebuilt_from_the_surviving_logs_alone() {
     let home = tempfile::tempdir().unwrap();
-    let sessions = ["accepted", "refused"];
+    let sessions = ["accepted", "earlier", "rotated", "current"];
     for session in sessions {
         write_session(
             home.path(),
@@ -4715,273 +4292,68 @@ fn a_spool_carrying_outbound_ack_is_refused_and_a_spool_moved_aside_resends_no_a
             )],
         );
     }
-    let refused = Arc::new(Mutex::new(vec!["refused.example"]));
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let mut receiver = refusing_receiver(refused.clone(), bodies.clone());
-    let options = commonmeasure_relay::RelayOptions {
-        receiver: Some(receiver.url()),
-        sessions: sessions
-            .iter()
-            .map(|session| (*session).to_owned())
-            .collect(),
-        ..Default::default()
-    };
-    commonmeasure_relay::relay(home.path(), &options).expect_err("one batch is refused");
-    let urls = |bodies: &Mutex<Vec<Value>>| {
-        let mut urls = delivered_urls(bodies);
-        urls.dedup();
-        urls
-    };
-    assert_eq!(urls(&bodies), ["https://accepted.example/page"]);
-
-    let spool = home.path().join("relay/spool");
-    std::fs::write(spool.join("outbound.ack"), "2\n").unwrap();
-    refused.lock().unwrap().clear();
-    bodies.lock().unwrap().clear();
-    let error = format!(
-        "{:#}",
-        relay_after_backoff(home.path(), &options).expect_err("the spool is refused")
-    );
-    assert!(
-        error.contains("outbound.ack was written by commonmeasure 0.3.4 or earlier")
-            && error.contains("move relay/spool aside, keeping it and relay/delivered.idx"),
-        "{error}"
-    );
-    assert!(bodies.lock().unwrap().is_empty(), "nothing is sent");
-    let status = commonmeasure_relay::egress_report(home.path());
-    assert!(
-        status["unavailable"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("outbound.ack")),
-        "{status}"
-    );
-    assert!(status["queued"].is_null());
-
-    std::fs::rename(&spool, home.path().join("relay/spool.0.3.4")).unwrap();
-    let report = relay_after_backoff(home.path(), &options).expect("the remedy delivers");
-    receiver.stop();
-    assert_eq!(
-        report.events_enqueued, 2,
-        "the refused crossing's two events are projected again, and no accepted one"
-    );
-    assert_eq!(bodies.lock().unwrap().len(), 1);
-    assert_eq!(urls(&bodies), ["https://refused.example/page"]);
-}
-
-/// A refused spool owing batches whose session logs partly survive, refused
-/// for `outbound.ack` or for a line without an index. The relay sends
-/// nothing, and the refusal and status name the remedy. Once the spool is
-/// moved aside, a relay run without `--session` projects again from every
-/// surviving log, not only the latest, and sends no event `delivered.idx`
-/// records as accepted. The batch whose log is gone is not sent: its events
-/// stay only in the saved spool.
-#[test]
-fn a_refused_spool_moved_aside_is_rebuilt_from_the_surviving_logs_alone() {
-    for acknowledged in [true, false] {
-        let home = tempfile::tempdir().unwrap();
-        let sessions = ["accepted", "earlier", "rotated", "current"];
-        for session in sessions {
-            write_session(
-                home.path(),
-                session,
-                &[crossing_line(
-                    "crossing_observed",
-                    session,
-                    &format!("https://{session}.example/page"),
-                    true,
-                )],
-            );
-        }
-        let refused = Arc::new(Mutex::new(vec![
-            "earlier.example",
-            "rotated.example",
-            "current.example",
-        ]));
-        let bodies = Arc::new(Mutex::new(Vec::new()));
-        let mut receiver = refusing_receiver(refused.clone(), bodies.clone());
-        let options = commonmeasure_relay::RelayOptions {
-            receiver: Some(receiver.url()),
-            ..Default::default()
-        };
-        commonmeasure_relay::relay(home.path(), &options).expect_err("three batches are refused");
-        let mut urls = delivered_urls(&bodies);
-        urls.dedup();
-        assert_eq!(urls, ["https://accepted.example/page"]);
-
-        std::fs::remove_file(home.path().join("sessions/rotated.ndjson")).unwrap();
-        let spool = home.path().join("relay/spool");
-        let queue_path = spool.join("outbound.ndjson");
-        let expected = if acknowledged {
-            std::fs::write(spool.join("outbound.ack"), "4\n").unwrap();
-            "outbound.ack was written by commonmeasure 0.3.4 or earlier"
-        } else {
-            // The rotated session's batch as 0.3.4 wrote it: first, with no
-            // index. Its recorded state names an index no line carries.
-            let queue = std::fs::read_to_string(&queue_path).unwrap();
-            let (mut old, current): (Vec<Value>, Vec<Value>) = queue
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                .partition(|line| line.to_string().contains("rotated.example"));
-            old[0].as_object_mut().unwrap().remove("index");
-            let lines: String = old
-                .iter()
-                .chain(&current)
-                .map(|line| format!("{line}\n"))
-                .collect();
-            std::fs::write(&queue_path, lines).unwrap();
-            "spool line 0 (counted from zero) was written by commonmeasure 0.3.4 or earlier"
-        };
-        refused.lock().unwrap().clear();
-        bodies.lock().unwrap().clear();
-        let burned = burned_ids(home.path());
-        let error = format!(
-            "{:#}",
-            relay_after_backoff(home.path(), &options).expect_err("the spool is refused")
-        );
-        assert!(
-            error.contains(expected)
-                && error.contains("move relay/spool aside, keeping it and relay/delivered.idx")
-                && error.contains(
-                    "an event whose session log or run input is gone stays in the saved spool"
-                )
-                && error.contains("(CHANGELOG.md, 0.4.1, Upgrading)")
-                && !error.contains("0.4.0"),
-            "{error}"
-        );
-        assert!(bodies.lock().unwrap().is_empty(), "nothing is sent");
-        assert_eq!(burned_ids(home.path()), burned);
-
-        let status = commonmeasure_relay::egress_report(home.path());
-        assert!(status["queued"].is_null(), "{status}");
-        assert!(
-            status["unavailable"]
-                .as_str()
-                .is_some_and(|reason| reason.contains(expected)),
-            "{status}"
-        );
-        // With `outbound.ack`, the three refused batches are indexed and
-        // recorded as queued. Without it, the rotated batch's line has no
-        // index, and its recorded state names a batch no indexed line
-        // carries, so the count is incomplete.
-        let counts = if acknowledged {
-            json!({"outstanding": 3, "unknown": 0, "unindexed": 0, "incomplete": null})
-        } else {
-            json!({"outstanding": 2, "unknown": 0, "unindexed": 1,
-                "incomplete": "the delivery metadata names 1 batch no indexed line carries"})
-        };
-        assert_eq!(status["refused_spool"], counts, "{status}");
-        let text = commonmeasure_relay::state::egress_text(&status);
-        assert!(
-            text.contains("each is projected again only if its session log remains")
-                && !text.contains("no indexed batch is outstanding"),
-            "{text}"
-        );
-
-        let saved = home.path().join("relay/spool.saved");
-        std::fs::rename(&spool, &saved).unwrap();
-        let report = relay_after_backoff(home.path(), &options).expect("the relay runs");
-        receiver.stop();
-        assert_eq!(
-            report.events_enqueued, 4,
-            "the earlier and current sessions' events, from their surviving logs"
-        );
-        let mut urls = delivered_urls(&bodies);
-        urls.sort();
-        urls.dedup();
-        assert_eq!(
-            urls,
-            [
-                "https://current.example/page",
-                "https://earlier.example/page"
-            ]
-        );
-        let sent: Vec<String> = bodies
-            .lock()
-            .unwrap()
-            .iter()
-            .flat_map(|body| body["events"].as_array().unwrap().clone())
-            .map(|event| event["id"].as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(sent.len(), 4);
-        assert!(
-            sent.iter().all(|id| !burned.contains(id)),
-            "no event recorded as accepted is sent again"
-        );
-        let delivered = burned_ids(home.path());
-        assert!(burned.iter().all(|id| delivered.contains(id)));
-        assert_eq!(delivered.len(), burned.len() + 4);
-        let status = commonmeasure_relay::egress_report(home.path());
-        assert_eq!(status["queued"], 0, "the rotated batch is not counted");
-        assert!(status["refused_spool"].is_null());
-        assert!(
-            std::fs::read_to_string(saved.join("outbound.ndjson"))
-                .unwrap()
-                .contains("rotated.example"),
-            "its events stay only in the saved spool"
-        );
-    }
-}
-
-/// A batch 0.3.4 or earlier queued, whose line a prune by 0.3.5 or 0.4.0
-/// rewrote with an index and `queued_at: null`, may carry consent
-/// provenance the rewrite filled in. It is held with a reason that names
-/// it, and never sent; a batch queued since is delivered beside it.
-#[test]
-fn a_batch_queued_by_0_3_4_or_earlier_is_held_and_never_sent() {
-    use commonmeasure_relay::spool::{DeliveryStatus, PRE_0_3_5_HOLD, Spool};
-    let home = tempfile::tempdir().unwrap();
-    write_session(
-        home.path(),
-        "early",
-        &[crossing_line(
-            "crossing_observed",
-            "early",
-            "https://early.example/page",
-            true,
-        )],
-    );
-    let refused = Arc::new(Mutex::new(vec!["early.example"]));
+    let refused = Arc::new(Mutex::new(vec![
+        "earlier.example",
+        "rotated.example",
+        "current.example",
+    ]));
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let mut receiver = refusing_receiver(refused.clone(), bodies.clone());
     let options = commonmeasure_relay::RelayOptions {
         receiver: Some(receiver.url()),
         ..Default::default()
     };
-    commonmeasure_relay::relay(home.path(), &options).expect_err("the batch is refused");
-
-    let queue_path = home.path().join("relay/spool/outbound.ndjson");
-    let mut line: Value =
-        serde_json::from_str(std::fs::read_to_string(&queue_path).unwrap().trim()).unwrap();
-    assert_eq!(line["index"], 0);
-    line["queued_at"] = Value::Null;
-    std::fs::write(&queue_path, format!("{line}\n")).unwrap();
-    write_session(
-        home.path(),
-        "later",
-        &[crossing_line(
-            "crossing_observed",
-            "later",
-            "https://later.example/page",
-            true,
-        )],
-    );
-    refused.lock().unwrap().clear();
-    for _ in 0..2 {
-        relay_after_backoff(home.path(), &options).expect("the later batch is delivered");
-    }
-    receiver.stop();
-    assert_eq!(bodies.lock().unwrap().len(), 1);
+    commonmeasure_relay::relay(home.path(), &options).expect_err("three batches are refused");
     let mut urls = delivered_urls(&bodies);
     urls.dedup();
-    assert_eq!(urls, ["https://later.example/page"]);
-    let states = Spool::read_only(home.path()).delivery_states().unwrap();
-    assert_eq!(states[&0].status, DeliveryStatus::Queued);
-    assert_eq!(states[&0].hold_reason.as_deref(), Some(PRE_0_3_5_HOLD));
-    assert_eq!(states[&0].attempts, 1, "a hold consumes no attempt");
+    assert_eq!(urls, ["https://accepted.example/page"]);
+
+    std::fs::remove_file(home.path().join("sessions/rotated.ndjson")).unwrap();
+    refused.lock().unwrap().clear();
+    bodies.lock().unwrap().clear();
+    let burned = burned_ids(home.path());
+    let spool = home.path().join("relay/spool");
+    let saved = home.path().join("relay/spool.saved");
+    std::fs::rename(&spool, &saved).unwrap();
+    let report = relay_after_backoff(home.path(), &options).expect("the relay runs");
+    receiver.stop();
+    assert_eq!(
+        report.events_enqueued, 4,
+        "the earlier and current sessions' events, from their surviving logs"
+    );
+    let mut urls = delivered_urls(&bodies);
+    urls.sort();
+    urls.dedup();
+    assert_eq!(
+        urls,
+        [
+            "https://current.example/page",
+            "https://earlier.example/page"
+        ]
+    );
+    let sent: Vec<String> = bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap().clone())
+        .map(|event| event["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(sent.len(), 4);
+    assert!(
+        sent.iter().all(|id| !burned.contains(id)),
+        "no event recorded as accepted is sent again"
+    );
+    let delivered = burned_ids(home.path());
+    assert!(burned.iter().all(|id| delivered.contains(id)));
+    assert_eq!(delivered.len(), burned.len() + 4);
     let status = commonmeasure_relay::egress_report(home.path());
-    assert_eq!(status["held"], 1);
-    assert_eq!(status["hold_reason"], PRE_0_3_5_HOLD);
-    assert!(status["oldest_queued_age_seconds"].is_null());
+    assert_eq!(status["queued"], 0, "the rotated batch is not counted");
+    assert!(
+        std::fs::read_to_string(saved.join("outbound.ndjson"))
+            .unwrap()
+            .contains("rotated.example"),
+        "its events stay only in the saved spool"
+    );
 }
 
 #[test]

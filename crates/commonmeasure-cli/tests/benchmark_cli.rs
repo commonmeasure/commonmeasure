@@ -163,7 +163,6 @@ fn unresolved_or_unrepresentable_source_policy_stops_before_calls() {
     for policy in [
         json!({"policy_mode":"observe", "principals":[{
             "principal":"unbound", "subject":"not-this-session"}]}),
-        json!({"policy_mode":"strict", "refuse_on_pii":true}),
         json!({"policy_mode":"strict", "record_internal_prefixes":["https://private.example/"]}),
     ] {
         let home = tempfile::tempdir().unwrap();

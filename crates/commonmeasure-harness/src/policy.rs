@@ -63,16 +63,6 @@ pub struct PolicyFile {
     /// to allow, explicitly.
     #[serde(default)]
     pub allow_private_hosts: bool,
-    /// Whether `strict` refuses a crossing for a PII finding on every
-    /// source. Off by default: a finding on a public source is recorded on
-    /// the crossing and the crossing is admitted, because a public page's
-    /// published contact details are not the personal data the detector
-    /// exists to keep out of a model, and `strict` refuses a finding only
-    /// on an internal or private source. An operator that wants the
-    /// refusal everywhere sets this. Left out of the file when false, so the
-    /// loader's form of a policy that does not set it is unchanged.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub refuse_on_pii: bool,
     /// Internal prefixes whose crossings may be recorded despite the privacy
     /// floor, for observed and mediated capture alike.
     ///
@@ -86,14 +76,15 @@ pub struct PolicyFile {
     /// omission.
     #[serde(default)]
     pub record_internal_prefixes: Vec<String>,
-    /// Operator references and assessments of the basis for use. Only an
-    /// applicable assessment covering the fetched content and use governs
-    /// source preferences; references alone establish no reuse rights.
+    /// Operator references for the basis of use, keyed by host. A reference
+    /// is recorded on the crossings of its host and establishes no reuse
+    /// right of its own; what a reference permits is settled by the network
+    /// design (roadmap NET-14 and NET-15), not here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub terms: Vec<TermsDeclaration>,
 }
 
-/// One operator reference and optional assessment of reuse, keyed by host.
+/// One operator reference, keyed by host.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TermsDeclaration {
@@ -115,111 +106,6 @@ pub struct TermsDeclaration {
     /// operator as an institution, never a person.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub access_context: Vec<InstitutionIdentifier>,
-    /// The operator's scoped assessment. Omission preserves the old loader
-    /// form and policy identity, but supplies no applicable basis for use.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assessment: Option<UseAssessment>,
-}
-
-/// The operator's assessment of the reference in a terms entry. The runtime
-/// checks its scope, without verifying legal entitlement or issuer authority.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct UseAssessment {
-    /// Whether the reference is an agreement, public licence or exception.
-    pub basis: UseBasis,
-    /// Applicability as assessed by the operator, never inferred from access.
-    pub applicability: AssessedApplicability,
-    /// The agreement or public licence version, required when applicable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// The party claimed to have issued the rights, where relevant.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claimed_issuer: Option<String>,
-    /// References supporting the claimed authority; these are not verified.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub authority_evidence: Vec<String>,
-    /// Exact absolute HTTP(S) URLs covered, including their query strings.
-    /// There are no host-wide, prefix or wildcard matches.
-    pub content: Vec<String>,
-    /// Uses covered by this assessment. Mediated fetch always makes AI input.
-    pub intended_uses: Vec<crate::declarations::Category>,
-    /// The operator's reason, including any unresolved applicability.
-    pub reason: String,
-}
-
-/// The kind of basis named by an operator reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum UseBasis {
-    /// An agreement granting the assessed reuse rights.
-    Agreement,
-    /// A public licence at the terms entry's reference and assessed version.
-    PublicLicence,
-    /// An operator-assessed exception identified by the terms reference.
-    Exception,
-}
-
-/// The operator's conclusion about applicability, separate from scope matching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AssessedApplicability {
-    /// The operator assesses the basis as applicable within its scope.
-    Applicable,
-    /// Applicability remains unresolved and cannot override a declaration.
-    Unresolved,
-}
-
-impl UseAssessment {
-    fn validate(&self, host: &str) -> Result<(), &'static str> {
-        if self.reason.trim().is_empty() {
-            return Err("assessment reason is empty");
-        }
-        if self.content.is_empty() || self.intended_uses.is_empty() {
-            return Err("assessment must name content and intended uses");
-        }
-        for content in &self.content {
-            let Ok(url) = url::Url::parse(content) else {
-                return Err(
-                    "assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment",
-                );
-            };
-            if !matches!(url.scheme(), "http" | "https")
-                || url.host_str().map(normalised_host).as_deref() != Some(host)
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.fragment().is_some()
-            {
-                return Err(
-                    "assessment content must be an absolute HTTP(S) URL for its host without credentials or a fragment",
-                );
-            }
-        }
-        if self.version.as_ref().is_some_and(|v| v.trim().is_empty())
-            || self
-                .claimed_issuer
-                .as_ref()
-                .is_some_and(|v| v.trim().is_empty())
-            || self.authority_evidence.iter().any(|v| v.trim().is_empty())
-        {
-            return Err(
-                "assessment version, issuer and authority references must be non-empty when supplied",
-            );
-        }
-        if self.applicability == AssessedApplicability::Applicable {
-            if self.basis != UseBasis::Exception && self.version.is_none() {
-                return Err("an applicable agreement or public licence must name its version");
-            }
-            if self.basis == UseBasis::Agreement
-                && (self.claimed_issuer.is_none() || self.authority_evidence.is_empty())
-            {
-                return Err(
-                    "an applicable agreement must name its claimed issuer and authority evidence",
-                );
-            }
-        }
-        Ok(())
-    }
 }
 
 /// One typed institution identifier, in the standard's `access_context`
@@ -264,16 +150,6 @@ pub struct PolicyScope {
     pub policy_mode: Option<PolicyMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub constraints: Option<Vec<Constraint>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_private_hosts: Option<bool>,
-    /// Whether `strict` refuses a PII finding on every source in this
-    /// scope; inherits the top-level value when left out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refuse_on_pii: Option<bool>,
-    /// Terms this scope holds, replacing the top-level list when present, as
-    /// `constraints` does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terms: Option<Vec<TermsDeclaration>>,
 }
 
 /// One authenticated principal's overlay. A binding names exactly one of
@@ -464,9 +340,8 @@ impl PrincipalBinding {
 const UNAUTHENTICATED: &str = "unauthenticated";
 
 /// Identity established before admission: at the process boundary for the
-/// stdio server, or from a verified token on the hosted edge. The asserted
-/// label is kept for diagnostics only and never participates in binding
-/// selection.
+/// stdio server, or from a verified token on the hosted edge. Nothing the
+/// process can set in its own environment takes part in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
     name: String,
@@ -474,23 +349,19 @@ pub struct Principal {
     /// is [`AuthenticationBasis::Unavailable`].
     key: Option<BindingKey>,
     basis: AuthenticationBasis,
-    asserted_label: Option<String>,
 }
 
 impl Principal {
     /// The identity of this process: its effective operating-system user
     /// where the platform has one this runtime can read.
     pub fn current() -> Self {
-        Self::resolved(
-            trusted_os_user(),
-            std::env::var("COMMONMEASURE_PRINCIPAL").ok(),
-        )
+        Self::resolved(trusted_os_user())
     }
 
     /// The person a verified access token names by its `sub` claim. The
     /// caller has verified the token; nothing here reads the process's own
-    /// user or the asserted-label variable, because on the hosted edge the
-    /// service account is not the principal.
+    /// user, because on the hosted edge the service account is not the
+    /// principal.
     pub fn oauth_subject(subject: &str) -> Self {
         Self::keyed(BindingKey::Subject(subject.to_owned()))
     }
@@ -506,30 +377,25 @@ impl Principal {
             name: key.default_name(),
             basis: key.basis(),
             key: Some(key),
-            asserted_label: None,
         }
     }
 
     /// One place decides what an authenticated subject — or its absence — is
     /// called, so a test principal and a real one cannot drift apart.
-    fn resolved(os_user: Option<u32>, asserted_label: Option<String>) -> Self {
+    fn resolved(os_user: Option<u32>) -> Self {
         match os_user {
-            Some(os_user) => Self {
-                asserted_label,
-                ..Self::keyed(BindingKey::OsUser(os_user))
-            },
+            Some(os_user) => Self::keyed(BindingKey::OsUser(os_user)),
             None => Self {
                 name: UNAUTHENTICATED.to_owned(),
                 key: None,
                 basis: AuthenticationBasis::Unavailable,
-                asserted_label,
             },
         }
     }
 
     #[cfg(test)]
-    fn for_test(os_user: Option<u32>, asserted_label: Option<&str>) -> Self {
-        Self::resolved(os_user, asserted_label.map(str::to_owned))
+    fn for_test(os_user: Option<u32>) -> Self {
+        Self::resolved(os_user)
     }
 }
 
@@ -570,7 +436,6 @@ impl Default for PolicyFile {
             scopes: Vec::new(),
             principals: Vec::new(),
             allow_private_hosts: false,
-            refuse_on_pii: false,
             record_internal_prefixes: Vec::new(),
             terms: Vec::new(),
         }
@@ -1135,18 +1000,13 @@ fn parse(encoded: &[u8], source: &Path) -> Result<PolicyFile, String> {
             ));
         }
     }
-    // Terms: the top-level list and every scope's own. A host that appears
-    // twice in one list would make the recorded reference depend on order,
-    // and an entry naming no host or no reference could govern nothing.
-    let terms_lists = std::iter::once(("the top-level policy".to_owned(), &file.terms)).chain(
-        file.scopes.iter().filter_map(|scope| {
-            scope
-                .terms
-                .as_ref()
-                .map(|terms| (format!("scope {:?}", scope.matcher), terms))
-        }),
-    );
-    for (owner, terms) in terms_lists {
+    // Terms. A host that appears twice would make the recorded reference
+    // depend on order, and an entry naming no host or no reference could
+    // govern nothing. The refusals name the list as the contract's `<list>`
+    // placeholder does.
+    {
+        let owner = "the top-level policy";
+        let terms = &file.terms;
         for (index, declared) in terms.iter().enumerate() {
             let host = normalised_host(&declared.host);
             if host.is_empty() {
@@ -1172,15 +1032,6 @@ fn parse(encoded: &[u8], source: &Path) -> Result<PolicyFile, String> {
                     "{} {owner} declares terms for host {host:?} twice; one host holds one \
                      agreement",
                     source.display()
-                ));
-            }
-            if let Some(assessment) = &declared.assessment
-                && let Err(reason) = assessment.validate(&host)
-            {
-                return Err(format!(
-                    "{} {owner} terms entry {} for host {host:?}: {reason}",
-                    source.display(),
-                    index + 1
                 ));
             }
             for identifier in &declared.access_context {
@@ -1348,15 +1199,6 @@ impl PolicyDocument {
             if let Some(constraints) = overlay.constraints {
                 file.constraints = constraints;
             }
-            if let Some(allow) = overlay.allow_private_hosts {
-                file.allow_private_hosts = allow;
-            }
-            if let Some(refuse) = overlay.refuse_on_pii {
-                file.refuse_on_pii = refuse;
-            }
-            if let Some(terms) = overlay.terms {
-                file.terms = terms;
-            }
             governing_engagement = overlay.engagement;
             allow_telemetry_egress = overlay.allow_telemetry_egress;
             overlay.matcher
@@ -1418,12 +1260,6 @@ impl SessionPolicy {
 
     pub fn mode(&self) -> PolicyMode {
         self.file.policy_mode
-    }
-
-    /// Whether `strict` refuses a PII finding on every source, rather than
-    /// on internal and private sources only ([`PolicyFile::refuse_on_pii`]).
-    pub fn refuse_on_pii(&self) -> bool {
-        self.file.refuse_on_pii
     }
 
     pub fn constraints(&self) -> &[Constraint] {
@@ -1553,7 +1389,6 @@ impl SessionPolicy {
             "principal": self.principal.name,
             "authentication_basis": self.principal.basis.as_str(),
             "authenticated_subject": self.principal.key.as_ref().map(BindingKey::status_form),
-            "asserted_principal": self.principal.asserted_label,
             "fail_closed": self.fail_closed,
             // Named for what it is, because a reader of this document may also
             // be reading a reported engagement resolved by different rules.
@@ -1569,7 +1404,6 @@ impl SessionPolicy {
             // an agent reading this status learns why a private address was
             // refused under a policy that appears to admit it.
             "private_floor": if self.private_floor_held { "held" } else { "policy" },
-            "refuse_on_pii": self.file.refuse_on_pii,
             // On the status surface deliberately: the console must be able to
             // say what internal supply is being recorded and on whose
             // authority. An empty list is the floor holding everywhere.
@@ -1593,7 +1427,7 @@ impl SessionPolicy {
 /// when a field is added to or removed from the pre-image, because every
 /// digest changes with it and a reader comparing digests across edges has
 /// to know they were computed over the same shape.
-pub const IDENTITY_SCHEMA: &str = "contextops-policy-identity/v2";
+pub const IDENTITY_SCHEMA: &str = "contextops-policy-identity/v3";
 
 /// The version of the resolution [`PolicyDocument::resolve`] performs: which
 /// scope wins, how a principal overlays, when a session fails closed. It
@@ -1662,10 +1496,9 @@ impl SessionPolicy {
     /// drift. Access rules are the exception: the first matching rule
     /// decides, so their order is the policy, and they are carried in
     /// declaration order with their position (`access_rules`), apart from
-    /// the sorted set (`constraints`). The operator's terms are carried
-    /// too, because they govern over a source's published preference, with
-    /// hosts normalised the way `terms_for` matches them. The source path,
-    /// the asserted label and the authenticated subject id are left out: they describe the
+    /// the sorted set (`constraints`). The operator's terms references are
+    /// carried too, with hosts normalised the way `terms_for` matches them. The source path,
+    /// and the authenticated subject id are left out: they describe the
     /// machine and the process, not the policy. A scope that did not match
     /// this session is left out too, so an edit to an unrelated scope leaves
     /// this identity unchanged.
@@ -1739,7 +1572,6 @@ impl SessionPolicy {
             "constraints": constraints,
             "access_rules": access_rules,
             "allow_private_hosts": self.file.allow_private_hosts,
-            "refuse_on_pii": self.file.refuse_on_pii,
             "record_internal_prefixes": prefixes,
             "scope": self.scope,
             "governing_engagement": self.governing_engagement,
@@ -1857,7 +1689,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         std::fs::write(directory.path().join("policy.json"), json).unwrap();
         let mut document = PolicyDocument::read(directory.path()).expect("valid policy");
-        document.principal = Principal::for_test(os_user, Some("someone-else"));
+        document.principal = Principal::for_test(os_user);
         document.resolve(cwd)
     }
 
@@ -1872,11 +1704,10 @@ mod tests {
         assert_eq!(policy.scope(), Some("alice-work"));
         assert_eq!(policy.mode(), PolicyMode::Strict);
         assert!(policy.admit_host("https://denied.example/").is_refusal());
-        assert_eq!(policy.describe()["asserted_principal"], "someone-else");
     }
 
     #[test]
-    fn changing_cwd_and_asserted_label_cannot_acquire_another_principals_scope() {
+    fn changing_cwd_cannot_acquire_another_principals_scope() {
         let policy = policy_for(
             r#"{"principals":[{"principal":"alice","os_user":1001,"require_scope":true},{"principal":"bob","os_user":1002,"require_scope":true}],"scopes":[{"match":"alice-work","principal":"alice"},{"match":"bob-work","principal":"bob","policy_mode":"observe"}]}"#,
             Some("/work/bob-work"),
@@ -2043,7 +1874,6 @@ mod tests {
         let status = policy.describe();
         assert_eq!(status["authentication_basis"], "oauth_subject");
         assert_eq!(status["authenticated_subject"], "subject:hub-user-01");
-        assert!(status["asserted_principal"].is_null());
         assert!(status["fail_closed"].is_null());
         assert_eq!(
             policy.canonical()["principal"],
@@ -2254,11 +2084,12 @@ mod tests {
         );
     }
 
-    /// The identity vectors: what these documents resolved to for these
-    /// principals before the token bases existed, taken from the resolver
-    /// then. Neither [`IDENTITY_SCHEMA`] nor [`RESOLVER_VERSION`] moved, so
-    /// an existing document for an existing principal must digest exactly
-    /// as it did; a moved digest here is silent drift on every managed edge.
+    /// The identity vectors: what these documents resolve to for these
+    /// principals under [`IDENTITY_SCHEMA`] v3 and [`RESOLVER_VERSION`] 2,
+    /// taken from the resolver when the pre-image lost `refuse_on_pii`. While
+    /// neither constant moves, an existing document for an existing principal
+    /// must digest exactly as it did; a moved digest here is silent drift on
+    /// every managed edge.
     #[test]
     fn existing_policy_identity_vectors_digest_unchanged() {
         const BOUND: &str = r#"{"principals":[{"principal":"alice","os_user":1001,"policy_mode":"strict"},{"principal":"bob","os_user":1002}]}"#;
@@ -2270,56 +2101,56 @@ mod tests {
                 BOUND,
                 None,
                 Some(1001),
-                "sha256:9d560bb560732fc5c44c6a68f32d45d0b23d7903a9d826a8d2e8d52310c8d69c",
+                "sha256:59c1fde67b4202e400c6fc7dfcb525fabf98aaf9f1d0437fa64395ad9bc48aee",
             ),
             (
                 "bound-bob",
                 BOUND,
                 None,
                 Some(1002),
-                "sha256:bf282aa71a2d8a9f4905beea370ff88ea16521dfea5133a840941f1ff85542e8",
+                "sha256:210f88044b8f0360d16985e02a3daf3e7ddb77d522ef43c4df57c3546c824147",
             ),
             (
                 "bound-stranger",
                 BOUND,
                 None,
                 Some(1003),
-                "sha256:cf8e1ae06a0b0b43bb379856071d004516e9d0e56697bd5eca9463723691eddc",
+                "sha256:69667697d0b5e9b1999a7c86e5b17c43a5733429558b736edf53e917083b8b00",
             ),
             (
                 "bound-unavailable",
                 BOUND,
                 None,
                 None,
-                "sha256:8218fd1ba028379fdc6ecec4a440c5d8395dcde4aad3a3044bbbb3a8a91b8da0",
+                "sha256:ee97d3b1883fcce09bcc508dcbd12528db6b4fc8591f60788cd09c2bbabb44f4",
             ),
             (
                 "owned-alice",
                 OWNED,
                 Some("/work/alice-work"),
                 Some(1001),
-                "sha256:9af3fa0b112c839c06da4de59690de1d7e84608d6397c0ab947a7dc447e3b995",
+                "sha256:9c771cac19e408704fd08eb410b634a5fc6f00971768e8210ef3f6e2aa88dec1",
             ),
             (
                 "owned-bob-in-alice",
                 OWNED,
                 Some("/work/alice-work"),
                 Some(1002),
-                "sha256:1cd31ecaebf397df5855c4820d7617c3e2d33fdde6d9aeb885a8fc980296c0d6",
+                "sha256:4ed1ca7fcdb9cee12d13dbae6b9e7927e1906808c44aee78c68a3bac46b9d2c4",
             ),
             (
                 "directory-only-unavailable",
                 DIRECTORY_ONLY,
                 Some("/work/ozone"),
                 None,
-                "sha256:73e0aed9b0c2114280cc95aae742d34672e2d8e240f708751aa7baf8e9060a0f",
+                "sha256:9327be414da531403c8b9994f4cea99c3089c242b91b089c98a42c4adacfcc18",
             ),
             (
                 "directory-only-uid",
                 DIRECTORY_ONLY,
                 Some("/work/ozone"),
                 Some(1001),
-                "sha256:fc04a0d6860b480bbb7f50f5f92fe1c4d48a58198a4d507f4b44c24a1079815d",
+                "sha256:8e301ce029b46953c78143038ea6a6f175e8cc3f9d86596e71bfd06b0251e9c1",
             ),
         ] {
             let policy = policy_for(json, cwd, uid);
@@ -2387,52 +2218,28 @@ mod tests {
             bare_identifier.contains("access_context identifier without a scheme or a value"),
             "{bare_identifier}"
         );
-
-        let in_scope = load_error(
-            r#"{"scopes":[{"match":"client","terms":[{"host":"pub.example","reference":""}]}]}"#,
-        );
-        assert!(
-            in_scope.contains("scope \"client\" terms entry 1"),
-            "a scope's own list is checked and named: {in_scope}"
-        );
     }
 
-    /// A scope's `terms` replace the top-level list, as `constraints` do; a
-    /// scope without its own inherits, and a host no list names has none.
+    /// Terms are matched on the normalised host, exactly, and a host the
+    /// list does not name has none. The status surface shows the list.
     #[test]
-    fn scope_terms_replace_the_top_level_list_and_absence_inherits() {
+    fn terms_are_matched_by_normalised_host_and_shown_on_the_status_surface() {
         const TERMS: &str = r#"{
-            "terms":[{"host":"pub.example","reference":"top-1"}],
-            "scopes":[
-                {"match":"client","terms":[{"host":"other.example","reference":"client-7",
-                                            "requires_reporting":true,
-                                            "access_context":[{"scheme":"ror","value":"https://ror.org/013meh722"}]}]},
-                {"match":"personal"}
-            ]}"#;
+            "terms":[{"host":"other.example","reference":"client-7",
+                      "requires_reporting":true,
+                      "access_context":[{"scheme":"ror","value":"https://ror.org/013meh722"}]}],
+            "scopes":[{"match":"client"}]}"#;
         let client = policy_in(TERMS, Some("/work/client"));
-        assert!(
-            client.terms_for("pub.example").is_none(),
-            "replaced, not merged"
-        );
         let terms = client
-            .terms_for("OTHER.example")
+            .terms_for("OTHER.example.")
             .expect("normalised host match");
         assert_eq!(terms.reference, "client-7");
         assert!(terms.requires_reporting);
         assert_eq!(terms.access_context[0].scheme, "ror");
-
-        let personal = policy_in(TERMS, Some("/work/personal"));
+        assert!(client.terms_for("nobody.example").is_none());
         assert_eq!(
-            personal
-                .terms_for("pub.example")
-                .map(|t| t.reference.as_str()),
-            Some("top-1"),
-            "a scope without terms inherits the top-level list"
-        );
-        assert!(personal.terms_for("nobody.example").is_none());
-        assert_eq!(
-            personal.describe()["terms"][0]["reference"],
-            "top-1",
+            client.describe()["terms"][0]["reference"],
+            "client-7",
             "the status surface shows the effective list"
         );
     }
@@ -3015,7 +2822,6 @@ mod tests {
                 "mode",
                 "principal",
                 "record_internal_prefixes",
-                "refuse_on_pii",
                 "resolver",
                 "schema",
                 "scope",
@@ -3493,9 +3299,8 @@ mod tests {
         assert!(governed.admit_host("https://api.example.com/").is_refusal());
     }
 
-    /// References and assessments are part of policy identity, including a
-    /// reference with no assessment, whose applicability is unresolved. Host
-    /// spelling does not change the terms entry selected.
+    /// References are part of policy identity. Host spelling does not change
+    /// the terms entry selected.
     #[test]
     fn terms_move_the_identity_and_a_respelt_host_does_not() {
         let without = policy(r#"{"policy_mode":"strict"}"#);
@@ -3518,49 +3323,6 @@ mod tests {
                 {"host":"pub.example","reference":"agreement-8","requires_reporting":true}]}"#,
         );
         assert_ne!(with.identity(), other_reference.identity());
-    }
-
-    /// A terms entry without an assessment keeps the canonical form and
-    /// digest it had before assessments existed, because published policy
-    /// revisions and the envelopes that sign them are named by that digest.
-    #[test]
-    fn absent_assessment_preserves_identity_and_every_assessment_field_is_bound() {
-        let unassessed = json!({"policy_mode":"strict","terms":[{
-            "host":"pub.example","reference":"agreement-7","requires_reporting":true}]});
-        let before = policy(&unassessed.to_string());
-        let mut explicit_null = unassessed.clone();
-        explicit_null["terms"][0]["assessment"] = Value::Null;
-        let omitted = policy(&explicit_null.to_string());
-        assert_eq!(before.identity(), omitted.identity());
-        assert_eq!(before.canonical(), omitted.canonical());
-        assert_eq!(before.canonical()["terms"], unassessed["terms"]);
-
-        let mut scoped = unassessed.clone();
-        scoped["terms"][0]["assessment"] = json!({
-            "basis":"agreement", "applicability":"applicable", "version":"1",
-            "claimed_issuer":"Publisher", "authority_evidence":["agreement-7:reuse"],
-            "content":["https://pub.example/article"], "intended_uses":["ai-input"],
-            "reason":"The agreement covers this use."});
-        let assessed = policy(&scoped.to_string());
-        assert_ne!(before.identity(), assessed.identity());
-        for (field, replacement) in [
-            ("basis", json!("public_licence")),
-            ("applicability", json!("unresolved")),
-            ("version", json!("2")),
-            ("claimed_issuer", json!("Other issuer")),
-            ("authority_evidence", json!(["agreement-7:other-clause"])),
-            ("content", json!(["https://pub.example/other"])),
-            ("intended_uses", json!(["train-ai"])),
-            ("reason", json!("The assessment was revised.")),
-        ] {
-            let mut changed = scoped.clone();
-            changed["terms"][0]["assessment"][field] = replacement;
-            assert_ne!(
-                assessed.identity(),
-                policy(&changed.to_string()).identity(),
-                "{field}"
-            );
-        }
     }
 
     /// A candidate built from a document resolves as the saved file would,

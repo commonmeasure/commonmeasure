@@ -163,7 +163,6 @@ fn every_validation_vector_is_ruled_by_the_binary_as_the_contract_states() {
         "terms_reference_empty",
         "terms_host_duplicate",
         "terms_identifier_incomplete",
-        "terms_assessment_invalid",
     ]
     .into_iter()
     .map(str::to_owned)

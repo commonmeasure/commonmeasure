@@ -113,10 +113,9 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `evidence_gap` | nothing; the log writes it | a window this log could not record |
 
 A host-policy refusal happens before any bytes move. A processor refusal,
-which is what the PII detector and the injection screen produce, happens
-after the fetch and before the text is returned: the bytes existed, their hash
-is on the refused crossing, and they never entered context (`grounded` is
-false). The two records differ because they are different facts, and both
+which the injection screen produces under `strict`, happens after the fetch
+and before the text is returned: the bytes existed, their hash is on the
+refused crossing, and they never entered context (`grounded` is false). The two records differ because they are different facts, and both
 are `crossing_refused` because in both cases the mediated path stopped the
 text before it reached the model. The tool error the agent sees says which:
 `refused before the crossing` for the first, `refused before the content
@@ -742,11 +741,9 @@ first match wins, `unattributed` otherwise). Editing a
 rule re-attributes history without rewriting any evidence. No engagement
 label enters this log. Observed and mediated crossings carry a `cwd`;
 reconstructed ones do not, because a directory read back from a transcript
-would be a claim, not a witnessed fact. A hosted session records none by default. With an explicit service
-`session_directory`, `cwd` instead names that operator-declared scope; the
-`hosted_scope` record distinguishes its basis from a client working directory.
-The process's own directory is never inferred. Older logs without the field
-read as absent and gain no reporting permission from new configuration.
+would be a claim, not a witnessed fact. A hosted session records none: it
+has no working directory, and the process's own directory is never inferred.
+Older logs without the field read as absent.
 
 `policy_scope` names the scoped policy overlay (`scopes` in `policy.json`,
 matched against the cwd when the server started, first match wins) that
@@ -786,20 +783,14 @@ is: only the mediated path met a policy. It is defined in §Policy identity.
 mode chose to carry rather than refuse. The mode decides what happens to a
 breach, never whether it is recorded ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)): under `observe` or
 `prefer` the crossing goes ahead with the broken constraint named here, where
-`strict` would have refused it. A carried PII finding is a breach like any
-other and is recorded in the same field. Under `strict` a PII finding
-refuses a crossing only where the source is internal or private: a named
-internal prefix, a loopback or private address reached under
-`allow_private_hosts`, or the operator's own corpus. On a public source the
-finding is recorded in `breach` and the crossing is admitted, because the
-published contact details of a public page are not the personal data the
-detector exists to keep out of a model, and the finding, with its
-categories and offsets, is the evidence a reviewer needs. `refuse_on_pii:
-true` in the policy makes `strict` refuse a finding on every source
-([`docs/contracts/source-policy.md`](source-policy.md) §Recording). Observed and reconstructed crossings
-never carry one, because nothing judged them before they happened; for the
-same reason the PII detector scans only crossings the mediated path carries,
-and its manifest names that blind spot.
+`strict` would have refused it. A PII finding is recorded in the same field
+in every mode, `strict` included: the detector refuses nothing, the crossing
+is admitted with the finding named here, and the finding's categories and
+offsets in the `processor_invoked` record are the evidence a reviewer needs.
+Observed and reconstructed crossings never carry a breach, because nothing
+judged them before they happened; for the same reason the PII detector scans
+only crossings the mediated path carries, and its manifest names that blind
+spot.
 
 ## Source declarations
 
@@ -858,8 +849,7 @@ addresses is `unknown`, never `disallow`.
                                          "endpoint": "…", "config": {"conformance_level": "grounding"}}]}}],
   "content_usage_header": "train-ai=n",
   "statements": [{"source": "content-usage-header", "category": "train-ai", "preference": "disallow", "detail": "Content-Usage: train-ai=n"}],
-  "effective": {"train-ai": "disallow", "ai-input": "allow", "ai-index": "unknown", "search": "unknown"},
-  "governing": "statements"
+  "effective": {"train-ai": "disallow", "ai-input": "allow", "ai-index": "unknown", "search": "unknown"}
 }
 ```
 
@@ -1376,10 +1366,7 @@ remembered for five minutes and asked again after it. A licence that is
 as though no licence terms were declared, and the record and the tool
 result carry the gap naming it. Adoption of licensing standards is
 uneven, and a publisher's broken link should not make its site
-unreachable. Both rules hold where the source's
-statements govern; where an applicable operator assessment governs, the
-assessment stands in for the licence's terms, as it does for a licence
-that was read.
+unreachable.
 
 On a paced host the manifest is asked before the page rather than after it,
 which is an exception to discovery never delaying a crossing. After the page,
@@ -1549,10 +1536,7 @@ A licence's reporting demands are ruled on where the source's own statements
 govern, whatever the combined AI-input preference. A `Content-Signal` in
 `robots.txt` or a `Content-Usage` header that disallows AI input beside a
 licence that permits it does not set the demand aside: `observe` and `prefer`
-carry the Disallow as a breach, and the demand is ruled on as well. Where an
-applicable operator assessment governs instead, the licence is not read for
-demands, and the operator's own declared reporting duty is what applies; that
-duty follows the session's mode like any other operator ruling.
+carry the Disallow as a breach, and the demand is ruled on as well.
 
 Which demands apply follows RSL 1.0 §3.12, under which a demand binds activity
 the enclosing licence authorises. A licence authorises AI input where its
@@ -1578,15 +1562,11 @@ address is reached only under `allow_private_hosts` or a prefix named in
 mode, which holds the private-address floor), the policy scope clears
 telemetry egress both in the policy the session started under and in
 `policy.json` as it stands at the ruling, `$COMMONMEASURE_HOME/relay.json` is
-one the relay loads and names a receiver that is not scoped to suppliers
-([telemetry projection §Supplier
-scope](telemetry-projection.md#supplier-scope): a fetched page names no
-supplier, so a scoped receiver never carries it, and an empty list is a
-scope), and automatic delivery is in force. A `relay.json` the relay refuses,
-a malformed `suppliers` list among its faults, leaves the demand unmet with
-the load error as the reason, because the relay sends nothing under it.
-`relay.json` is read at each ruling, not once when the MCP server starts, so a
-receiver removed or scoped to suppliers during a long-lived session (Claude
+one the relay loads and names a receiver, and automatic delivery is in
+force. A `relay.json` the relay refuses leaves the demand unmet with the load
+error as the reason, because the relay sends nothing under it. `relay.json`
+is read at each ruling, not once when the MCP server starts, so a receiver
+removed during a long-lived session (Claude
 Desktop keeps its server for the life of the app) leaves the next demand
 unmet. Egress clearance is read the same way, because the relay resolves it
 from the current policy and reporting approvals at each run: a scope's
@@ -1737,8 +1717,8 @@ breach named. No settlement rail that pays a quoted price is built, so the
 receipt
 reports no charge, the reservation is released on it, and `paid` says
 nothing was; a rail that pays reconciles the same reservation against what
-it charged. Absent where no licence quoted a price, the operator's terms
-govern, or the principal declares no allowance.
+it charged. Absent where no licence quoted a price or the principal declares
+no allowance.
 
 `named_by` says who named the source of a mediated fetch: `user` when a
 prompt of this session carried the URL the fetch was asked for, `agent` when
@@ -1750,59 +1730,23 @@ means the user supplied the content bytes; a URL the user pastes is a
 reference, and the fetch is acquisition by the system, so `named_by` is a
 fact for the operator's policy and never a carve-out from a preference.
 
-The operator's terms reference and assessment are recorded separately from
-source statements under `declarations.terms`. Their fields and scope checks
-are defined by [source policy](source-policy.md#terms). A reference alone,
-including a supplier API subscription, leaves applicability unresolved.
-Only an applicable assessment covering the requested URL and `ai-input`
-governs: `governing` is `operator_terms`, the source statements remain in
-`statements` and `effective`, and the assessment's reporting duties apply.
-Otherwise `governing` is `statements` and the source declaration and policy
-mode decide whether content is admitted.
+The operator's terms reference for the host is recorded separately from
+source statements under `declarations.terms`, with the fields
+[source policy](source-policy.md#terms) defines. It is a record of the
+reference alone: the source's statements and the policy mode decide whether
+content is admitted, and a reference, a supplier API subscription included,
+supplies no reuse permission and no declared licence.
 
-Where a terms entry names the host, `declarations.assessment_decision`
-records the rule, actual URL and use, scope result and explanation, policy
-mode and declaration-check outcome. Successful tool results carry the same decision; refusal results carry an
-error and leave the structured decision in the source record.
-The assessment's own reason remains in `terms.assessment.reason`.
-
-```json
-"assessment_decision": {
-  "rule": "terms (publisher.example) assessment",
-  "url": "https://publisher.example/articles/1",
-  "intended_use": "ai-input",
-  "applicability": "applied",
-  "reason": "The operator assessed this basis as applicable to the requested content and AI input.",
-  "mode": "strict",
-  "outcome": "allowed"
-}
-```
-
-`applicability` is `applied`, `out_of_scope` or `unresolved`. The latter
-includes a legacy reference with no assessment. `outcome` is `allowed`,
-`allowed_with_breach` or `refused` for the declaration checks. `mode` and
-`outcome` are `null` if an earlier allowance refusal prevents those checks
-from running. A separate host, screening or transport failure can still
-prevent delivery. The
-crossing's refusal or breach preserves the resulting reason. An unresolved
-assessment remains unresolved in observe and prefer modes even when content
-is carried. Each redirect destination is evaluated against its own content
-scope before being requested; the final decision names the final or refused
-hop, as the robots evaluation does.
-
-Applicable terms may name the institution identifiers the basis attributes
-usage to (`access_context`). They require the standard's session-level
+Terms may name the institution identifiers the agreement attributes usage
+to (`access_context`). They require the standard's session-level
 `access_context` container on any report. The event batch the relay delivers
 has no session data, so a session under such terms is withheld by the relay
 and counted as withheld for that reason, until session-document delivery is
-built. The relay conservatively retains this withholding for a configured
-host's institution identifiers even when its assessment does not apply.
-`licence.state` is `declared` with the terms reference only where its
-assessment governs, with the licence URL where RSL terms were read, and
-`unknown` otherwise. Reaching a page establishes no permission.
+built. `licence.state` is `declared` with the licence URL where RSL terms
+were read, and `unknown` otherwise. Reaching a page establishes no
+permission.
 
-Issuer and authority references are operator assertions, retained without
-legal verification. [Embedded credentials on acquisition](#embedded-credentials-on-acquisition)
+[Embedded credentials on acquisition](#embedded-credentials-on-acquisition)
 describes verification before transformation; the pasted-content reader below
 is a separate path.
 
@@ -2554,7 +2498,7 @@ turn boundary or a crossing recorded, is **seen working**. Absent from the
 table with no `session_ended` is **gone without a session end**, reported
 as that and never as completed. A log whose only records are the ones
 written at start (`policy_sync`, `edge_identity`, `host_process`,
-`nudge_issued`, `hosted_scope`) is **configured, never seen working**.
+`nudge_issued`) is **configured, never seen working**.
 
 A reader joins on a log's first `host_process` record. A session the host
 resumes under a new process writes a second record with the new pair; it is
@@ -2850,17 +2794,6 @@ recorded host sessions, which this repository does not carry
 transcript with its text replaced by same-length filler
 (`crates/commonmeasure-harness/tests/recorded/claude-code-transcript.jsonl`).
 
-
-## Hosted scope
-
-A service configured with `session_directory` writes one `hosted_scope` record
-when it opens a session's file, before any crossing. Its payload carries
-`session_id`, `host`, `timestamp`, `basis: "service_configuration"` and the
-canonical `directory`. It attests the operator's declaration only. The selected
-root must already be locally enrolled under the service account; neither
-configuration nor OAuth consent approves reporting. The existing directory
-consent, signed reporting approval, source-policy veto and privacy filter still apply.
-This record and its path never enter Content Telemetry.
 
 ## Local comparison records
 

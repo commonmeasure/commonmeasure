@@ -93,7 +93,14 @@ authoritative technical definitions live in the contracts under
   invocation. Add-ons are processors. A processor is one kind of extension.
 - **Console** — the local web application served by `commonmeasure serve` on
   loopback, rendered from the evidence logs
-  ([`docs/CONSOLE.md`](CONSOLE.md)).
+  ([`docs/CONSOLE.md`](CONSOLE.md)). `commonmeasure console` names its
+  address and pages from the terminal.
+- **Finding** — one sentence of `commonmeasure doctor` or `status`, with its
+  **standing**: `ok`, `attention` (something for the operator), `unknown`
+  (could not be determined; never reported as either of the first two) or
+  `note` (a fact with nothing to act on). The standing is chosen by the code
+  that established the fact ([host integration
+  §Registration](contracts/host-integration.md#doctor)).
 - **Index** — the SQLite file the console derives from the evidence logs
   (`~/.commonmeasure/telemetry.db`). It can be deleted and rebuilt; the logs
   are authoritative.
@@ -255,10 +262,7 @@ them: entitlements, CM Attestation and the network they make up.
   reference a registration names and the grant revision, digest, duty and
   limit reservation its accepted binding carries
   ([instance registration §Entitlement binding](contracts/instance-registration.md#entitlement-binding)).
-  Holding a grant document without the binding authorises nothing. The
-  experiment runtime's governance entitlement is an
-  ordered tier a run holds, sealed in the run manifest
-  ([run output](contracts/run-output.md)), with no issuer, grantee or binding.
+  Holding a grant document without the binding authorises nothing.
 - **Grant basis** — how a grant came to exist and what stands behind it:
   `self_issued` (an owner authored it), `issuer_signed` (the issuer signed
   it), `derived` (Hub derived it from what the issuer served, such as a
@@ -327,8 +331,9 @@ them: entitlements, CM Attestation and the network they make up.
   and none did, `unknown` when no prompt was recorded. A recorded fact, not
   a carve-out from any preference.
 - **Terms** — an agreement the operator holds with a source, declared in
-  `policy.json` by host and reference. Terms govern over a source's
-  published preference and are never checked by the runtime.
+  `policy.json` by host and reference. The reference is recorded on the
+  host's crossings; it does not override the source's published preference
+  and is never checked by the runtime.
 - **Policy mode** — how strictly policy acts: `observe` records only,
   `prefer` records and steers, `strict` refuses what the rules do not
   allow.

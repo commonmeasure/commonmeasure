@@ -62,6 +62,7 @@ use serde_json::{Value, json};
 
 use crate::hook::HostSurface;
 use crate::policy::PolicyDocument;
+use commonmeasure_types::Finding;
 
 /// The server name every host sees, which is also the plugin's name: a
 /// session with either registration spells the tools `context_fetch`,
@@ -1156,77 +1157,76 @@ fn uninstall_chrome(paths: &HostPaths) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-fn doctor_chrome(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_chrome(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let mut registered = false;
     if paths.native_messaging.is_empty() {
-        lines.push(
+        findings.push(Finding::note(
             "native messaging: this platform's browsers read the registry, which this binary \
              does not write"
                 .to_owned(),
-        );
+        ));
     }
     for directory in &paths.native_messaging {
         let manifest = directory.manifest();
         let document = match std::fs::read_to_string(&manifest) {
             Ok(text) => serde_json::from_str::<Value>(&text).ok(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                lines.push(format!(
+                findings.push(Finding::note(format!(
                     "native messaging: no host {NATIVE_HOST} for {} in {}",
                     directory.browser,
                     manifest.display()
-                ));
+                )));
                 continue;
             }
             Err(error) => {
-                lines.push(format!(
+                findings.push(Finding::unknown(format!(
                     "native messaging: cannot read {}: {error}",
                     manifest.display()
-                ));
+                )));
                 continue;
             }
         };
         let Some(document) = document.filter(|document| document["name"] == NATIVE_HOST) else {
-            lines.push(format!(
+            findings.push(Finding::note(format!(
                 "native messaging: {} is not this product's manifest",
                 manifest.display()
-            ));
+            )));
             continue;
         };
         registered = true;
         let command = document["path"].as_str().unwrap_or_default().to_owned();
-        lines.push(format!(
+        findings.push(Finding::ok(format!(
             "native messaging: host {NATIVE_HOST} registered for {} in {}, command {command}",
             directory.browser,
             manifest.display()
-        ));
+        )));
         let origin = format!("chrome-extension://{EXTENSION_ID}/");
         let allows_ours = document["allowed_origins"]
             .as_array()
             .is_some_and(|origins| origins.iter().any(|allowed| allowed == &json!(origin)));
         if !allows_ours {
-            lines.push(format!(
+            findings.push(Finding::attention(format!(
                 "native messaging: the manifest does not allow {origin}, so the extension cannot \
                  start the binary; run commonmeasure install chrome"
-            ));
+            )));
         }
-        lines.push(binary_line(&command));
+        findings.push(binary_finding(&command));
     }
-    lines.push(
+    findings.push(Finding::note(
         "extension: whether it is loaded is the browser's record and is not read here; its \
          popup says whether it reaches the binary"
             .to_owned(),
-    );
-    lines.push(
+    ));
+    findings.push(Finding::note(
         "hooks: none; the extension observes ChatGPT and Bing Copilot Search, and nothing it \
          records is mediated"
             .to_owned(),
-    );
-    lines.extend(home_lines(home));
+    ));
     HostReport {
         host: "chrome",
         registered,
-        lines,
+        findings,
     }
 }
 
@@ -1556,84 +1556,110 @@ fn uninstall_codex(paths: &HostPaths) -> Result<Vec<String>, String> {
     ])
 }
 
-/// What one host's registration says, checked against the machine.
+/// What one host's registration says, checked against the machine: each
+/// finding with its standing, so `doctor` can mark the ones that need the
+/// operator without reading the words.
 #[derive(Debug, Clone)]
 pub struct HostReport {
     pub host: &'static str,
     pub registered: bool,
-    pub lines: Vec<String>,
+    pub findings: Vec<Finding>,
 }
 
 /// What a registered binary path does when run: its reported version, or
-/// why it could not be run.
-fn binary_line(path: &str) -> String {
+/// why it could not be run. A binary that is not there, or does not answer
+/// `--version`, needs the operator: every session registered against it
+/// records nothing.
+fn binary_finding(path: &str) -> Finding {
     let file = Path::new(path);
     if !file.exists() {
-        return format!(
+        return Finding::attention(format!(
             "binary {path}: not found; every session registered against it records nothing \
              until it is restored or the registration is rewritten (commonmeasure install)"
-        );
+        ));
     }
     match std::process::Command::new(file).arg("--version").output() {
-        Ok(output) if output.status.success() => format!(
+        Ok(output) if output.status.success() => Finding::ok(format!(
             "binary {path}: runs, reports {}",
             String::from_utf8_lossy(&output.stdout).trim()
-        ),
-        Ok(output) => format!(
+        )),
+        Ok(output) => Finding::attention(format!(
             "binary {path}: exits {} on --version",
             output
                 .status
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "by signal".to_owned())
-        ),
-        Err(error) => format!("binary {path}: cannot run: {error}"),
+        )),
+        Err(error) => Finding::attention(format!("binary {path}: cannot run: {error}")),
+    }
+}
+
+/// The hooks a host has registered, complete or with some of the set
+/// missing. A partial set records some moments of a session and not
+/// others, which is the operator's to put right (`commonmeasure install`).
+fn hooks_finding(registered: &[&str], missing: &[&str], file: &Path) -> Finding {
+    let text = format!(
+        "hooks: {} registered in {}{}",
+        registered.join(", "),
+        file.display(),
+        if missing.is_empty() {
+            String::new()
+        } else {
+            format!(" (missing {})", missing.join(", "))
+        }
+    );
+    if missing.is_empty() {
+        Finding::ok(text)
+    } else {
+        Finding::attention(text)
     }
 }
 
 /// Whether a session log can be written in the operator home, in the words
 /// `doctor` uses.
 pub fn recording_line(home: &Path) -> String {
-    home_lines(home).swap_remove(0)
+    home_findings(home).swap_remove(0).text
 }
 
-/// The operator home's state, the same for every host: whether a session
-/// log can be written, and what the policy file says.
-fn home_lines(home: &Path) -> Vec<String> {
-    let mut lines = Vec::new();
+/// The operator home's state, the same whatever the host: whether a session
+/// log can be written, and what the policy file says. `doctor` prints these
+/// once, before the hosts, because every host's sessions share them.
+pub fn home_findings(home: &Path) -> Vec<Finding> {
+    let mut findings = Vec::new();
     let sessions = home.join("sessions");
     let probe = sessions.join(".doctor-probe");
     let writable = std::fs::create_dir_all(&sessions)
         .and_then(|()| std::fs::write(&probe, b""))
         .and_then(|()| std::fs::remove_file(&probe));
-    lines.push(match writable {
-        Ok(()) => format!("recording: {} is writable", sessions.display()),
-        Err(error) => format!(
+    findings.push(match writable {
+        Ok(()) => Finding::ok(format!("recording: {} is writable", sessions.display())),
+        Err(error) => Finding::attention(format!(
             "recording: {} cannot be written ({error}); hooks exit zero and record nothing",
             sessions.display()
-        ),
+        )),
     });
-    lines.push(match PolicyDocument::read(home) {
-        Ok(document) if !document.declared() => format!(
+    findings.push(match PolicyDocument::read(home) {
+        Ok(document) if !document.declared() => Finding::note(format!(
             "policy: {} absent; observe mode, refusing nothing",
             home.join("policy.json").display()
-        ),
+        )),
         Ok(document) => {
             let resolved = document.resolve(None);
-            format!(
+            Finding::ok(format!(
                 "policy: {} loads; top-level mode {:?}, {} scope(s), {} principal(s)",
                 home.join("policy.json").display(),
                 resolved.mode(),
                 document.scopes().len(),
                 document.principals().len()
-            )
+            ))
         }
-        Err(error) => format!(
+        Err(error) => Finding::attention(format!(
             "policy: cannot load; the mediated tools refuse every crossing until it is fixed: \
              {error}"
-        ),
+        )),
     });
-    lines
+    findings
 }
 
 /// What the plugin route says for Claude Code: one line per Common Measure
@@ -1642,12 +1668,12 @@ fn home_lines(home: &Path) -> Vec<String> {
 /// given only when a direct registration stands beside a plugin that
 /// loads, because that is the only state in which two sets of hooks fire
 /// for one crossing.
-fn plugin_lines(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<String>, bool) {
-    let mut lines = Vec::new();
+fn plugin_findings(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<Finding>, bool) {
+    let mut findings = Vec::new();
     let mut registers = false;
     for plugin in installed_plugins(paths, settings) {
         let name = &plugin.name;
-        lines.push(format!(
+        findings.push(Finding::note(format!(
             "plugin {name}: installed at {}, {} in {}",
             plugin.path.as_deref().unwrap_or("an unrecorded path"),
             if plugin.enabled {
@@ -1656,14 +1682,14 @@ fn plugin_lines(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<Strin
                 "disabled"
             },
             paths.claude_settings.display()
-        ));
+        )));
         if let Some(path) = &plugin.path
             && !Path::new(path).is_dir()
         {
-            lines.push(format!(
+            findings.push(Finding::attention(format!(
                 "plugin {name}: {path} does not exist, so the plugin loads nothing and none of \
                  its hooks fires"
-            ));
+            )));
         }
         // The marketplace the plugin was installed from must still exist
         // where Claude Code recorded it: a moved directory makes the host
@@ -1671,29 +1697,29 @@ fn plugin_lines(paths: &HostPaths, settings: &Value, direct: bool) -> (Vec<Strin
         if let Some(location) = &plugin.marketplace_location
             && !Path::new(location).is_dir()
         {
-            lines.push(format!(
+            findings.push(Finding::attention(format!(
                 "plugin {name}: its marketplace is recorded at {location}, which does not \
                  exist; Claude Code reports the plugin as failed to load and none of its hooks \
                  fires"
-            ));
+            )));
         }
         if plugin.loads() {
             registers = true;
             if direct {
-                lines.push(format!(
+                findings.push(Finding::attention(format!(
                     "plugin {name}: its hooks fire beside the direct registration and a \
                      crossing is recorded twice; keep one of the two (claude plugin disable \
                      {name}, or commonmeasure uninstall claude)"
-                ));
+                )));
             } else {
-                lines.push(format!(
+                findings.push(Finding::ok(format!(
                     "plugin {name}: this is the registration; its hooks and its MCP entry \
                      are what Claude Code runs"
-                ));
+                )));
             }
         }
     }
-    (lines, registers)
+    (findings, registers)
 }
 
 /// Whether a `SessionEnd` hook of this product would fire in Claude Code:
@@ -1723,22 +1749,24 @@ pub fn session_end_registered(paths: &HostPaths) -> bool {
 }
 
 /// Read one host's registration back and check it against the machine.
-pub fn doctor(surface: HostSurface, paths: &HostPaths, home: &Path) -> HostReport {
+pub fn doctor(surface: HostSurface, paths: &HostPaths) -> HostReport {
     match surface {
-        HostSurface::ClaudeCode => doctor_claude(paths, home),
-        HostSurface::Codex => doctor_codex(paths, home),
-        HostSurface::Pi => doctor_pi(paths, home),
-        HostSurface::ClaudeDesktop => doctor_claude_desktop(paths, home),
-        HostSurface::Cursor => doctor_cursor(paths, home),
-        HostSurface::CopilotCli => doctor_copilot(paths, home),
-        HostSurface::VsCode => doctor_vscode(paths, home),
-        HostSurface::Chrome => doctor_chrome(paths, home),
+        HostSurface::ClaudeCode => doctor_claude(paths),
+        HostSurface::Codex => doctor_codex(paths),
+        HostSurface::Pi => doctor_pi(paths),
+        HostSurface::ClaudeDesktop => doctor_claude_desktop(paths),
+        HostSurface::Cursor => doctor_cursor(paths),
+        HostSurface::CopilotCli => doctor_copilot(paths),
+        HostSurface::VsCode => doctor_vscode(paths),
+        HostSurface::Chrome => doctor_chrome(paths),
         surface @ (HostSurface::ChatgptWeb
         | HostSurface::GoogleAiOverview
         | HostSurface::BingCopilotSearch) => HostReport {
             host: surface.id(),
             registered: false,
-            lines: vec![browser_surface_is_not_a_registration(surface)],
+            findings: vec![Finding::note(browser_surface_is_not_a_registration(
+                surface,
+            ))],
         },
     }
 }
@@ -1754,50 +1782,49 @@ fn json_server_command(path: &Path, key: &str) -> Result<Option<String>, String>
         .map(str::to_owned))
 }
 
-fn doctor_claude_desktop(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_claude_desktop(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let command = match json_server_command(&paths.claude_desktop_config, "mcpServers") {
         Ok(command) => command,
         Err(error) => {
             return HostReport {
                 host: "claude-desktop",
                 registered: false,
-                lines: vec![format!("mcp: {error}")],
+                findings: vec![Finding::unknown(format!("mcp: {error}"))],
             };
         }
     };
     match &command {
         Some(command) => {
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: server {SERVER_NAME} registered in {}, command {command}",
                 paths.claude_desktop_config.display()
-            ));
-            lines.push(binary_line(command));
+            )));
+            findings.push(binary_finding(command));
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no server {SERVER_NAME} in {}",
             paths.claude_desktop_config.display()
-        )),
+        ))),
     }
-    lines.push(
+    findings.push(Finding::note(
         "hooks: none; Claude Desktop has no hook surface, so crossings are mediated or nothing"
             .to_owned(),
-    );
-    lines.push(
+    ));
+    findings.push(Finding::note(
         "servers: two per launch, one for the chat client and one for the local agent mode; \
          each that makes a call leaves its own session naming its client"
             .to_owned(),
-    );
-    lines.extend(home_lines(home));
+    ));
     HostReport {
         host: "claude-desktop",
         registered: command.is_some(),
-        lines,
+        findings,
     }
 }
 
-fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_cursor(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let mut binaries: Vec<String> = Vec::new();
     let hooks_document = match read_json(&paths.cursor_hooks) {
         Ok(document) => document,
@@ -1805,7 +1832,7 @@ fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
             return HostReport {
                 host: "cursor",
                 registered: false,
-                lines: vec![format!("hooks: {error}")],
+                findings: vec![Finding::unknown(format!("hooks: {error}"))],
             };
         }
     };
@@ -1829,72 +1856,59 @@ fn doctor_cursor(paths: &HostPaths, home: &Path) -> HostReport {
         }
     }
     if hooked.is_empty() {
-        lines.push(format!(
+        findings.push(Finding::note(format!(
             "hooks: none of this product in {}",
             paths.cursor_hooks.display()
-        ));
+        )));
     } else {
-        lines.push(format!(
-            "hooks: {} registered in {}{}",
-            hooked.join(", "),
-            paths.cursor_hooks.display(),
-            if hooked.len() < CURSOR_HOOKS.len() {
-                format!(
-                    " (missing {})",
-                    CURSOR_HOOKS
-                        .iter()
-                        .map(|(event, _)| *event)
-                        .filter(|event| !hooked.contains(event))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            } else {
-                String::new()
-            }
-        ));
+        let missing: Vec<&str> = CURSOR_HOOKS
+            .iter()
+            .map(|(event, _)| *event)
+            .filter(|event| !hooked.contains(event))
+            .collect();
+        findings.push(hooks_finding(&hooked, &missing, &paths.cursor_hooks));
     }
     let command = match json_server_command(&paths.cursor_mcp, "mcpServers") {
         Ok(command) => command,
         Err(error) => {
-            lines.push(format!("mcp: {error}"));
+            findings.push(Finding::unknown(format!("mcp: {error}")));
             None
         }
     };
     match &command {
         Some(command) => {
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: server {SERVER_NAME} registered in {}, command {command}",
                 paths.cursor_mcp.display()
-            ));
+            )));
             if !binaries.contains(command) {
                 binaries.push(command.clone());
             }
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no server {SERVER_NAME} in {}",
             paths.cursor_mcp.display()
-        )),
+        ))),
     }
     if binaries.len() > 1 {
-        lines.push(
+        findings.push(Finding::attention(
             "the hooks and the MCP server name different binaries; a session records under one \
              version and mediates under another"
                 .to_owned(),
-        );
+        ));
     }
     for binary in &binaries {
-        lines.push(binary_line(binary));
+        findings.push(binary_finding(binary));
     }
-    lines.extend(home_lines(home));
     HostReport {
         host: "cursor",
         registered: !hooked.is_empty() || command.is_some(),
-        lines,
+        findings,
     }
 }
 
-fn doctor_copilot(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_copilot(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let mut binaries: Vec<String> = Vec::new();
     let hooks_document = match read_json(&paths.copilot_hooks) {
         Ok(document) => document,
@@ -1902,7 +1916,7 @@ fn doctor_copilot(paths: &HostPaths, home: &Path) -> HostReport {
             return HostReport {
                 host: "copilot-cli",
                 registered: false,
-                lines: vec![format!("hooks: {error}")],
+                findings: vec![Finding::unknown(format!("hooks: {error}"))],
             };
         }
     };
@@ -1925,175 +1939,166 @@ fn doctor_copilot(paths: &HostPaths, home: &Path) -> HostReport {
         }
     }
     if hooked.is_empty() {
-        lines.push(format!(
+        findings.push(Finding::note(format!(
             "hooks: none of this product in {}",
             paths.copilot_hooks.display()
-        ));
+        )));
     } else {
         let missing: Vec<&str> = COPILOT_HOOKS
             .iter()
             .map(|(event, _, _)| *event)
             .filter(|event| !hooked.contains(event))
             .collect();
-        lines.push(format!(
-            "hooks: {} registered in {}{}",
-            hooked.join(", "),
-            paths.copilot_hooks.display(),
-            if missing.is_empty() {
-                String::new()
-            } else {
-                format!(" (missing {})", missing.join(", "))
-            }
-        ));
+        findings.push(hooks_finding(&hooked, &missing, &paths.copilot_hooks));
     }
     let command = match json_server_command(&paths.copilot_mcp, "mcpServers") {
         Ok(command) => command,
         Err(error) => {
-            lines.push(format!("mcp: {error}"));
+            findings.push(Finding::unknown(format!("mcp: {error}")));
             None
         }
     };
     match &command {
         Some(command) => {
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: server {SERVER_NAME} registered in {}, command {command}",
                 paths.copilot_mcp.display()
-            ));
+            )));
             if !binaries.contains(command) {
                 binaries.push(command.clone());
             }
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no server {SERVER_NAME} in {}",
             paths.copilot_mcp.display()
-        )),
+        ))),
     }
     if binaries.len() > 1 {
-        lines.push(
+        findings.push(Finding::attention(
             "the hooks and the MCP server name different binaries; a session records under one \
              version and mediates under another"
                 .to_owned(),
-        );
+        ));
     }
     for binary in &binaries {
-        lines.push(binary_line(binary));
+        findings.push(binary_finding(binary));
     }
-    lines.push(
+    findings.push(Finding::note(
         "readers: the Copilot CLI, the GitHub Copilot app and VS Code's Agent Host read the \
          same mcp-config.json; the hooks are the CLI's"
             .to_owned(),
-    );
-    lines.push(
+    ));
+    findings.push(Finding::note(
         "calls: a Copilot plan that allows MCP is needed; without one the CLI reports the server \
          as blocked by policy and never starts it"
             .to_owned(),
-    );
-    lines.extend(home_lines(home));
+    ));
     HostReport {
         host: "copilot-cli",
         registered: !hooked.is_empty() || command.is_some(),
-        lines,
+        findings,
     }
 }
 
-fn doctor_vscode(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_vscode(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let command = match json_server_command(&paths.vscode_mcp, "servers") {
         Ok(command) => command,
         Err(error) => {
             return HostReport {
                 host: "vscode",
                 registered: false,
-                lines: vec![format!("mcp: {}", vscode_json_error(error))],
+                findings: vec![Finding::unknown(format!(
+                    "mcp: {}",
+                    vscode_json_error(error)
+                ))],
             };
         }
     };
     match &command {
         Some(command) => {
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: server {SERVER_NAME} registered in {}, command {command}",
                 paths.vscode_mcp.display()
-            ));
-            lines.push(binary_line(command));
+            )));
+            findings.push(binary_finding(command));
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no server {SERVER_NAME} in {}",
             paths.vscode_mcp.display()
-        )),
+        ))),
     }
-    lines.push(
+    findings.push(Finding::note(
         "hooks: none by decision; VS Code runs hooks only through the Copilot Chat extension, \
          which also loads Claude Code's hook files and ignores their matchers"
             .to_owned(),
-    );
+    ));
     if command.is_some()
         && json_server_command(&paths.copilot_mcp, "mcpServers").is_ok_and(|c| c.is_some())
     {
-        lines.push(format!(
+        findings.push(Finding::note(format!(
             "copilot: {} names the server too; VS Code forwards this entry to its Agent Host, \
              which also reads that file, and which of the two the Copilot harness starts is not \
              documented",
             paths.copilot_mcp.display()
-        ));
+        )));
     }
-    lines.extend(home_lines(home));
     HostReport {
         host: "vscode",
         registered: command.is_some(),
-        lines,
+        findings,
     }
 }
 
-fn doctor_pi(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_pi(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let binary = match std::fs::read_to_string(&paths.pi_extension) {
         Ok(text) => match pi_extension_binary(&text) {
             Some(binary) => Some(binary),
             None => {
-                lines.push(format!(
+                findings.push(Finding::attention(format!(
                     "extension: {} exists but names no binary; run commonmeasure install pi",
                     paths.pi_extension.display()
-                ));
+                )));
                 None
             }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            lines.push(format!(
+            findings.push(Finding::note(format!(
                 "extension: none at {}",
                 paths.pi_extension.display()
-            ));
+            )));
             None
         }
         Err(error) => {
-            lines.push(format!(
+            findings.push(Finding::unknown(format!(
                 "extension: cannot read {}: {error}",
                 paths.pi_extension.display()
-            ));
+            )));
             None
         }
     };
     if let Some(binary) = &binary {
-        lines.push(format!(
+        findings.push(Finding::ok(format!(
             "extension: {} registered, naming {binary}",
             paths.pi_extension.display()
-        ));
-        lines.push(binary_line(binary));
+        )));
+        findings.push(binary_finding(binary));
     }
-    lines.push(
+    findings.push(Finding::note(
         "hooks: none by design; Pi has no web tool of its own, so crossings are mediated or \
          nothing"
             .to_owned(),
-    );
-    lines.extend(home_lines(home));
+    ));
     HostReport {
         host: "pi",
         registered: binary.is_some(),
-        lines,
+        findings,
     }
 }
 
-fn doctor_claude(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_claude(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let mut binaries: Vec<String> = Vec::new();
     let settings = match read_json(&paths.claude_settings) {
         Ok(settings) => settings,
@@ -2101,7 +2106,7 @@ fn doctor_claude(paths: &HostPaths, home: &Path) -> HostReport {
             return HostReport {
                 host: "claude-code",
                 registered: false,
-                lines: vec![format!("hooks: {error}")],
+                findings: vec![Finding::unknown(format!("hooks: {error}"))],
             };
         }
     };
@@ -2127,29 +2132,17 @@ fn doctor_claude(paths: &HostPaths, home: &Path) -> HostReport {
         }
     }
     if hooked.is_empty() {
-        lines.push(format!(
+        findings.push(Finding::note(format!(
             "hooks: none of this product in {}",
             paths.claude_settings.display()
-        ));
+        )));
     } else {
-        lines.push(format!(
-            "hooks: {} registered in {}{}",
-            hooked.join(", "),
-            paths.claude_settings.display(),
-            if hooked.len() < CLAUDE_HOOKS.len() {
-                format!(
-                    " (missing {})",
-                    CLAUDE_HOOKS
-                        .iter()
-                        .map(|(event, _, _)| *event)
-                        .filter(|event| !hooked.contains(event))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            } else {
-                String::new()
-            }
-        ));
+        let missing: Vec<&str> = CLAUDE_HOOKS
+            .iter()
+            .map(|(event, _, _)| *event)
+            .filter(|event| !hooked.contains(event))
+            .collect();
+        findings.push(hooks_finding(&hooked, &missing, &paths.claude_settings));
     }
     let server = read_json(&paths.claude_state)
         .ok()
@@ -2158,42 +2151,41 @@ fn doctor_claude(paths: &HostPaths, home: &Path) -> HostReport {
     match &server {
         Some(server) => {
             let command = server["command"].as_str().unwrap_or_default().to_owned();
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: server {SERVER_NAME} registered at user scope in {}, command {command}",
                 paths.claude_state.display()
-            ));
+            )));
             if !binaries.contains(&command) {
                 binaries.push(command);
             }
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no server {SERVER_NAME} in {}",
             paths.claude_state.display()
-        )),
+        ))),
     }
     if binaries.len() > 1 {
-        lines.push(
+        findings.push(Finding::attention(
             "the hooks and the MCP server name different binaries; a session records under one \
              version and mediates under another"
                 .to_owned(),
-        );
+        ));
     }
     for binary in &binaries {
-        lines.push(binary_line(binary));
+        findings.push(binary_finding(binary));
     }
     let direct = !hooked.is_empty() || server.is_some();
-    let (plugin, plugin_registers) = plugin_lines(paths, &settings, direct);
-    lines.extend(plugin);
-    lines.extend(home_lines(home));
+    let (plugin, plugin_registers) = plugin_findings(paths, &settings, direct);
+    findings.extend(plugin);
     HostReport {
         host: "claude-code",
         registered: direct || plugin_registers,
-        lines,
+        findings,
     }
 }
 
-fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
-    let mut lines = Vec::new();
+fn doctor_codex(paths: &HostPaths) -> HostReport {
+    let mut findings = Vec::new();
     let server = match read_toml(&paths.codex_config) {
         Ok(document) => document
             .get("mcp_servers")
@@ -2205,7 +2197,7 @@ fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
             return HostReport {
                 host: "codex",
                 registered: false,
-                lines: vec![format!("mcp: {error}")],
+                findings: vec![Finding::unknown(format!("mcp: {error}"))],
             };
         }
     };
@@ -2216,56 +2208,65 @@ fn doctor_codex(paths: &HostPaths, home: &Path) -> HostReport {
         .map(str::to_owned);
     match &command {
         Some(command) => {
-            lines.push(format!(
+            findings.push(Finding::ok(format!(
                 "mcp: [mcp_servers.{SERVER_NAME}] registered in {}, command {command}",
                 paths.codex_config.display()
-            ));
-            lines.push(binary_line(command));
+            )));
+            findings.push(binary_finding(command));
             let approval = server
                 .as_ref()
                 .and_then(|server| server.get("default_tools_approval_mode"))
                 .and_then(toml_edit::Item::as_str);
-            lines.push(match approval {
-                Some(mode) if mode == CODEX_APPROVAL_MODE => format!(
+            findings.push(match approval {
+                Some(mode) if mode == CODEX_APPROVAL_MODE => Finding::ok(format!(
                     "approval: default_tools_approval_mode = \"{mode}\"; Codex calls the tools \
                      without asking, in the CLI, the ChatGPT desktop app and the IDE extension"
-                ),
-                Some(mode) => format!(
+                )),
+                Some(mode) => Finding::attention(format!(
                     "approval: default_tools_approval_mode = \"{mode}\", not the \
                      \"{CODEX_APPROVAL_MODE}\" install writes; Codex may ask before each call or \
                      refuse it in a non-interactive run"
-                ),
-                None => format!(
+                )),
+                None => Finding::attention(format!(
                     "approval: no default_tools_approval_mode on the table; Codex asks before \
                      each call and codex exec refuses them; run commonmeasure install codex to \
                      write \"{CODEX_APPROVAL_MODE}\""
-                ),
+                )),
             });
         }
-        None => lines.push(format!(
+        None => findings.push(Finding::note(format!(
             "mcp: no [mcp_servers.{SERVER_NAME}] in {}",
             paths.codex_config.display()
-        )),
+        ))),
     }
-    lines.push(
+    findings.push(Finding::note(
         "hooks: none by design; Codex's hosted web search fires no hook and its shell reaches \
          the web as command text, so crossings are mediated or nothing"
             .to_owned(),
-    );
-    lines.push(format!(
-        "enrol skill: {} at {}",
-        if paths.codex_skill.is_file() {
-            "installed"
-        } else {
-            "missing; run commonmeasure install codex"
-        },
-        paths.codex_skill.display()
     ));
-    lines.extend(home_lines(home));
+    // A missing skill beside a registered server is an install left
+    // incomplete; beside no registration it is one more thing nobody asked
+    // for.
+    findings.push(if paths.codex_skill.is_file() {
+        Finding::ok(format!(
+            "enrol skill: installed at {}",
+            paths.codex_skill.display()
+        ))
+    } else if command.is_some() {
+        Finding::attention(format!(
+            "enrol skill: missing; run commonmeasure install codex to write {}",
+            paths.codex_skill.display()
+        ))
+    } else {
+        Finding::note(format!(
+            "enrol skill: missing; commonmeasure install codex writes {}",
+            paths.codex_skill.display()
+        ))
+    });
     HostReport {
         host: "codex",
         registered: command.is_some(),
-        lines,
+        findings,
     }
 }
 
@@ -2515,8 +2516,8 @@ mod tests {
             std::fs::read_to_string(paths.native_messaging[1].manifest()).unwrap(),
             native_messaging_manifest(&binary)
         );
-        let report = doctor_chrome(&paths, directory.path());
-        assert!(report.registered, "{:?}", report.lines);
+        let report = doctor_chrome(&paths);
+        assert!(report.registered, "{:?}", report.findings);
 
         std::fs::write(
             paths.native_messaging[1].manifest(),
@@ -2692,15 +2693,14 @@ mod tests {
             !text.contains("\n[mcp_servers]\n"),
             "the parent table stays implicit: {text}"
         );
-        let report = doctor_codex(&paths, directory.path());
+        let report = doctor_codex(&paths);
         assert!(report.registered);
         assert!(
-            report
-                .lines
-                .iter()
-                .any(|line| line.contains("approval: default_tools_approval_mode = \"approve\"")),
+            report.findings.iter().any(|finding| finding
+                .text
+                .contains("approval: default_tools_approval_mode = \"approve\"")),
             "{:?}",
-            report.lines
+            report.findings
         );
 
         uninstall_codex(&paths).expect("uninstalls");
@@ -2722,15 +2722,14 @@ mod tests {
             "[mcp_servers.commonmeasure]\ncommand = \"/usr/bin/commonmeasure\"\nargs = [\"mcp\", \"--host\", \"codex\"]\n",
         )
         .unwrap();
-        let report = doctor_codex(&paths, directory.path());
+        let report = doctor_codex(&paths);
         assert!(report.registered);
         assert!(
-            report
-                .lines
-                .iter()
-                .any(|line| line.contains("approval: no default_tools_approval_mode")),
+            report.findings.iter().any(|finding| finding
+                .text
+                .contains("approval: no default_tools_approval_mode")),
             "{:?}",
-            report.lines
+            report.findings
         );
     }
 
@@ -2746,16 +2745,16 @@ mod tests {
             "[mcp_servers.commonmeasure]\ncommand = \"/usr/bin/commonmeasure\"\nargs = [\"mcp\", \"--host\", \"codex\"]\ndefault_tools_approval_mode = \"prompt\"\n",
         )
         .unwrap();
-        let report = doctor_codex(&paths, directory.path());
+        let report = doctor_codex(&paths);
         assert!(report.registered);
         assert!(
-            report.lines.iter().any(|line| {
-                line.contains(
+            report.findings.iter().any(|finding| {
+                finding.text.contains(
                     "approval: default_tools_approval_mode = \"prompt\", not the \"approve\" install writes",
                 )
             }),
             "{:?}",
-            report.lines
+            report.findings
         );
     }
 
@@ -2784,23 +2783,23 @@ mod tests {
         )
         .unwrap();
 
-        let report = doctor_claude(&paths, directory.path());
-        assert!(report.registered, "{:?}", report.lines);
+        let report = doctor_claude(&paths);
+        assert!(report.registered, "{:?}", report.findings);
         assert!(
             report
-                .lines
+                .findings
                 .iter()
-                .any(|line| line.contains("this is the registration")),
+                .any(|finding| finding.text.contains("this is the registration")),
             "{:?}",
-            report.lines
+            report.findings
         );
         assert!(
             !report
-                .lines
+                .findings
                 .iter()
-                .any(|line| line.contains("recorded twice")),
+                .any(|finding| finding.text.contains("recorded twice")),
             "{:?}",
-            report.lines
+            report.findings
         );
 
         // A direct MCP registration written beside it: now two routes.
@@ -2809,15 +2808,15 @@ mod tests {
             r#"{"mcpServers": {"commonmeasure": {"command": "/usr/bin/commonmeasure", "args": ["mcp", "--host", "claude-code"]}}}"#,
         )
         .unwrap();
-        let report = doctor_claude(&paths, directory.path());
+        let report = doctor_claude(&paths);
         assert!(report.registered);
         assert!(
             report
-                .lines
+                .findings
                 .iter()
-                .any(|line| line.contains("recorded twice")),
+                .any(|finding| finding.text.contains("recorded twice")),
             "{:?}",
-            report.lines
+            report.findings
         );
 
         // install refuses on the same predicate the doctor reports on; with
@@ -2832,15 +2831,15 @@ mod tests {
             "{error}"
         );
         std::fs::remove_dir_all(&plugin_dir).unwrap();
-        let report = doctor_claude(&paths, directory.path());
-        assert!(!report.registered, "{:?}", report.lines);
+        let report = doctor_claude(&paths);
+        assert!(!report.registered, "{:?}", report.findings);
         assert!(
             report
-                .lines
+                .findings
                 .iter()
-                .any(|line| line.contains("loads nothing")),
+                .any(|finding| finding.text.contains("loads nothing")),
             "{:?}",
-            report.lines
+            report.findings
         );
         install_claude(&binary, &paths).expect("installs beside a plugin that does not load");
     }

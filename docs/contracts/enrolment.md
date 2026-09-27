@@ -139,9 +139,7 @@ API keys page. Otherwise, in this order, under the home (`$COMMONMEASURE_HOME` o
    A process of another release reading this record signs after a 401
    revocation; see `ARCHITECTURE.md` §What runs where.
 3. `relay.json`: `receiver`, the hub URL given plus `telemetry_path`, and
-   `api_key`, mode `0600`, with no `suppliers` list, so the hub takes every
-   cleared event
-   ([telemetry projection §Supplier scope](telemetry-projection.md#supplier-scope)). Where a `relay.json` existed, `connect` prints the
+   `api_key`, mode `0600`. Where a `relay.json` existed, `connect` prints the
    receiver it named.
 4. With `--managed`, `deployment.json`: `mode` `managed`, the `signer` from
    `policy_signer`, the `policy_url` and the organisation. It is read back

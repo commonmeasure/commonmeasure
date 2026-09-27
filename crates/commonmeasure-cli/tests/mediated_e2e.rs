@@ -74,33 +74,15 @@ fn public(site: &ServerHandle) -> String {
 /// The same conversation, started from a chosen working directory — which is
 /// what a policy scope is resolved against.
 fn converse_in(home: &Path, cwd: Option<&Path>, requests: &[Value]) -> Vec<Value> {
-    converse_as_asserted(home, cwd, None, requests)
+    converse_as_host(home, cwd, "claude-code", requests)
 }
 
-fn converse_as_asserted(
-    home: &Path,
-    cwd: Option<&Path>,
-    asserted: Option<&str>,
-    requests: &[Value],
-) -> Vec<Value> {
-    converse_as_host(home, cwd, asserted, "claude-code", requests)
-}
-
-fn converse_as_host(
-    home: &Path,
-    cwd: Option<&Path>,
-    asserted: Option<&str>,
-    host: &str,
-    requests: &[Value],
-) -> Vec<Value> {
+fn converse_as_host(home: &Path, cwd: Option<&Path>, host: &str, requests: &[Value]) -> Vec<Value> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
     command
         .args(["mcp", "--host", host, "--session", "test-session"])
         .env("COMMONMEASURE_HOME", home)
         .env("COMMONMEASURE_TEST_HOSTS", TEST_HOSTS);
-    if let Some(asserted) = asserted {
-        command.env("COMMONMEASURE_PRINCIPAL", asserted);
-    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -132,7 +114,7 @@ fn converse_as_host(
 /// `a_platform_that_authenticates_nothing_fails_closed_under_principal_policy`.
 #[cfg(unix)]
 #[test]
-fn cwd_and_asserted_principal_cannot_acquire_another_principals_authority() {
+fn the_working_directory_cannot_acquire_another_principals_authority() {
     let origin = origin("principal-bound");
     let home = tempfile::tempdir().expect("home");
     let alice_work = tempfile::tempdir().expect("alice work");
@@ -156,19 +138,17 @@ fn cwd_and_asserted_principal_cannot_acquire_another_principals_authority() {
         .to_string(),
     );
 
-    let admitted = converse_as_asserted(
+    let admitted = converse_in(
         home.path(),
         Some(alice_work.path()),
-        Some("bob"),
         &[call("context_fetch", json!({"url": origin.url()}))],
     );
     assert_eq!(admitted[0]["result"]["isError"], false);
 
     std::fs::remove_file(home.path().join("sessions/test-session.ndjson")).expect("fresh log");
-    let refused = converse_as_asserted(
+    let refused = converse_in(
         home.path(),
         Some(bob_work.path()),
-        Some("bob"),
         &[call("context_fetch", json!({"url": origin.url()}))],
     );
     assert_eq!(refused[0]["result"]["isError"], true);
@@ -348,7 +328,6 @@ fn the_host_argument_records_the_named_host_and_refuses_an_unknown_one_with_the_
     write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
     let responses = converse_as_host(
         home.path(),
-        None,
         None,
         "cursor",
         &[
@@ -627,12 +606,63 @@ fn observe_mode_carries_the_crossing_and_still_records_it() {
     );
 }
 
-/// A strict-mode PII hit blocks the crossing: the bytes were fetched, the
-/// detector found a structured identifier, and the text never reached the
-/// agent. The refusal, the invocation and the withheld content hash are all
-/// on the record.
+/// What a carried PII finding must look like after one real fetch: the agent
+/// got the text, the crossing is mediated and grounded with the finding in
+/// `breach`, the invocation records the finding by category and offsets,
+/// and the identifier is in the tool result alone, never in the record.
+fn assert_pii_finding_carried(home: &Path, response: &Value) {
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let result = payload(response);
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("casework.team@example.co.uk"),
+        "the text is delivered to the agent"
+    );
+    assert!(
+        result["breach"]
+            .as_str()
+            .expect("the tool result names the finding")
+            .contains("PII detector"),
+        "{result}"
+    );
+
+    let recorded = crossings(home);
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["event"], "crossing_mediated");
+    assert_eq!(recorded[0]["payload"]["grounded"], true);
+    assert!(recorded[0]["payload"]["refusal"].is_null());
+    assert!(
+        recorded[0]["payload"]["breach"]
+            .as_str()
+            .expect("the finding is carried as a breach")
+            .contains("PII detector"),
+        "{}",
+        recorded[0]
+    );
+
+    let pii = invocations(home, "pii-detector");
+    assert_eq!(pii.len(), 1);
+    assert_eq!(pii[0]["payload"]["decision"], "admit");
+    assert_eq!(
+        pii[0]["payload"]["detail"]["categories"]["email_address"],
+        1
+    );
+    assert_eq!(pii[0]["payload"]["detail"]["matched_text_recorded"], false);
+    for record in records(home) {
+        assert!(
+            !record.to_string().contains("casework.team@example.co.uk"),
+            "the identifier itself must never enter the evidence record: {record}"
+        );
+    }
+}
+
+/// A PII hit on a private address under `strict`: the bytes were fetched,
+/// the detector found a structured identifier, and the text reached the
+/// agent with the finding recorded, as it does in every mode.
 #[test]
-fn a_fetch_carrying_pii_from_a_private_address_is_refused_in_strict_mode_and_recorded() {
+fn a_fetch_carrying_pii_from_a_private_address_is_carried_in_strict_mode_and_recorded() {
     let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
     let home = tempfile::tempdir().expect("tempdir");
     write_policy(
@@ -644,54 +674,14 @@ fn a_fetch_carrying_pii_from_a_private_address_is_refused_in_strict_mode_and_rec
         home.path(),
         &[call("context_fetch", json!({"url": origin.url()}))],
     );
-    assert_eq!(responses[0]["result"]["isError"], true);
-    let error = error_text(&responses[0]);
-    assert!(
-        error.contains("refused before the content entered the context")
-            && error.contains("PII detector"),
-        "{error}"
-    );
-    assert!(
-        !error.contains("casework.team@example.co.uk"),
-        "the refusal must not repeat the identifier it refused"
-    );
-
-    let recorded = crossings(home.path());
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0]["event"], "crossing_refused");
-    assert_eq!(recorded[0]["payload"]["grounded"], false);
-    assert!(
-        recorded[0]["payload"]["refusal"]
-            .as_str()
-            .expect("the refusal is recorded")
-            .contains("PII detector")
-    );
-
-    let invocation = records(home.path())
-        .into_iter()
-        .find(|record| {
-            record["event"] == "processor_invoked"
-                && record["payload"]["processor"]["name"] == "pii-detector"
-        })
-        .expect("the invocation is in the session log");
-    assert_eq!(invocation["payload"]["decision"], "refuse");
-    assert_eq!(
-        invocation["payload"]["detail"]["categories"]["email_address"],
-        1
-    );
-    assert!(
-        !invocation
-            .to_string()
-            .contains("casework.team@example.co.uk"),
-        "the identifier itself must never enter the evidence record"
-    );
+    assert_pii_finding_carried(home.path(), &responses[0]);
 }
 
-/// A named internal prefix is internal supply: under `strict` a finding
-/// there refuses the crossing as a private address does, and the record
-/// carries the finding and the internal stamp.
+/// A named internal prefix is internal supply: a finding there is carried
+/// as it is anywhere else, and the record carries the internal stamp beside
+/// the finding.
 #[test]
-fn a_fetch_carrying_pii_from_a_named_internal_prefix_is_refused_in_strict_mode() {
+fn a_fetch_carrying_pii_from_a_named_internal_prefix_is_carried_in_strict_mode() {
     let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
     let home = tempfile::tempdir().expect("tempdir");
     write_policy(
@@ -709,67 +699,11 @@ fn a_fetch_carrying_pii_from_a_named_internal_prefix_is_refused_in_strict_mode()
             json!({"url": format!("{}/contacts", origin.url())}),
         )],
     );
-    assert_eq!(responses[0]["result"]["isError"], true);
-    let error = error_text(&responses[0]);
-    assert!(
-        error.contains("refused before the content entered the context")
-            && error.contains("PII detector"),
-        "{error}"
-    );
-    let recorded = crossings(home.path());
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0]["event"], "crossing_refused");
-    assert_eq!(recorded[0]["payload"]["internal"], true);
-    assert!(
-        !recorded[0]
-            .to_string()
-            .contains("casework.team@example.co.uk"),
-        "the identifier itself must never enter the evidence record"
-    );
+    assert_pii_finding_carried(home.path(), &responses[0]);
+    assert_eq!(crossings(home.path())[0]["payload"]["internal"], true);
 }
 
-/// `refuse_on_pii` is accepted by the loader, reported by `context_status`,
-/// and refuses a finding with the processor's wording. A loopback origin is
-/// private, which strict refuses without the switch too, so what this holds
-/// is the switch's path through the loader and the ruling; the public case
-/// the switch exists for is held at the seam in
-/// `crates/commonmeasure-harness/src/mcp.rs`.
-#[test]
-fn refuse_on_pii_is_loaded_reported_and_refuses_with_the_processor_wording() {
-    let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
-    let home = tempfile::tempdir().expect("tempdir");
-    write_policy(
-        home.path(),
-        r#"{"policy_mode":"strict","allow_private_hosts":true,"refuse_on_pii":true}"#,
-    );
-
-    let responses = converse(
-        home.path(),
-        &[
-            call("context_status", json!({})),
-            call("context_fetch", json!({"url": origin.url()})),
-        ],
-    );
-    assert_eq!(payload(&responses[0])["policy"]["refuse_on_pii"], true);
-    assert_eq!(responses[1]["result"]["isError"], true);
-    let error = error_text(&responses[1]);
-    assert!(
-        error.contains("refused before the content entered the context")
-            && error.contains("PII detector"),
-        "{error}"
-    );
-    let recorded = crossings(home.path());
-    assert_eq!(recorded[0]["event"], "crossing_refused");
-    assert!(
-        !recorded[0]
-            .to_string()
-            .contains("casework.team@example.co.uk")
-    );
-}
-
-/// The same finding under `observe` is carried: the agent gets the text and
-/// the crossing records the finding as a breach, exactly as host policy
-/// breaches are recorded.
+/// The same finding under `observe` is carried and recorded identically.
 #[test]
 fn observe_mode_carries_a_pii_finding_and_records_it() {
     let origin = origin("Send the reading to casework.team@example.co.uk with your reference.");
@@ -783,32 +717,7 @@ fn observe_mode_carries_a_pii_finding_and_records_it() {
         home.path(),
         &[call("context_fetch", json!({"url": origin.url()}))],
     );
-    assert_eq!(responses[0]["result"]["isError"], false);
-    assert!(
-        payload(&responses[0])["content"]
-            .as_str()
-            .unwrap()
-            .contains("casework.team@example.co.uk"),
-        "observe carries the crossing"
-    );
-
-    let recorded = crossings(home.path());
-    assert_eq!(recorded[0]["event"], "crossing_mediated");
-    assert_eq!(recorded[0]["payload"]["grounded"], true);
-    assert!(
-        recorded[0]["payload"]["breach"]
-            .as_str()
-            .expect("the finding is carried as a breach")
-            .contains("PII detector"),
-        "the mode decides what happens to a finding, never whether it is recorded"
-    );
-    assert!(
-        records(home.path())
-            .iter()
-            .any(|record| record["event"] == "processor_invoked"
-                && record["payload"]["decision"] == "admit"),
-        "the invocation is recorded identically under observe"
-    );
+    assert_pii_finding_carried(home.path(), &responses[0]);
 }
 
 /// A strict-mode injection-screen match blocks the crossing in a real
@@ -1016,12 +925,13 @@ fn an_identifier_in_markup_alone_does_not_refuse_the_page_in_strict_mode() {
     assert_eq!(pii[0]["payload"]["detail"]["findings"], json!([]));
 }
 
-/// An identifier in the page's text refuses in strict mode as before, and
-/// the finding's offsets index the extracted text: a reader who applies the
-/// pinned rules to the bytes the retrieved hash names reproduces the content
-/// hash and finds the identifier at the recorded offsets.
+/// An identifier in the page's text is carried in strict mode with the
+/// finding named, and the finding's offsets index the extracted text: a
+/// reader who applies the pinned rules to the bytes the retrieved hash names
+/// reproduces the content hash and finds the identifier at the recorded
+/// offsets.
 #[test]
-fn an_identifier_in_page_text_refuses_in_strict_mode_with_offsets_into_the_delivered_text() {
+fn an_identifier_in_page_text_is_carried_in_strict_mode_with_offsets_into_the_delivered_text() {
     let page = "<html><head><title>Readings</title></head><body>\
                 <p>Send   the reading to <b>casework.team@example.co.uk</b> with your reference.</p>\
                 </body></html>";
@@ -1037,21 +947,23 @@ fn an_identifier_in_page_text_refuses_in_strict_mode_with_offsets_into_the_deliv
         home.path(),
         &[call("context_fetch", json!({"url": origin.url()}))],
     );
-    assert_eq!(responses[0]["result"]["isError"], true);
-    let error = error_text(&responses[0]);
+    assert_pii_finding_carried(home.path(), &responses[0]);
+    let result = payload(&responses[0]);
+    assert_eq!(result["content"], text);
     assert!(
-        error.contains("PII detector") && error.contains("the extracted text of"),
-        "the refusal names what was scanned: {error}"
+        result["breach"]
+            .as_str()
+            .unwrap()
+            .contains("the extracted text of"),
+        "the breach names what was scanned: {}",
+        result["breach"]
     );
-    assert!(!error.contains("casework.team@example.co.uk"));
 
     let recorded = crossings(home.path());
-    assert_eq!(recorded[0]["event"], "crossing_refused");
-    assert_eq!(recorded[0]["payload"]["grounded"], false);
     assert_eq!(
         recorded[0]["payload"]["content_hash"],
         sha256_digest(text.as_bytes()),
-        "the withheld text's hash is over the extracted text"
+        "the delivered text's hash is over the extracted text"
     );
     assert_eq!(
         recorded[0]["payload"]["retrieved_hash"],
@@ -1059,7 +971,6 @@ fn an_identifier_in_page_text_refuses_in_strict_mode_with_offsets_into_the_deliv
     );
 
     let pii = invocations(home.path(), "pii-detector");
-    assert_eq!(pii[0]["payload"]["decision"], "refuse");
     assert_eq!(
         pii[0]["payload"]["inputs"][0]["content_hash"],
         sha256_digest(text.as_bytes())
@@ -1068,7 +979,6 @@ fn an_identifier_in_page_text_refuses_in_strict_mode_with_offsets_into_the_deliv
     let start = finding["start"].as_u64().expect("start") as usize;
     let end = finding["end"].as_u64().expect("end") as usize;
     assert_eq!(&text[start..end], "casework.team@example.co.uk");
-    assert!(!pii[0].to_string().contains("casework.team@example.co.uk"));
 }
 
 /// A body whose content type is not HTML is delivered as it came, the two
@@ -1445,11 +1355,7 @@ mod internal_corpus {
             root.join("corpus.json"),
             r#"{"name": "mediated test corpus",
                 "licence": {"state": "declared", "reference": "test/kb-licence-v1"},
-                "dates": {"guide.md": "2026-05-01"},
-                "documents": {"guide.md": {
-                  "edition": "orchestrator", "version_range": "4.x",
-                  "integration_path": "stream-gateway",
-                  "support_status": "supported", "entitlement": "standard"}}}"#,
+                "dates": {"guide.md": "2026-05-01"}}"#,
         )
         .expect("manifest");
         std::fs::write(
@@ -1632,7 +1538,7 @@ mod operator_credentials {
             directory.path().join("corpus.json"),
             r#"{"name": "credentials test corpus",
                 "licence": {"state": "declared", "reference": "test/kb-licence-v1"},
-                "dates": {}, "documents": {}}"#,
+                "dates": {}}"#,
         )
         .expect("manifest");
         std::fs::write(
@@ -1921,7 +1827,7 @@ fn a_mediated_crossing_names_the_policy_identity_status_reports() {
     assert!(reported.starts_with("sha256:"), "{reported}");
     assert_eq!(
         status["policy"]["policy_identity"]["schema"],
-        "contextops-policy-identity/v2"
+        "contextops-policy-identity/v3"
     );
 
     let refused = converse_in(
@@ -2108,7 +2014,6 @@ Allow: /
             declarations["effective"]["ai-index"], "unknown",
             "an absent statement is unknown, never disallow"
         );
-        assert_eq!(declarations["governing"], "statements");
         let statements = declarations["statements"].as_array().expect("statements");
         assert!(
             statements
@@ -2388,50 +2293,6 @@ Allow: /
         let licence = &recorded[0]["payload"]["declarations"]["licences"][0];
         assert_eq!(licence["mechanism"], "robots-license");
         assert_eq!(licence["url"], site.url("/license.xml"));
-    }
-
-    /// Terms the operator holds for the host govern: the disallowed statement
-    /// is recorded and not enforced, the crossing's licence is the agreement
-    /// reference, and the governing decision is on the record.
-    #[test]
-    fn operator_terms_govern_over_a_published_preference_and_are_recorded_as_the_licence() {
-        let site = publisher(ROBOTS_BY_NAME, "", None);
-        let home = tempfile::tempdir().expect("tempdir");
-        write_policy(
-            home.path(),
-            &json!({"policy_mode":"strict","allow_private_hosts":true,
-                "terms":[{"host":"127.0.0.1","reference":"agreement-42",
-                    "assessment": {"basis":"agreement", "applicability":"applicable",
-                        "version":"2026-09", "claimed_issuer":"Publisher",
-                        "authority_evidence":["agreement-42:reuse-clause"],
-                        "content":[site.url("/news/3")], "intended_uses":["ai-input"],
-                        "reason":"The agreement covers AI input for this article."}}]})
-            .to_string(),
-        );
-
-        let responses = converse(
-            home.path(),
-            &[call("context_fetch", json!({"url": site.url("/news/3")}))],
-        );
-        assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
-        let result = payload(&responses[0]);
-        assert_eq!(result["licence"]["reference"], "agreement-42");
-        assert_eq!(result["declarations"]["governing"], "operator_terms");
-        assert_eq!(
-            result["declarations"]["effective"]["ai-input"], "disallow",
-            "the statement is still read and recorded"
-        );
-
-        let recorded = crossings(home.path());
-        assert_eq!(recorded[0]["event"], "crossing_mediated");
-        let payload = &recorded[0]["payload"];
-        assert_eq!(payload["grounded"], true);
-        assert!(payload["breach"].is_null(), "terms override the preference");
-        assert_eq!(payload["licence"]["reference"], "agreement-42");
-        assert_eq!(
-            payload["declarations"]["terms"]["reference"],
-            "agreement-42"
-        );
     }
 
     /// A host that publishes nothing: robots.txt answers 404, no statement
@@ -3715,14 +3576,14 @@ mod discovery_probes {
     /// than half this edge's 60 s wait budget: the licence is sent at once,
     /// its 301 to `/rsl.xml` would take a whole delay, and the page a whole
     /// delay after that would not fit. The redirect is declined, the licence
-    /// is recorded unread, and the page is fetched a delay after the licence.
-    /// The operator's assessment of the host governs, so the unread licence
-    /// does not refuse the page. Breaks under the mutation that gives a probe
-    /// redirect the whole of what the call may still spend waiting
+    /// is recorded unread with the redirect and the delay as the reason, and
+    /// the page, whose licence terms are then unknown, is refused without
+    /// being requested. Breaks under the mutation that gives a probe redirect
+    /// the whole of what the call may still spend waiting
     /// (`Pacing::probe_hop` ignoring `probe_reserve`): `/rsl.xml` is
-    /// requested and the page is refused.
+    /// requested.
     #[test]
-    fn a_licence_redirect_leaves_the_page_its_turn() {
+    fn a_licence_redirect_is_declined_when_its_turn_would_not_fit() {
         let (site, log) = publisher(|_, target, _| match target {
             "/robots.txt" => Response::text(
                 200,
@@ -3738,36 +3599,27 @@ mod discovery_probes {
         let home = tempfile::tempdir().expect("tempdir");
         write_policy(
             home.path(),
-            &json!({"policy_mode":"observe","allow_private_hosts":true,
-                "terms":[{"host":"paced.localhost","reference":"agreement-7",
-                    "assessment": {"basis":"agreement", "applicability":"applicable",
-                        "version":"2026-09", "claimed_issuer":"Publisher",
-                        "authority_evidence":["agreement-7:reuse-clause"],
-                        "content":[page.clone()], "intended_uses":["ai-input"],
-                        "reason":"The agreement covers AI input for this story."}}]})
-            .to_string(),
+            r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
         );
 
         let response = fetch(home.path(), &page);
-        assert_eq!(response["result"]["isError"], false, "{response}");
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        assert!(
+            error_text(&response).contains("could not be read"),
+            "{response}"
+        );
         let timed = taken_timed(&log);
         let names: Vec<String> = timed.iter().map(|(request, _)| request.clone()).collect();
         assert_eq!(
             names,
             [
                 "paced.localhost /robots.txt",
-                "paced.localhost /licence.xml",
-                "paced.localhost /story",
-            ]
+                "paced.localhost /licence.xml"
+            ],
+            "the redirect is declined and the page is not requested"
         );
-        let waited = gap(
-            &timed,
-            "paced.localhost /licence.xml",
-            "paced.localhost /story",
-        );
-        assert!(waited >= Duration::from_secs(30), "{waited:?}");
         let crossing = &crossings(home.path())[0];
-        assert_eq!(crossing["event"], "crossing_mediated", "{crossing}");
+        assert_eq!(crossing["event"], "crossing_refused", "{crossing}");
         let licence = &crossing["payload"]["declarations"]["licences"][0];
         assert_eq!(licence["mechanism"], "robots-license", "{licence}");
         assert_eq!(licence["cache"], "fetched", "{licence}");
@@ -5024,7 +4876,7 @@ mod reporting_demand {
             "context_fetch",
             json!({"url": format!("{}/article", public(&site))}),
         ));
-        let responses = converse_as_host(home.path(), Some(&cleared), None, host, &requests);
+        let responses = converse_as_host(home.path(), Some(&cleared), host, &requests);
         (responses, crossings(home.path()))
     }
 
@@ -5232,7 +5084,6 @@ mod reporting_demand {
             converse_as_host(
                 home.path(),
                 Some(&cleared),
-                None,
                 "claude-desktop",
                 &[
                     initialize(Some(
@@ -5335,10 +5186,9 @@ mod reporting_demand {
     /// Review P2-3. One Claude Desktop session, one MCP server process, and
     /// `relay.json` rewritten between its fetches while the background relay
     /// holds the home. The reporting ruling reads `relay.json` when it rules,
-    /// not the copy taken when the server started: a fetch admitted under an
-    /// unscoped receiver is followed by one refused once the receiver is
-    /// scoped to suppliers, admitted again once it is not, and refused once
-    /// the file is gone.
+    /// not the copy taken when the server started: a fetch admitted under the
+    /// configured receiver is followed by one refused once the file stops
+    /// loading, admitted again once it does, and refused once the file is gone.
     #[cfg(unix)]
     #[test]
     fn the_reporting_ruling_reads_relay_json_at_each_fetch_of_one_session() {
@@ -5405,16 +5255,16 @@ mod reporting_demand {
 
         std::fs::write(
             &relay_json,
-            json!({"receiver": receiver.url(), "suppliers": ["ozone"]}).to_string(),
+            json!({"receiver": receiver.url(), "api_key": 7}).to_string(),
         )
         .unwrap();
-        let scoped = fetch("scoped");
-        assert_eq!(scoped["result"]["isError"], true, "{scoped}");
+        let refused = fetch("refused");
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
         let reason = reporting(1)["reason"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        assert!(reason.contains("scoped to suppliers (ozone)"), "{reason}");
+        assert!(reason.contains("not a valid relay config"), "{reason}");
 
         std::fs::write(&relay_json, &unscoped).unwrap();
         let again = fetch("unscoped-again");
@@ -7137,20 +6987,31 @@ mod absolute_licence_scope {
 /// A reporting demand whose relay configuration is refused reaches the
 /// agent as a breach, and the breach names the receiver by its origin
 /// alone. A key held in the receiver's credentials, its query or a
-/// tokenised path is in no part of the `context_fetch` result, the strict
+/// tokenised path is in no part of the `context_fetch` result, the
 /// refusal or the source record. Driven through the binary against a
-/// loopback origin under a public name ([`public`]), with operator terms
-/// that require reporting and a scope
-/// that clears telemetry egress, so the relay configuration's error is
-/// what leaves the demand unmet.
+/// loopback origin under a public name ([`public`]), whose licence demands
+/// telemetry reporting, under a scope that clears telemetry egress, so the
+/// relay configuration's error is what leaves the demand unmet. A reporting
+/// demand binds in every mode, so the crossing is refused under `observe`
+/// and `strict` alike.
 #[test]
 fn a_refused_receiver_reaches_the_agent_by_its_origin_alone() {
+    const LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
+  <content url="/"><license>
+    <permits type="usage">ai-input</permits>
+    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur">
+      <![CDATA[{"conformance_level": "grounding"}]]>
+    </reporting>
+  </license></content></rsl>"#;
     let origin = Server::bind("127.0.0.1:0")
         .expect("bind")
         .spawn(|request| match request.target.as_str() {
-            "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+            "/robots.txt" => {
+                Response::text(200, "License: /license.xml\nUser-agent: *\nAllow: /\n")
+            }
+            "/license.xml" => Response::new(200, LICENCE.as_bytes().to_vec()),
             target if target.starts_with("/.well-known/") => Response::text(404, "absent"),
-            _ => Response::text(200, "Reported under the agreement."),
+            _ => Response::text(200, "Reported under the licence."),
         })
         .expect("spawn");
     let url = format!("{}/article", public(&origin));
@@ -7177,13 +7038,6 @@ fn a_refused_receiver_reaches_the_agent_by_its_origin_alone() {
             std::fs::create_dir_all(&work).expect("workspace");
             let policy = json!({
                 "policy_mode": mode, "allow_private_hosts": true,
-                "terms": [{"host": PUBLIC_NAME, "reference": "operator-agreement",
-                    "requires_reporting": true,
-                    "assessment": {"basis": "agreement", "applicability": "applicable",
-                        "version": "2026-09", "claimed_issuer": "Local publication",
-                        "authority_evidence": ["operator-agreement:reuse-clause"],
-                        "content": [url], "intended_uses": ["ai-input"],
-                        "reason": "The agreement covers AI input for this article."}}],
                 "scopes": [{"match": "reporting-cleared", "engagement": "research",
                     "allow_telemetry_egress": true}],
             });
@@ -7204,16 +7058,9 @@ fn a_refused_receiver_reaches_the_agent_by_its_origin_alone() {
                 !answer.contains("ak_PLANTED"),
                 "{mode} {receiver}: {answer}"
             );
-            let told = if mode == "observe" {
-                assert_eq!(responses[0]["result"]["isError"], false, "{answer}");
-                let result = payload(&responses[0]);
-                assert_eq!(result["content"], "Reported under the agreement.");
-                result["breach"].as_str().expect("a breach").to_owned()
-            } else {
-                assert_eq!(responses[0]["result"]["isError"], true, "{answer}");
-                error_text(&responses[0])
-            };
-            assert!(told.contains("require usage reporting"), "{told}");
+            assert_eq!(responses[0]["result"]["isError"], true, "{answer}");
+            let told = error_text(&responses[0]);
+            assert!(told.contains("requires telemetry reporting"), "{told}");
             assert!(told.contains(fault), "{told}");
             assert!(told.contains(&format!("at {named} ")), "{told}");
 
