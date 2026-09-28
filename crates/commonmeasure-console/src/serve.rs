@@ -16,8 +16,9 @@
 //!
 //! The console's writes are `POST /app/compare`, a query the operator submits
 //! and the injected [`SearchRunner`] runs through governed acquisition for the
-//! selected providers, retaining local comparison evidence; and the three declaration edits the Policy screen
-//! offers, `POST /app/policy/mode`, `POST /app/policy/deny` and
+//! selected providers, retaining local comparison evidence; and declaration edits
+//! from the Policy screen: the shared form at `POST /api/policy/save`, the field endpoints
+//! `POST /app/policy/mode`, `POST /app/policy/deny` and
 //! `POST /app/attribution`, each revision-checked and saved through the
 //! artefact's own loader (`console::edit`). `GET /app/policy/forecast` is the
 //! dry run over recorded history for a draft rule and writes nothing.
@@ -313,21 +314,18 @@ fn route(
         return match path {
             "/app/compare" | "/api/compare" => post_compare(search, request, providers, home),
             "/app/policy/mode" | "/app/policy/deny" | "/app/attribution" | "/api/policy/mode"
-            | "/api/policy/deny" | "/api/attribution" => {
-                policy_write(state, home, sessions_dir, path, request)
-            }
+            | "/api/policy/deny" | "/api/attribution" | "/api/policy/save"
+            | "/api/policy/check" => policy_write(state, home, sessions_dir, path, request),
             _ => json_error(
                 405,
-                "the console's writes are a comparison query, the policy mode, a denied host \
-                 and the attribution rules; nothing here executes anything else",
+                "the console writes comparison records, personal source policies and local attribution rules",
             ),
         };
     }
     if request.method != "GET" {
         return json_error(
             405,
-            "the console edits the attribution rules, the declared policy mode and its denied \
-             hosts; nothing here executes",
+            "the console edits personal source policies and local attribution rules",
         );
     }
     // The engagement filter, shared by the aggregate routes. The rules are
@@ -444,6 +442,22 @@ fn route(
         "/fonts/GeistMono-Variable.woff2" => binary_asset(
             include_bytes!("../../../console/fonts/GeistMono-Variable.woff2"),
             "font/woff2",
+        ),
+        "/policy-form.mjs" => asset(
+            include_str!("../../../console/policy-form/policy-form.mjs"),
+            "text/javascript; charset=utf-8",
+        ),
+        "/policy-form.css" => asset(
+            include_str!("../../../console/policy-form/policy-form.css"),
+            "text/css; charset=utf-8",
+        ),
+        "/policy-host.mjs" => asset(
+            include_str!("../../../console/policy-host.mjs"),
+            "text/javascript; charset=utf-8",
+        ),
+        "/source-policy.schema.json" => asset(
+            include_str!("../../../docs/contracts/source-policy.schema.json"),
+            "application/json",
         ),
         "/styles.css" => asset(STYLES_CSS, "text/css; charset=utf-8"),
         "/theme.js" => asset(
@@ -1043,6 +1057,17 @@ fn policy_write(
     };
     let revision = field("revision").unwrap_or_default();
     let outcome = match path {
+        "/api/policy/save" => {
+            edit::save_draft(home, revision, field("document").unwrap_or_default())
+        }
+        "/api/policy/check" => match edit::check_draft(home, field("document").unwrap_or_default())
+        {
+            Ok(_) => Outcome::Unchanged("Draft validated. Nothing was saved.".into()),
+            Err(notice) => Outcome::Refused {
+                status: 400,
+                notice,
+            },
+        },
         "/app/policy/mode" | "/api/policy/mode" => {
             match edit::mode_of(field("mode").unwrap_or_default()) {
                 Ok(mode) => edit::set_mode(home, revision, edit::scope_field(field("scope")), mode),

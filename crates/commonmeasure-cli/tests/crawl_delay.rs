@@ -19,6 +19,9 @@
 //! left, dated ahead, so the wait is longer than the whole budget and no test
 //! waits a minute for it.
 
+mod common;
+use common::{crossings, payload};
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -264,25 +267,6 @@ fn text_of(response: &Value) -> String {
         .as_str()
         .expect("a tool result carries text")
         .to_owned()
-}
-
-fn payload(response: &Value) -> Value {
-    serde_json::from_str(&text_of(response)).expect("the payload is JSON")
-}
-
-fn crossings(home: &Path) -> Vec<Value> {
-    let path = home.join("sessions/test-session.ndjson");
-    let file = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    file.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<Value>(line).expect("the log is NDJSON"))
-        .filter(|record| {
-            record["event"]
-                .as_str()
-                .is_some_and(|event| event.starts_with("crossing_"))
-        })
-        .collect()
 }
 
 /// Write the turn an earlier request left, dated `at`. This is the store's

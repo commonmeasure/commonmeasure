@@ -46,12 +46,13 @@ that the service did not start
 stops the service before it replaces the binary the service runs, and starts
 it again with the Edge home and log in its plist, whichever home the shell
 running `update` selects. It refuses a plist edited since `service install`
-wrote it (§1 of the same guide, Updating). `GET /api/version`
+wrote it, and does not refuse because other processes run the binary (§1
+of the same guide, Updating). `GET /api/version`
 answers the running binary's version and process id, which `service status`
 compares with the `commonmeasure` on `PATH`.
 
-The console writes four things: the policy mode, a scope's denied hosts,
-the attribution rules, and the record of each comparison Compare runs.
+The console saves personal source policies, local attribution rules and the
+record of each comparison Compare runs.
 
 ## From the command line
 
@@ -85,24 +86,26 @@ pointing its own name at 127.0.0.1, and so is a request carrying a foreign
 ## Sections
 
 Seven sections, each at its own address: Overview, Record, Agents, Policy,
-Sources, Compare and Budget. Each screen names what it was read from and
-when: the sessions directory and the time of the read, or for Policy the
-policy file and its revision.
+Sources, Compare and Budget. Overview, Record, Agents and Budget keep the
+sessions directory and read time in Record details. Policy details contain
+the policy file and its revision.
 
 ### Overview
 
 `/`. Crossings recorded, witnessed by Common Measure, refused by policy,
 and delivered by the relay. Beneath them, the most recent crossings by
 host, and each engagement with its crossings, attributed by the working
-directory each crossing ran in. The Hub card gives the relay's delivery
-state, the receiver and the edge key with its standing. Where the stored
-hub URL is one nothing is sent to, the standing reads in words beside
+directory each crossing ran in. The Hub card precedes the crossing lists.
+Delivery and identity contains queue counts, the receiver and the edge key
+with its standing. It opens automatically for undelivered batches, unknown
+queue counts or recorded delivery problems; healthy queue details stay
+collapsed. Where the stored hub URL is one nothing is sent to, the standing reads in words beside
 `cleartext_hub` or `unusable_hub_url`, and a callout gives the reason and
 the remedy as `commonmeasure status` prints them. Where the spool is
 refused, a callout states what it still owes in the words `status` uses; a
 count it could not complete reads as unknown. Where `enrolment.json` exists
-but cannot be read, the key reads as unknown and a callout gives the error
-as `status` prints it.
+but cannot be read, the receiver and key read as unknown and a callout gives
+the error as `status` prints it.
 
 ### Record
 
@@ -111,11 +114,14 @@ attribution rules (`~/.commonmeasure/attribution.json`) resolve for each,
 and the chosen session in a pane. Each session has its own address,
 `/app/record?session=<id>`, which works without JavaScript.
 
-- A rail row reads "N crossed" (observed and mediated together), with
-  "N refused" and "N breached" when either is non-zero.
+- A rail row leads with the recorded host and last-record time, followed by
+  the complete session identifier. It reads "N crossed" (observed and
+  mediated together), with
+  "N refused" and "N breached" when either is non-zero. Reconstructed
+  crossings have a separate count. Sessions with zero crossings remain listed.
 - A Claude Code session's mediated crossings are recorded under a separate
   `local-<timestamp>-<pid>` session of the MCP server's own, beside the host
-  session's observed record, and the rail says so.
+  session's observed record; Recording coverage in the rail explains this.
 - The pane states the session's witnessed, reconstructed, grounded,
   refused and breached counts, then one card per crossing: URL, grade,
   whether it was grounded, host and licence, and the record's fields where
@@ -187,62 +193,74 @@ process is shown running only when it is found in the process table; a
 missing `session_ended` record is never read as running, and where the
 table cannot be read the screen says liveness is unavailable.
 
+Attention and session health lead the view. Integration coverage and
+verification expands the host path table, including unavailable paths and
+verification grades. Those grades describe integration evidence, not current
+connectivity. A selected session puts attention before its provenance;
+Session provenance contains its timeline, complete identifiers and log links.
+
 ### Policy
 
-`/app/policy`. What governs the next crossing, read from
-`~/.commonmeasure/policy.json` through the runtime's own loader:
+`/app/policy` opens a read view. Directory groups show Engagement, Mode and
+Reporting separately. Details contain full directory matches, rule order,
+inheritance and the identity resolved for the console principal. Policy
+details contain the source file, revision and read time. Reporting permission
+is not evidence of consent, approval or delivery. Engagement mismatches link
+to local attribution; matching names produce no notice.
 
-- the mode in force (observe, prefer or strict) and what it does;
-- how many engagements are cleared to leave the machine;
-- one row per scope: its mode (marked inherited where the scope declares
-  none), the engagement it governs, the directories it has covered, its
-  denied hosts and its access rules;
-- every scope where the engagement the policy declares and the engagement
-  the attribution rules report differ, with both names. Neither overrides
-  the other.
+**Personal policy.** Edit policy opens the shared browser form. If it cannot
+open, a labelled alert beside the action receives focus and the read view
+stays available. Choose a default or directory mode, add a denied host, or open
+Full policy JSON for other fields. Review changes validates through the runtime
+loader and shows before/after values before Save. The complete document travels with the draft,
+including fields outside the simple controls. Arrays retain their order. An
+inherited mode follows the default; adding a denied host to inherited rules
+copies the default constraints and ends that inheritance.
 
-With no policy file the screen says so and names the path. The console
-never creates a policy file.
+A save holds the existing policy lock, checks the revision and validates with
+the runtime loader before atomic replacement. A stale save returns 409 and
+retains the draft so it can be copied before reloading. Invalid drafts return
+400 without changing the declaration. A save governs subsequent crossings;
+a running mediated session keeps the policy it loaded until its next start.
+The full JSON controls can change reporting permission and internal recording
+prefixes; their consequences are stated beside the JSON control. Review shows
+before/after values and when the saved policy takes effect.
+No Hub account or network connection is needed for local editing. A policy
+containing an integer beyond the browser’s exact range requires file editing;
+the form refuses it to preserve the value.
 
-Edits:
+**Hub Managed.** A validated managed `deployment.json` produces the badge and
+a read-only policy view. Every policy write endpoint also rejects managed
+writes. An unreadable deployment declaration disables editing with its repair
+error. The console has no declared organisation editor URL, so it does not
+construct a link from the policy distribution endpoint. Local attribution
+remains separately editable: it changes reporting labels, not source policy.
 
-- The mode control and each scope row set a mode.
-- The block form adds a host to a scope's denied hosts. A scope that
-  inherited the top-level constraints keeps them as its own list from its
-  first denied host, and the save says the scope has stopped inheriting.
-- The attribution editor replaces the ordered attribution rules.
-- `allow_telemetry_egress` and `record_internal_prefixes`, which widen what
-  may leave the machine or enter the record, cannot be edited here.
+An absent or malformed policy has a recovery state naming the file. The
+console never creates a missing source policy or replaces one that cannot
+load. File and CLI workflows remain available. Reading and historical
+forecasting work without JavaScript; the shared form requires the embedded
+local browser module.
 
-Every form carries the revision of the file it was rendered from. A save
-against a file that has changed since is refused with both revisions
-stated and nothing written. A policy save goes through the runtime's
-loader, so a policy the runtime would refuse is refused with the loader's
-reason and the file is left as it was. A saved edit governs the next
-crossing and nothing already recorded; a mediated session already running
-keeps the policy it loaded until it next starts, and the page says so on
-every save. A save answers 200, a conflict or an undeclared policy 409, and
-a form or candidate the loader refused 400.
-
-**Forecast.** Before saving, a draft can be tried against the recorded
-history: every recorded crossing is put through the runtime's admission
-check under the standing and the draft policy, and the table shows what the
+**Historical forecast.** This optional disclosure tests recorded crossings
+under the saved policy and one proposed change. The forecast shows what the
 draft would newly refuse, newly carry as a breach or newly admit, with
 witnessed, reconstructed and previously refused crossings on separate lines.
-A draft is a mode for a scope, a denied host for a scope, or an access rule
-(a host pattern and an action); for an access rule the forecast shows the
-JSON to add to the scope, since the console does not write access rules.
-The forecast states:
+A draft is a mode for a scope, a denied host for a scope, or an appended
+access rule. It fetches no source and saves nothing. It retains the console
+principal caveat, the top-level policy for reconstructed crossings and counts
+of records with no URL. It is independent of any editor draft. Compare remains
+at `/app/compare`.
 
-- the principal it judged as, which is the console process's own, and how
-  many crossings were recorded under another principal;
-- that reconstructed crossings carry no working directory and are judged
-  under the top-level policy;
-- how many crossing records carried no URL and could not be judged.
-
-A forecast writes nothing.
+The form's artifact and host adapter contract are documented in
+`console/policy-form/README.md` in the repository.
 
 ### Sources
+
+Supplier rows show the name, capability and configuration state. Missing
+configuration evidence is unknown. Configuration and access contains the
+startup read basis and separate access, licence and credit limitations;
+configured credentials do not establish any of those states.
 
 `/app/sources`. Every provider that takes a key, and whether a key is
 present in the operator's credentials. The console checks presence and
@@ -251,6 +269,13 @@ the operator may use it; the licence stays unknown unless a provider states
 one.
 
 ### Compare
+
+The query and supplier selection precede results, export and setup details.
+The submit action states where the query goes and that suppliers may charge,
+including for withheld results. Measurement and reporting limits contains
+the retrieval-only and local-record limitations. Results retain separate
+supplier costs and unknown measurements; export remains available beside
+the retained comparison details.
 
 `/app/compare`. One query sent to the providers you select, one after
 another, asking each for up to five results. None is selected at first.
@@ -311,6 +336,10 @@ empty, repeated or unknown selection is refused before anything is sent.
 same loopback, `Host` and `Origin` rules as the rest of the console.
 
 ### Budget
+
+Engagement groups retain their separate witnessed and reconstructed
+footprints. Allowance record details names the declaration and ledger files;
+principal allowances remain independent of the engagement filter.
 
 `/app/budget`; the same data is `GET /api/budget`. The recorded context
 footprint by engagement, the acquisition caps the policy declares (labelled

@@ -1270,17 +1270,52 @@ fn a_400_or_422_proof_refusal_preserves_a_current_listing_and_records_the_failur
     }
 }
 
-/// Connect, then make the held proof due only because the release changed,
-/// so the next start or relay run uploads.
-fn connected_with_upload_due(state: &Arc<Mutex<HubState>>, home: &Path) -> ServerHandle {
+fn connected_home(initial: HubState) -> (tempfile::TempDir, Arc<Mutex<HubState>>, ServerHandle) {
+    let home = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(initial));
     let server = hub(state.clone());
     assert!(
-        commonmeasure(home, &["connect", &server.url(), "--token", TOKEN])
+        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
             .status
             .success()
     );
-    change_recorded_release(home);
-    server
+    (home, state, server)
+}
+
+/// Connect, then make the held proof due only because the release changed,
+/// so the next start or relay run uploads.
+fn home_with_upload_due() -> (tempfile::TempDir, Arc<Mutex<HubState>>, ServerHandle) {
+    let (home, state, server) = connected_home(HubState {
+        proof_authority: Some("hub.example"),
+        ..HubState::default()
+    });
+    change_recorded_release(home.path());
+    (home, state, server)
+}
+
+fn check_refused_managed_pin(initial: HubState, reason: &str) -> Arc<Mutex<HubState>> {
+    let state = Arc::new(Mutex::new(initial));
+    let server = hub(state.clone());
+    let hub_url = server.url();
+    let home = tempfile::tempdir().unwrap();
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &hub_url, "--token", TOKEN, "--managed"],
+    );
+    assert!(!output.status.success(), "a refused pin must exit non-zero");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
+    assert!(stderr.contains(reason), "{stderr}");
+    assert!(
+        !home.path().join("deployment.json").exists(),
+        "nothing was pinned"
+    );
+    assert!(
+        home.path().join("enrolment.json").exists(),
+        "the enrolment stands"
+    );
+    state
 }
 
 /// A 401, 404 or 409 in the hub's own error shape: the edge concludes the key
@@ -1290,12 +1325,7 @@ fn connected_with_upload_due(state: &Arc<Mutex<HubState>>, home: &Path) -> Serve
 fn upload_refusals_of_401_404_and_409_from_the_hub_are_stored_as_the_edges_conclusion() {
     const REASON: &str = "the hub refused this key";
     for status in [401, 404, 409] {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
-            proof_authority: Some("hub.example"),
-            ..HubState::default()
-        }));
-        let mut server = connected_with_upload_due(&state, home.path());
+        let (home, state, mut server) = home_with_upload_due();
         state.lock().unwrap().refuse_upload = Some((status, REASON));
         session_start(home.path(), "s-key-refused");
         assert_eq!(state.lock().unwrap().uploads.len(), 2);
@@ -1352,12 +1382,7 @@ fn a_401_or_404_not_in_the_hubs_shape_is_a_failure_to_reach_it_and_leaves_the_li
         .into_iter()
         .flat_map(|status| answers.clone().map(|answer| (status, answer)))
     {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
-            proof_authority: Some("hub.example"),
-            ..HubState::default()
-        }));
-        let mut server = connected_with_upload_due(&state, home.path());
+        let (home, state, mut server) = home_with_upload_due();
         let before = directory_listing(home.path());
         state.lock().unwrap().upload_error = Some((status, body));
         session_start(home.path(), "s-ingress");
@@ -1527,17 +1552,10 @@ fn an_answer_on_the_status_route_is_credited_to_the_hub_only_in_its_shape() {
             (403, "this credential lacks the telemetry:ingest scope"),
             (404, "no edge key is enrolled under this credential"),
         ] {
-            let home = tempfile::tempdir().unwrap();
-            let state = Arc::new(Mutex::new(HubState {
+            let (home, state, mut server) = connected_home(HubState {
                 proof_authority: Some("hub.example"),
                 ..HubState::default()
-            }));
-            let mut server = hub(state.clone());
-            assert!(
-                commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-                    .status
-                    .success()
-            );
+            });
             state.lock().unwrap().status_error = Some((status, detail));
             let reason = if at_start {
                 change_recorded_release(home.path());
@@ -1575,12 +1593,7 @@ fn an_upload_answer_not_in_the_hubs_shape_is_not_a_refusal_by_the_hub() {
         (503, "", "no body"),
     ];
     for (status, body, shown) in answers {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
-            proof_authority: Some("hub.example"),
-            ..HubState::default()
-        }));
-        let mut server = connected_with_upload_due(&state, home.path());
+        let (home, state, mut server) = home_with_upload_due();
         state.lock().unwrap().upload_error = Some((status, body.to_owned()));
         session_start(home.path(), "s-upload-ingress");
         assert_eq!(state.lock().unwrap().uploads.len(), 2);
@@ -1599,12 +1612,7 @@ fn an_upload_answer_not_in_the_hubs_shape_is_not_a_refusal_by_the_hub() {
         (500, "internal server error"),
         (503, "the identity documents need IDENTITY_ORIGIN"),
     ] {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
-            proof_authority: Some("hub.example"),
-            ..HubState::default()
-        }));
-        let mut server = connected_with_upload_due(&state, home.path());
+        let (home, state, mut server) = home_with_upload_due();
         state.lock().unwrap().refuse_upload = Some((status, detail));
         session_start(home.path(), "s-upload-hub");
         // A 429 or a 5xx rules on nothing; a 4xx is the hub's refusal.
@@ -1632,12 +1640,7 @@ fn a_later_status_answer_replaces_the_edges_conclusion() {
         ),
         ((true, None), None),
     ] {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
-            proof_authority: Some("hub.example"),
-            ..HubState::default()
-        }));
-        let mut server = connected_with_upload_due(&state, home.path());
+        let (home, state, mut server) = home_with_upload_due();
         state.lock().unwrap().refuse_upload = Some((409, "the edge key is revoked"));
         assert!(commonmeasure(home.path(), &["relay"]).status.success());
         assert_eq!(
@@ -2054,35 +2057,12 @@ fn connect_with_managed_prefers_the_hubs_absolute_policy_url_over_the_typed_addr
 /// enrolled and local, the exit is non-zero and nothing is pinned.
 #[test]
 fn connect_with_managed_refuses_a_plain_http_policy_url_off_the_machine() {
-    let state = Arc::new(Mutex::new(HubState {
-        signer_policy_url: Some("http://hub.internal/api/v1/policy/desired"),
-        ..HubState::default()
-    }));
-    let server = hub(state.clone());
-    let hub_url = server.url();
-    let home = tempfile::tempdir().unwrap();
-    let output = commonmeasure(
-        home.path(),
-        &["connect", &hub_url, "--token", TOKEN, "--managed"],
-    );
-    assert!(!output.status.success(), "a refused pin must exit non-zero");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
-    assert!(
-        stderr.contains(
-            "policy_url at http://hub.internal must be an https URL, or http to a loopback \
-             origin"
-        ),
-        "{stderr}"
-    );
-    assert!(
-        !home.path().join("deployment.json").exists(),
-        "nothing was pinned"
-    );
-    assert!(
-        home.path().join("enrolment.json").exists(),
-        "the enrolment stands"
+    check_refused_managed_pin(
+        HubState {
+            signer_policy_url: Some("http://hub.internal/api/v1/policy/desired"),
+            ..HubState::default()
+        },
+        "policy_url at http://hub.internal must be an https URL, or http to a loopback origin",
     );
 }
 
@@ -2090,32 +2070,12 @@ fn connect_with_managed_refuses_a_plain_http_policy_url_off_the_machine() {
 /// enrolled and local, and says so with a non-zero exit: nothing is pinned.
 #[test]
 fn connect_with_managed_against_a_hub_that_refuses_the_signer_enrols_and_exits_non_zero() {
-    let state = Arc::new(Mutex::new(HubState {
-        refuse_signer: true,
-        ..HubState::default()
-    }));
-    let server = hub(state.clone());
-    let hub_url = server.url();
-    let home = tempfile::tempdir().unwrap();
-    let output = commonmeasure(
-        home.path(),
-        &["connect", &hub_url, "--token", TOKEN, "--managed"],
-    );
-    assert!(!output.status.success(), "a refused pin must exit non-zero");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("deployment  not pinned:"), "{stdout}");
-    assert!(
-        stderr.contains("did not let this edge read the policy signer (401"),
-        "{stderr}"
-    );
-    assert!(
-        !home.path().join("deployment.json").exists(),
-        "nothing was pinned"
-    );
-    assert!(
-        home.path().join("enrolment.json").exists(),
-        "the enrolment stands"
+    let state = check_refused_managed_pin(
+        HubState {
+            refuse_signer: true,
+            ..HubState::default()
+        },
+        "did not let this edge read the policy signer (401",
     );
     assert_eq!(
         state.lock().unwrap().signer_keys,
@@ -2550,17 +2510,10 @@ fn managed_connect_still_fails_on_errors_and_keeps_the_local_policy() {
 fn member_removal_stops_signing_on_relay_and_start_time_standing_checks() {
     const DETAIL: &str = "the member was removed";
     for at_start in [false, true] {
-        let home = tempfile::tempdir().unwrap();
-        let state = Arc::new(Mutex::new(HubState {
+        let (home, state, mut server) = connected_home(HubState {
             proof_authority: Some("hub.example"),
             ..HubState::default()
-        }));
-        let mut server = hub(state.clone());
-        assert!(
-            commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-                .status
-                .success()
-        );
+        });
         assert!(
             commonmeasure_harness::identity::Identity::load(home.path())
                 .unwrap()
@@ -2620,17 +2573,10 @@ fn member_removal_stops_signing_on_relay_and_start_time_standing_checks() {
 
 #[test]
 fn server_and_transport_failures_leave_the_enrolled_key_signing() {
-    let home = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(HubState {
+    let (home, state, mut server) = connected_home(HubState {
         proof_authority: Some("hub.example"),
         ..HubState::default()
-    }));
-    let mut server = hub(state.clone());
-    assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-            .status
-            .success()
-    );
+    });
     for status in [403, 404, 500, 503] {
         state.lock().unwrap().status_error = Some((status, "standing unavailable"));
         assert!(commonmeasure(home.path(), &["relay"]).status.success());
@@ -2929,14 +2875,7 @@ fn a_stored_hub_url_with_credentials_is_refused_and_named_by_its_origin_alone() 
 /// the enrolment: a mistyped `--api-key` must not revoke it.
 #[test]
 fn a_mistyped_api_key_leaves_the_edge_enrolled_and_signing() {
-    let home = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(HubState::default()));
-    let mut server = hub(state.clone());
-    assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-            .status
-            .success()
-    );
+    let (home, state, mut server) = connected_home(HubState::default());
     let output = commonmeasure(home.path(), &["relay", "--api-key", "ak_typo"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -2978,14 +2917,7 @@ fn a_mistyped_api_key_leaves_the_edge_enrolled_and_signing() {
 #[test]
 fn a_401_revocation_is_withdrawn_when_the_hub_answers_for_the_key_again() {
     const DETAIL: &str = "an auth proxy refused the request";
-    let home = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(HubState::default()));
-    let mut server = hub(state.clone());
-    assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-            .status
-            .success()
-    );
+    let (home, state, mut server) = connected_home(HubState::default());
     state.lock().unwrap().status_error = Some((401, DETAIL));
     let output = commonmeasure(home.path(), &["relay"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3030,14 +2962,7 @@ fn a_401_revocation_is_withdrawn_when_the_hub_answers_for_the_key_again() {
 #[test]
 fn a_revocation_stated_after_a_401_keeps_the_first_learnt_time() {
     const DETAIL: &str = "the member was removed";
-    let home = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(HubState::default()));
-    let mut server = hub(state.clone());
-    assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-            .status
-            .success()
-    );
+    let (home, state, mut server) = connected_home(HubState::default());
     state.lock().unwrap().status_error = Some((401, DETAIL));
     commonmeasure(home.path(), &["relay"]);
     let first = commonmeasure_harness::EnrolmentRecord::load(home.path())
@@ -3087,17 +3012,10 @@ fn a_revocation_stated_after_a_401_keeps_the_first_learnt_time() {
 /// than the one presented.
 #[test]
 fn an_upload_401_for_a_key_other_than_the_enrolled_one_revokes_nothing() {
-    let home = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(HubState {
+    let (home, state, mut server) = connected_home(HubState {
         proof_authority: Some("hub.example"),
         ..HubState::default()
-    }));
-    let mut server = hub(state.clone());
-    assert!(
-        commonmeasure(home.path(), &["connect", &server.url(), "--token", TOKEN])
-            .status
-            .success()
-    );
+    });
     let relay = home.path().join("relay.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&relay).unwrap()).unwrap();
     config["api_key"] = json!("ak_rotated");

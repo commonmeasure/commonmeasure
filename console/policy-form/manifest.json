@@ -1,0 +1,18 @@
+{
+  "contract": "commonmeasure-policy-form/v1",
+  "files": {
+    "policy-form.mjs": {
+      "source": "console/policy-form/policy-form.mjs",
+      "sha256": "910d9097a9abb507492be4c95fed26e3ffb26bc11ce4faae89224fb60316caa9"
+    },
+    "policy-form.css": {
+      "source": "console/policy-form/policy-form.css",
+      "sha256": "659299223c42a88589916d7a6676f92fb905154db75c61c9db05a1d71c5fcc5d"
+    },
+    "source-policy.schema.json": {
+      "source": "docs/contracts/source-policy.schema.json",
+      "sha256": "87202566169b85db33c88018bc1471c149835e81f7f04a18e12a4dc510025e7f"
+    }
+  },
+  "sha256": "86d522dd6e0d67c8c2aea42cb20dc7496707841de8b499dbff4cfb17bf5f52c7"
+}

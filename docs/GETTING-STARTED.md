@@ -128,8 +128,9 @@ size and SHA-256 it recorded before the installer ran, and says one of:
 
 - the binary is unchanged;
 - the binary was replaced, with the version the new binary reports. It is
-  asked only after `update` has tried to start the console service again,
-  whether or not that succeeded, and given 15 seconds and 4 KiB of output.
+  asked only after `update` has tried to start the console and relay
+  services again, whether or not that succeeded, and given 15 seconds and
+  4 KiB of output.
   Past either, it and the processes it started in its process group are
   stopped; a process that leaves that group is not stopped. Past either, or
   when it exits non-zero, the version is not known and `update` prints the
@@ -138,7 +139,7 @@ size and SHA-256 it recorded before the installer ran, and says one of:
   read, or changed or was replaced while it was read, with the command that
   shows its version.
 
-The version check’s five-second bound covers the wait for output and exit,
+The version check’s 15-second bound covers the wait for output and exit,
 not the system calls that spawn and reap the child or the whole `update`
 command.
 
@@ -147,7 +148,7 @@ is not a snapshot. A process writing the binary at the same time can change
 it between or during those reads without being told apart from the
 installer, and nothing locks the binary against other writers.
 
-A failure restarting the console service is described below. It replaces the
+A failure restarting the console or relay service is described below. It replaces the
 binary it was run as. On macOS it refuses when it was run through a symbolic
 link, which belongs to whatever installed it. On Linux it does not detect
 the link: the system reports the file the link points to, and `update`
@@ -174,9 +175,25 @@ the origin's `latest` points to has any other form, `update` and
 form and installs the named release even when its version is lower than
 this binary's.
 
-Before stopping anything or downloading release assets, `update` refuses
-while other processes of yours run the same binary file, and lists each
-one's pid, its executable, its subcommand (such as `mcp`) and its
+`update` does not stop other processes that run the binary, and does not
+refuse because of them. The installer moves the new binary into place by
+renaming it over the old file, so a process already running keeps the file
+it started from: an MCP server a host started, a hook in progress,
+`commonmeasure hosted service`, or a `serve` or `relay` started by hand
+runs the old release until it exits or its host starts it again. After
+every successful install, including a reinstall of the release already
+installed, `update` lists these processes; when the version changed it then
+says what new sessions run:
+
+```text
+These processes run commonmeasure 0.4.4, or a release installed before it, until their host restarts them:
+  pid 12293  mcp  COMMONMEASURE_HOME not set or empty
+  pid 61846  serve  COMMONMEASURE_HOME=/home/op/edge-a
+
+Hosts start the MCP server and hooks from this binary: sessions opened from now on run 0.4.5.
+```
+
+Each process is shown by pid, subcommand (such as `mcp`) and
 `COMMONMEASURE_HOME`, or `COMMONMEASURE_HOME unknown` when its environment
 cannot be read. macOS withholds the environment of a restricted process, so
 an empty one is reported as unknown rather than unset, as is an environment
@@ -184,51 +201,39 @@ of zero bytes on Linux, and one with an empty entry followed by more entries
 that do not include `COMMONMEASURE_HOME`. On macOS, where the kernel's own
 strings follow the environment, it is also unknown when `COMMONMEASURE_HOME`
 appears only past where the environment was taken to end (`ARCHITECTURE.md`
-§What runs where). It prints no other argument or environment variable,
-since either can hold a credential. The console service's own process is
-left out only when launchd names the same pid before and after the check,
-the process is launchd's child, and it started before `update` first asked
-launchd. A process whose executable the system does not identify is listed
-by its process name when that name is `commonmeasure`: on macOS, a process
-that still runs a binary whose file has since been removed. Close them and
-run `update` again: quit the host app that started an MCP server, and stop
-`commonmeasure hosted service` and `commonmeasure relay`. A background relay
-installed as a login service starts again at login: run `commonmeasure
-service uninstall relay`, update, and install it again. It does not stop
-them itself and has no option to skip the check.
+§What runs where). An empty or whitespace-only `COMMONMEASURE_HOME` is
+reported as `not set or empty`, as is an environment that does not set it;
+these use the default home. No other argument or environment variable is
+printed, since either can hold a credential. A process whose executable the
+system does not identify is listed by its process name when that name is
+`commonmeasure`: on macOS, a process that still runs a binary whose file has
+since been removed. When the process table cannot be read, `update` says so
+in one line and the update stands.
 
-Two other cases also refuse, with their own remedy:
+The list leaves out other users' processes, copies of `commonmeasure` at
+other paths, and processes started while the installer ran. Until the
+listed processes restart, processes of two releases share the Edge home
+(`ARCHITECTURE.md` §What runs where). To finish on one release, start a new
+session in each host, and stop and start `commonmeasure hosted service` and
+any `serve` or `relay` started by hand; `commonmeasure service status`
+names a console on the service's port that the service did not start.
 
-- On macOS, a process the system refuses to describe, whose owner and name
-  cannot be read either, is counted, since nothing shows it does not run the
-  binary. It is listed as not inspected, with the `ps` command that checks
-  it; run `update` again once it has exited.
-- When the console service restarts or stops while `update` checks it,
-  `update` cannot tell its process from another one running the binary. It
-  says the console restarted during the check; run `update` again.
-
-Looking up the latest release tag can precede this check. An empty or
-whitespace-only `COMMONMEASURE_HOME` is reported as `not set or empty`,
-as is an environment that does not set it; these use the default home.
-
-The check does not find:
-
-- processes running another copy of `commonmeasure` on the same Edge home;
-- a copy under another name whose executable the system does not identify,
-  such as one whose file has since been removed;
-- a process started after the check and before the new binary is moved into
-  place;
-- other users' processes.
-
-Those remain the operator's to stop (one release per Edge home,
-`ARCHITECTURE.md` §What runs where).
-
-A console service (§5) is handled as follows:
+The console service and the background relay service (§5) are handled as
+follows, the console first:
 
 - A loaded service running this binary is stopped before the installer runs,
   and started again afterwards with the configuration in its plist: its
-  address, Edge home, log and working directory, whatever the shell running
-  `update` selects.
+  address or interval, Edge home, log and working directory, whatever the
+  shell running `update` selects.
+- Stopping waits up to 10 seconds: for the console's port to free, and for
+  the background relay's loop, which finishes the run in progress after it
+  is stopped, to release `relay-loop.lock` in its Edge home. Starting again
+  waits up to 10 seconds for the console to answer on its port, or for the
+  new loop to hold `relay-loop.lock`. A console whose port stays held is
+  started again at once and nothing is installed. A relay loop still holding
+  its lock after the wait stops the update before anything is installed; the
+  console, if it was stopped, is started again, and `update` prints the
+  command that starts the relay service once the loop has exited.
 - It is started again whenever it was stopped: on the new binary after a
   successful install, and on whatever binary is then in place when the
   installer fails. The message names which, as above. A replacement is
@@ -854,7 +859,9 @@ says so in the log, exits and stays stopped until you install it again;
 home, and name its log. `install relay` refuses when `relay.json` names no
 receiver, and when a background relay you started by hand already holds the
 home. `commonmeasure disconnect` removes `relay.json` and names `service
-uninstall relay` while the agent is installed. On Linux, run `commonmeasure
+uninstall relay` while the agent is installed. `commonmeasure update` stops
+the agent before it replaces the binary and starts it again with the Edge
+home, interval and log in its plist (§1, Updating). On Linux, run `commonmeasure
 relay --every 300` under your own service manager; `service` names a
 `systemd-run` command, whose unit is transient (not restarted, not started at
 login), as for the console above. While it runs, `status` and `doctor` show

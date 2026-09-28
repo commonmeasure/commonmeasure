@@ -1,0 +1,14 @@
+/* Host variables inherit the existing application tokens. No remote assets. */
+.policy-form { color: inherit; max-width: 60rem; }
+.policy-form fieldset, .policy-form .pf-change { border: 1px solid var(--edge, #dce3ed); border-radius: 10px; padding: 1rem; margin: 1rem 0; min-width: 0; }
+.policy-form label { display: flex; flex-direction: column; gap: .4rem; margin: .7rem 0; }
+.policy-form input, .policy-form select, .policy-form textarea { font: inherit; color: inherit; background: var(--surface, Canvas); border: 1px solid var(--edge, #dce3ed); border-radius: 6px; padding: .6rem; max-width: 100%; box-sizing: border-box; }
+.policy-form textarea { width: 100%; font-family: monospace; }
+.policy-form button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--edge, #dce3ed); border-radius: 10px; padding: .6rem 1rem; min-height: 44px; cursor: pointer; }
+.policy-form .pf-primary { background: var(--action, #164bce); color: var(--on-action, #fff); }
+.policy-form .pf-actions { display: flex; flex-wrap: wrap; gap: .7rem; margin: 1rem 0; }
+.policy-form pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.policy-form legend, .policy-form h3 { overflow-wrap: anywhere; }
+.policy-form summary { cursor: pointer; padding: .75rem 0; }
+.policy-form .pf-error:empty { display: none; }
+.policy-form :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

@@ -8,6 +8,9 @@
 //! `robots.txt` and its own cache entry, and the policy opts into private
 //! addresses to reach them. Nothing else is substituted.
 
+mod common;
+use common::{crossings, payload};
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -134,33 +137,11 @@ fn fetch(url: &str) -> Value {
     })
 }
 
-fn payload(response: &Value) -> Value {
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
-        .expect("a tool result carries text");
-    serde_json::from_str(text).expect("the payload is JSON")
-}
-
 fn error_text(response: &Value) -> String {
     response["result"]["content"][0]["text"]
         .as_str()
         .expect("an error result carries text")
         .to_owned()
-}
-
-fn crossings(home: &Path) -> Vec<Value> {
-    let path = home.join("sessions/test-session.ndjson");
-    let file = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    file.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<Value>(line).expect("the log is NDJSON"))
-        .filter(|record| {
-            record["event"]
-                .as_str()
-                .is_some_and(|event| event.starts_with("crossing_"))
-        })
-        .collect()
 }
 
 fn home_with_mode(mode: &str) -> tempfile::TempDir {

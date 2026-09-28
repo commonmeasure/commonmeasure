@@ -59,6 +59,21 @@ pub fn projection(
     attribution: &Attribution,
     engagement: Option<&str>,
 ) -> Value {
+    let mut value = declaration_projection(home, cwd_facts, attribution, engagement);
+    value["managed"] = json!(matches!(
+        commonmeasure_harness::managed::Deployment::read(home),
+        Ok(commonmeasure_harness::managed::Deployment::Managed { .. })
+    ));
+    value["edit_error"] = json!(super::edit::local_policy(home).err());
+    value
+}
+
+fn declaration_projection(
+    home: &Path,
+    cwd_facts: &Value,
+    attribution: &Attribution,
+    engagement: Option<&str>,
+) -> Value {
     let source = home.join("policy.json");
     let source_text = source.display().to_string();
     if !source.exists() {
@@ -224,6 +239,7 @@ pub fn projection(
                 "reported_engagements": engagements,
                 "distinct_cwds": directories,
                 "policy_identity": identity,
+                "reporting_permitted": scope.allow_telemetry_egress,
             })
         })
         .chain(std::iter::once({
@@ -274,6 +290,7 @@ pub fn projection(
         // mode dial states it back on a save, so an edit against a policy that
         // changed underneath is refused rather than taken.
         "revision": document.revision(),
+        "document": document.file(),
         // What a session outside every scope — including one reporting no
         // working directory at all — runs under.
         "outside_scopes": stance_of(&top),

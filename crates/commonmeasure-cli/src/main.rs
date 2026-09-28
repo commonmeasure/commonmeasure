@@ -448,21 +448,22 @@ enum Command {
     /// Replace this binary with the latest release, or the one --tag names,
     /// through the installer compiled into it: the checksum from the
     /// release's SHA256SUMS and the new binary's version are verified before
-    /// it is moved into place, and a failure before then leaves this binary
+    /// it is renamed into place, and a failure before then leaves this binary
     /// as it was. When the installer fails, update compares the binary with
     /// the one it recorded first and says whether it is unchanged, was
     /// replaced (naming the version the new binary reports, asked after the
-    /// attempt to start the console service again), or cannot be told.
-    /// Refuses while other processes run this binary, naming them by pid,
-    /// executable, subcommand and COMMONMEASURE_HOME. A loaded
-    /// console service running this binary is stopped for the update and
-    /// started again, with its installed Edge home, on the binary then in
-    /// place; when it cannot be started again, update fails and says whether
-    /// the binary was replaced. On macOS, refuses a binary run through a
-    /// symbolic link; Linux does not detect one. Prints the release origin
-    /// first; a release build ignores COMMONMEASURE_RELEASE_URL. Contacts
-    /// the release location only when run; --check reports the versions and
-    /// changes nothing. macOS and Linux.
+    /// attempt to start the console and relay services again), or cannot be
+    /// told. Lists other processes running this binary by pid, subcommand
+    /// and COMMONMEASURE_HOME; they keep the old release until their host
+    /// restarts them and do not prevent the update. Loaded console and relay
+    /// services it manages that run this binary are stopped for the update
+    /// and started again, with their installed Edge homes, on the binary
+    /// then in place; when either cannot be started again, update
+    /// fails and says whether the binary was replaced. On macOS, refuses a
+    /// binary run through a symbolic link; Linux does not detect one. Prints
+    /// the release origin first; a release build ignores
+    /// COMMONMEASURE_RELEASE_URL. Contacts the release location only when
+    /// run; --check reports the versions and changes nothing. macOS and Linux.
     Update(update::Update),
 }
 

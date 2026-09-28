@@ -6,6 +6,8 @@
 //! the file the extension's own tests assert its parser produces, so the
 //! message the extension builds and the message the binary reads are one file.
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -53,13 +55,7 @@ fn replies(output: &Output) -> Vec<Value> {
 }
 
 fn records(home: &Path, session: &str) -> Vec<Value> {
-    let path = home.join("sessions").join(format!("{session}.ndjson"));
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(|line| serde_json::from_str(line).expect("NDJSON"))
-        .collect()
+    common::optional_records(home, session, false)
 }
 
 /// Chrome starts the host with the extension's origin as the only argument.

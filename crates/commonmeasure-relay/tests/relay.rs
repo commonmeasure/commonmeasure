@@ -850,6 +850,32 @@ fn a_dotted_private_name_is_kept_home_as_the_dotless_one_is() {
     }
 }
 
+fn assert_internal_prefix(session: &str, prefix: &str, url: &str) {
+    let prefixes = [prefix.to_owned()];
+    let captured = captured_lines(session, url, &prefixes);
+    assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
+    let record: Value = serde_json::from_str(&captured[0]).unwrap();
+    assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
+    let public = crossing_in_cwd(
+        "crossing_observed",
+        session,
+        PUBLIC_PAGE,
+        true,
+        "/work/personal",
+    );
+    let unmarked = crossing_in_cwd("crossing_observed", session, url, true, "/work/personal");
+    for (kind, lines) in [
+        ("captured", [captured[0].clone(), public.clone()]),
+        ("unmarked", [unmarked, public]),
+    ] {
+        assert_eq!(
+            relayed_urls(session, &prefixes, &lines),
+            [PUBLIC_PAGE],
+            "{kind}: {url} stays home under {prefix}"
+        );
+    }
+}
+
 /// A named internal prefix covers every spelling of a page under it,
 /// credentials in the URL included, and the operator's prefix is a spelling
 /// too. Capture marks the crossing internal, and the relay keeps it home, by
@@ -872,41 +898,7 @@ fn a_dotted_spelling_under_an_internal_prefix_is_internal_and_stays_home() {
         ),
         (&dotted, "https://intranet.example.com/private/handbook"),
     ] {
-        let prefixes = std::slice::from_ref(prefix);
-        let captured = captured_lines("s-dotted-internal", url, prefixes);
-        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
-        let record: Value = serde_json::from_str(&captured[0]).unwrap();
-        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
-
-        let public = crossing_in_cwd(
-            "crossing_observed",
-            "s-dotted-internal",
-            PUBLIC_PAGE,
-            true,
-            "/work/personal",
-        );
-        let marked = [captured[0].clone(), public.clone()];
-        assert_eq!(
-            relayed_urls("s-dotted-internal", prefixes, &marked),
-            [PUBLIC_PAGE],
-            "{url} captured under {prefix} stays home"
-        );
-        // A record from before the marker existed: the prefix alone holds it.
-        let unmarked = [
-            crossing_in_cwd(
-                "crossing_observed",
-                "s-dotted-internal",
-                url,
-                true,
-                "/work/personal",
-            ),
-            public,
-        ];
-        assert_eq!(
-            relayed_urls("s-dotted-internal", prefixes, &unmarked),
-            [PUBLIC_PAGE],
-            "{url} recorded without the marker stays home under {prefix}"
-        );
+        assert_internal_prefix("s-dotted-internal", prefix, url);
     }
 }
 
@@ -932,38 +924,7 @@ fn a_path_spelling_under_an_internal_prefix_is_internal_and_stays_home() {
         (&plain, "https://corp.example/private%2Fa"),
         (&encoded, "https://corp.example/private/a"),
     ] {
-        let prefixes = std::slice::from_ref(prefix);
-        let captured = captured_lines("s-path-internal", url, prefixes);
-        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
-        let record: Value = serde_json::from_str(&captured[0]).unwrap();
-        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
-        let unmarked = [
-            crossing_in_cwd(
-                "crossing_observed",
-                "s-path-internal",
-                url,
-                true,
-                "/work/personal",
-            ),
-            crossing_in_cwd(
-                "crossing_observed",
-                "s-path-internal",
-                PUBLIC_PAGE,
-                true,
-                "/work/personal",
-            ),
-        ];
-        let marked = [captured[0].clone(), unmarked[1].clone()];
-        assert_eq!(
-            relayed_urls("s-path-internal", prefixes, &marked),
-            [PUBLIC_PAGE],
-            "{url} captured under {prefix} stays home"
-        );
-        assert_eq!(
-            relayed_urls("s-path-internal", prefixes, &unmarked),
-            [PUBLIC_PAGE],
-            "{url} recorded without the marker stays home under {prefix}"
-        );
+        assert_internal_prefix("s-path-internal", prefix, url);
     }
     let doubled = "https://corp.example//private/".to_owned();
     let outside = "https://corp.example/private/a";
@@ -1002,32 +963,7 @@ fn a_path_any_order_of_the_operations_brings_under_an_internal_prefix_stays_home
             "https://corp.example/a/b//..%2F%2F..%2Fprivate/1",
         ),
     ] {
-        let prefixes = [prefix.to_owned()];
-        let captured = captured_lines("s-order-internal", url, &prefixes);
-        assert_eq!(captured.len(), 1, "{prefix} admits {url} to the record");
-        let record: Value = serde_json::from_str(&captured[0]).unwrap();
-        assert_eq!(record["payload"]["internal"], json!(true), "{prefix} {url}");
-        let public = crossing_in_cwd(
-            "crossing_observed",
-            "s-order-internal",
-            PUBLIC_PAGE,
-            true,
-            "/work/personal",
-        );
-        let unmarked = crossing_in_cwd(
-            "crossing_observed",
-            "s-order-internal",
-            url,
-            true,
-            "/work/personal",
-        );
-        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
-            assert_eq!(
-                relayed_urls("s-order-internal", &prefixes, &lines),
-                [PUBLIC_PAGE],
-                "{url} stays home under {prefix}"
-            );
-        }
+        assert_internal_prefix("s-order-internal", prefix, url);
     }
 }
 
@@ -1047,31 +983,7 @@ fn a_stripped_parameter_a_decoded_backslash_or_the_cap_under_an_internal_prefix_
         // More readings than the cap: internal under any prefix on its origin.
         "https://corp.example/x//..;/.../;/..;/a/%2Fb/;//%2F..%2F..%2F;%5Cc",
     ] {
-        let captured = captured_lines("s-strip-internal", url, &prefixes);
-        assert_eq!(captured.len(), 1, "the prefix admits {url} to the record");
-        let record: Value = serde_json::from_str(&captured[0]).unwrap();
-        assert_eq!(record["payload"]["internal"], json!(true), "{url}");
-        let public = crossing_in_cwd(
-            "crossing_observed",
-            "s-strip-internal",
-            PUBLIC_PAGE,
-            true,
-            "/work/personal",
-        );
-        let unmarked = crossing_in_cwd(
-            "crossing_observed",
-            "s-strip-internal",
-            url,
-            true,
-            "/work/personal",
-        );
-        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
-            assert_eq!(
-                relayed_urls("s-strip-internal", &prefixes, &lines),
-                [PUBLIC_PAGE],
-                "{url} stays home"
-            );
-        }
+        assert_internal_prefix("s-strip-internal", &prefixes[0], url);
     }
 }
 
@@ -1087,31 +999,7 @@ fn an_encoded_parameter_under_an_internal_prefix_stays_home() {
         "https://corp.example/confluence/private%3bx/a",
         "https://corp.example/confluence/x/..%3B/private/a",
     ] {
-        let captured = captured_lines("s-encoded-parameter", url, &prefixes);
-        assert_eq!(captured.len(), 1, "the prefix admits {url} to the record");
-        let record: Value = serde_json::from_str(&captured[0]).unwrap();
-        assert_eq!(record["payload"]["internal"], json!(true), "{url}");
-        let public = crossing_in_cwd(
-            "crossing_observed",
-            "s-encoded-parameter",
-            PUBLIC_PAGE,
-            true,
-            "/work/personal",
-        );
-        let unmarked = crossing_in_cwd(
-            "crossing_observed",
-            "s-encoded-parameter",
-            url,
-            true,
-            "/work/personal",
-        );
-        for lines in [[captured[0].clone(), public.clone()], [unmarked, public]] {
-            assert_eq!(
-                relayed_urls("s-encoded-parameter", &prefixes, &lines),
-                [PUBLIC_PAGE],
-                "{url} stays home"
-            );
-        }
+        assert_internal_prefix("s-encoded-parameter", &prefixes[0], url);
     }
 }
 
@@ -1297,45 +1185,46 @@ fn relay_to_answer(
     (home, result)
 }
 
-/// The batch left and its ids are recorded delivered, whatever the body said.
-fn assert_accepted(home: &Path, report: &commonmeasure_relay::RelayReport) {
-    assert_eq!(report.events_delivered, 2);
-    assert_eq!(burned_ids(home).len(), 2);
-    let egress = commonmeasure_relay::egress_report(home);
-    assert_eq!(egress["delivered"], 2);
-    assert_eq!(egress["pending"], 0);
+/// Acceptance burns the ids regardless of whether the receiver states a count.
+fn check_accepted_answer(
+    status: u16,
+    content_type: &'static str,
+    body: &'static str,
+    count: Option<u64>,
+) {
+    let case = format!("{status} {content_type} {body}");
+    let (home, result) = relay_to_answer(status, content_type, body);
+    let report = result.unwrap_or_else(|error| panic!("{case}: {error:#}"));
+    assert_eq!(report.events_delivered, 2, "{case}");
+    assert_eq!(burned_ids(home.path()).len(), 2, "{case}");
+    let egress = commonmeasure_relay::egress_report(home.path());
+    assert_eq!(egress["delivered"], 2, "{case}");
+    assert_eq!(egress["pending"], 0, "{case}");
+    assert_eq!(report.events_new_at_receiver, count, "{case}");
 }
 
 /// Any 2xx is acceptance; a JSON body stating `events_created` gives the
 /// count of newly recorded events.
 #[test]
 fn a_two_hundred_with_a_count_is_accepted_and_the_count_recorded() {
-    let (home, result) = relay_to_answer(
+    check_accepted_answer(
         200,
         "application/json",
-        "{\"status\":\"ok\",\"events_created\":2}",
+        r#"{"status":"ok","events_created":2}"#,
+        Some(2),
     );
-    let report = result.expect("200 is an acceptance");
-    assert_accepted(home.path(), &report);
-    assert_eq!(report.events_new_at_receiver, Some(2));
 }
 
 /// A receiver that queues the batch may answer 202 with no body. The batch is
 /// delivered and the count of new events is unknown, never zero.
 #[test]
 fn a_two_hundred_and_two_without_a_body_is_accepted_with_the_count_unknown() {
-    let (home, result) = relay_to_answer(202, "application/json", "");
-    let report = result.expect("202 is an acceptance");
-    assert_accepted(home.path(), &report);
-    assert_eq!(report.events_new_at_receiver, None);
+    check_accepted_answer(202, "application/json", "", None);
 }
 
 #[test]
 fn a_two_hundred_and_four_is_accepted_with_the_count_unknown() {
-    let (home, result) = relay_to_answer(204, "application/json", "");
-    let report = result.expect("204 is an acceptance");
-    assert_accepted(home.path(), &report);
-    assert_eq!(report.events_new_at_receiver, None);
+    check_accepted_answer(204, "application/json", "", None);
 }
 
 /// A 2xx whose body is not JSON, or is JSON without an unsigned
@@ -1351,10 +1240,7 @@ fn a_two_hundred_with_a_malformed_body_is_accepted_with_the_count_unknown() {
         ("application/json", "{\"status\":\"ok\"}"),
         ("application/json", "{\"events_created\":-1}"),
     ] {
-        let (home, result) = relay_to_answer(201, content_type, body);
-        let report = result.unwrap_or_else(|error| panic!("{body}: {error:#}"));
-        assert_accepted(home.path(), &report);
-        assert_eq!(report.events_new_at_receiver, None, "{body}");
+        check_accepted_answer(201, content_type, body, None);
     }
 }
 
@@ -2579,27 +2465,7 @@ fn a_damaged_log_does_not_hold_back_another_sessions_duty_bearing_batches() {
 
     let accepting = Arc::new(AtomicBool::new(false));
     let bodies = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let mut issuer = {
-        let (accepting, bodies) = (accepting.clone(), bodies.clone());
-        commonmeasure_http::Server::bind("127.0.0.1:0")
-            .unwrap()
-            .spawn(move |request| {
-                if !accepting.load(Ordering::SeqCst) {
-                    return commonmeasure_http::Response::json(
-                        503,
-                        &json!({"detail": "unavailable"}).to_string(),
-                    );
-                }
-                let body: Value = serde_json::from_slice(&request.body).unwrap();
-                let events = body["events"].as_array().map(Vec::len).unwrap_or(0);
-                bodies.lock().unwrap().push(body);
-                commonmeasure_http::Response::json(
-                    201,
-                    &json!({"status": "ok", "events_created": events}).to_string(),
-                )
-            })
-            .unwrap()
-    };
+    let mut issuer = switchable_receiver(accepting.clone(), bodies.clone());
     let origin = issuer.url().trim_end_matches('/').to_owned();
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -2785,12 +2651,7 @@ fn a_batch_whose_log_is_damaged_later_stays_queued_under_a_directory_selection()
     };
 
     write_session(&home, "pending", &[crossing("pending")]);
-    let start = chrono::Utc::now();
-    commonmeasure_relay::relay_with_clock(&home, &options, &|| start)
-        .expect_err("the receiver answers 503");
-    let due = Spool::read_only(&home).delivery_states().unwrap()[&0]
-        .next_attempt_at
-        .expect("a persisted deadline");
+    let due = queue_before_damage(&home, &options);
 
     cut_short_the_final_record(&home, "pending");
     write_session(&home, "later", &[crossing("later")]);
@@ -2865,6 +2726,20 @@ fn a_batch_whose_log_is_damaged_later_stays_queued_under_a_directory_selection()
     receiver.stop();
 }
 
+fn queue_before_damage(
+    home: &Path,
+    options: &commonmeasure_relay::RelayOptions,
+) -> chrono::DateTime<chrono::Utc> {
+    let start = chrono::Utc::now();
+    commonmeasure_relay::relay_with_clock(home, options, &|| start)
+        .expect_err("the receiver answers 503");
+    commonmeasure_relay::spool::Spool::read_only(home)
+        .delivery_states()
+        .unwrap()[&0]
+        .next_attempt_at
+        .expect("a persisted deadline")
+}
+
 /// The same sequence in a home without a directory selection: no recheck
 /// reads the origin log, so the batch spooled before the damage is delivered
 /// while the session is skipped and named. The run's last delivery succeeded,
@@ -2873,7 +2748,6 @@ fn a_batch_whose_log_is_damaged_later_stays_queued_under_a_directory_selection()
 /// for a log it never opened. The receiver is `switchable_receiver`.
 #[test]
 fn a_batch_whose_log_is_damaged_later_is_delivered_without_a_directory_selection() {
-    use commonmeasure_relay::spool::Spool;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let accepting = Arc::new(AtomicBool::new(false));
@@ -2895,12 +2769,7 @@ fn a_batch_whose_log_is_damaged_later_is_delivered_without_a_directory_selection
     };
 
     write_session(home.path(), "pending", &[crossing("pending")]);
-    let start = chrono::Utc::now();
-    commonmeasure_relay::relay_with_clock(home.path(), &options(&[]), &|| start)
-        .expect_err("the receiver answers 503");
-    let due = Spool::read_only(home.path()).delivery_states().unwrap()[&0]
-        .next_attempt_at
-        .expect("a persisted deadline");
+    let due = queue_before_damage(home.path(), &options(&[]));
 
     cut_short_the_final_record(home.path(), "pending");
     accepting.store(true, Ordering::SeqCst);

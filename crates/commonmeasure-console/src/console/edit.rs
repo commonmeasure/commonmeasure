@@ -111,6 +111,12 @@ pub fn write_policy(
             };
         }
     };
+    if let Err(notice) = local_policy(home) {
+        return Outcome::Refused {
+            status: 403,
+            notice,
+        };
+    }
     let document = match PolicyDocument::read(home) {
         Ok(document) => document,
         Err(error) => {
@@ -137,8 +143,8 @@ pub fn write_policy(
         return Outcome::Conflict(format!(
             "Not saved: {attempt} was edited against revision {} of the policy file, and the \
              file is now revision {}. Another editor or process changed it since this page was \
-             rendered. The page below shows the current declaration; repeat the edit against it \
-             if it still applies.",
+             rendered. Copy any draft changes you need to keep, then reload the current policy \
+             before repeating the edit.",
             short(revision),
             short(document.revision())
         ));
@@ -165,6 +171,43 @@ pub fn write_policy(
             ),
         },
     }
+}
+
+/// Authorise local mutation from the runtime's deployment declaration.
+/// An unreadable declaration cannot establish permission to edit.
+pub fn local_policy(home: &Path) -> Result<(), String> {
+    match commonmeasure_harness::managed::Deployment::read(home) {
+        Ok(commonmeasure_harness::managed::Deployment::Local) => Ok(()),
+        Ok(_) => Err("This policy is Hub Managed. Edit it in your organisation's Hub.".into()),
+        Err(error) => Err(format!(
+            "Policy editing unavailable: repair deployment.json. {error}"
+        )),
+    }
+}
+
+/// Validate a full draft with the production loader in an isolated temporary
+/// directory. The live declaration is never used as validation scratch space.
+pub fn check_draft(home: &Path, encoded: &str) -> Result<PolicyFile, String> {
+    local_policy(home)?;
+    let file: PolicyFile = serde_json::from_str(encoded).map_err(|e| e.to_string())?;
+    let scratch = tempfile::tempdir_in(home).map_err(|e| e.to_string())?;
+    PolicyDocument::save(scratch.path(), &file)?;
+    Ok(file)
+}
+
+/// Save the shared form's complete draft behind the same lock and revision
+/// check as the existing field endpoints. Unexposed fields travel with it.
+pub fn save_draft(home: &Path, revision: &str, encoded: &str) -> Outcome {
+    write_policy(home, revision, "source policy", |document| {
+        let file = check_draft(home, encoded)?;
+        let changed = serde_json::to_value(&file).map_err(|e| e.to_string())?
+            != serde_json::to_value(document.file()).map_err(|e| e.to_string())?;
+        Ok(Candidate {
+            file,
+            changed,
+            notice: "Source policy saved.".into(),
+        })
+    })
 }
 
 /// The mode dial: one scope's mode, or the top-level mode for `None`.
@@ -387,6 +430,86 @@ mod tests {
 
     fn revision(home: &Path) -> String {
         PolicyDocument::read(home).unwrap().revision().to_owned()
+    }
+
+    #[test]
+    fn full_draft_validation_save_conflict_and_preservation() {
+        let home = home_with(
+            r#"{"policy_mode":"observe", "allow_private_hosts":true,
+            "record_internal_prefixes":["https://internal.example/"],
+            "terms":[{"host":"example.test", "reference":"agreement"}],
+            "constraints":[{"kind":"denied_source_host","host":"tracker.example"}],
+            "scopes":[{"match":"code/narrow"},{"match":"code"}]}"#,
+        );
+        let before = PolicyDocument::read(home.path()).unwrap();
+        let rev = before.revision().to_owned();
+        let mut draft = serde_json::to_value(before.file()).unwrap();
+        draft["policy_mode"] = serde_json::json!("strict");
+        assert!(check_draft(home.path(), &draft.to_string()).is_ok());
+        assert_eq!(
+            revision(home.path()),
+            rev,
+            "checking never writes the live declaration"
+        );
+        assert_eq!(
+            save_draft(home.path(), &rev, &draft.to_string()).status(),
+            200
+        );
+        let saved = PolicyDocument::read(home.path()).unwrap();
+        assert_eq!(serde_json::to_value(saved.file()).unwrap(), draft);
+        assert!(saved.scopes()[0].policy_mode.is_none());
+        assert_eq!(
+            saved.resolve(Some("/code/narrow/file")).mode(),
+            PolicyMode::Strict
+        );
+        assert_eq!(
+            saved.resolve(Some("/code/narrow/file")).scope(),
+            Some("code/narrow")
+        );
+        assert_eq!(
+            save_draft(home.path(), &rev, &draft.to_string()).status(),
+            409
+        );
+        let current = saved.revision();
+        draft["scopes"][0]["match"] = serde_json::json!("");
+        assert!(check_draft(home.path(), &draft.to_string()).is_err());
+        assert_eq!(
+            save_draft(home.path(), current, &draft.to_string()).status(),
+            400
+        );
+        assert_eq!(revision(home.path()), current);
+    }
+
+    #[test]
+    fn deployment_rejects_all_policy_writes_but_keeps_attribution_local() {
+        let home = home_with(DECLARED);
+        let rev = revision(home.path());
+        let managed = serde_json::json!({"mode":"managed", "organisation":"example",
+            "policy_url":"https://hub.example/api/v1/policy/desired",
+            "signer":{"key_id":"test", "algorithm":"ed25519", "public_key":"00".repeat(32)}});
+        for deployment in [managed.to_string(), "{".into()] {
+            std::fs::write(home.path().join("deployment.json"), deployment).unwrap();
+            assert_eq!(
+                set_mode(home.path(), &rev, None, PolicyMode::Strict).status(),
+                403
+            );
+            assert_eq!(
+                deny_host(home.path(), &rev, None, "example.test").status(),
+                403
+            );
+            assert_eq!(save_draft(home.path(), &rev, DECLARED).status(), 403);
+            assert!(check_draft(home.path(), DECLARED).is_err());
+            assert_eq!(revision(home.path()), rev);
+        }
+        assert_eq!(
+            set_attribution(
+                home.path(),
+                declaration::ABSENT,
+                &[("code".into(), "work".into())]
+            )
+            .status(),
+            200
+        );
     }
 
     #[test]

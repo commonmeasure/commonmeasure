@@ -6,6 +6,9 @@
 //! started under umask 022, set in the child between fork and exec, so the
 //! owner-only modes asserted here hold whatever umask the suite runs with.
 
+mod common;
+use common::{call, crossings, payload, records, write_policy};
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -73,11 +76,6 @@ fn origin(
 
 const ALLOW_ALL: &str = "User-agent: *\nAllow: /\n";
 
-fn write_policy(home: &Path, policy: &str) {
-    std::fs::create_dir_all(home).expect("home");
-    std::fs::write(home.join("policy.json"), policy).expect("policy");
-}
-
 fn strict(home: &Path) {
     write_policy(
         home,
@@ -92,11 +90,6 @@ fn observe(home: &Path) {
         home,
         r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
     );
-}
-
-fn call(name: &str, arguments: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-           "params": {"name": name, "arguments": arguments}})
 }
 
 /// Speak to the stdio server as a host does, the server's umask 022.
@@ -136,40 +129,12 @@ fn converse(home: &Path, requests: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn payload(response: &Value) -> Value {
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
-        .expect("a tool result carries text");
-    serde_json::from_str(text).expect("the payload is JSON")
-}
-
 fn error_text(response: &Value) -> String {
     assert_eq!(response["result"]["isError"], true, "{response}");
     payload(response)["error"]
         .as_str()
         .expect("an error result names the error")
         .to_owned()
-}
-
-fn records(home: &Path) -> Vec<Value> {
-    let path = home.join("sessions/test-session.ndjson");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("the log is NDJSON"))
-        .collect()
-}
-
-fn crossings(home: &Path) -> Vec<Value> {
-    records(home)
-        .into_iter()
-        .filter(|record| {
-            record["event"]
-                .as_str()
-                .is_some_and(|event| event.starts_with("crossing_"))
-        })
-        .collect()
 }
 
 fn files_directory(home: &Path) -> PathBuf {

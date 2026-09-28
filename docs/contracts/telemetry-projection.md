@@ -539,8 +539,8 @@ managed policy before the relay takes the lock, so on a managed edge the
 losing run can still fetch the policy envelope and rewrite `policy.json`
 before it exits.
 
-Every process using an Edge home runs the same release (`ARCHITECTURE.md`
-§What runs where).
+Processes of two releases may share an Edge home while an update settles;
+each checks the files it reads (`ARCHITECTURE.md` §What runs where).
 
 ## Receiver and key
 

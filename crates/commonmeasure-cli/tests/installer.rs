@@ -334,14 +334,17 @@ fn needs_no_credential_and_no_github_client() {
 // the same loopback release. The binary under test is copied into a
 // directory of its own and run from there, so the file it replaces is that
 // copy. HOME is empty, so there is no plist to read. On macOS launchd is
-// asked, read-only, whether the service is loaded, under a scratch label
+// asked, read-only, whether the console and relay services are loaded,
+// under a scratch label and the relay's `<label>.relay`
 // (`COMMONMEASURE_SERVICE_LABEL`, which a debug build takes): no test
-// addresses the machine owner's `ai.commonmeasure.console`, even to read it.
-// A `launchctl` first on PATH records each call and forwards to the real one
-// only `print gui/<uid>/<scratch label>`, exactly those two arguments; it
-// refuses any other call before forwarding, and a refused call fails the
-// test. No test needs `bootstrap` or `bootout`: the scratch label is never
-// loaded, so `update` finds no service to stop or start.
+// addresses the machine owner's `ai.commonmeasure.console` or
+// `ai.commonmeasure.relay`, even to read them. A `launchctl` first on PATH
+// records each call and forwards to the real one only `print
+// gui/<uid>/<scratch label>` and `print gui/<uid>/<scratch label>.relay`,
+// exactly those two arguments; it refuses any other call before forwarding,
+// and a refused call fails the test. No test needs `bootstrap` or
+// `bootout`: the scratch labels are never loaded, so `update` finds no
+// service to stop or start.
 //
 // These tests run only in a debug build: a release build ignores
 // `COMMONMEASURE_SERVICE_LABEL` and `COMMONMEASURE_RELEASE_URL` by design,
@@ -367,7 +370,8 @@ fn installed_copy(home: &Path) -> PathBuf {
 }
 
 /// The `launchctl` the update tests put first on PATH. It logs each call,
-/// then forwards to `/bin/launchctl` only `print gui/<uid>/<label>`; any other
+/// then forwards to `/bin/launchctl` only `print gui/<uid>/<label>` and
+/// `print gui/<uid>/<label>.relay`; any other
 /// operation, target or argument count is logged as `REFUSED` and exits 97
 /// without forwarding. Checking the whole call, not each argument, is what
 /// keeps a domain-wide `print gui/<uid>` or `bootout gui/<uid>` from reaching
@@ -377,7 +381,8 @@ fn launchctl_wrapper(label: &str, log: &Path) -> String {
         "#!/bin/sh\n\
          log='{log}'\n\
          printf '%s\\n' \"$*\" >> \"$log\"\n\
-         if [ \"$#\" -ne 2 ] || [ \"$1\" != print ] || [ \"$2\" != \"gui/$(id -u)/{label}\" ]; then\n\
+         if [ \"$#\" -ne 2 ] || [ \"$1\" != print ] || {{ [ \"$2\" != \"gui/$(id -u)/{label}\" ] \
+         && [ \"$2\" != \"gui/$(id -u)/{label}.relay\" ]; }}; then\n\
          \tprintf 'REFUSED %s\\n' \"$*\" >> \"$log\"\n\
          \texit 97\n\
          fi\n\
@@ -422,9 +427,11 @@ fn the_launchctl_wrapper_forwards_only_print_of_the_scratch_service() {
     let dir = tempfile::tempdir().expect("tempdir");
     let label = "ai.commonmeasure.test-wrapper";
     let target = format!("gui/{}/{label}", uid());
-    let (code, forwarded, calls) = run_wrapper(dir.path(), label, &["print", &target]);
-    assert_eq!((code, forwarded), (Some(0), true), "{calls}");
-    assert!(!calls.contains("REFUSED"), "{calls}");
+    for target in [target.clone(), format!("{target}.relay")] {
+        let (code, forwarded, calls) = run_wrapper(dir.path(), label, &["print", &target]);
+        assert_eq!((code, forwarded), (Some(0), true), "{calls}");
+        assert!(!calls.contains("REFUSED"), "{calls}");
+    }
 }
 
 #[test]
@@ -448,6 +455,7 @@ fn the_launchctl_wrapper_refuses_every_other_call_before_forwarding() {
     let plist = plist.display().to_string();
     let scratch = format!("{domain}/{label}");
     let prefixed = format!("{domain}/{label}0");
+    let relay_prefixed = format!("{domain}/{label}.relay0");
     let other_domain = format!("system/{label}");
     let cases: &[(&str, Vec<&str>)] = &[
         ("domain-only print", vec!["print", &domain]),
@@ -465,6 +473,10 @@ fn the_launchctl_wrapper_refuses_every_other_call_before_forwarding() {
         (
             "label extending the scratch label",
             vec!["print", &prefixed],
+        ),
+        (
+            "label extending the relay's scratch label",
+            vec!["print", &relay_prefixed],
         ),
         (
             "another operation on the scratch target",
@@ -525,7 +537,9 @@ fn update(origin: &ServerHandle, binary: &Path, args: &[&str]) -> Output {
     );
     for call in calls.lines() {
         assert!(
-            call.contains(&label) && !call.contains("ai.commonmeasure.console"),
+            call.contains(&label)
+                && !call.contains("ai.commonmeasure.console")
+                && !call.contains("ai.commonmeasure.relay"),
             "launchctl {call}"
         );
     }
@@ -747,14 +761,15 @@ fn update_does_not_downgrade_to_an_older_latest_but_installs_an_older_tag_by_nam
 }
 
 /// Another process running the binary, here an MCP server as a host starts
-/// one, makes update refuse before anything is downloaded, naming the
-/// process and its Edge home.
+/// one, does not stop the update: the binary is replaced by rename, the
+/// server keeps running the release it started with, and update names it
+/// with its Edge home.
 #[test]
 #[cfg(debug_assertions)]
-fn update_refuses_while_another_process_runs_this_binary() {
+fn update_replaces_this_binary_while_another_process_runs_it_and_names_that_process() {
     let script = script_reporting("9.9.9");
     let sum = sha256_hex(&script);
-    let (origin, requests) = recorded_release("v9.9.9", script, &sum, true);
+    let origin = release("v9.9.9", script, &sum, true);
     let home = tempfile::tempdir().expect("tempdir");
     let binary = installed_copy(home.path());
     let edge = home.path().join("edge");
@@ -780,48 +795,92 @@ fn update_refuses_while_another_process_runs_this_binary() {
     assert!(mcp.try_wait().unwrap().is_none(), "the MCP server runs");
 
     let output = update(&origin, &binary, &[]);
+    let still_running = mcp.try_wait().unwrap().is_none();
     let _ = mcp.kill();
     let _ = mcp.wait();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    // Pid, the executable as the kernel reports it, the subcommand and the
-    // home; no other argument and no other environment entry.
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    assert_eq!(version_of(&binary), "commonmeasure 9.9.9");
     assert!(
-        stderr.contains(&format!(
-            "pid {}  {}  mcp  COMMONMEASURE_HOME={}",
-            mcp.id(),
-            binary.canonicalize().unwrap().display(),
-            edge.display()
-        )),
-        "{stderr}"
+        still_running,
+        "the MCP server kept running through the update"
     );
+    // Pid, the subcommand and the home; no other argument and no other
+    // environment entry.
+    let listing = stdout
+        .find(&format!(
+            "These processes run commonmeasure {VERSION}, or a release installed before it, \
+             until their host restarts them:\n  pid {}  mcp  COMMONMEASURE_HOME={}\n",
+            mcp.id(),
+            edge.display()
+        ))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let sessions = stdout
+        .find("sessions opened from now on run 9.9.9")
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(listing < sessions, "{stdout}");
     for text in [&stdout, &stderr] {
         assert!(!text.contains("NOT_A_CREDENTIAL"), "{text}");
         assert!(!text.contains("AAA_SENTINEL"), "{text}");
         assert!(!text.contains("claude-code"), "{text}");
     }
-    assert!(stderr.contains("quit the host app"), "{stderr}");
-    assert!(
-        stderr.contains("Nothing was stopped or installed"),
-        "{stderr}"
-    );
-    assert!(
-        !requests
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|path| path.contains("/download/")),
-        "nothing was downloaded"
-    );
-    assert_eq!(version_of(&binary), format!("commonmeasure {VERSION}"));
+}
 
-    // With it closed, the same update goes ahead.
-    let output = update(&origin, &binary, &[]);
+/// A reinstall of the release this binary already is still installs, so it
+/// still names the processes that run the file it replaced: one that
+/// outlived an earlier update is otherwise never reported again. New
+/// sessions run the same release as before, so that line is left out.
+#[test]
+#[cfg(debug_assertions)]
+fn reinstalling_the_current_release_names_the_processes_still_running_it() {
+    let script = script_reporting(VERSION);
+    let sum = sha256_hex(&script);
+    let tag = format!("v{VERSION}");
+    let origin = release(&tag, script, &sum, true);
+    let home = tempfile::tempdir().expect("tempdir");
+    let binary = installed_copy(home.path());
+    let edge = home.path().join("edge");
+    let mut mcp = Command::new(&binary)
+        .args(["mcp", "--host", "claude-code"])
+        .env_clear()
+        .env("AAA_SENTINEL", "NOT_A_CREDENTIAL")
+        .env("HOME", home.path())
+        .env("COMMONMEASURE_HOME", &edge)
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the MCP server starts");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(mcp.try_wait().unwrap().is_none(), "the MCP server runs");
+
+    let output = update(&origin, &binary, &["--tag", &tag]);
+    let still_running = mcp.try_wait().unwrap().is_none();
+    let _ = mcp.kill();
+    let _ = mcp.wait();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    assert!(stdout.contains("checksum verified"), "{stdout}");
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        still_running,
+        "the MCP server kept running through the reinstall"
     );
-    assert_eq!(version_of(&binary), "commonmeasure 9.9.9");
+    assert!(
+        stdout.contains(&format!(
+            "These processes run commonmeasure {VERSION}, or a release installed before it, \
+             until their host restarts them:\n  pid {}  mcp  COMMONMEASURE_HOME={}\n",
+            mcp.id(),
+            edge.display()
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("sessions opened from now on"), "{stdout}");
+    for text in [&stdout, &stderr] {
+        assert!(!text.contains("NOT_A_CREDENTIAL"), "{text}");
+        assert!(!text.contains("AAA_SENTINEL"), "{text}");
+        assert!(!text.contains("claude-code"), "{text}");
+    }
 }

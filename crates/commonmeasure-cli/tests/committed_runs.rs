@@ -26,22 +26,7 @@ const CURRENT_RUN_VERSION: &str = commonmeasure_runtime::SCHEMA_VERSION;
 /// Each entry must still name at least one run that fails the check below, so
 /// republishing a family fails this test until its row goes. The list only
 /// ever shrinks.
-const AWAITING_REPUBLISH: &[(&str, &str)] = &[
-    (
-        "output/skills",
-        "`just skills-example`, which needs the two catalogued bundles installed where \
-         `demo/skills/catalogue.json` says and a `/usr/bin/python3` that can import `yaml`: \
-         both validators require it, and without it each exits with an import error, seals an \
-         empty result and covers nothing",
-    ),
-    (
-        "output/commerce-routing/",
-        "a new routing experiment, not a republish: `demo/jobs/commerce-routing/rule.json` is \
-         frozen after the fitting runs and before the holdout and cites each fitting run by \
-         manifest hash, so rebuilding those runs alone breaks the citation the experiment rests \
-         on. Fitting, freezing a rule and running the holdout are one act",
-    ),
-];
+const AWAITING_REPUBLISH: &[(&str, &str)] = &[];
 
 /// The maintainer's recorded fixtures (`COMMONMEASURE_PRIVATE_EVIDENCE`,
 /// resolved by `build.rs`).

@@ -222,13 +222,15 @@ resource bounds and the limits of unsigned declarations.
 maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with seven
 sections, rendered server-side over an SQLite index derived from the session
 evidence logs, from the same JSON values the `/api/*` routes serve, with
-vendored htmx as the only client script. The logs are authoritative: the
+vendored htmx for fragment swaps, local appearance controls and the offline
+shared policy form (`console/policy-form/`). The logs are authoritative: the
 index can be rebuilt from them, and witnessed and reconstructed evidence stay
 separate in every aggregate. Attribution rules
 (`~/.commonmeasure/attribution.json`) are applied at query time as a projection
-over the unchanged store. The console's writes are the policy mode, a scope's
-denied hosts and the attribution rules, each revision-checked and saved
-through the artefact's own loader, and the record of each Compare
+over the unchanged store. The console saves personal source policies and local
+attribution rules, each revision-checked and saved through the artefact's own
+loader. Managed policy writes are refused from the deployment declaration.
+The console also saves the record of each Compare
 comparison, kept in `<home>/comparisons/` outside the relay's session scan.
 It cannot start a run or modify existing evidence, and it sends no record
 anywhere. It is the one component that reads both engagement identities, so
@@ -339,31 +341,61 @@ Multiple registered hosts may use that same home and enrolled identity, even
 when each starts its own MCP process. Process separation alone does not create
 separate credentials, records or tenant boundaries.
 
-Every process using an Edge home runs the same release. Upgrade by stopping
-all of them, including `commonmeasure hosted service` and a background
-relay.
+Processes of two releases may share an Edge home while an update settles.
+`commonmeasure update` replaces the binary by renaming the new file over
+it, so a process already running keeps the inode it started from: an MCP
+server or hook a host started, `commonmeasure hosted service`, or a `serve`
+or `relay` started by hand runs the old release until it exits or its host
+starts it again. `update` stops the console and background relay services
+it manages and starts them again on the new binary with each service's own
+Edge home. It lists the other processes of the same user that run the
+binary file (the path the kernel reports for the executable is the file's
+canonical path, or the image is the same inode, or, where neither can be
+read, the process name is the file's name), with each one's subcommand and
+`COMMONMEASURE_HOME`; it refuses nothing on their account. A process table
+that cannot be read is reported in one line and the update stands.
 
-`commonmeasure update` enforces part of this. Before it stops or downloads
-anything, it reads the process table and refuses while other processes of
-the same user run the binary file it replaces (the path the kernel reports
-for the executable is the file's canonical path, or the image is the same
-inode), naming each one with its `COMMONMEASURE_HOME` where readable. A
-process whose executable the kernel does not identify, such as one running
-an old release whose last link was removed, is refused when its process
-name is the file's name. A read of the process table that cannot be
-completed refuses the update. It stops the console service it manages and
-starts it again with the service's own Edge home. It does not detect:
+No lock or version check coordinates the processes of a home. Each process
+checks the state it reads where it reads it, per file and per record.
+These structures are deserialised into types that refuse a member they do
+not know, so the loader fails with an error rather than dropping the
+member:
 
-- processes running another copy of the binary on the same Edge home;
-- a copy under another name whose executable the kernel does not identify:
-  on macOS one whose file has been removed, on Linux one that is not
-  dumpable;
-- a process started between the check and the rename that replaces the
-  binary;
-- other users' processes.
+- `policy.json` (the policy loader, which every session, `policy check`
+  and the console use): the top level, each scope, principal binding and
+  `terms` entry with its `access_context` identifiers, each allowance, and
+  the amounts of allowances and cost limits. A constraint object in
+  `constraints`, at the top level, in a scope or in a principal binding,
+  is read by its `kind`, and its other unknown members are ignored.
+- `relay.json` (the relay's loader), whole. The hub ingest key reader in
+  enrolment takes only `receiver` and `api_key` from it.
+- `hosted-service.json` (`hosted service`), whole.
+- `deployment.json` with its `signer`, and `managed/state.json` with
+  `applied` and `last_sync`.
+- `enrolment.json` with its `identity`. Its `organization` ignores unknown
+  members.
+- `directory-listing.json` at the top level. The proof statement it holds
+  (`stated`) ignores unknown members.
+- `directories.json`, the project registry, with each project.
 
-No lock is shared by the processes of a home, so these remain the operator's
-to stop.
+Two signed documents are read as JSON values and checked for the members
+they must carry; unknown members are ignored. A managed policy envelope
+from `policy sync` is checked for its format, signer, signature over the
+payload, organisation, edge and validity times, and the policy in its
+payload is then parsed as `policy.json` is. `reporting-approvals.json` is
+checked for its format, organisation, edge key, signer key, payload digest,
+validity window and a signature over every member but the signature.
+
+The observation index (`observation-index/<session>.ndjson`) is derived
+from the session's source log. Its entries refuse unknown members, but a
+journal with an entry that does not parse, or that does not continue the
+entries before it, is not an error: the journal is discarded and the index
+is rebuilt from the log.
+
+A change to a file or record format that these checks would not refuse
+cleanly, such as a new member of a constraint, the enrolment organisation,
+the proof statement or a signed document, needs a lock shared by the
+processes of a home before it ships.
 
 When the installer fails, `update` compares the binary's device, inode,
 size and SHA-256 with those it recorded before the installer ran. Each read
@@ -373,28 +405,21 @@ one read, makes the outcome unknown. This is a sequential check, not an
 atomic snapshot: a writer that changes the binary and restores it between
 the reads is not seen, and the comparison does not say which writer changed
 it. A replacement is asked for its version only after the attempt to start
-the console service again, whether or not that attempt succeeded. The
-question runs as its own process group with standard error discarded; after
-5 seconds, or past 4 KiB of output, the group is killed. The 5 seconds bound
-the wait for its output and exit, not the system calls that start it and
-reap it. A process that leaves the group is not killed and can hold the
+the console and relay services again, whether or not that attempt
+succeeded. The question runs as its own process group with standard error
+discarded; after 15 seconds, or past 4 KiB of output, the group is killed.
+The 15 seconds bound the wait for its output and exit, not the system calls
+that start it and reap it. A process that leaves the group is not killed and can hold the
 output open; `update` does not wait for it. `service status` asks the
 `commonmeasure` on `PATH` for its version within the same bounds.
 
-Limits of the process inspection on macOS:
+Limits of the process listing on macOS:
 
-- The managed console is left out only when launchd reports the same pid
-  before and after the scan, and the process at that pid is launchd's child
-  and started before launchd was first asked. An orphaned process, whose
-  parent is also launchd, that takes the console's pid after that is
-  counted. Start times are wall-clock, so a clock set back during the update
-  can defeat the comparison.
 - A process the kernel refuses to describe (`proc_pidinfo` EPERM) is not
   taken to be another user's on that alone, since a security policy can
   refuse a process of the same user. Its owner is read from `sysctl`
-  `KERN_PROC_PID`: the same user's is refused by process name, and one whose
-  owner cannot be read is refused and listed as not inspected, not as a
-  process known to run the binary.
+  `KERN_PROC_PID`: the same user's is listed by process name, and one whose
+  owner cannot be read is not listed.
 - `COMMONMEASURE_HOME` is read from `KERN_PROCARGS2`. The arguments begin
   after the executable path and the kernel's padding to eight bytes, which
   is XNU's layout, not an interface. A layout that added NUL bytes before

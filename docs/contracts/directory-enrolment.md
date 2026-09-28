@@ -157,8 +157,8 @@ source policy.
 Source-policy envelopes carry no reporting approvals, and a reporting-approval
 snapshot is never accepted as source policy.
 
-Every process using an Edge home runs the same release (`ARCHITECTURE.md`
-§What runs where).
+Processes of two releases may share an Edge home while an update settles;
+each checks the files it reads (`ARCHITECTURE.md` §What runs where).
 
 ## Evidence and withdrawal
 

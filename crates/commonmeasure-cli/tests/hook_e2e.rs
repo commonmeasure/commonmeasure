@@ -5,6 +5,8 @@
 //! wrapper whose `result` field — not the wrapper — is what enters the model's
 //! context.
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -39,14 +41,7 @@ fn hook_as(home: &Path, host: &str, event: &str, payload: Value) -> std::process
 }
 
 fn records(home: &Path, session: &str) -> Vec<Value> {
-    let path = home.join("sessions").join(format!("{session}.ndjson"));
-    let Ok(file) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    file.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("the log is NDJSON"))
-        .collect()
+    common::optional_records(home, session, true)
 }
 
 #[test]

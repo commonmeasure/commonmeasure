@@ -26,5 +26,4 @@ url.workspace = true
 # Portable result bundles; already locked through c2pa, with no compression backend.
 zip = { version = "8.6", default-features = false }
 
-[dev-dependencies]
 tempfile.workspace = true

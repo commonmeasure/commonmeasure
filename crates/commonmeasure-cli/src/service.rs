@@ -90,6 +90,50 @@ pub enum ServiceName {
     Relay,
 }
 
+impl ServiceName {
+    /// The word `service install` and `service uninstall` take.
+    pub fn word(self) -> &'static str {
+        match self {
+            ServiceName::Console => "console",
+            ServiceName::Relay => "relay",
+        }
+    }
+
+    /// How messages name the service.
+    pub fn noun(self) -> &'static str {
+        match self {
+            ServiceName::Console => "console service",
+            ServiceName::Relay => "background relay service",
+        }
+    }
+
+    /// The subcommand and the option the plist runs the binary with; the
+    /// option's value is [`Installed::listen`].
+    fn arguments(self) -> (&'static str, &'static str) {
+        match self {
+            ServiceName::Console => ("serve", "--listen"),
+            ServiceName::Relay => ("relay", "--every"),
+        }
+    }
+
+    /// Reads back a plist written for this service.
+    fn read(self, text: &str) -> Option<Installed> {
+        match self {
+            ServiceName::Console => read_plist(text),
+            ServiceName::Relay => read_relay_plist(text).map(|(installed, _)| installed),
+        }
+    }
+
+    /// The plist install writes for `installed`.
+    fn write(self, context: &Context, installed: &Installed) -> String {
+        let context = context.installed(installed);
+        match self {
+            ServiceName::Console => plist(&context, &installed.listen),
+            ServiceName::Relay => relay_agent_plist(&context, &installed.listen),
+        }
+    }
+}
+
 /// What a command printed and how it exited.
 pub struct Output {
     pub success: bool,
@@ -164,13 +208,16 @@ impl Context {
 
     /// This context with the installed service's configuration in place of
     /// the invoking shell's, so the service is started as it was installed.
+    /// A plist without `COMMONMEASURE_HOME` runs with the default Edge home
+    /// under the user's home, whatever home the invoking shell selects: the
+    /// background relay's start reads that home's `relay.json` and lock.
     fn installed(&self, installed: &Installed) -> Context {
         Context {
             user_home: self.user_home.clone(),
             edge_home: installed
                 .home
                 .clone()
-                .unwrap_or_else(|| self.edge_home.clone()),
+                .unwrap_or_else(|| self.user_home.join(".commonmeasure")),
             home_override: installed.home.clone(),
             log: installed.log.clone(),
             working_directory: installed.working_directory.clone(),
@@ -293,7 +340,7 @@ fn unsupported(command: &ServiceCommand) -> String {
     )
 }
 
-/// The console service as `update` finds it before anything is stopped.
+/// A managed service as `update` finds it before anything is stopped.
 #[derive(Debug, PartialEq)]
 pub enum BeforeUpdate {
     /// Launchd has no such job loaded. A plist left on disk is neither
@@ -302,47 +349,44 @@ pub enum BeforeUpdate {
     /// The loaded job runs the binary being replaced, and its plist holds
     /// the configuration launchd loaded, so the job can be started again as
     /// it was.
-    Runs {
-        installed: Installed,
-        pid: Option<u32>,
-        /// When launchd was asked for `pid`, noted just before asking.
-        asked: SystemTime,
-    },
+    Runs(Installed),
     /// The loaded job runs another binary, which the update leaves alone.
     RunsOther(PathBuf),
 }
 
-/// Before `update` replaces `binary`: what the console service runs, asked
-/// of launchd first and of the plist second, since a plist can be removed or
-/// rewritten while the job it loaded keeps running. Changes nothing.
+/// Before `update` replaces `binary`: what the managed service `service`
+/// at `context`'s label runs, asked of launchd first and of the plist
+/// second, since a plist can be removed or rewritten while the job it loaded
+/// keeps running. Changes nothing.
 ///
 /// A loaded job running `binary` is an error unless its plist can be read
 /// and matches the loaded job: the update would otherwise either replace the
-/// binary under a console it cannot stop and start again, or start it again
+/// binary under a service it cannot stop and start again, or start it again
 /// with another Edge home.
 pub fn inspect_for_update(
     context: &Context,
     commands: &dyn Commands,
+    service: ServiceName,
     binary: &Path,
 ) -> Result<BeforeUpdate, String> {
     let label = &context.label;
     let target = context.target();
-    let asked = SystemTime::now();
+    let (noun, word) = (service.noun(), service.word());
     let job = match loaded(context, commands) {
         Ok(None) => return Ok(BeforeUpdate::Absent),
         Ok(Some(job)) => job,
         Err(error) => {
             return Err(format!(
-                "cannot tell whether the console service {label} is loaded: {error}. Check it \
-                 with: launchctl print {target}"
+                "cannot tell whether the {noun} {label} is loaded: {error}. Check it with: \
+                 launchctl print {target}"
             ));
         }
     };
     let Some(program) = job.program() else {
         return Err(format!(
-            "the console service {label} is loaded, but launchctl print {target} names no \
-             program, so update cannot tell whether it runs {}. Remove it with: commonmeasure \
-             service uninstall console",
+            "the {noun} {label} is loaded, but launchctl print {target} names no program, so \
+             update cannot tell whether it runs {}. Remove it with: commonmeasure service \
+             uninstall {word}",
             binary.display()
         ));
     };
@@ -351,13 +395,21 @@ pub fn inspect_for_update(
     }
     let path = context.plist();
     let running = format!(
-        "the console service {label} is loaded{} and runs {}",
+        "the {noun} {label} is loaded{} and runs {}",
         job.pid
             .map(|pid| format!(" (pid {pid})"))
             .unwrap_or_default(),
         program.display()
     );
-    let listen = job.listen().unwrap_or("<address>");
+    let (_, option) = service.arguments();
+    let value = job.value(service).unwrap_or(match service {
+        ServiceName::Console => "<address>",
+        ServiceName::Relay => "<seconds>",
+    });
+    let reinstall = format!(
+        "{} service install {word} {option} {value}",
+        shell_quote(&program)
+    );
     let home = match &job.home {
         JobHome::Set(home) => Some(home.as_path()),
         JobHome::Unset => None,
@@ -365,10 +417,8 @@ pub fn inspect_for_update(
             return Err(format!(
                 "{running}, but launchctl print {target} shows no environment block update can \
                  read, so update cannot tell which Edge home the service runs with. Stop it with \
-                 `commonmeasure service uninstall console`, then install it again from a shell \
-                 that selects its Edge home: `{} service install console --listen {listen}`. \
-                 Then run update again",
-                shell_quote(&program)
+                 `commonmeasure service uninstall {word}`, then install it again from a shell \
+                 that selects its Edge home: `{reinstall}`. Then run update again"
             ));
         }
         JobHome::Empty => {
@@ -376,10 +426,8 @@ pub fn inspect_for_update(
                 "{running}, but launchctl print {target} shows the service's own \
                  COMMONMEASURE_HOME set to \"\" and none inherited, so update cannot establish \
                  from that value which Edge home the service runs with. Stop it with \
-                 `commonmeasure service uninstall console`, then install it again from a shell \
-                 that selects its Edge home: `{} service install console --listen {listen}`. \
-                 Then run update again",
-                shell_quote(&program)
+                 `commonmeasure service uninstall {word}`, then install it again from a shell \
+                 that selects its Edge home: `{reinstall}`. Then run update again"
             ));
         }
         JobHome::Inherited { own, inherited } => {
@@ -388,14 +436,15 @@ pub fn inspect_for_update(
                 own.as_deref(),
                 inherited,
                 &program,
-                listen,
+                service,
+                value,
             ));
         }
     };
     let remedy = format!(
-        "Stop it with `commonmeasure service uninstall console`, or install it again with the \
+        "Stop it with `commonmeasure service uninstall {word}`, or install it again with the \
          Edge home launchd reports for it: `{}`. Then run update again",
-        install_command(home, &program, listen)
+        install_command(service, home, &program, value)
     );
     let text = match std::fs::read_to_string(&path) {
         Err(error) => {
@@ -407,7 +456,7 @@ pub fn inspect_for_update(
         }
         Ok(text) => text,
     };
-    let installed = read_plist(&text).ok_or_else(|| {
+    let installed = service.read(&text).ok_or_else(|| {
         format!(
             "{running}, but its plist {} is not in the form install writes, so update could not \
              start it again with the same Edge home. {remedy}",
@@ -416,7 +465,7 @@ pub fn inspect_for_update(
     })?;
     // Starting the service again writes the plist from `installed`, so any
     // setting outside it, such as a hand-edited KeepAlive, would be lost.
-    if edited(context, &installed, &text) {
+    if service.write(context, &installed) != text {
         return Err(format!(
             "{running}, but its plist {} has been edited since service install wrote it, and \
              update would start the service again from a plist written anew, losing the edits. \
@@ -424,7 +473,7 @@ pub fn inspect_for_update(
             path.display()
         ));
     }
-    let differences = job.differences(&installed, &path);
+    let differences = job.differences(service, &installed, &path);
     if !differences.is_empty() {
         return Err(format!(
             "{running}, but its plist {} differs from the job launchd loaded ({}), and update \
@@ -433,18 +482,7 @@ pub fn inspect_for_update(
             differences.join("; ")
         ));
     }
-    Ok(BeforeUpdate::Runs {
-        installed,
-        pid: job.pid,
-        asked,
-    })
-}
-
-/// The pid launchd reports for the console service now, asked again after
-/// `update` has scanned the process table. `None` when it reports none, or
-/// cannot be asked, so that the process at the earlier pid is counted.
-pub fn console_pid(context: &Context, commands: &dyn Commands) -> Option<u32> {
-    loaded(context, commands).ok().flatten()?.pid
+    Ok(BeforeUpdate::Runs(installed))
 }
 
 /// Why the service `inspect_for_update` found could not be stopped.
@@ -452,40 +490,88 @@ pub fn console_pid(context: &Context, commands: &dyn Commands) -> Option<u32> {
 pub enum StopFailed {
     /// Launchd refused to boot the job out; it may still be running.
     NotStopped(String),
-    /// The job was booted out but the port did not free: something is down
-    /// that should be started again.
-    PortHeld(String),
+    /// The job was booted out, but what its process holds was not released
+    /// within the settle time: the console's port, or the background relay's
+    /// `relay-loop.lock`.
+    StillHeld(String),
 }
 
 /// Stop the service `inspect_for_update` found running the binary: boot it
-/// out, so that `KeepAlive` cannot start the old binary again, and wait for
-/// its port to free.
+/// out, so that `KeepAlive` cannot start the old binary again, and wait,
+/// for at most `context.settle`, for its process to let go: the console's
+/// port to free, or the background relay's loop, which finishes the run in
+/// progress after SIGTERM, to release `relay-loop.lock` in its Edge home.
 pub fn stop_for_update(
     context: &Context,
     commands: &dyn Commands,
+    service: ServiceName,
     installed: &Installed,
 ) -> Result<(), StopFailed> {
-    let address = loopback(&installed.listen).map_err(StopFailed::NotStopped)?;
-    bootout(context, commands).map_err(StopFailed::NotStopped)?;
-    if !wait_until(context.settle, || probe(address) == Answer::Nothing) {
-        return Err(StopFailed::PortHeld(format!(
-            "the console service was stopped but {} is still in use {} s later",
-            installed.listen,
-            context.settle.as_secs()
-        )));
+    use commonmeasure_harness::delivery::{LockState, relay_loop_state};
+    let seconds = context.settle.as_secs();
+    match service {
+        ServiceName::Console => {
+            let address = loopback(&installed.listen).map_err(StopFailed::NotStopped)?;
+            bootout(context, commands).map_err(StopFailed::NotStopped)?;
+            if !wait_until(context.settle, || probe(address) == Answer::Nothing) {
+                return Err(StopFailed::StillHeld(format!(
+                    "the console service was stopped but {} is still in use {seconds} s later",
+                    installed.listen,
+                )));
+            }
+        }
+        ServiceName::Relay => {
+            let home = context.installed(installed).edge_home;
+            bootout(context, commands).map_err(StopFailed::NotStopped)?;
+            let mut state = LockState::Running;
+            if !wait_until(context.settle, || {
+                state = relay_loop_state(&home);
+                state == LockState::NotRunning
+            }) {
+                let lock = crate::relay_loop::lock_path(&home);
+                return Err(StopFailed::StillHeld(match state {
+                    LockState::Unknown(reason) => format!(
+                        "the background relay service was stopped but whether its loop still \
+                         holds {} cannot be read {seconds} s later ({reason})",
+                        lock.display()
+                    ),
+                    _ => format!(
+                        "the background relay service was stopped but its loop still holds {} \
+                         {seconds} s later",
+                        lock.display()
+                    ),
+                }));
+            }
+        }
     }
     Ok(())
 }
 
 /// Start the service `stop_for_update` stopped, as it was installed: its
-/// binary path, address, Edge home, log and working directory, whatever the
-/// shell running `update` selects.
+/// binary path, address or interval, Edge home, log and working directory,
+/// whatever the shell running `update` selects. Bounded as `service install`
+/// is: the console is waited for until it answers on its port, the
+/// background relay until its loop holds `relay-loop.lock`, each for at most
+/// `context.settle`.
 pub fn start_after_update(
     context: &Context,
     commands: &dyn Commands,
+    service: ServiceName,
     installed: &Installed,
 ) -> Result<String, String> {
-    install(&context.installed(installed), commands, &installed.listen)
+    let context = context.installed(installed);
+    match service {
+        ServiceName::Console => install(&context, commands, &installed.listen),
+        ServiceName::Relay => {
+            let every = installed.listen.parse().map_err(|_| {
+                format!(
+                    "the plist's interval {:?} is not a number of seconds",
+                    installed.listen
+                )
+            })?;
+            install_relay(&context, commands, every)
+        }
+    }
 }
 
 /// Why `update` refuses a job whose launchd domain passes it
@@ -498,7 +584,8 @@ fn inherited_refusal(
     own: Option<&Path>,
     inherited: &Path,
     program: &Path,
-    listen: &str,
+    service: ServiceName,
+    argument: &str,
 ) -> String {
     let value = |home: &Path| match home.as_os_str().is_empty() {
         true => "\"\"".to_string(),
@@ -516,23 +603,24 @@ fn inherited_refusal(
              applies over the inherited value, so the service runs with that home. {unset}, \
              then install the service again with it: `{}`. Then run update again",
             own.display(),
-            install_command(Some(own), program, listen)
+            install_command(service, Some(own), program, argument)
         ),
         (None, Some(_)) => format!(
             "{passed}. {unset}, then install the service again: `{}`. Then run update again",
-            install_command(Some(inherited), program, listen)
+            install_command(service, Some(inherited), program, argument)
         ),
         (own, None) => format!(
             "{passed}{}, so update cannot tell which Edge home the service runs with. {unset}, \
              choose the Edge home the service should use, and install the service again from a \
-             shell that selects it: `{} service install console --listen {listen}`. Then run \
-             update again",
+             shell that selects it: `{} service install {} {} {argument}`. Then run update again",
             own.map(|own| format!(
                 ", and its own environment sets COMMONMEASURE_HOME={}",
                 value(own)
             ))
             .unwrap_or_default(),
-            shell_quote(program)
+            shell_quote(program),
+            service.word(),
+            service.arguments().1,
         ),
     }
 }
@@ -548,24 +636,33 @@ fn effective_home<'a>(own: Option<&'a Path>, inherited: &'a Path) -> Option<&'a 
 
 /// The command that installs the service again as `installed` describes
 /// it, for an operator to run when `update` could not.
-pub fn reinstall_command(installed: &Installed) -> String {
+pub fn reinstall_command(service: ServiceName, installed: &Installed) -> String {
     install_command(
+        service,
         installed.home.as_deref(),
         &installed.program,
         &installed.listen,
     )
 }
 
-/// `service install` run by `program` with `COMMONMEASURE_HOME` set to
-/// `home`, or unset when the service uses the default Edge home.
-fn install_command(home: Option<&Path>, program: &Path, listen: &str) -> String {
+/// `service install` of `service` run by `program` with its address or
+/// interval `value` and `COMMONMEASURE_HOME` set to `home`, or unset when
+/// the service uses the default Edge home.
+fn install_command(
+    service: ServiceName,
+    home: Option<&Path>,
+    program: &Path,
+    value: &str,
+) -> String {
     let home = match home {
         Some(home) => format!("env COMMONMEASURE_HOME={}", shell_quote(home)),
         None => "env -u COMMONMEASURE_HOME".to_string(),
     };
     format!(
-        "{home} {} service install console --listen {listen}",
-        shell_quote(program)
+        "{home} {} service install {} {} {value}",
+        shell_quote(program),
+        service.word(),
+        service.arguments().1
     )
 }
 
@@ -735,9 +832,14 @@ pub const RELAY_THROTTLE_SECS: u64 = 300;
 /// refused every ten seconds. A crash is started again at most every
 /// [`RELAY_THROTTLE_SECS`].
 pub fn relay_plist(context: &Context, every: u64) -> String {
+    relay_agent_plist(context, &every.to_string())
+}
+
+/// [`relay_plist`] with the interval as the plist holds it.
+fn relay_agent_plist(context: &Context, every: &str) -> String {
     agent(
         context,
-        &["relay", "--every", &every.to_string()],
+        &["relay", "--every", every],
         "<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>",
         Some(RELAY_THROTTLE_SECS),
     )
@@ -1019,16 +1121,18 @@ impl Loaded {
             .or_else(|| self.arguments.first().map(PathBuf::from))
     }
 
-    /// The address from `serve --listen <address>`.
-    fn listen(&self) -> Option<&str> {
+    /// The value from the service's arguments: the address from `serve
+    /// --listen <address>`, the interval from `relay --every <seconds>`.
+    fn value(&self, service: ServiceName) -> Option<&str> {
+        let (subcommand, option) = service.arguments();
         match self.arguments.as_slice() {
-            [_, serve, flag, listen] if serve == "serve" && flag == "--listen" => Some(listen),
+            [_, named, flag, value] if named == subcommand && flag == option => Some(value),
             _ => None,
         }
     }
 
     /// Where the plist at `path` says something other than the loaded job.
-    fn differences(&self, installed: &Installed, path: &Path) -> Vec<String> {
+    fn differences(&self, service: ServiceName, installed: &Installed, path: &Path) -> Vec<String> {
         let mut out = Vec::new();
         let mut path_field = |name: &str, loaded: Option<&Path>, plist: Option<&Path>| {
             let same = match (loaded, plist) {
@@ -1072,9 +1176,10 @@ impl Loaded {
             self.working_directory.as_deref(),
             Some(&installed.working_directory),
         );
-        if self.listen() != Some(installed.listen.as_str()) {
+        if self.value(service) != Some(installed.listen.as_str()) {
+            let (subcommand, option) = service.arguments();
             out.push(format!(
-                "arguments: loaded {}, plist serve --listen {}",
+                "arguments: loaded {}, plist {subcommand} {option} {}",
                 self.arguments.join(" "),
                 installed.listen
             ));
@@ -2117,23 +2222,37 @@ pub mod testing {
         context
     }
 
-    /// `launchctl print` for a job loaded from `context`'s plist as
+    /// `launchctl print` for a console job loaded from `context`'s plist as
     /// `context` would write it, in the shape launchd prints.
     pub fn printed(context: &Context, listen: &str, pid: u32) -> String {
+        printed_job(context, &["serve", "--listen", listen], pid)
+    }
+
+    /// [`printed`] for a background relay job running every `every` seconds.
+    pub fn printed_relay(context: &Context, every: u64, pid: u32) -> String {
+        printed_job(context, &["relay", "--every", &every.to_string()], pid)
+    }
+
+    fn printed_job(context: &Context, arguments: &[&str], pid: u32) -> String {
         let environment = context
             .home_override
             .as_ref()
             .map(|home| format!("\t\tCOMMONMEASURE_HOME => {}\n", home.display()))
             .unwrap_or_default();
+        let arguments: String = arguments
+            .iter()
+            .map(|argument| format!("\t\t{argument}\n"))
+            .collect();
         format!(
-            "gui/501/{LABEL} = {{\n\tactive count = 1\n\tpath = {plist}\n\ttype = LaunchAgent\n\
-             \tstate = running\n\n\tprogram = {exe}\n\targuments = {{\n\t\t{exe}\n\t\tserve\n\
-             \t\t--listen\n\t\t{listen}\n\t}}\n\n\tworking directory = {wd}\n\n\
+            "gui/501/{label} = {{\n\tactive count = 1\n\tpath = {plist}\n\ttype = LaunchAgent\n\
+             \tstate = running\n\n\tprogram = {exe}\n\targuments = {{\n\t\t{exe}\n{arguments}\
+             \t}}\n\n\tworking directory = {wd}\n\n\
              \tstdout path = {log}\n\tstderr path = {log}\n\tinherited environment = {{\n\
              \t\tSSH_AUTH_SOCK => /private/tmp/listeners\n\t}}\n\n\tenvironment = {{\n\
-             \t\tOSLogRateLimit => 64\n{environment}\t\tXPC_SERVICE_NAME => {LABEL}\n\t}}\n\n\
+             \t\tOSLogRateLimit => 64\n{environment}\t\tXPC_SERVICE_NAME => {label}\n\t}}\n\n\
              \tdomain = gui/501 [100024]\n\tpid = {pid}\n\n\tjetsam coalition = {{\n\
              \t\tstate = active\n\t}}\n}}\n",
+            label = context.label,
             plist = context.plist().display(),
             exe = context.exe.display(),
             wd = context.working_directory.display(),
@@ -2457,7 +2576,7 @@ mod tests {
         assert_eq!(job.state.as_deref(), Some("running"));
         assert_eq!(job.path, Some(context.plist()));
         assert_eq!(job.program(), Some(context.exe.clone()));
-        assert_eq!(job.listen(), Some("127.0.0.1:4173"));
+        assert_eq!(job.value(ServiceName::Console), Some("127.0.0.1:4173"));
         assert_eq!(job.home, JobHome::Set(edge.clone()));
         assert_eq!(job.stdout, Some(edge.join("logs/console.log")));
         assert_eq!(job.working_directory, Some(home.path().to_path_buf()));
@@ -2573,11 +2692,11 @@ mod tests {
         let shell = with_home(context(home.path()), &home.path().join("edge-b"));
         let commands =
             Recorder::default().answer(&format!("launchctl print gui/501/{LABEL}"), true, &print);
-        let found = inspect_for_update(&shell, &commands, &shell.exe).unwrap();
-        let BeforeUpdate::Runs { installed, pid, .. } = found else {
+        let found =
+            inspect_for_update(&shell, &commands, ServiceName::Console, &shell.exe).unwrap();
+        let BeforeUpdate::Runs(installed) = found else {
             panic!("{found:?}");
         };
-        assert_eq!(pid, Some(7));
         assert_eq!(installed.home, Some(edge_a.clone()));
         assert_eq!(installed.log, installer.log);
         // Inspecting changes nothing.
@@ -2594,10 +2713,10 @@ mod tests {
                 "",
             )
             .answer(&format!("launchctl kickstart gui/501/{LABEL}"), true, "");
-        stop_for_update(&shell, &commands, &installed).unwrap();
+        stop_for_update(&shell, &commands, ServiceName::Console, &installed).unwrap();
         // The plist stays, so the service can be started again on it.
         assert!(shell.plist().exists());
-        let _ = start_after_update(&shell, &commands, &installed);
+        let _ = start_after_update(&shell, &commands, ServiceName::Console, &installed);
         assert_eq!(
             commands.calls(),
             vec![
@@ -2623,11 +2742,17 @@ mod tests {
         let commands =
             Recorder::default().answer(&format!("launchctl print gui/501/{LABEL}"), true, &print);
         assert_eq!(
-            inspect_for_update(&installer, &commands, &other).unwrap(),
+            inspect_for_update(&installer, &commands, ServiceName::Console, &other).unwrap(),
             BeforeUpdate::RunsOther(installer.exe.clone())
         );
         assert_eq!(
-            inspect_for_update(&installer, &Recorder::default(), &installer.exe).unwrap(),
+            inspect_for_update(
+                &installer,
+                &Recorder::default(),
+                ServiceName::Console,
+                &installer.exe
+            )
+            .unwrap(),
             BeforeUpdate::Absent
         );
     }
@@ -2641,7 +2766,8 @@ mod tests {
             Recorder::default().answer(&format!("launchctl print gui/501/{LABEL}"), true, &print);
 
         std::fs::remove_file(installer.plist()).unwrap();
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(error.contains("is loaded (pid 7)"), "{error}");
         assert!(error.contains("cannot be read"), "{error}");
         assert!(
@@ -2659,11 +2785,13 @@ mod tests {
 
         // A binary plist, as `plutil -convert binary1` leaves it.
         std::fs::write(installer.plist(), b"bplist00\xd1\x01\x02").unwrap();
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(error.contains("cannot be read"), "{error}");
 
         std::fs::write(installer.plist(), "<plist><dict></dict></plist>").unwrap();
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(error.contains("not in the form install writes"), "{error}");
         // Nothing but the inspection reached launchd.
         assert!(commands.calls().iter().all(|call| call.contains("print")));
@@ -2679,7 +2807,8 @@ mod tests {
             Some(125),
             "Domain does not support specified action",
         );
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(error.contains("cannot tell whether"), "{error}");
         assert!(error.contains("exit 125"), "{error}");
     }
@@ -2695,7 +2824,8 @@ mod tests {
         // The plist was rewritten for home B without being loaded.
         let rewritten = with_home(context(home.path()), &home.path().join("b"));
         std::fs::write(installer.plist(), plist(&rewritten, &listen)).unwrap();
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(
             error.contains("differs from the job launchd loaded"),
             "{error}"
@@ -2705,8 +2835,60 @@ mod tests {
 
         // Or for another address.
         std::fs::write(installer.plist(), plist(&installer, "127.0.0.1:1")).unwrap();
-        let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+            .unwrap_err();
         assert!(error.contains("arguments: loaded"), "{error}");
+    }
+
+    #[test]
+    fn update_finds_a_relay_service_and_refuses_one_whose_plist_differs_from_the_loaded_job() {
+        let home = tempfile::tempdir().unwrap();
+        let edge = home.path().join("edge-a");
+        let installer = Context {
+            log: edge.join("logs/relay.log"),
+            ..with_home(super::testing::relay_context(home.path()), &edge)
+        };
+        std::fs::create_dir_all(installer.plist().parent().unwrap()).unwrap();
+        std::fs::write(installer.plist(), relay_plist(&installer, 300)).unwrap();
+        let print = super::testing::printed_relay(&installer, 300, 8);
+        let commands = Recorder::default().answer(
+            &format!("launchctl print gui/501/{RELAY_LABEL}"),
+            true,
+            &print,
+        );
+        let found =
+            inspect_for_update(&installer, &commands, ServiceName::Relay, &installer.exe).unwrap();
+        let BeforeUpdate::Runs(installed) = found else {
+            panic!("{found:?}");
+        };
+        assert_eq!(installed.home, Some(edge.clone()));
+        assert_eq!(installed.listen, "300");
+        assert_eq!(
+            reinstall_command(ServiceName::Relay, &installed),
+            format!(
+                "env COMMONMEASURE_HOME={} {} service install relay --every 300",
+                edge.display(),
+                installer.exe.display()
+            )
+        );
+
+        // The plist was rewritten for another interval without being loaded.
+        std::fs::write(installer.plist(), relay_plist(&installer, 60)).unwrap();
+        let error = inspect_for_update(&installer, &commands, ServiceName::Relay, &installer.exe)
+            .unwrap_err();
+        assert!(
+            error.contains("the background relay service ai.commonmeasure.relay is loaded (pid 8)"),
+            "{error}"
+        );
+        assert!(
+            error.contains("arguments: loaded") && error.contains("plist relay --every 60"),
+            "{error}"
+        );
+        assert!(
+            error.contains("commonmeasure service uninstall relay"),
+            "{error}"
+        );
+        assert!(commands.calls().iter().all(|call| call.contains("print")));
     }
 
     /// Inspect a job that `print` describes, with the plist `context`
@@ -2717,7 +2899,7 @@ mod tests {
         let commands =
             Recorder::default().answer(&format!("launchctl print gui/501/{LABEL}"), true, print);
         (
-            inspect_for_update(context, &commands, &context.exe),
+            inspect_for_update(context, &commands, ServiceName::Console, &context.exe),
             commands,
         )
     }
@@ -2730,7 +2912,7 @@ mod tests {
         let print = printed(&context, "127.0.0.1:4173", 42);
         assert!(matches!(
             inspect_print(&context, &print).0,
-            Ok(BeforeUpdate::Runs { .. })
+            Ok(BeforeUpdate::Runs(_))
         ));
         for changed in [
             print.replace("\tenvironment = {", "\tchanged environment = {"),
@@ -2923,7 +3105,9 @@ mod tests {
         ] {
             assert_ne!(edit, written);
             std::fs::write(installer.plist(), &edit).unwrap();
-            let error = inspect_for_update(&installer, &commands, &installer.exe).unwrap_err();
+            let error =
+                inspect_for_update(&installer, &commands, ServiceName::Console, &installer.exe)
+                    .unwrap_err();
             assert!(
                 error.contains("has been edited since service install wrote it"),
                 "{error}"
@@ -3015,7 +3199,7 @@ mod tests {
             working_directory: PathBuf::from("/home/op"),
         };
         assert_eq!(
-            reinstall_command(&installed),
+            reinstall_command(ServiceName::Console, &installed),
             "env COMMONMEASURE_HOME='/home/op/edge a' /home/op/.local/bin/commonmeasure service \
              install console --listen 127.0.0.1:4173"
         );
@@ -3023,7 +3207,10 @@ mod tests {
             home: None,
             ..installed
         };
-        assert!(reinstall_command(&default).starts_with("env -u COMMONMEASURE_HOME "));
+        assert!(
+            reinstall_command(ServiceName::Console, &default)
+                .starts_with("env -u COMMONMEASURE_HOME ")
+        );
     }
 
     fn with_receiver(context: &Context) {

@@ -10,6 +10,9 @@
 //! policy opts into private addresses to reach the origin, as the stdio test
 //! in `mediated_e2e.rs` does.
 
+mod common;
+use common::hosted_records as records;
+
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -366,13 +369,6 @@ fn session_files(home: &Path) -> Vec<std::path::PathBuf> {
     let mut files: Vec<_> = entries.map(|entry| entry.expect("entry").path()).collect();
     files.sort();
     files
-}
-
-fn records(home: &Path, session: &str) -> Vec<Value> {
-    commonmeasure_harness::SessionLog::read(
-        &home.join("sessions").join(format!("{session}.ndjson")),
-    )
-    .expect("the session file reads")
 }
 
 fn crossings(records: &[Value]) -> Vec<&Value> {

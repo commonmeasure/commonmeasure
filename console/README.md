@@ -81,3 +81,28 @@ console at `http://127.0.0.1:4187` with three synthetic sessions in a temporary
 directory. It has no provider runner, credentials or relay. Policy-form writes
 affect only that temporary directory. Stop the process when finished. This
 fixture establishes rendering and local interactions, not provider integration.
+
+## Shared policy form
+
+`policy-form/` owns the reusable form and reproducible package;
+[`policy-form/README.md`](policy-form/README.md) specifies its adapter and Hub
+pinning. `policy-host.mjs` is the Edge adapter. Both are served as same-origin
+modules under the existing CSP. No Node runtime is needed by the binary.
+
+The visual fixture defaults to synthetic directory policies. Set
+`CM_DESIGN_PREVIEW_POLICY` to `empty`, `one`, `many`, `managed`, `absent`,
+`malformed` or `deployment-error` to exercise other states. These declarations
+exist only in the fixture's temporary home. `CM_DESIGN_PREVIEW_PORT` chooses
+the loopback port.
+
+After building the preview, the browser acceptance script uses an installed
+Playwright module (no browser download is performed):
+
+```sh
+PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node console/test/policy-browser.mjs
+```
+
+It starts only temporary synthetic fixtures and writes screenshots and results
+to the ignored `target/policy-ux-evidence/` directory. It checks both themes at
+390px and 1280px, error/read-only states, the real local edit/review/save path,
+stale and invalid drafts, preservation and historical forecasting.

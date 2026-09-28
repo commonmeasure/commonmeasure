@@ -6,6 +6,18 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.6 (28 September 2026)
+
+Upgrading: `update` no longer asks the operator to close hosts or uninstall
+the relay service.
+
+### Changed
+
+- The console distinguishes unreadable enrolment from an unconfigured receiver, shows delivered events once, stacks record details on narrow screens, uses singular counts for one result or engagement mismatch, and focuses a labelled alert beside Edit policy when the editor cannot open.
+- The console leads with delivery exceptions, session health and comparison controls. Storage, identity, coverage and measurement details use labelled disclosures; Record leads with host and time while keeping complete session identifiers and separate evidence grades. Sources distinguishes configured, unconfigured and unknown configuration from access, licence and credit evidence.
+- `update` no longer refuses while other processes of yours run the binary. The installer renames the new binary over the old one, so an MCP server, hook, `hosted service` or hand-started `serve` or `relay` keeps the release it started with until its host starts it again; after every install, a reinstall of the release already installed included, `update` lists each by pid, subcommand and `COMMONMEASURE_HOME`. It stops the background relay service and starts it again with its own Edge home, interval and log, as it already did for the console service. The refusal, the console exemption, the second launchd check and the refusal of processes that could not be inspected are removed ([updating](https://github.com/commonmeasure/commonmeasure/blob/main/docs/GETTING-STARTED.md#updating)).
+- The console's Policy page opens as a read view grouped by directory, with engagement, mode and reporting shown separately. A personal policy is edited in one offline form that validates through the runtime's loader and shows the changes for review before Save; the whole document, fields outside the simple controls included, travels with the draft, and a stale save keeps the draft. A policy managed through `deployment.json` is read-only, at the write endpoints as well as on the page. The historical forecast is kept as a disclosure beside the view ([the console](https://github.com/commonmeasure/commonmeasure/blob/main/docs/CONSOLE.md#policy)).
+
 ## 0.4.5 (27 September 2026)
 
 Upgrading: a `policy.json` that sets `refuse_on_pii`, `terms[].assessment`, a

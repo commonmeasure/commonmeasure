@@ -21,7 +21,9 @@ use chrono::{DateTime, Duration, Utc};
 use maud::{Markup, html};
 use serde_json::{Value, json};
 
-use super::app::{ReadFrom, Section, fact, refused_standing_words, shell, str_of, topbar, u, when};
+use super::app::{
+    ReadFrom, Section, fact, record_heading, refused_standing_words, shell, str_of, u, when,
+};
 use super::form::encode_component;
 
 /// Answers whether the process `(pid, started_at)` is in the process table
@@ -631,13 +633,14 @@ fn screen(agents: &Value, selected: Option<&str>, read: ReadFrom<'_>) -> Markup 
     let selected_session = selected.and_then(|id| find(agents, id));
     let selected_id = selected_session.and_then(|session| session["id"].as_str());
     html! {
-        (topbar("Agents", html! {
-            "Read from " span class="mono" { (read.sessions) } " at " (read.at) "."
-            @if agents["liveness_probe"] != "wired" { " Liveness unavailable: no probe is wired." }
-        }))
-        section class="screen" {
-            div class="cards stack" {
-                (attention_card(&agents["attention"]))
+        (record_heading("Agents", read))
+        section class="screen surface-screen" {
+            @if agents["liveness_probe"] != "wired" {
+                p class="callout" { "Liveness unavailable: no process probe is connected." }
+            }
+            (attention_card(&agents["attention"]))
+            details class="surface-details" {
+                summary { "Integration coverage and verification" }
                 (coverage_card(&agents["coverage"]))
             }
         }
@@ -673,7 +676,7 @@ fn attention_card(attention: &Value) -> Markup {
         div class="card" {
             h2 { "Attention" span class="muted-inline" { (items.len()) } }
             p class="callout" {
-                "Host sessions with a running host process or a record in the last " (ATTENTION_WINDOW_HOURS) " hours, and the edge's delivery state. An older session's items are in its detail."
+                "Running hosts · last " (ATTENTION_WINDOW_HOURS) " hours of session records · current delivery state. Older items remain in session details."
             }
             @if items.is_empty() {
                 p class="muted" { "Nothing recorded needs attention." }
@@ -708,7 +711,7 @@ fn coverage_card(coverage: &Value) -> Markup {
     let empty = Vec::new();
     let hosts = coverage.as_array().unwrap_or(&empty);
     html! {
-        div class="card" {
+        div class="coverage-table table-scroll" tabindex="0" role="region" aria-label="Host path coverage" {
             h2 { "Coverage by host" }
             @if hosts.is_empty() {
                 p class="muted" { "No host has recorded anything." }
@@ -809,72 +812,6 @@ fn detail(agents: &Value, id: &str) -> Markup {
             (fact("refused", &refused.to_string(), refused > 0))
         }
 
-        h3 class="xh" { "Timeline" }
-        dl class="cx-fields" {
-            (field("Host", str_of(session.get("host"), "not recorded")))
-            @if let Some(name) = session["client"]["name"].as_str() {
-                (field("Client", &format!("{name} {}", str_of(session["client"].get("version"), ""))))
-            }
-            @if process.is_object() {
-                (field("Host process", &format!(
-                    "{} pid {} started {}",
-                    str_of(process.get("command"), "unknown"),
-                    process["pid"],
-                    str_of(process.get("started_at"), "unknown"),
-                )))
-            }
-            (field("Liveness basis", str_of(session["liveness"].get("basis"), "")))
-            (field("Join", &format!(
-                "{}: {}",
-                str_of(session["join"].get("basis"), ""),
-                str_of(session["join"].get("detail"), ""),
-            )))
-            (field("First record", &when(session.get("first"))))
-            (field("Last record", &when(session.get("last"))))
-            @if session["ended"].is_object() {
-                (field("Session ended", &format!(
-                    "{} ({})",
-                    when(session["ended"].get("timestamp")),
-                    str_of(session["ended"].get("reason"), "no reason given"),
-                )))
-            }
-            @for cwd in session["cwds"].as_array().into_iter().flatten() {
-                (field("Working directory", cwd.as_str().unwrap_or("")))
-            }
-        }
-
-        h3 class="xh" { "Sources" }
-        table class="rules" {
-            thead { tr { th { "Log" } th { "Path" } th { "Records" } th { "Mediated" } th { "Observed" } th { "Reconstructed" } th { "Refused" } } }
-            tbody {
-                @for log in session["logs"].as_array().into_iter().flatten() {
-                    tr {
-                        td class="mono" {
-                            a href=(format!("/app/record?session={}", encode_component(str_of(log.get("session_id"), "")))) {
-                                (str_of(log.get("session_id"), ""))
-                            }
-                        }
-                        td { (str_of(log.get("process_path"), "not recorded")) }
-                        td { (u(log.get("records"))) }
-                        td { (u(log.get("mediated"))) }
-                        td { (u(log.get("observed"))) }
-                        td { (u(log.get("reconstructed"))) }
-                        td { (u(log.get("refused"))) }
-                    }
-                }
-            }
-        }
-        p class="muted" { "Each log opens in Record, which shows every crossing." }
-
-        h3 class="xh" { "Policy" }
-        (policy_block(session))
-
-        h3 class="xh" { "Context" }
-        (context_block(&session["context"]))
-
-        h3 class="xh" { "Reporting" }
-        (reporting_block(session))
-
         h3 class="xh" { "Attention" }
         @if session["attention"].as_array().is_none_or(Vec::is_empty) {
             p class="muted" { "Nothing recorded needs attention." }
@@ -886,6 +823,76 @@ fn detail(agents: &Value, id: &str) -> Markup {
                 }
             }
         }
+        details class="surface-details" {
+            summary { "Session provenance" }
+            h3 class="xh" { "Timeline" }
+            dl class="cx-fields" {
+                (field("Host", str_of(session.get("host"), "not recorded")))
+                @if let Some(name) = session["client"]["name"].as_str() {
+                    (field("Client", &format!("{name} {}", str_of(session["client"].get("version"), ""))))
+                }
+                @if process.is_object() {
+                    (field("Host process", &format!(
+                        "{} pid {} started {}",
+                        str_of(process.get("command"), "unknown"),
+                        process["pid"],
+                        str_of(process.get("started_at"), "unknown"),
+                    )))
+                }
+                (field("Liveness basis", str_of(session["liveness"].get("basis"), "")))
+                (field("Join", &format!(
+                    "{}: {}",
+                    str_of(session["join"].get("basis"), ""),
+                    str_of(session["join"].get("detail"), ""),
+                )))
+                (field("First record", &when(session.get("first"))))
+                (field("Last record", &when(session.get("last"))))
+                @if session["ended"].is_object() {
+                    (field("Session ended", &format!(
+                        "{} ({})",
+                        when(session["ended"].get("timestamp")),
+                        str_of(session["ended"].get("reason"), "no reason given"),
+                    )))
+                }
+                @for cwd in session["cwds"].as_array().into_iter().flatten() {
+                    (field("Working directory", cwd.as_str().unwrap_or("")))
+                }
+            }
+
+            h3 class="xh" { "Sources" }
+            div class="table-scroll" tabindex="0" role="region" aria-label="Session source logs" {
+            table class="rules" {
+                thead { tr { th { "Log" } th { "Path" } th { "Records" } th { "Mediated" } th { "Observed" } th { "Reconstructed" } th { "Refused" } } }
+                tbody {
+                    @for log in session["logs"].as_array().into_iter().flatten() {
+                        tr {
+                            td class="mono" {
+                                a href=(format!("/app/record?session={}", encode_component(str_of(log.get("session_id"), "")))) {
+                                    (str_of(log.get("session_id"), ""))
+                                }
+                            }
+                            td { (str_of(log.get("process_path"), "not recorded")) }
+                            td { (u(log.get("records"))) }
+                            td { (u(log.get("mediated"))) }
+                            td { (u(log.get("observed"))) }
+                            td { (u(log.get("reconstructed"))) }
+                            td { (u(log.get("refused"))) }
+                        }
+                    }
+                }
+            }
+            }
+
+        }
+
+        h3 class="xh" { "Policy" }
+        (policy_block(session))
+
+        h3 class="xh" { "Context" }
+        (context_block(&session["context"]))
+
+        h3 class="xh" { "Reporting" }
+        (reporting_block(session))
     }
 }
 

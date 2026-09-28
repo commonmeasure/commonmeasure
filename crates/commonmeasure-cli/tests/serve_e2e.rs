@@ -310,7 +310,10 @@ fn the_policy_screen_names_each_scope_whose_two_engagement_names_differ() {
     assert_eq!(response.status, 200);
     let page = body_text(response);
     assert!(page.contains(r#"data-outcome="saved""#), "{page}");
-    assert!(page.contains("Every scope's governing engagement"));
+    assert!(
+        !page.contains(r#"id="divergences""#),
+        "resolved mismatches leave no notice"
+    );
     assert!(
         console.get_json("/api/policy")["engagement_divergences"]
             .as_array()
@@ -421,7 +424,7 @@ fn a_conflicting_edit_is_refused_with_both_versions_stated() {
     assert!(page.contains(r#"data-outcome="conflict""#), "{page}");
     assert!(page.contains(&stale[..12]) && page.contains(&current[..12]));
     assert!(
-        page.contains(r#"value="prefer" checked"#),
+        page.contains(r#"class="policy-label">Mode</span>prefer"#),
         "the page shows the current declaration"
     );
     assert_eq!(policy_revision(&console), current, "nothing was written");

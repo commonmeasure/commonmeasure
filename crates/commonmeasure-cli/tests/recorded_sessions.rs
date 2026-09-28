@@ -5,6 +5,9 @@
 //! produced; a change in the reader that moves them is a change in what
 //! the report says about a real session.
 
+mod common;
+use common::session_records as records;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -50,15 +53,6 @@ fn session_report(home: &Path, session: &str) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn records(home: &Path, session: &str) -> Vec<Value> {
-    std::fs::read_to_string(home.join("sessions").join(format!("{session}.ndjson")))
-        .expect("the log was copied")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("NDJSON"))
-        .collect()
 }
 
 /// The real Copilot paired request shared one authenticated MCP session.

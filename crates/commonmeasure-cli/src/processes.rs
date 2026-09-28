@@ -1,8 +1,8 @@
 //! The processes of this user that run a given executable file, read from
 //! the platform's process table: `proc_listallpids`, `proc_pidinfo` and
-//! `proc_pidpath` on macOS, `/proc/<pid>` on Linux. `update` uses it to
-//! refuse replacing a binary other processes still run (`ARCHITECTURE.md`
-//! §What runs where).
+//! `proc_pidpath` on macOS, `/proc/<pid>` on Linux. `update` lists them
+//! after it replaces the binary: they keep the release they started with
+//! until their host starts them again (`ARCHITECTURE.md` §What runs where).
 //!
 //! Each listed process is gone (exited, or a zombie), identified, or live
 //! but unidentified. An identified process runs the file when the path the
@@ -10,24 +10,23 @@
 //! its image is the file's inode. The path catches a process still running
 //! an inode an earlier upgrade renamed over, since the kernel keeps
 //! reporting the path it was started from; the inode catches a process that
-//! reached the file through another path, such as a hard link.
+//! reached the file through another path, such as a hard link. So a listed
+//! process runs the file, or a file that was at its path before it; the
+//! listing does not tell which.
 //!
-//! A process whose executable cannot be identified is counted when its
-//! process name is the file's name, or when not even its name can be read.
-//! Refusing every unidentified process would block on `ssh-agent` and
-//! `gpg-agent`, which Linux hides from their own user; ignoring them missed
-//! a live process running an old release whose last link was removed. A
-//! renamed copy of the binary whose image cannot be read is therefore
-//! missed.
+//! A process whose executable cannot be identified is listed when its
+//! process name is the file's name: on macOS, a process whose image lost
+//! its last link has no path the kernel reports. A renamed copy of the
+//! binary whose image cannot be read, and a process whose name cannot be
+//! read either, are not listed.
 //!
 //! Nothing here returns argument or environment text read from another
 //! process beyond an exact subcommand name and `COMMONMEASURE_HOME`: other
 //! processes' arguments and environments can carry credentials.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
-/// A live process of this user that runs the file, or may.
+/// A live process of this user that runs the file.
 #[derive(Debug, PartialEq)]
 pub struct Process {
     pub pid: u32,
@@ -36,25 +35,17 @@ pub struct Process {
     /// the subcommand names `running` was given.
     pub subcommand: Option<String>,
     pub home: Home,
-    /// It runs the file at the pid launchd first reported for the managed
-    /// console, as launchd's child, but started after launchd was asked, or
-    /// launchd reported another pid or none when asked again: the console
-    /// service restarted or stopped during the check.
-    pub console_changed: bool,
 }
 
 /// How a process was matched to the file.
 #[derive(Debug, PartialEq)]
 pub enum Runs {
-    /// Its executable is the file. `path` is the executable's path as the
-    /// kernel reports it, when it reports one.
-    File { path: Option<PathBuf> },
+    /// Its executable is the file, or was started from the file's path and
+    /// may be an earlier file renamed over since.
+    File,
     /// Its executable could not be identified, and its process name is the
-    /// file's name, or could not be read either (`None`). On macOS the name
-    /// is unreadable only for a process the kernel refused to describe
-    /// whose owner could not be read either: nothing shows it runs the file,
-    /// and nothing rules it out.
-    Unidentified { name: Option<String> },
+    /// file's name.
+    Unidentified { name: String },
 }
 
 /// The Edge home a process was started with.
@@ -76,45 +67,10 @@ pub enum Home {
     Unknown,
 }
 
-/// The managed console as launchd reported it, which `running` leaves out
-/// only while it is still that process.
-pub struct Console<'a> {
-    pub pid: u32,
-    /// When launchd was asked for `pid`. The process it reported had
-    /// started by then; one started later reuses the pid.
-    pub asked: SystemTime,
-    /// Asks launchd again, after the scan, for the pid it reports now.
-    pub again: &'a dyn Fn() -> Option<u32>,
-}
-
-impl Console<'_> {
-    /// Whether the process at `pid`, which runs the file, may be the one
-    /// launchd reported: the same pid, a child of launchd, and started
-    /// before launchd was asked. `running` still asks launchd again before
-    /// leaving it out.
-    fn admits(&self, pid: u32, mine: &Mine) -> bool {
-        pid == self.pid
-            && mine.parent == 1
-            && mine.started.is_some_and(|started| started < self.asked)
-    }
-}
-
 /// The processes of the current user, other than this one, that run
-/// `file`. `console` is the managed console: the process at its pid is left
-/// out only when it runs `file`, its parent is launchd (pid 1), it started
-/// before launchd was asked, and launchd reports the same pid again after
-/// the scan. The start time rules out a process that took the pid after
-/// launchd answered, such as an orphaned MCP server, whose parent is also
-/// launchd; the second answer rules out a console launchd stopped reporting
-/// during the scan. Start times are wall-clock, so a clock set back between
-/// the two can defeat the first check. Without a start time, as on Linux,
-/// the console is counted like any other process. An error means the table
-/// could not be read in full, which is not the same as finding no process.
-pub fn running(
-    file: &Path,
-    console: Option<&Console>,
-    subcommands: &[String],
-) -> Result<Vec<Process>, String> {
+/// `file`. An error means the table could not be read in full, which is not
+/// the same as finding no process.
+pub fn running(file: &Path, subcommands: &[String]) -> Result<Vec<Process>, String> {
     let target = Target {
         canonical: file
             .canonicalize()
@@ -128,7 +84,6 @@ pub fn running(
     };
     let me = std::process::id();
     let mut found = Vec::new();
-    let mut console_process = None;
     for pid in table::pids()? {
         if pid == me {
             continue;
@@ -136,14 +91,8 @@ pub fn running(
         let Entry::Mine(mine) = table::entry(pid)? else {
             continue;
         };
-        let identity = mine.executable.identify(&target);
-        let at_console = identity == Identity::Target
-            && console.is_some_and(|console| pid == console.pid && mine.parent == 1);
-        let admitted = at_console && console.is_some_and(|console| console.admits(pid, &mine));
-        let runs = match identity {
-            Identity::Target => Runs::File {
-                path: mine.executable.path,
-            },
+        let runs = match mine.executable.identify(&target) {
+            Identity::Target => Runs::File,
             Identity::Other => continue,
             Identity::Unknown => match unidentified(mine.name, &target.name, mine.name_limit) {
                 Some(runs) => runs,
@@ -151,25 +100,11 @@ pub fn running(
             },
         };
         let (subcommand, home) = table::shown(pid, subcommands);
-        let process = Process {
+        found.push(Process {
             pid,
             runs,
             subcommand,
             home,
-            console_changed: at_console && !admitted,
-        };
-        if admitted {
-            console_process = Some(process);
-        } else {
-            found.push(process);
-        }
-    }
-    if let (Some(process), Some(console)) = (console_process, console)
-        && (console.again)() != Some(process.pid)
-    {
-        found.push(Process {
-            console_changed: true,
-            ..process
         });
     }
     found.sort_by_key(|process| process.pid);
@@ -193,12 +128,9 @@ enum Entry {
 }
 
 struct Mine {
-    parent: u32,
-    /// When it started, where the kernel says.
-    started: Option<SystemTime>,
     /// The process name: the executable's file name when it started,
-    /// truncated to `name_limit` bytes. `None` when it could not be read.
-    name: Option<String>,
+    /// truncated to `name_limit` bytes.
+    name: String,
     name_limit: usize,
     executable: Executable,
 }
@@ -249,17 +181,10 @@ impl Executable {
     }
 }
 
-/// Whether a process whose executable is not identified is counted: when
-/// its name, truncated to `limit` bytes, is the file's name, or when its
-/// name could not be read either, since then nothing rules it out.
-fn unidentified(name: Option<String>, file_name: &str, limit: usize) -> Option<Runs> {
-    match name {
-        Some(name) if same_name(&name, file_name, limit) => {
-            Some(Runs::Unidentified { name: Some(name) })
-        }
-        Some(_) => None,
-        None => Some(Runs::Unidentified { name: None }),
-    }
+/// Whether a process whose executable is not identified is listed: when
+/// its name, truncated to `limit` bytes, is the file's name.
+fn unidentified(name: String, file_name: &str, limit: usize) -> Option<Runs> {
+    same_name(&name, file_name, limit).then_some(Runs::Unidentified { name })
 }
 
 /// Whether process name `name`, which the kernel truncates to `limit`
@@ -408,35 +333,27 @@ fn mapped<E>(mut region: impl FnMut(u64) -> Result<Option<Region>, E>) -> Result
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 enum Owner {
     Gone,
-    Read { uid: u32, parent: u32, name: String },
+    Read { uid: u32, name: String },
     Unreadable,
 }
 
 /// A process the kernel refused to describe (EPERM), by its owner. A
 /// security policy can refuse a process of this user too, so EPERM alone
 /// does not make it another user's: the same user's is unidentified, and
-/// the name rule applies; one whose owner cannot be read is unidentified
-/// with no name, so it is counted.
+/// the name rule applies. One whose owner cannot be read is not listed:
+/// nothing shows it runs the file.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn denied(owner: Owner, me: u32) -> Entry {
     match owner {
         Owner::Gone => Entry::Gone,
         Owner::Read { uid, .. } if uid != me => Entry::Other,
-        Owner::Read { parent, name, .. } => Entry::Mine(Mine {
-            parent,
-            started: None,
-            name: Some(name),
+        Owner::Read { name, .. } => Entry::Mine(Mine {
+            name,
             // `p_comm` holds this many bytes and a NUL.
             name_limit: MAXCOMLEN,
             executable: Executable::default(),
         }),
-        Owner::Unreadable => Entry::Mine(Mine {
-            parent: 0,
-            started: None,
-            name: None,
-            name_limit: 0,
-            executable: Executable::default(),
-        }),
+        Owner::Unreadable => Entry::Other,
     }
 }
 
@@ -609,10 +526,6 @@ mod table {
             name if name.is_empty() => text(&info.pbi_comm),
             name => name,
         };
-        let started = std::time::UNIX_EPOCH.checked_add(
-            std::time::Duration::from_secs(info.pbi_start_tvsec)
-                + std::time::Duration::from_micros(info.pbi_start_tvusec),
-        );
         let executable = match path(pid) {
             Ok(path) => Executable {
                 canonical: path.canonicalize().ok(),
@@ -633,9 +546,7 @@ mod table {
             },
         };
         Ok(Entry::Mine(Mine {
-            parent: info.pbi_ppid,
-            started,
-            name: Some(name),
+            name,
             name_limit: NAME_LIMIT,
             executable,
         }))
@@ -653,9 +564,8 @@ mod table {
     const KINFO_PID: usize = 40;
     const KINFO_COMM: usize = 243;
     const KINFO_UID: usize = 420;
-    const KINFO_PARENT: usize = 560;
 
-    /// The owner, parent and name of `pid` from `sysctl` `KERN_PROC_PID`,
+    /// The owner and name of `pid` from `sysctl` `KERN_PROC_PID`,
     /// which describes any process to any user: the kernel's check that
     /// refuses `proc_pidinfo` does not apply to it.
     pub(super) fn owner(pid: libc::c_int) -> super::Owner {
@@ -686,7 +596,6 @@ mod table {
                 let name: Vec<u8> = comm.iter().copied().take_while(|&byte| byte != 0).collect();
                 super::Owner::Read {
                     uid: int(KINFO_UID) as u32,
-                    parent: int(KINFO_PARENT) as u32,
                     name: String::from_utf8_lossy(&name).into_owned(),
                 }
             }
@@ -860,9 +769,8 @@ mod table {
         // Real, effective, saved and filesystem uids: the effective one.
         let uid =
             field("Uid:").and_then(|uids| uids.split_whitespace().nth(1)?.parse::<u32>().ok());
-        let parent = field("PPid:").and_then(|parent| parent.parse::<u32>().ok());
-        let (Some(uid), Some(parent)) = (uid, parent) else {
-            return Err(format!("read /proc/{pid}/status: no Uid or PPid line"));
+        let Some(uid) = uid else {
+            return Err(format!("read /proc/{pid}/status: no Uid line"));
         };
         // SAFETY: getuid cannot fail.
         if uid != unsafe { libc::getuid() } {
@@ -909,11 +817,8 @@ mod table {
             // `maps` and `map_files` are all withheld.
             Err(_) => Executable::default(),
         };
-        // Service mode, and with it the console exemption, is macOS only.
         Ok(Entry::Mine(Mine {
-            parent,
-            started: None,
-            name: Some(name),
+            name,
             name_limit: NAME_LIMIT,
             executable,
         }))
@@ -1295,20 +1200,20 @@ mod tests {
     #[test]
     fn a_denied_process_is_another_user_s_only_when_its_owner_says_so() {
         let mine = |entry: Entry| match entry {
-            Entry::Mine(mine) => Some((mine.parent, mine.name, mine.name_limit)),
+            Entry::Mine(mine) => Some((mine.name, mine.name_limit)),
             _ => None,
         };
         let read = |uid| Owner::Read {
             uid,
-            parent: 1,
             name: "commonmeasure".into(),
         };
         assert!(matches!(denied(read(0), 501), Entry::Other));
         assert_eq!(
             mine(denied(read(501), 501)),
-            Some((1, Some("commonmeasure".into()), MAXCOMLEN))
+            Some(("commonmeasure".into(), MAXCOMLEN))
         );
-        assert_eq!(mine(denied(Owner::Unreadable, 501)), Some((0, None, 0)));
+        // Nothing shows a process whose owner cannot be read runs the file.
+        assert!(matches!(denied(Owner::Unreadable, 501), Entry::Other));
         assert!(matches!(denied(Owner::Gone, 501), Entry::Gone));
     }
 
@@ -1317,72 +1222,30 @@ mod tests {
     fn the_owner_of_any_process_is_read_independently() {
         // launchd is root's, and proc_pidinfo describes it only to root.
         match table::owner(1) {
-            Owner::Read { uid, parent, name } => {
-                assert_eq!((uid, parent, name.as_str()), (0, 0, "launchd"));
+            Owner::Read { uid, name } => {
+                assert_eq!((uid, name.as_str()), (0, "launchd"));
             }
             _ => panic!("launchd's owner was not read"),
         }
         let pid = libc::c_int::try_from(std::process::id()).unwrap();
-        // SAFETY: getuid and getppid cannot fail.
-        let (uid, parent) = unsafe { (libc::getuid(), libc::getppid()) };
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() };
         match table::owner(pid) {
-            Owner::Read {
-                uid: read,
-                parent: read_parent,
-                ..
-            } => {
-                assert_eq!(read, uid);
-                assert_eq!(read_parent, u32::try_from(parent).unwrap());
-            }
+            Owner::Read { uid: read, .. } => assert_eq!(read, uid),
             _ => panic!("this process's owner was not read"),
         }
         assert!(matches!(table::owner(i32::MAX), Owner::Gone));
     }
 
     #[test]
-    fn the_console_is_admitted_only_as_launchd_s_child_started_before_launchd_was_asked() {
-        let asked = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
-        let again = || Some(7);
-        let console = Console {
-            pid: 7,
-            asked,
-            again: &again,
-        };
-        let process = |parent, started: Option<u64>| Mine {
-            parent,
-            started: started
-                .map(|secs| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
-            name: Some("commonmeasure".into()),
-            name_limit: 31,
-            executable: Executable::default(),
-        };
-        assert!(console.admits(7, &process(1, Some(999))));
-        // Started after launchd answered: the pid was reused.
-        assert!(!console.admits(7, &process(1, Some(1_000))));
-        assert!(!console.admits(7, &process(1, Some(1_001))));
-        // No start time, another parent, or another pid.
-        assert!(!console.admits(7, &process(1, None)));
-        assert!(!console.admits(7, &process(4242, Some(999))));
-        assert!(!console.admits(8, &process(1, Some(999))));
-    }
-
-    #[test]
-    fn an_unidentified_process_is_counted_by_its_name_or_when_it_has_none() {
+    fn an_unidentified_process_is_listed_by_its_name() {
         assert_eq!(
-            unidentified(Some("commonmeasure".into()), "commonmeasure", 31),
+            unidentified("commonmeasure".into(), "commonmeasure", 31),
             Some(Runs::Unidentified {
-                name: Some("commonmeasure".into())
+                name: "commonmeasure".into()
             })
         );
-        assert_eq!(
-            unidentified(Some("ssh-agent".into()), "commonmeasure", 31),
-            None
-        );
-        // A denied process whose owner could not be read has no name either.
-        assert_eq!(
-            unidentified(None, "commonmeasure", 0),
-            Some(Runs::Unidentified { name: None })
-        );
+        assert_eq!(unidentified("ssh-agent".into(), "commonmeasure", 31), None);
     }
 
     #[test]
@@ -1503,31 +1366,17 @@ mod tests {
         // environment, the shape that once leaked it.
         let child = start(&file, Some(""), false);
         let pid = child.id();
-        let found = running(&file, None, &names(&["mcp", "serve"]));
-        // Exempt as the console only when its parent is launchd, which a
-        // child of this test is not.
-        let again = || Some(pid);
-        let console = Console {
-            pid,
-            asked: SystemTime::now(),
-            again: &again,
-        };
-        let as_console = running(&file, Some(&console), &[]);
+        let found = running(&file, &names(&["mcp", "serve"]));
         stop(child);
 
         let found = found.unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].pid, pid);
-        assert!(
-            matches!(&found[0].runs, Runs::File { path: Some(path) }
-                if path.canonicalize().unwrap() == file.canonicalize().unwrap()),
-            "{found:?}"
-        );
+        assert_eq!(found[0].runs, Runs::File);
         assert_eq!(found[0].subcommand.as_deref(), Some("mcp"));
         assert_eq!(found[0].home, Home::Set("/edge/a".into()));
         assert!(!format!("{found:?}").contains("NOT_A_CREDENTIAL"));
-        assert_eq!(as_console.unwrap().len(), 1);
-        assert_eq!(running(&file, None, &[]).unwrap(), vec![]);
+        assert_eq!(running(&file, &[]).unwrap(), vec![]);
     }
 
     #[test]
@@ -1539,7 +1388,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = sleeper(dir.path(), "f");
         let child = start_with_home(&file, None, false, None);
-        let found = running(&file, None, &[]);
+        let found = running(&file, &[]);
         stop(child);
         let found = found.unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1560,7 +1409,7 @@ mod tests {
             .spawn()
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let found = running(&file, None, &[]);
+        let found = running(&file, &[]);
         child.kill().unwrap();
         child.wait().unwrap();
         let found = found.unwrap();
@@ -1577,14 +1426,14 @@ mod tests {
         std::fs::hard_link(&file, &alias).unwrap();
         let child = start(&alias, None, false);
         let pid = child.id();
-        let found = running(&file, None, &[]);
+        let found = running(&file, &[]);
         stop(child);
         let found = found.unwrap();
         assert_eq!(
             found.iter().map(|process| process.pid).collect::<Vec<_>>(),
             [pid]
         );
-        assert!(matches!(found[0].runs, Runs::File { .. }), "{found:?}");
+        assert_eq!(found[0].runs, Runs::File, "{found:?}");
     }
 
     #[test]
@@ -1603,7 +1452,7 @@ mod tests {
         std::fs::copy(&file, &fresh).unwrap();
         std::fs::rename(&fresh, &file).unwrap();
         std::fs::remove_file(&alias).unwrap();
-        let found = running(&file, None, &[]);
+        let found = running(&file, &[]);
         stop(child);
 
         let found = found.unwrap();
@@ -1617,14 +1466,38 @@ mod tests {
             assert_eq!(
                 found[0].runs,
                 Runs::Unidentified {
-                    name: Some(file.file_name().unwrap().to_string_lossy().into())
+                    name: file.file_name().unwrap().to_string_lossy().into()
                 }
             );
         } else {
             // /proc/<pid>/exe still reads the path it was started from.
-            assert!(matches!(found[0].runs, Runs::File { .. }), "{found:?}");
+            assert_eq!(found[0].runs, Runs::File, "{found:?}");
         }
         assert_eq!(found[0].home, Home::Set("/edge/a".into()));
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn a_process_whose_file_was_renamed_over_is_still_listed() {
+        // What `update` does: a new file renamed over the path while a
+        // process runs the old one.
+        let dir = tempfile::tempdir().unwrap();
+        let file = sleeper(dir.path(), "g");
+        let child = start(&file, None, false);
+        let pid = child.id();
+        let fresh = dir.path().join("fresh");
+        std::fs::copy(&file, &fresh).unwrap();
+        std::fs::rename(&fresh, &file).unwrap();
+        let found = running(&file, &names(&["mcp"]));
+        stop(child);
+
+        let found = found.unwrap();
+        assert_eq!(
+            found.iter().map(|process| process.pid).collect::<Vec<_>>(),
+            [pid],
+            "{found:?}"
+        );
+        assert_eq!(found[0].subcommand.as_deref(), Some("mcp"));
     }
 
     #[test]
@@ -1635,7 +1508,7 @@ mod tests {
         let child = start(&file, None, true);
         let pid = child.id();
         let unreadable = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap_err();
-        let found = running(&file, None, &[]);
+        let found = running(&file, &[]);
         stop(child);
 
         assert_eq!(unreadable.kind(), std::io::ErrorKind::PermissionDenied);
@@ -1645,67 +1518,9 @@ mod tests {
         assert_eq!(
             found[0].runs,
             Runs::Unidentified {
-                name: Some(file.file_name().unwrap().to_string_lossy().into())
+                name: file.file_name().unwrap().to_string_lossy().into()
             }
         );
         assert_eq!(found[0].home, Home::Unknown);
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn an_orphan_at_the_console_s_pid_is_exempt_only_as_the_process_launchd_reported() {
-        // The reviewer's orphan probe: a copy started through a shell that
-        // exits at once, so its parent is launchd, as the console's is.
-        let dir = tempfile::tempdir().unwrap();
-        let file = sleeper(dir.path(), "e");
-        let before_start = SystemTime::now();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let output = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(r#"COMMONMEASURE_TEST_SLEEP=1 "$0" --exact processes::tests::sleeping_child >/dev/null 2>&1 & echo $!"#)
-            .arg(&file)
-            .output()
-            .unwrap();
-        let pid: u32 = String::from_utf8(output.stdout)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let after_start = SystemTime::now();
-        let parent = std::process::Command::new("ps")
-            .args(["-o", "ppid=", "-p", &pid.to_string()])
-            .output()
-            .unwrap();
-        let scan = |asked, again: Option<u32>| {
-            let again = move || again;
-            let console = Console {
-                pid,
-                asked,
-                again: &again,
-            };
-            running(&file, Some(&console), &[]).map(|found| {
-                found
-                    .iter()
-                    .map(|process| (process.pid, process.console_changed))
-                    .collect::<Vec<_>>()
-            })
-        };
-        let reused = scan(before_start, Some(pid));
-        let reported = scan(after_start, Some(pid));
-        let changed = scan(after_start, Some(pid + 1));
-        let gone = scan(after_start, None);
-        // SAFETY: kill with a pid and a signal number.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-
-        assert_eq!(String::from_utf8_lossy(&parent.stdout).trim(), "1");
-        // Started after launchd was asked: a reused pid, counted, and marked
-        // as a console that changed during the check.
-        assert_eq!(reused.unwrap(), [(pid, true)]);
-        // Started before, and launchd names it again: the console.
-        assert_eq!(reported.unwrap(), Vec::<(u32, bool)>::new());
-        // Launchd names another pid, or none, the second time: counted.
-        assert_eq!(changed.unwrap(), [(pid, true)]);
-        assert_eq!(gone.unwrap(), [(pid, true)]);
     }
 }

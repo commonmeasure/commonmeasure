@@ -19,7 +19,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::service::{self, BeforeUpdate, Commands, Context, Installed, StopFailed};
+use crate::processes::{Home, Process, Runs};
+use crate::service::{self, BeforeUpdate, Commands, Context, Installed, ServiceName, StopFailed};
 
 const INSTALLER: &str = include_str!("../../../install.sh");
 
@@ -75,10 +76,13 @@ pub fn run(args: Update) -> Result<(), String> {
     }
 
     let target = target()?;
-    let context = if cfg!(target_os = "macos") {
-        Some(service::context()?)
+    let contexts = if cfg!(target_os = "macos") {
+        vec![
+            (ServiceName::Console, service::context()?),
+            (ServiceName::Relay, service::relay_context()?),
+        ]
     } else {
-        None
+        Vec::new()
     };
     let replacement = Replacement {
         releases,
@@ -89,11 +93,11 @@ pub fn run(args: Update) -> Result<(), String> {
         installer: INSTALLER,
         reported_version: &reported_version,
     };
-    replacement.run(
-        context
-            .as_ref()
-            .map(|context| (context, &service::System as &dyn Commands)),
-    )
+    let services: Vec<(ServiceName, &Context)> = contexts
+        .iter()
+        .map(|(service, context)| (*service, context))
+        .collect();
+    replacement.run(&services, &service::System)
 }
 
 /// The release location. A debug build honours `COMMONMEASURE_RELEASE_URL`,
@@ -219,97 +223,110 @@ struct Replacement<'a> {
 }
 
 impl Replacement<'_> {
-    /// In order: find the console service and refuse what cannot be stopped
-    /// and started again as it was; refuse while other processes run the
-    /// target; stop the service; run the installer; start the service again
-    /// on the binary then in place, whatever the installer's outcome. Every
-    /// refusal comes before anything is stopped or downloaded.
-    fn run(&self, service: Option<(&Context, &dyn Commands)>) -> Result<(), String> {
+    /// In order: find the managed services (console, then background relay)
+    /// and refuse what cannot be stopped and started again as it was; stop
+    /// each that runs the target; list the other processes that run it; run
+    /// the installer; start each stopped service again on the binary then in
+    /// place, whatever the installer's outcome; after every successful
+    /// install, the current release's included, name the processes listed,
+    /// which keep the release they started with.
+    /// Every refusal comes before anything is stopped or downloaded. Other
+    /// processes are never a reason to refuse: the installer renames the new
+    /// file over the target, and a running process keeps the inode it
+    /// started from.
+    fn run(
+        &self,
+        services: &[(ServiceName, &Context)],
+        commands: &dyn Commands,
+    ) -> Result<(), String> {
         let target = self.target.as_path();
-        let before = match service {
-            Some((context, commands)) => service::inspect_for_update(context, commands, target)
-                .map_err(|error| format!("{error}. Nothing was stopped or installed."))?,
-            None => BeforeUpdate::Absent,
-        };
-        // Launchd is asked a second time only when a process at the console's
-        // pid could be the console.
-        let again =
-            || service.and_then(|(context, commands)| service::console_pid(context, commands));
-        let console = match &before {
-            BeforeUpdate::Runs {
-                pid: Some(pid),
-                asked,
-                ..
-            } => Some(crate::processes::Console {
-                pid: *pid,
-                asked: *asked,
-                again: &again,
-            }),
-            _ => None,
-        };
-        refuse_other_processes(target, console.as_ref())?;
+        let mut found = Vec::new();
+        for &(service, context) in services {
+            let before = service::inspect_for_update(context, commands, service, target)
+                .map_err(|error| format!("{error}. Nothing was stopped or installed."))?;
+            found.push((service, context, before));
+        }
 
-        let stopped = match (before, service) {
-            (BeforeUpdate::Runs { installed, .. }, Some((context, commands))) => {
-                match service::stop_for_update(context, commands, &installed) {
-                    Ok(()) => {
-                        println!(
-                            "Stopped the console service on {} for the update.",
-                            installed.listen
-                        );
-                        Some((installed, context, commands))
-                    }
-                    Err(StopFailed::NotStopped(error)) => {
-                        return Err(format!(
-                            "stop the console service before updating: {error}. Nothing was \
-                             installed. Check it with: commonmeasure service status"
-                        ));
-                    }
-                    Err(StopFailed::PortHeld(error)) => {
-                        let restart = start_console(
-                            context,
-                            commands,
-                            &installed,
-                            &format!("commonmeasure {}", self.current),
-                        )
-                        .err();
-                        return Err(format!(
-                            "stop the console service before updating: {error}. Nothing was \
-                             installed.{}",
-                            restart.map(|error| format!(" {error}")).unwrap_or_default()
-                        ));
+        let old = format!("commonmeasure {}", self.current);
+        let mut stopped: Vec<(ServiceName, &Context, Installed)> = Vec::new();
+        for (service, context, before) in found {
+            let noun = service.noun();
+            match before {
+                BeforeUpdate::Runs(installed) => {
+                    match service::stop_for_update(context, commands, service, &installed) {
+                        Ok(()) => {
+                            let on = match service {
+                                ServiceName::Console => format!(" on {}", installed.listen),
+                                ServiceName::Relay => String::new(),
+                            };
+                            println!("Stopped the {noun}{on} for the update.");
+                            stopped.push((service, context, installed));
+                        }
+                        Err(StopFailed::NotStopped(error)) => {
+                            let restarts = start_again(&stopped, commands, &old);
+                            return Err(with_restarts(
+                                format!(
+                                    "stop the {noun} before updating: {error}. Nothing was \
+                                     installed. Check it with: commonmeasure service status {}",
+                                    service.word()
+                                ),
+                                &restarts,
+                            ));
+                        }
+                        Err(StopFailed::StillHeld(error)) => {
+                            let remedy = match service {
+                                // Something else may hold the console's
+                                // port; the console is started again at once.
+                                ServiceName::Console => {
+                                    stopped.push((service, context, installed));
+                                    String::new()
+                                }
+                                // The loop is finishing a run; another loop
+                                // would be refused until it exits.
+                                ServiceName::Relay => format!(
+                                    " Once it has exited, start it again with: {}",
+                                    service::reinstall_command(service, &installed)
+                                ),
+                            };
+                            let restarts = start_again(&stopped, commands, &old);
+                            return Err(with_restarts(
+                                format!(
+                                    "stop the {noun} before updating: {error}. Nothing was \
+                                     installed.{remedy}"
+                                ),
+                                &restarts,
+                            ));
+                        }
                     }
                 }
-            }
-            (BeforeUpdate::RunsOther(program), _) => {
-                println!(
-                    "The console service runs {}, not {}, and is left running.",
+                BeforeUpdate::RunsOther(program) => println!(
+                    "The {noun} runs {}, not {}, and is left running.",
                     program.display(),
                     target.display()
-                );
-                None
+                ),
+                BeforeUpdate::Absent => {}
             }
-            _ => None,
-        };
+        }
 
+        // Listed after the services are stopped, so they are not among the
+        // processes left on the old release.
+        let listed = listed(target);
         let outcome = self.install();
-        let restart = stopped.map(|(installed_service, context, commands)| {
-            let running = match &outcome {
-                Outcome::Installed => format!("commonmeasure {}", self.version),
-                Outcome::Unchanged(_) => format!("commonmeasure {}", self.current),
-                Outcome::Replaced(_) => format!("the replacement now at {}", target.display()),
-                Outcome::Uncertain(_) => format!("the binary now at {}", target.display()),
-            };
-            start_console(context, commands, &installed_service, &running)
-        });
-        let restart = restart.and_then(Result::err);
+        let running = match &outcome {
+            Outcome::Installed => format!("commonmeasure {}", self.version),
+            Outcome::Unchanged(_) => old.clone(),
+            Outcome::Replaced(_) => format!("the replacement now at {}", target.display()),
+            Outcome::Uncertain(_) => format!("the binary now at {}", target.display()),
+        };
+        let restarts = start_again(&stopped, commands, &running);
         match outcome {
             Outcome::Installed => {
-                if let Some(restart) = restart {
+                if !restarts.is_empty() {
                     return Err(format!(
-                        "{} was replaced by commonmeasure {}, but {restart}",
+                        "{} was replaced by commonmeasure {}, but {}",
                         target.display(),
-                        self.version
+                        self.version,
+                        restarts.join("\n")
                     ));
                 }
             }
@@ -317,24 +334,24 @@ impl Replacement<'_> {
                 // Only now, after the restart was attempted: recovery never
                 // waits on the replacement answering, and the answer is
                 // bounded in time and size.
-                return Err(format!(
-                    "{error}, but {} had already been replaced by {}{}",
+                let mut text = format!(
+                    "{error}, but {} had already been replaced by {}",
                     target.display(),
                     (self.reported_version)(target),
-                    restart
-                        .map(|restart| format!(", and {restart}"))
-                        .unwrap_or_default()
-                ));
+                );
+                if !restarts.is_empty() {
+                    text.push_str(&format!(", and {}", restarts.join("\n")));
+                }
+                return Err(text);
             }
             Outcome::Unchanged(error) | Outcome::Uncertain(error) => {
-                return Err([Some(error), restart]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join("\n"));
+                return Err(with_restarts(error, &restarts));
             }
         }
 
+        // Printed after a reinstall of the current release too: processes
+        // that outlived an earlier update still run the file it replaced.
+        print!("{}", still_running(target, self.current, &listed));
         if self.version != self.current {
             println!(
                 "\nHosts start the MCP server and hooks from this binary: sessions opened from \
@@ -650,139 +667,104 @@ fn stop(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// Refuse while processes other than this one and the managed console run
-/// the binary: they would keep the old release beside the new one on the
-/// same Edge home. The check covers this user's processes running this
-/// file, at the moment it runs. Each is shown by pid, executable path,
-/// subcommand and `COMMONMEASURE_HOME`, never by its other arguments or
-/// environment, which can carry credentials.
-fn refuse_other_processes(
-    target: &Path,
-    console: Option<&crate::processes::Console>,
-) -> Result<(), String> {
+/// The processes of this user, other than this one, that run `target`,
+/// each with its subcommand and `COMMONMEASURE_HOME` and never its other
+/// arguments or environment, which can carry credentials; or why the
+/// process table could not be read.
+fn listed(target: &Path) -> Result<Vec<Process>, String> {
     use clap::CommandFactory as _;
     let subcommands: Vec<String> = crate::Cli::command()
         .get_subcommands()
         .map(|command| command.get_name().to_string())
         .collect();
-    let others = crate::processes::running(target, console, &subcommands).map_err(|error| {
-        format!(
-            "cannot tell which processes run {}: {error}. Nothing was stopped or installed.",
-            target.display()
-        )
-    })?;
-    if others.is_empty() {
-        return Ok(());
-    }
-    Err(refusal(target, &others))
+    crate::processes::running(target, &subcommands)
 }
 
-/// The refusal for `others`, the processes found running `target`, in up to
-/// three groups with their own remedies: processes that run it, processes
-/// that could not be inspected, and a console service that restarted during
-/// the check.
-fn refusal(target: &Path, others: &[crate::processes::Process]) -> String {
-    use crate::processes::{Home, Runs};
-    let line = |process: &crate::processes::Process, runs: String| {
+/// What `update` prints after replacing `target`, which ran release
+/// `current`, about the processes `listed` found running it: they keep the
+/// binary they started with until their host starts them again. That is
+/// `current`, or for a process that outlived an earlier update, the release
+/// installed before it; the listing does not tell them apart. Empty when
+/// none was found.
+fn still_running(target: &Path, current: Version, listed: &Result<Vec<Process>, String>) -> String {
+    let processes = match listed {
+        Ok(processes) if processes.is_empty() => return String::new(),
+        Ok(processes) => processes,
+        Err(error) => {
+            return format!(
+                "\nThe processes running {} could not be listed ({error}); any that run it keep \
+                 commonmeasure {current}, or a release installed before it, until their host \
+                 restarts them.\n",
+                target.display()
+            );
+        }
+    };
+    let mut text = format!(
+        "\nThese processes run commonmeasure {current}, or a release installed before it, until \
+         their host restarts them:\n"
+    );
+    for process in processes {
+        let name = match &process.runs {
+            Runs::Unidentified { name } => {
+                format!("  process name {name}, its executable could not be read")
+            }
+            Runs::File => String::new(),
+        };
         let subcommand = process
             .subcommand
             .as_deref()
             .map(|name| format!("  {name}"))
             .unwrap_or_default();
         let home = match &process.home {
-            Home::Set(home) => format!("  COMMONMEASURE_HOME={home}"),
-            Home::Default => "  COMMONMEASURE_HOME not set or empty".to_string(),
-            Home::Unknown => "  COMMONMEASURE_HOME unknown".to_string(),
+            Home::Set(home) => format!("COMMONMEASURE_HOME={home}"),
+            Home::Default => "COMMONMEASURE_HOME not set or empty".to_string(),
+            Home::Unknown => "COMMONMEASURE_HOME unknown".to_string(),
         };
-        format!("  pid {}  {runs}{subcommand}{home}", process.pid)
-    };
-    let (mut running, mut uninspected, mut console) = (Vec::new(), Vec::new(), Vec::new());
-    for process in others {
-        match &process.runs {
-            _ if process.console_changed => console.push(format!("pid {}", process.pid)),
-            Runs::File { path } => running.push(line(
-                process,
-                path.as_deref().unwrap_or(target).display().to_string(),
-            )),
-            Runs::Unidentified { name: Some(name) } => running.push(line(
-                process,
-                format!("process name {name}; its executable could not be read"),
-            )),
-            Runs::Unidentified { name: None } => uninspected.push(process.pid),
-        }
-    }
-    let mut text = Vec::new();
-    if !running.is_empty() {
-        text.push(format!(
-            "other processes run {}, and would keep running the old release beside the new \
-             one:\n{}\nClose them, then run update again: quit the host app that started an MCP \
-             server (commonmeasure mcp), and stop commonmeasure hosted service and commonmeasure \
-             relay. A background relay installed as a login service starts again at login: \
-             remove it with commonmeasure service uninstall relay, and install it again after \
-             the update.",
-            target.display(),
-            running.join("\n")
+        text.push_str(&format!(
+            "  pid {}{name}{subcommand}  {home}\n",
+            process.pid
         ));
     }
-    if !uninspected.is_empty() {
-        text.push(format!(
-            "processes that could not be inspected may run {}, and update counts them since \
-             nothing shows they do not:\n{}\nCheck them with: ps -o pid,user,comm -p {}. Run \
-             update again once they have exited.",
-            target.display(),
-            uninspected
-                .iter()
-                .map(|pid| format!(
-                    "  pid {pid}  the system refused to describe it, and its owner and name could \
-                     not be read"
-                ))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            uninspected
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-    if !console.is_empty() {
-        text.push(format!(
-            "the console service restarted while update checked it ({}), so update could not \
-             tell its process from another running {}. Run update again.",
-            console.join(", "),
-            target.display()
-        ));
-    }
-    text.push("Nothing was stopped or installed.".to_string());
-    text.join("\n")
+    text
 }
 
-/// Start the service `stop_for_update` stopped, as it was installed. When
-/// it cannot be, the error names the command that starts it with the same
-/// Edge home.
-fn start_console(
-    context: &Context,
+/// Start again each service in `stopped`, as it was installed, now that
+/// the target holds `running`. Returns an error for each that did not
+/// start, naming the command that starts it with the same Edge home.
+fn start_again(
+    stopped: &[(ServiceName, &Context, Installed)],
     commands: &dyn Commands,
-    installed: &Installed,
     running: &str,
-) -> Result<(), String> {
-    match service::start_after_update(context, commands, installed) {
-        Ok(text) => {
-            println!("\nThe console service was started again on {running}:");
-            print!("{text}");
-            Ok(())
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (service, context, installed) in stopped {
+        let noun = service.noun();
+        match service::start_after_update(context, commands, *service, installed) {
+            Ok(text) => {
+                println!("\nThe {noun} was started again on {running}:");
+                print!("{text}");
+            }
+            Err(error) => errors.push(format!(
+                "the {noun} did not start again: {error}\nStart it with: {}",
+                service::reinstall_command(*service, installed)
+            )),
         }
-        Err(error) => Err(format!(
-            "the console service did not start again: {error}\nStart it with: {}",
-            service::reinstall_command(installed)
-        )),
     }
+    errors
+}
+
+/// `error`, then each restart that failed, one to a line.
+fn with_restarts(error: String, restarts: &[String]) -> String {
+    std::iter::once(error)
+        .chain(restarts.iter().cloned())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::testing::{Recorder, context, printed, with_home};
+    use crate::service::testing::{Recorder, context, printed, printed_relay, with_home};
     use commonmeasure_http::{Request, Response, Server, ServerHandle};
     use sha2::{Digest, Sha256};
     use std::sync::{Arc, Mutex};
@@ -943,14 +925,27 @@ mod tests {
 
     /// A home with a binary at `bin/commonmeasure` and a console service
     /// installed for Edge home `edge-a`, loaded and running it on a free
-    /// port. Returns the context of a shell that selects `edge-b`.
+    /// port. Holds the contexts of a shell that selects `edge-b`.
     struct Home {
         dir: tempfile::TempDir,
         shell: Context,
+        /// The background relay's context in the same shell.
+        relay_shell: Context,
         installed_plist: String,
         print: String,
         port: u16,
     }
+
+    /// The background relay service [`Home::with_relay`] installs: for Edge
+    /// home `edge-a`, every 300 s, loaded and running.
+    struct Relay {
+        installed_plist: String,
+        print: String,
+        /// The Edge home it relays, with a receiver in `relay.json`.
+        home: PathBuf,
+    }
+
+    const RELAY_PRINT: &str = "launchctl print gui/501/ai.commonmeasure.relay";
 
     impl Home {
         fn new() -> Home {
@@ -970,13 +965,85 @@ mod tests {
             let print = printed(&installer, &listen, 7);
             let shell = with_home(context(dir.path()), &dir.path().join("edge-b"));
             std::fs::write(&shell.exe, "#!/bin/sh\necho \"commonmeasure 0.0.0\"\n").unwrap();
+            let relay_shell = Context {
+                label: crate::service::RELAY_LABEL.to_string(),
+                log: dir.path().join("edge-b/logs/relay.log"),
+                ..with_home(context(dir.path()), &dir.path().join("edge-b"))
+            };
+            std::fs::write(
+                &relay_shell.exe,
+                "#!/bin/sh\necho \"commonmeasure 0.0.0\"\n",
+            )
+            .unwrap();
             Home {
                 dir,
                 shell,
+                relay_shell,
                 installed_plist,
                 print,
                 port,
             }
+        }
+
+        /// Both managed services as `update` is given them. A relay that is
+        /// not installed is not loaded, as the recorder answers.
+        fn services(&self) -> [(ServiceName, &Context); 2] {
+            [
+                (ServiceName::Console, &self.shell),
+                (ServiceName::Relay, &self.relay_shell),
+            ]
+        }
+
+        /// Install the background relay service too.
+        fn with_relay(&self) -> Relay {
+            let edge = self.dir.path().join("edge-a");
+            let installer = Context {
+                label: crate::service::RELAY_LABEL.to_string(),
+                log: edge.join("logs/relay.log"),
+                ..with_home(context(self.dir.path()), &edge)
+            };
+            std::fs::write(&installer.exe, "#!/bin/sh\necho \"commonmeasure 0.0.0\"\n").unwrap();
+            std::fs::create_dir_all(&edge).unwrap();
+            std::fs::write(
+                edge.join("relay.json"),
+                r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+            )
+            .unwrap();
+            let installed_plist = crate::service::relay_plist(&installer, 300);
+            std::fs::write(self.relay_plist_path(), &installed_plist).unwrap();
+            Relay {
+                installed_plist,
+                print: printed_relay(&installer, 300, 8),
+                home: edge,
+            }
+        }
+
+        fn relay_plist_path(&self) -> PathBuf {
+            crate::service::plist_path(self.dir.path(), crate::service::RELAY_LABEL)
+        }
+
+        /// [`Home::launchd`] with the relay loaded too: its print, bootout,
+        /// bootstrap and kickstart succeed, and kickstart starts a loop that
+        /// holds the relay's Edge home.
+        fn launchd_with(&self, relay: &Relay) -> Recorder {
+            let label = crate::service::RELAY_LABEL;
+            self.launchd()
+                .answer(RELAY_PRINT, true, &relay.print)
+                .answer(&format!("launchctl bootout gui/501/{label}"), true, "")
+                .answer(
+                    &format!(
+                        "launchctl bootstrap gui/501 {}",
+                        self.relay_plist_path().display()
+                    ),
+                    true,
+                    "",
+                )
+                .answer(&format!("launchctl kickstart gui/501/{label}"), true, "")
+                .relay_on(&format!("launchctl kickstart gui/501/{label}"), &relay.home)
+        }
+
+        fn relay_plist(&self) -> String {
+            std::fs::read_to_string(self.relay_plist_path()).unwrap()
         }
 
         /// The launchd a loaded service meets: print, bootout, bootstrap and
@@ -1032,6 +1099,13 @@ mod tests {
     }
 
     fn restarted(calls: &[String]) -> bool {
+        restarted_as(calls, crate::service::LABEL)
+    }
+
+    /// Whether the service at `label` was booted out, bootstrapped and
+    /// kickstarted, in that order.
+    fn restarted_as(calls: &[String], label: &str) -> bool {
+        let calls: Vec<&String> = calls.iter().filter(|call| call.contains(label)).collect();
         let at = |prefix: &str| calls.iter().position(|call| call.starts_with(prefix));
         matches!(
             (at("launchctl bootout"), at("launchctl bootstrap"), at("launchctl kickstart")),
@@ -1045,7 +1119,7 @@ mod tests {
         let launchd = home.launchd();
         let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
         home.replacement(&origin, Version(9, 9, 9))
-            .run(Some((&home.shell, &launchd)))
+            .run(&home.services(), &launchd)
             .unwrap();
 
         let downloads = origin.downloads();
@@ -1055,6 +1129,7 @@ mod tests {
             calls_then.as_slice(),
             [
                 LAUNCHCTL_PRINT.to_string(),
+                RELAY_PRINT.to_string(),
                 "launchctl bootout gui/501/ai.commonmeasure.console".to_string()
             ],
             "the service was stopped, and not yet started, when the origin first served bytes"
@@ -1079,7 +1154,7 @@ mod tests {
         let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
         let error = home
             .replacement(&origin, Version(9, 9, 9))
-            .run(Some((&home.shell, &launchd)))
+            .run(&home.services(), &launchd)
             .unwrap_err();
         assert!(error.contains("Nothing was installed"), "{error}");
         assert!(error.contains("Input/output error"), "{error}");
@@ -1105,7 +1180,7 @@ mod tests {
         let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
         let error = home
             .replacement(&origin, Version(9, 9, 9))
-            .run(Some((&home.shell, &launchd)))
+            .run(&home.services(), &launchd)
             .unwrap_err();
         assert!(
             error.contains("Nothing was stopped or installed"),
@@ -1123,7 +1198,7 @@ mod tests {
         let origin = Origin::new("v9.9.9", "9.9.9", false, launchd.log());
         let error = home
             .replacement(&origin, Version(9, 9, 9))
-            .run(Some((&home.shell, &launchd)))
+            .run(&home.services(), &launchd)
             .unwrap_err();
         assert!(error.contains("is unchanged"), "{error}");
         assert!(restarted(&launchd.calls()), "{:?}", launchd.calls());
@@ -1156,7 +1231,7 @@ mod tests {
                 installer: script,
                 ..home.replacement(&origin, Version(9, 9, 9))
             };
-            let error = replacement.run(Some((&home.shell, &launchd))).unwrap_err();
+            let error = replacement.run(&home.services(), &launchd).unwrap_err();
             assert!(error.contains(expected), "{shell}: {error}");
             assert!(
                 restarted(&launchd.calls()),
@@ -1188,7 +1263,7 @@ mod tests {
         let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
         let error = home
             .replacement(&origin, Version(9, 9, 9))
-            .run(Some((&home.shell, &launchd)))
+            .run(&home.services(), &launchd)
             .unwrap_err();
         // Both outcomes: the binary was replaced, the console was not
         // started again.
@@ -1209,6 +1284,157 @@ mod tests {
             "{error}"
         );
         assert!(home.binary().contains("commonmeasure 9.9.9"));
+    }
+
+    #[test]
+    fn the_relay_service_is_stopped_before_the_first_download_and_started_again_as_installed() {
+        let home = Home::new();
+        let relay = home.with_relay();
+        let launchd = home.launchd_with(&relay);
+        let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
+        home.replacement(&origin, Version(9, 9, 9))
+            .run(&home.services(), &launchd)
+            .unwrap();
+
+        let downloads = origin.downloads();
+        let (_, calls_then) = downloads.first().expect("the release was downloaded");
+        assert_eq!(
+            calls_then.as_slice(),
+            [
+                LAUNCHCTL_PRINT.to_string(),
+                RELAY_PRINT.to_string(),
+                "launchctl bootout gui/501/ai.commonmeasure.console".to_string(),
+                "launchctl bootout gui/501/ai.commonmeasure.relay".to_string(),
+            ],
+            "both services were stopped, and neither started, when the origin first served bytes"
+        );
+        let calls = launchd.calls();
+        assert!(restarted(&calls), "{calls:?}");
+        assert!(
+            restarted_as(&calls, crate::service::RELAY_LABEL),
+            "{calls:?}"
+        );
+        assert!(home.binary().contains("commonmeasure 9.9.9"));
+        // Started again with Edge home A, though the shell selected B.
+        assert_eq!(home.relay_plist(), relay.installed_plist);
+        assert!(home.relay_plist().contains("edge-a"));
+        assert_eq!(
+            commonmeasure_harness::delivery::relay_loop_state(&relay.home),
+            commonmeasure_harness::delivery::LockState::Running
+        );
+    }
+
+    #[test]
+    fn an_installer_failure_starts_the_relay_service_again_on_the_old_binary_with_its_home() {
+        let home = Home::new();
+        let relay = home.with_relay();
+        let launchd = home.launchd_with(&relay);
+        let origin = Origin::new("v9.9.9", "9.9.9", false, launchd.log());
+        let error = home
+            .replacement(&origin, Version(9, 9, 9))
+            .run(&home.services(), &launchd)
+            .unwrap_err();
+        assert!(error.contains("is unchanged"), "{error}");
+        let calls = launchd.calls();
+        assert!(restarted(&calls), "{calls:?}");
+        assert!(
+            restarted_as(&calls, crate::service::RELAY_LABEL),
+            "{calls:?}"
+        );
+        assert!(home.binary().contains("commonmeasure 0.0.0"));
+        assert_eq!(home.relay_plist(), relay.installed_plist);
+    }
+
+    #[test]
+    fn a_relay_restart_that_fails_fails_the_update_and_names_the_command_with_the_home() {
+        let home = Home::new();
+        let relay = home.with_relay();
+        let label = crate::service::RELAY_LABEL;
+        let launchd = home
+            .launchd()
+            .answer(RELAY_PRINT, true, &relay.print)
+            .answer(&format!("launchctl bootout gui/501/{label}"), true, "")
+            .fail(
+                &format!(
+                    "launchctl bootstrap gui/501 {}",
+                    home.relay_plist_path().display()
+                ),
+                Some(5),
+                "Bootstrap failed: 5: Input/output error",
+            );
+        let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
+        let error = home
+            .replacement(&origin, Version(9, 9, 9))
+            .run(&home.services(), &launchd)
+            .unwrap_err();
+        // The binary was replaced and the console started again; the relay
+        // was not.
+        assert!(
+            error.contains(&format!(
+                "{} was replaced by commonmeasure 9.9.9, but the background relay service did \
+                 not start again",
+                home.shell.exe.display()
+            )),
+            "{error}"
+        );
+        assert!(!error.contains("console service did not"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "Start it with: env COMMONMEASURE_HOME={} {} service install relay --every 300",
+                relay.home.display(),
+                home.shell.exe.display()
+            )),
+            "{error}"
+        );
+        assert!(restarted(&launchd.calls()), "{:?}", launchd.calls());
+        assert!(home.binary().contains("commonmeasure 9.9.9"));
+    }
+
+    #[test]
+    fn a_relay_loop_that_keeps_its_lock_stops_the_update_and_the_console_starts_again() {
+        // The loop finishes the run in progress after SIGTERM; one still
+        // holding the lock when the wait ends leaves nothing installed.
+        let home = Home::new();
+        let relay = home.with_relay();
+        let launchd = home.launchd_with(&relay);
+        let held = commonmeasure_runtime::declaration::open_lock(&crate::relay_loop::lock_path(
+            &relay.home,
+        ))
+        .unwrap();
+        held.lock().unwrap();
+        let origin = Origin::new("v9.9.9", "9.9.9", true, launchd.log());
+        let error = home
+            .replacement(&origin, Version(9, 9, 9))
+            .run(&home.services(), &launchd)
+            .unwrap_err();
+        drop(held);
+        assert!(
+            error.contains("the background relay service was stopped but its loop still holds"),
+            "{error}"
+        );
+        assert!(error.contains("Nothing was installed"), "{error}");
+        assert!(
+            error.contains(&format!(
+                "Once it has exited, start it again with: env COMMONMEASURE_HOME={} {} service \
+                 install relay --every 300",
+                relay.home.display(),
+                home.shell.exe.display()
+            )),
+            "{error}"
+        );
+        let calls = launchd.calls();
+        assert!(
+            restarted(&calls),
+            "the console was started again: {calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.contains("bootstrap") && call.contains("relay")),
+            "{calls:?}"
+        );
+        assert!(origin.requests.lock().unwrap().is_empty());
+        assert!(home.binary().contains("commonmeasure 0.0.0"));
     }
 
     /// A shell that runs the installer, then runs `after` with `$target` set
@@ -1239,7 +1465,7 @@ mod tests {
             shell: wrapper(&home, "closed-stdout", "/bin/sh \"$@\" >&-", ""),
             ..home.replacement(&origin, Version(9, 9, 9))
         };
-        let error = replacement.run(Some((&home.shell, &launchd))).unwrap_err();
+        let error = replacement.run(&home.services(), &launchd).unwrap_err();
         assert!(!error.contains("unchanged"), "{error}");
         assert!(
             error.contains(&format!(
@@ -1269,7 +1495,7 @@ mod tests {
             ),
             ..home.replacement(&origin, Version(9, 9, 9))
         };
-        let error = replacement.run(Some((&home.shell, &launchd))).unwrap_err();
+        let error = replacement.run(&home.services(), &launchd).unwrap_err();
         std::fs::set_permissions(&home.shell.exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(!error.contains("unchanged"), "{error}");
         assert!(!error.contains("was replaced by"), "{error}");
@@ -1325,7 +1551,7 @@ mod tests {
                 reported_version: &ask,
                 ..home.replacement(&origin, Version(9, 9, 9))
             };
-            let error = replacement.run(Some((&home.shell, &launchd))).unwrap_err();
+            let error = replacement.run(&home.services(), &launchd).unwrap_err();
             assert!(
                 error.contains("had already been replaced by commonmeasure 9.9.9 (as the callback"),
                 "{name}: {error}"
@@ -1453,7 +1679,7 @@ mod tests {
             ..home.replacement(&origin, Version(9, 9, 9))
         };
         let before = std::fs::metadata(&home.shell.exe).unwrap();
-        let error = replacement.run(Some((&home.shell, &launchd))).unwrap_err();
+        let error = replacement.run(&home.services(), &launchd).unwrap_err();
         let after = std::fs::metadata(&home.shell.exe).unwrap();
         use std::os::unix::fs::MetadataExt as _;
         assert_eq!(
@@ -1568,74 +1794,41 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_names_what_was_found_and_the_remedy_for_each() {
-        use crate::processes::{Home as Env, Process, Runs};
+    fn the_processes_left_on_the_old_release_are_named_by_pid_subcommand_and_home() {
+        use crate::processes::Home as Env;
         let target = Path::new("/u/bin/commonmeasure");
-        let process = |pid, runs, console_changed| Process {
+        let process = |pid, runs, subcommand: Option<&str>, home| Process {
             pid,
             runs,
-            subcommand: Some("mcp".to_string()),
-            home: Env::Default,
-            console_changed,
+            subcommand: subcommand.map(str::to_string),
+            home,
         };
-        let mcp = process(
-            11,
-            Runs::File {
-                path: Some(target.to_path_buf()),
-            },
-            false,
-        );
-        let unreadable = process(12, Runs::Unidentified { name: None }, false);
-        let console = process(13, Runs::File { path: None }, true);
-
-        let restarted = refusal(target, std::slice::from_ref(&console));
-        assert!(
-            restarted.contains("the console service restarted while update checked it (pid 13)"),
-            "{restarted}"
-        );
-        assert!(restarted.contains("Run update again."), "{restarted}");
-        for absent in [
-            "quit the host app",
-            "hosted service",
-            "relay",
-            "other processes run",
-        ] {
-            assert!(!restarted.contains(absent), "{absent}: {restarted}");
-        }
-
-        let uninspected = refusal(target, std::slice::from_ref(&unreadable));
-        assert!(
-            uninspected.contains("processes that could not be inspected may run"),
-            "{uninspected}"
-        );
-        assert!(
-            uninspected.contains(
-                "pid 12  the system refused to describe it, and its owner and name could not be \
-                 read"
+        let listed = Ok(vec![
+            process(12293, Runs::File, Some("mcp"), Env::Default),
+            process(61846, Runs::File, Some("serve"), Env::Set("/edge/a".into())),
+            process(400, Runs::File, Some("mcp"), Env::Unknown),
+            process(
+                401,
+                Runs::Unidentified {
+                    name: "commonmeasure".into(),
+                },
+                None,
+                Env::Default,
             ),
-            "{uninspected}"
+        ]);
+        assert_eq!(
+            still_running(target, Version(0, 4, 4), &listed),
+            "\nThese processes run commonmeasure 0.4.4, or a release installed before it, until \
+             their host restarts them:\n  pid 12293  mcp  COMMONMEASURE_HOME not set or empty\n  \
+             pid 61846  serve  COMMONMEASURE_HOME=/edge/a\n  pid 400  mcp  COMMONMEASURE_HOME \
+             unknown\n  pid 401  process name commonmeasure, its executable could not be read  \
+             COMMONMEASURE_HOME not set or empty\n"
         );
+        assert_eq!(still_running(target, Version(0, 4, 4), &Ok(Vec::new())), "");
+        let failed = still_running(target, Version(0, 4, 4), &Err("read /proc: denied".into()));
         assert!(
-            uninspected.contains("ps -o pid,user,comm -p 12"),
-            "{uninspected}"
+            failed.contains("could not be listed (read /proc: denied)"),
+            "{failed}"
         );
-        assert!(
-            !uninspected.contains("other processes run"),
-            "{uninspected}"
-        );
-        assert!(!uninspected.contains("quit the host app"), "{uninspected}");
-
-        let all = refusal(target, &[mcp, unreadable, console]);
-        assert!(
-            all.contains(
-                "other processes run /u/bin/commonmeasure, and would keep running the old release \
-                 beside the new one:\n  pid 11  /u/bin/commonmeasure  mcp  COMMONMEASURE_HOME not \
-                 set or empty\nClose them"
-            ),
-            "{all}"
-        );
-        assert!(all.contains("ps -o pid,user,comm -p 12."), "{all}");
-        assert!(all.contains("(pid 13)"), "{all}");
-        assert!(all.ends_with("Nothing was stopped or installed."), "{all}");
     }
 }

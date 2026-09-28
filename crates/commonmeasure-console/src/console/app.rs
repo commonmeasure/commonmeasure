@@ -174,10 +174,12 @@ pub(super) fn shell(active: Option<Section>, main: Markup) -> Markup {
                 title { "Common Measure Edge" }
                 link rel="icon" href="/favicon.svg" type="image/svg+xml";
                 script src="/theme.js" {}
+                script type="module" src="/policy-host.mjs" {}
+                link rel="stylesheet" href="/policy-form.css";
                 link rel="stylesheet" href="/styles.css";
                 // A write answers with its outcome's own status, and the
                 // answer is the screen to read whatever the status was.
-                meta name="htmx-config" content=r#"{"responseHandling":[{"code":"204","swap":false},{"code":"[2345]..","swap":true},{"code":"...","swap":true}]}"#;
+                meta name="htmx-config" content=r#"{"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[2345]..","swap":true},{"code":"...","swap":true}]}"#;
                 script src="/htmx.min.js" defer {}
             }
             body {
@@ -278,7 +280,23 @@ pub(super) fn topbar(title: &str, read: Markup) -> Markup {
     html! {
         header class="topbar" {
             h1 { (title) }
-            p class="lede" { (read) }
+            @if !read.0.is_empty() { p class="lede" { (read) } }
+        }
+    }
+}
+
+/// Storage provenance stays available without preceding the operational view.
+pub(super) fn record_heading(title: &str, read: ReadFrom<'_>) -> Markup {
+    html! {
+        header class="topbar" {
+            h1 { (title) }
+            details class="surface-details" {
+                summary { "Record details" }
+                dl class="kv" {
+                    div { dt { "Sessions" } dd class="mono" { (read.sessions) } }
+                    div { dt { "Read at" } dd { (read.at) } }
+                }
+            }
         }
     }
 }
@@ -312,16 +330,33 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
     let key_id = egress.get("key_id").and_then(Value::as_str);
     let key_standing = egress.get("key_standing").and_then(Value::as_str);
 
+    // Missing delivery counts need inspection just as a recorded failure does.
+    let delivery_attention = ["queued", "dead", "held"]
+        .iter()
+        .any(|key| egress[*key].as_u64().is_none_or(|n| n > 0))
+        || [
+            "last_error",
+            "unavailable",
+            "enrolment_error",
+            "hub_refused",
+            "close_error",
+            "close_error_unreadable",
+        ]
+        .iter()
+        .any(|key| egress[*key].is_string())
+        || egress["skipped_sessions"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        || key_standing.and_then(refused_standing_words).is_some();
+
     let recent: Vec<&Value> = content
         .as_array()
         .map(|list| list.iter().take(5).collect())
         .unwrap_or_default();
 
     html! {
-        (topbar("Overview", html! {
-            "Read from " span class="mono" { (read.sessions) } " at " (read.at) "."
-        }))
-        section class="screen" {
+        (record_heading("Overview", read))
+        section class="screen surface-screen" {
             div class="metrics" {
                 (metric(&(witnessed + reconstructed).to_string(), "crossings recorded", ""))
                 (metric(&witnessed.to_string(), "witnessed by Common Measure", "act"))
@@ -330,6 +365,115 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
             }
             (host_observation_counts(&status["host_observed"]))
             div class="cards grid-2" {
+                div class="card hub-state" {
+                    h2 { "Hub" }
+                    p class="muted" {
+                        @if egress["enrolment_error"].is_string() || egress["unavailable"].is_string() {
+                            "Delivery state unavailable"
+                        } @else if receiver.is_none() { "No receiver configured" }
+                        @else { "Receiver configured" }
+                    }
+                    details class="surface-details" open[delivery_attention] {
+                        summary { "Delivery and identity" }
+                        dl class="kv" {
+                            @for (field, label) in [("queued", "Queued batches"), ("dead", "Dead batches"), ("delivered_batches", "Delivered batches")] {
+                                div {
+                                    dt { (label) }
+                                    dd { (egress[field].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into())) }
+                                }
+                            }
+                            div {
+                                dt { "Oldest queued" }
+                                dd { (egress["oldest_queued_age_seconds"].as_u64().map(|n| format!("{n}s")).unwrap_or_else(|| if egress["queued"] == 0 { "none".into() } else { "unknown".into() })) }
+                            }
+                            div {
+                                dt { "Next attempt" }
+                                dd { (next_delivery_attempt(&egress)) }
+                            }
+                            div {
+                                dt { "Policy hold" }
+                                dd {
+                                    (egress["held"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
+                                    " batches"
+                                    @if let Some(reason) = egress["hold_reason"].as_str() { ": " (reason) }
+                                }
+                            }
+                            div {
+                                dt { "Last error" }
+                                dd { (egress["last_error"].as_str().unwrap_or("none")) }
+                            }
+                            @if let Some(skipped) = egress["skipped_sessions"].as_array().filter(|list| !list.is_empty()) {
+                                div {
+                                    dt { "Skipped sessions" }
+                                    dd {
+                                        @for session in skipped {
+                                            div { (skipped_session(session)) }
+                                        }
+                                    }
+                                }
+                            }
+                            div {
+                                dt { "Receiver" }
+                                dd {
+                                    @match receiver {
+                                        Some(receiver) => { span class="mono" { (receiver) } }
+                                        None if egress["enrolment_error"].is_string() => {
+                                            "Unknown: the enrolment record could not be read."
+                                        }
+                                        None => { "none configured; nothing leaves this machine" }
+                                    }
+                                }
+                            }
+                            div {
+                                dt { "Edge key" }
+                                dd {
+                                    @match (key_id, key_standing) {
+                                        (Some(key_id), Some(standing)) => {
+                                            span class="mono" { (key_id) } ", "
+                                            @match refused_standing_words(standing) {
+                                                Some(words) => { (words) " (" span class="mono" { (standing) } ")." }
+                                                None => { (standing) "." }
+                                            }
+                                        }
+                                        _ if egress["enrolment_error"].is_string() => {
+                                            "Unknown: the enrolment record could not be read."
+                                        }
+                                        _ => { "Not enrolled with a hub: no edge key." }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    @if let Some(line) = commonmeasure_relay::enrolment_error_line(&egress) {
+                        p class="callout" { (line.trim_end()) "." }
+                    }
+                    @if let Some(reason) = egress["hub_refused"].as_str() {
+                        p class="callout" { "Hub URL refused: " (reason) "." }
+                    }
+                    @if let Some(error) = egress["unavailable"].as_str() {
+                        p class="callout" { "Delivery state unavailable: " (error) }
+                    }
+                    @if let Some(error) = egress["close_error"].as_str() {
+                        p class="callout" {
+                            "The last spool close did not fold the delivery journal: " (error)
+                            ". Delivery state is intact and the next relay run retries."
+                        }
+                    }
+                    @if let Some(error) = egress["close_error_unreadable"].as_str() {
+                        p class="callout" {
+                            span class="mono" { "relay/spool/outbound.close-error" }
+                            " did not read: " (error) ". Whether the last spool close folded the "
+                            "delivery journal is unknown. Delivery state is intact and the file "
+                            "can be removed."
+                        }
+                    }
+                    @if egress["queued"].as_u64().is_some_and(|n| n > 0) || egress["dead"].as_u64().is_some_and(|n| n > 0) {
+                        p class="muted" { "Queued and dead batches are undelivered." }
+                    }
+                    @if egress["dead"].as_u64().is_some_and(|n| n > 0) {
+                        p { "Start another delivery schedule with " code { "commonmeasure relay requeue" } "." }
+                    }
+                }
                 div class="card" {
                     h2 { "Recent crossings" a href="/app/record" { "Record" } }
                     @if recent.is_empty() {
@@ -366,103 +510,6 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
                             }
                         }
                         p class="callout" { "Attributed by the working directory each crossing ran in." }
-                    }
-                }
-                div class="card" {
-                    h2 { "Hub" }
-                    dl class="kv" {
-                        @for (field, label) in [("queued", "Queued batches"), ("dead", "Dead batches"), ("delivered_batches", "Delivered batches")] {
-                            div {
-                                dt { (label) }
-                                dd { (egress[field].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into())) }
-                            }
-                        }
-                        div {
-                            dt { "Oldest queued" }
-                            dd { (egress["oldest_queued_age_seconds"].as_u64().map(|n| format!("{n}s")).unwrap_or_else(|| if egress["queued"] == 0 { "none".into() } else { "unknown".into() })) }
-                        }
-                        div {
-                            dt { "Next attempt" }
-                            dd { (next_delivery_attempt(&egress)) }
-                        }
-                        div {
-                            dt { "Policy hold" }
-                            dd {
-                                (egress["held"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
-                                " batches"
-                                @if let Some(reason) = egress["hold_reason"].as_str() { ": " (reason) }
-                            }
-                        }
-                        div {
-                            dt { "Last error" }
-                            dd { (egress["last_error"].as_str().unwrap_or("none")) }
-                        }
-                        @if let Some(skipped) = egress["skipped_sessions"].as_array().filter(|list| !list.is_empty()) {
-                            div {
-                                dt { "Skipped sessions" }
-                                dd {
-                                    @for session in skipped {
-                                        div { (skipped_session(session)) }
-                                    }
-                                }
-                            }
-                        }
-                        div {
-                            dt { "Receiver" }
-                            dd {
-                                @match receiver {
-                                    Some(receiver) => { span class="mono" { (receiver) } }
-                                    None => { "none configured; nothing leaves this machine" }
-                                }
-                            }
-                        }
-                        div {
-                            dt { "Edge key" }
-                            dd {
-                                @match (key_id, key_standing) {
-                                    (Some(key_id), Some(standing)) => {
-                                        span class="mono" { (key_id) } ", "
-                                        @match refused_standing_words(standing) {
-                                            Some(words) => { (words) " (" span class="mono" { (standing) } ")." }
-                                            None => { (standing) "." }
-                                        }
-                                    }
-                                    _ if egress["enrolment_error"].is_string() => {
-                                        "Unknown: the enrolment record could not be read."
-                                    }
-                                    _ => { "Not enrolled with a hub: no edge key." }
-                                }
-                            }
-                        }
-                    }
-                    @if let Some(line) = commonmeasure_relay::enrolment_error_line(&egress) {
-                        p class="callout" { (line.trim_end()) "." }
-                    }
-                    @if let Some(reason) = egress["hub_refused"].as_str() {
-                        p class="callout" { "Hub URL refused: " (reason) "." }
-                    }
-                    @if let Some(error) = egress["unavailable"].as_str() {
-                        p class="callout" { "Delivery state unavailable: " (error) }
-                    }
-                    @if let Some(error) = egress["close_error"].as_str() {
-                        p class="callout" {
-                            "The last spool close did not fold the delivery journal: " (error)
-                            ". Delivery state is intact and the next relay run retries."
-                        }
-                    }
-                    @if let Some(error) = egress["close_error_unreadable"].as_str() {
-                        p class="callout" {
-                            span class="mono" { "relay/spool/outbound.close-error" }
-                            " did not read: " (error) ". Whether the last spool close folded the "
-                            "delivery journal is unknown. Delivery state is intact and the file "
-                            "can be removed."
-                        }
-                    }
-                    @if egress["queued"].as_u64().is_some_and(|n| n > 0) || egress["dead"].as_u64().is_some_and(|n| n > 0) {
-                        p class="muted" { "Queued and dead batches are undelivered." }
-                    }
-                    @if egress["dead"].as_u64().is_some_and(|n| n > 0) {
-                        p { "Start another delivery schedule with " code { "commonmeasure relay requeue" } "." }
                     }
                 }
             }
@@ -554,9 +601,7 @@ fn record(sessions: &Value, selected: Option<(&str, &Value)>, read: ReadFrom<'_>
     }
     let selected_id = selected.map(|(id, _)| id);
     html! {
-        (topbar("Record", html! {
-            "Read from " span class="mono" { (read.sessions) } " at " (read.at) "."
-        }))
+        (record_heading("Record", read))
         section class="screen record" {
             div class="md" {
                 aside class="md-rail" aria-label="Sessions" {
@@ -570,10 +615,13 @@ fn record(sessions: &Value, selected: Option<(&str, &Value)>, read: ReadFrom<'_>
                             }
                         }
                     }
-                    p class="note" {
+                    details class="surface-details rail-details" {
+                        summary { "Recording coverage" }
+                        p class="note" {
                         "A Claude Code session's mediated crossings are recorded under a separate "
                         span class="mono" { "local-…" }
                         " session of the MCP server's own, beside the host session's observed record."
+                        }
                     }
                 }
                 section class="md-detail" id="detail" aria-label="Session" {
@@ -611,15 +659,18 @@ fn session_row(session: &Value, selected: Option<&str>) -> Markup {
             aria-current=[(selected == Some(id)).then_some("true")]
         {
             span class="srow-top" {
-                span class="mono" { (id) }
-                small { (str_of(session.get("host"), "")) }
+                strong { (str_of(session.get("host"), "Host not recorded")) }
+                small { (when(session.get("last"))) }
             }
             span class="srow-meta" {
                 (witnessed) " crossed"
                 @if refused > 0 { " · " (refused) " refused" }
                 @if breached > 0 { " · " (breached) " breached" }
-                " · " (when(session.get("last")))
+                @if u(session.get("reconstructed")) > 0 {
+                    " · " (u(session.get("reconstructed"))) " reconstructed"
+                }
             }
+            span class="srow-id mono" { (id) }
         }
     }
 }
@@ -947,10 +998,13 @@ fn crossing_evidence(crossing: &Value, records: &[Value]) -> Markup {
 /// Render the budget API projection without recomputing spend or policy caps.
 pub fn budget_page(budget: &Value, read: ReadFrom<'_>) -> String {
     shell(Some(Section::Budget), html! {
-        (topbar("Budget", html! { "Read from " (read.sessions) " at " (read.at) "." }))
-        section class="screen" {
+        (record_heading("Budget", read))
+        section class="screen surface-screen budget-screen" {
             h2 { "Recorded footprint by engagement" }
             p class="callout" { (str_of(budget["acquisition_charge"].get("reason"), "")) }
+            @if budget["engagements"].as_array().is_some_and(Vec::is_empty) {
+                p class="muted" { "No crossings recorded." }
+            }
             @for row in budget["engagements"].as_array().into_iter().flatten() {
                 @let reconstructed = row["reconstructed"].as_u64().is_some_and(|count| count > 0);
                 div class="card" {
@@ -975,8 +1029,21 @@ pub fn budget_page(budget: &Value, read: ReadFrom<'_>) -> String {
                 }
             }
             h2 { "Principal allowances" }
-            p class="callout" { "Declarations from policy.json; standing from allowance/ledger.ndjson. Principal allowances are independent of the engagement filter." }
-            (evidence_value(&budget["allowances"]))
+            p class="callout" { "Principal allowances are independent of the engagement filter." }
+            @if budget["allowances"]["available"] == false {
+                p class="callout" role="status" { (str_of(budget["allowances"].get("reason"), "Allowance state unavailable.")) }
+            } @else if budget["allowances"]["available"] == true && budget["allowances"]["declared"] == false {
+                p class="muted" { "No principal allowances declared." }
+            } @else {
+                (evidence_value(&budget["allowances"]))
+            }
+            details class="surface-details" {
+                summary { "Allowance record details" }
+                dl class="kv" {
+                    div { dt { "Declarations" } dd { code { "policy.json" } } }
+                    div { dt { "Standing" } dd { code { "allowance/ledger.ndjson" } } }
+                }
+            }
         }
     }).into_string()
 }
@@ -995,6 +1062,9 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
             @if result["runner_available"] == false {
                 p class="compare-status" { "No comparison runner is connected. This view cannot query suppliers." }
             }
+        }
+        (compare(result["query"].as_str(), result["results"].as_array().map(Vec::as_slice).unwrap_or(&[]), providers))
+        section class="screen compare-overview" {
             @if let Some(id) = result["comparison_id"].as_str() {
                 @if let Err(reason) = commonmeasure_harness::compare_export::project(result, false) {
                     p class="compare-note" { (reason) }
@@ -1032,9 +1102,8 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
                 }
             }
         }
-        (compare(result["query"].as_str(), result["results"].as_array().map(Vec::as_slice).unwrap_or(&[]), providers))
         @if let Some(records) = result["evidence"].as_array() {
-            section class="screen" {
+            section class="screen surface-screen" {
                 details class="card" {
                     summary { "Source record" }
                     @for record in records {
@@ -1044,7 +1113,7 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
                 }
             }
         }
-        section class="screen" {
+        section class="screen surface-screen" {
             h2 { "Local comparisons" }
             @if let Some(ids) = result["history"].as_array() {
                 @if ids.is_empty() { p class="muted" { "No comparison has been recorded in this Edge home." } }
@@ -1064,208 +1133,123 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
 /// whole screen with one rendered from a fresh read, and they carry a plain
 /// `action` as well so they work with no script at all.
 fn policy_screen(policy: &Value, rules: &Value, notice: Option<(&str, &str)>, at: &str) -> Markup {
-    let source = str_of(policy.get("source"), "policy.json");
-    let revision = policy.get("revision").and_then(Value::as_str);
     html! {
-        (topbar("Policy", html! {
-            "Read from " span class="mono" { (source) }
-            @if let Some(revision) = revision { ", revision " span class="mono" { (short(revision)) } }
-            " at " (at) "."
-        }))
+        header class="topbar" {
+            h1 { "Policy" @if policy["managed"] == true { span class="policy-badge" { "Hub Managed" } } }
+            details class="policy-provenance" {
+                summary { "Policy details" }
+                dl {
+                    dt { "Source" } dd class="mono" { (str_of(policy.get("source"), "policy.json")) }
+                    dt { "Revision" } dd class="mono" { (str_of(policy.get("revision"), "unavailable")) }
+                    dt { "Read at" } dd { (at) }
+                    dt { "Identity principal" } dd { (str_of(policy["identity_principal"].get("name"), "unknown")) }
+                    dt { "Authentication basis" } dd { (str_of(policy["identity_principal"].get("basis"), "unknown")) }
+                }
+            }
+        }
         (policy_body(policy, rules, notice))
     }
 }
 
-/// The screen below the top bar: what an htmx write swaps in place.
 fn policy_body(policy: &Value, rules: &Value, notice: Option<(&str, &str)>) -> Markup {
-    let declared = policy
-        .get("declared")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let source = str_of(policy.get("source"), "your policy file");
-    let revision = str_of(policy.get("revision"), "");
     let modes = policy
         .get("modes")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    // The top-level mode governs any directory no scope matches: the scope-null
-    // entry in the modes list.
-    let top_mode = modes
-        .iter()
-        .find(|m| m.get("scope").map(Value::is_null).unwrap_or(false))
-        .and_then(|m| m.get("mode"))
-        .and_then(Value::as_str)
-        .unwrap_or("observe");
-    // How many engagements clear any telemetry to the hub.
-    let cleared = policy
-        .get("engagements")
-        .and_then(Value::as_array)
-        .map(|engs| {
-            engs.iter()
-                .filter(|e| {
-                    e.get("stances")
-                        .and_then(Value::as_array)
-                        .map(|st| {
-                            st.iter().any(|s| {
-                                s.get("allow_telemetry_egress") == Some(&Value::Bool(true))
-                            })
-                        })
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0);
     let divergences = policy
         .get("engagement_divergences")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let error = policy.get("error").and_then(Value::as_str);
-
     html! {
         section class="screen" id="policy-screen" {
             @if let Some((kind, text)) = notice {
                 div class=(format!("notice {kind}")) role="status" data-outcome=(kind) { (text) }
             }
-            div class="cards stack" {
-                @if let Some(error) = error {
-                    div class="card" {
-                        h2 { "Policy" }
-                        p class="muted" { "The policy file did not load, so nothing here can be edited until it is repaired by hand: " (error) }
-                    }
-                } @else if !declared {
-                    div class="card" {
-                        h2 { "Policy" }
-                        p class="muted" {
-                            "No policy is declared, so Common Measure records everything and refuses nothing. Declare one in "
-                            span class="mono" { (source) }
-                            " to start refusing crossings before they reach your agent. The console never creates a policy file."
-                        }
-                    }
+            div id="policy-read" {
+                @if let Some(error) = policy.get("error").and_then(Value::as_str) {
+                    p role="alert" { "Policy unavailable. Repair " (str_of(policy.get("source"), "policy.json")) ": " (error) }
+                } @else if policy["declared"] != true {
+                    p { "No policy is declared at " span class="mono" { (str_of(policy.get("source"), "policy.json")) } ". Declare one there to edit it. The console never creates a policy file." }
                 } @else {
-                    div class="card" {
-                        h2 { "Mode" span class="muted-inline" { "for every directory no scope matches" } }
-                        form class="dial-form" method="post" action="/app/policy/mode"
-                             hx-post="/app/policy/mode" hx-target="#policy-screen" hx-swap="outerHTML" {
-                            input type="hidden" name="scope" value="";
-                            input type="hidden" name="revision" value=(revision);
-                            fieldset class="dial-options" {
-                                legend class="sr-only" { "Mode for every directory no scope matches" }
-                                (dial_option("observe", top_mode, "Everything is recorded; nothing is blocked."))
-                                (dial_option("prefer", top_mode, "Rules steer selection, but a failing crossing is admitted and flagged."))
-                                (dial_option("strict", top_mode, "A crossing that fails a rule is refused before it reaches your agent."))
-                            }
-                            div class="rule-actions" {
-                                button type="button" class="btn quiet"
-                                       hx-get="/app/policy/forecast" hx-include="closest form" hx-vals=r#"{"action":"mode"}"#
-                                       hx-target="#forecast-mode" hx-swap="innerHTML" { "Forecast over the record" }
-                                button type="submit" class="btn" { "Save mode" }
-                            }
+                    @if let Some(reason) = policy.get("edit_error").and_then(Value::as_str) {
+                        @if policy["managed"] != true { p role="alert" { (reason) } }
+                    } @else {
+                        button type="button" class="btn" data-policy-edit { "Edit policy" }
+                        div id="policy-open-error" class="notice refused" role="alert" tabindex="-1"
+                            aria-labelledby="policy-open-error-label" hidden {
+                            strong id="policy-open-error-label" { "Could not open policy editor" }
+                            p data-policy-open-error-message {}
                         }
-                        div class="forecast" id="forecast-mode" role="status" {}
-                        p class="callout" { (super::edit::REACH) }
+                        noscript { p { "Enable JavaScript to edit here, or edit the source policy file directly." } }
                     }
-                    div class="card" {
-                        h2 {
-                            "Scopes"
-                            span class="muted-inline" { (cleared) " clearing to the hub" }
-                        }
-                        div class="table-wrap" {
-                            table class="rules" {
-                                thead { tr {
-                                    th { "Directory" } th { "Mode" } th { "Governs" } th { "Directories" } th { "Denied hosts" } th { "Access rules" }
-                                    th { "Policy identity" }
-                                } }
-                                tbody { @for m in &modes { (scope_row(m, revision)) } }
-                            }
-                        }
-                        p class="muted" {
-                            "Policy identity is resolved for the principal this console runs as ("
-                            (str_of(policy.get("identity_principal").and_then(|p| p.get("name")), "unknown"))
-                            ", basis "
-                            (str_of(policy.get("identity_principal").and_then(|p| p.get("basis")), "unknown"))
-                            "). A session under another principal resolves its own identity, which its mediated crossings record."
-                        }
-                        p class="callout" {
-                            "Scopes resolve by the working directory a crossing ran in, first match wins; the mode decides whether a failing crossing is refused. A scope marked inherited follows the top-level value until it states its own."
+                    @for m in &modes {
+                        @if m.get("scope").is_none_or(Value::is_null) { (scope_row(m)) }
+                    }
+                    h2 { "Directories" }
+                    div class="policy-directories" {
+                        @for m in &modes {
+                            @if m.get("scope").is_some_and(|s| !s.is_null()) { (scope_row(m)) }
                         }
                     }
-                    div class="card" {
-                        h2 { "Where the two engagement names differ" }
-                        @if divergences.is_empty() {
-                            p class="muted" { "Every scope's governing engagement, declared in the policy, matches the reported engagement the attribution rules resolve for its directories." }
-                        } @else {
-                            div class="table-wrap" {
-                                table class="rules" id="divergences" {
-                                    thead { tr {
-                                        th { "Scope" } th { "Governing (policy)" } th { "Reported (attribution)" } th { "Telemetry egress" }
-                                    } }
-                                    tbody { @for d in &divergences { (divergence_row(d)) } }
-                                }
-                            }
-                            p class="callout" {
-                                "The governing engagement is what the runtime enforces and the relay reports under; the reported engagement is what this console counts work under. Neither overrides the other. Edit the scope in the policy file or the attribution rule below until they agree."
-                            }
+                    @if !modes.iter().any(|m| m.get("scope").is_some_and(|s| !s.is_null())) {
+                        p class="muted" { "No directory scopes declared." }
+                    }
+                    @if !divergences.is_empty() {
+                        details class="policy-group" open {
+                            summary { (divergences.len()) " engagement " (if divergences.len() == 1 { "mismatch" } else { "mismatches" }) }
+                            div class="table-wrap" { table id="divergences" {
+                                thead { tr { th { "Directory scope" } th { "Governing" } th { "Reported" } th { "Reporting" } } }
+                                tbody { @for d in &divergences { (divergence_row(d)) } }
+                            } }
+                            p { "Align the policy engagement with the " a href="#local-attribution" { "local attribution rules" } ". Attribution changes reporting labels, not policy." }
                         }
                     }
-                    div class="card" {
-                        h2 { "Block a host" span class="muted-inline" { "adds to a scope's denied-host set" } }
-                        form class="draft" method="post" action="/app/policy/deny"
-                             hx-post="/app/policy/deny" hx-target="#policy-screen" hx-swap="outerHTML" {
-                            input type="hidden" name="revision" value=(revision);
-                            input type="hidden" name="action" value="deny";
-                            div class="fields" {
-                                label class="field" { "Scope" (scope_select(&modes)) }
-                                label class="field" { "Host" input type="text" name="host" class="mono" placeholder="tracker.example" required; }
-                            }
-                            div class="rule-actions" {
-                                button type="button" class="btn quiet"
-                                       hx-get="/app/policy/forecast" hx-include="closest form"
-                                       hx-target="#forecast-deny" hx-swap="innerHTML" { "Forecast over the record" }
-                                button type="submit" class="btn" { "Block" }
-                            }
-                        }
-                        div class="forecast" id="forecast-deny" role="status" {}
-                        p class="callout" { "A denied host is refused in strict mode and carried with the breach recorded in observe and prefer. A scope that inherits the top-level constraints keeps them on its first write and stops inheriting; the save says so." }
-                    }
-                    div class="card" {
-                        h2 { "Draft an access rule" span class="muted-inline" { "forecast only; the rule is added to the policy file by hand" } }
-                        form class="draft" hx-get="/app/policy/forecast" hx-target="#forecast-rule" hx-swap="innerHTML"
-                             method="get" action="/app/policy/forecast" {
-                            div class="fields" {
-                                label class="field" { "Scope" (scope_select(&modes)) }
-                                label class="field" { "Host pattern" input type="text" name="host" class="mono" placeholder="*.example.com" required; }
-                                label class="field" { "Action"
-                                    select name="action" {
-                                        option value="refuse" { "refuse" }
-                                        option value="allow" { "allow" }
-                                        option value="require_licence" { "require_licence" }
-                                        option value="require_mediation" { "require_mediation" }
-                                    }
-                                }
-                                label class="field" { "Licence (require_licence)" input type="text" name="licence" class="mono" placeholder="rsl:publisher/2026"; }
-                            }
-                            div class="rule-actions" {
-                                button type="submit" class="btn quiet" { "Forecast over the record" }
-                            }
-                        }
-                        div class="forecast" id="forecast-rule" role="status" {}
-                        p class="callout" { "Access rules are read in order and the first match decides. The forecast appends the draft after the scope's existing rules; a rule that must come first is an edit to the file." }
-                    }
+                    (historical_forecast(&modes))
                 }
-                (attribution_card(rules))
+                details id="local-attribution" class="policy-group" {
+                    summary { "Local attribution" }
+                    (attribution_card(rules))
+                }
             }
+            div id="policy-editor" {}
         }
     }
 }
 
-/// One radio in the mode dial, with the consequence of choosing it beside it.
-fn dial_option(mode: &str, active: &str, consequence: &str) -> Markup {
+/// Historical forecasts remain independent drafts over the recorded sources.
+fn historical_forecast(modes: &[Value]) -> Markup {
     html! {
-        label class="dial-option" {
-            input type="radio" name="mode" value=(mode) checked[mode == active];
-            span { (mode) small { " — " (consequence) } }
+        details class="policy-group" {
+            summary { "Historical forecast" }
+            p { "Try one change against recorded sources. No source is fetched and nothing is saved." }
+            form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-mode" {
+                input type="hidden" name="action" value="mode";
+                div class="fields" {
+                    label class="field" { "Directory scope" (scope_select(modes)) }
+                    label class="field" { "Mode" select name="mode" { @for mode in ["observe", "prefer", "strict"] { option { (mode) } } } }
+                }
+                button class="btn quiet" { "Forecast mode" }
+            }
+            div id="forecast-mode" role="status" {}
+            form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-rule" {
+                div class="fields" {
+                    label class="field" { "Directory scope" (scope_select(modes)) }
+                    label class="field" { "Host pattern" input name="host" required placeholder="*.example.com"; }
+                    label class="field" { "Action" select name="action" {
+                        option value="deny" { "Deny host" }
+                        option value="refuse" { "Refuse" }
+                        option value="allow" { "Allow" }
+                        option value="require_licence" { "Require licence" }
+                        option value="require_mediation" { "Require mediation" }
+                    } }
+                    label class="field" { "Licence (when required)" input name="licence"; }
+                }
+                p { "Access rules are tested after the existing rules, in order. The first match wins." }
+                button class="btn quiet" { "Forecast rule" }
+            }
+            div id="forecast-rule" role="status" {}
         }
     }
 }
@@ -1286,76 +1270,57 @@ fn scope_select(modes: &[Value]) -> Markup {
     }
 }
 
-fn scope_row(m: &Value, revision: &str) -> Markup {
-    let mode = str_of(m.get("mode"), "observe");
-    let inherited = m.get("declares_mode") == Some(&Value::Bool(false));
-    let inherits_constraints = m.get("declares_constraints") == Some(&Value::Bool(false));
-    let scope = m.get("scope").and_then(Value::as_str);
-    let named = scope.unwrap_or("everything else");
-    let denied: Vec<&str> = m
-        .get("denied_hosts")
-        .and_then(Value::as_array)
-        .map(|hosts| hosts.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    let access: Vec<&Value> = m
-        .get("access_rules")
-        .and_then(Value::as_array)
-        .map(|rules| rules.iter().collect())
-        .unwrap_or_default();
+fn scope_row(m: &Value) -> Markup {
+    let named = m
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("Default policy");
     html! {
-        tr {
-            td class="mono" { (named) }
-            td {
-                form class="inline" method="post" action="/app/policy/mode"
-                     hx-post="/app/policy/mode" hx-target="#policy-screen" hx-swap="outerHTML" {
-                    input type="hidden" name="scope" value=(scope.unwrap_or(""));
-                    input type="hidden" name="revision" value=(revision);
-                    // Four rows carry the same three controls, so each names
-                    // its scope: a list of controls read aloud has to tell
-                    // them apart.
-                    select name="mode" aria-label=(format!("Mode for {named}")) {
-                        @for option in ["observe", "prefer", "strict"] {
-                            option value=(option) selected[option == mode] { (option) }
-                        }
+        details class="policy-group" {
+            summary {
+                span class="policy-path" { (named) span class="policy-disclose" { "Details" } }
+                span class="policy-fields" {
+                    span { span class="policy-label" { "Engagement" } (str_of(m.get("governing_engagement"), "None")) }
+                    span { span class="policy-label" { "Mode" } (str_of(m.get("mode"), "unknown"))
+                        @if m["declares_mode"] == false { span class="policy-badge" { "Inherited" } }
                     }
-                    button type="button" class="btn quiet" aria-label=(format!("Forecast the mode for {named} over the record"))
-                           hx-get="/app/policy/forecast" hx-include="closest form" hx-vals=r#"{"action":"mode"}"#
-                           hx-target="#forecast-mode" hx-swap="innerHTML" { "Forecast" }
-                    button type="submit" class="btn quiet" aria-label=(format!("Save the mode for {named}")) { "Save" }
-                    @if inherited { span class="muted-inline" { "inherited" } }
-                }
-            }
-            td {
-                @match m.get("governing_engagement").and_then(Value::as_str) {
-                    Some(engagement) => (engagement),
-                    None => "—",
-                }
-            }
-            td class="mono" { (u(m.get("distinct_cwds"))) }
-            td class="mono" {
-                @if denied.is_empty() { "—" } @else { (denied.join(", ")) }
-                @if inherits_constraints { " " span class="muted-inline" { "inherited" } }
-            }
-            td class="mono" {
-                @if access.is_empty() { "—" } @else {
-                    @for rule in &access {
-                        div {
-                            (u(rule.get("position"))) ". " (str_of(rule.get("host"), "")) " → " (str_of(rule.get("action"), ""))
-                            @if let Some(licence) = rule.get("licence").and_then(Value::as_str) { " " (licence) }
+                    span { span class="policy-label" { "Reporting" }
+                        @match m.get("reporting_permitted").and_then(Value::as_bool) {
+                            Some(true) => "Permitted by policy",
+                            Some(false) => "Off",
+                            None => "Not declared",
                         }
                     }
                 }
             }
-            // The digest of the effective policy a session in this scope
-            // resolves to, the same one its mediated crossings record. Drift
-            // evidence between edges, not proof of enforcement.
-            td class="mono" {
-                @match m.get("policy_identity") {
-                    Some(Value::String(digest)) => (short_digest(digest)),
-                    Some(Value::Object(shadow)) => {
-                        "governed by " (str_of(shadow.get("shadowed_by"), "an earlier scope"))
+            div class="policy-detail" {
+                dl {
+                    dt { "Directory match" } dd class="mono" { (named) }
+                    dt { "Rule origin" } dd { @if m["declares_constraints"] == false { "Inherited" } @else { "Own rules" } }
+                    dt { "Denied hosts" } dd class="mono" {
+                        @if let Some(hosts) = m["denied_hosts"].as_array() {
+                            @for host in hosts { div { (str_of(Some(host), "")) } }
+                        }
                     }
-                    _ => "—",
+                    dt { "Access rules, in order" } dd {
+                        @if let Some(rules) = m["access_rules"].as_array() {
+                            @for rule in rules {
+                                div class="mono" { (u(rule.get("position"))) ". " (str_of(rule.get("host"), "")) " → " (str_of(rule.get("action"), ""))
+                                    @if let Some(licence) = rule["licence"].as_str() { " " (licence) }
+                                }
+                            }
+                        }
+                    }
+                    dt { "Policy identity for the console principal" } dd class="mono" {
+                        @match m.get("policy_identity") {
+                            Some(Value::String(digest)) => (digest),
+                            Some(Value::Object(shadow)) => { "Governed by " (str_of(shadow.get("shadowed_by"), "an earlier scope")) }
+                            _ => "Unknown",
+                        }
+                    }
+                }
+                @if m["reporting_permitted"] == true {
+                    p { "Local consent and Hub approval may also be required. This is policy permission, not evidence of delivery." }
                 }
             }
         }
@@ -1497,33 +1462,26 @@ pub fn forecast_fragment(forecast: &Value, draft: &Value) -> String {
     markup.into_string()
 }
 
-/// A digest shortened for a table cell, with the full value on hover and in
-/// the JSON projection.
-fn short_digest(digest: &str) -> Markup {
-    let shown: String = digest.chars().take(19).collect();
-    html! { span title=(digest) { (shown) "…" } }
-}
-
-/// A revision token shortened for the provenance line.
-fn short(revision: &str) -> String {
-    revision.chars().take(12).collect()
-}
-
 /// The Sources screen: the providers the agent may pull content from, and
 /// which hold a key. The connected flag is computed by the CLI at start from
 /// the operator's own credentials — the console never holds a key.
 fn sources(providers: &[Value]) -> Markup {
     html! {
-        (topbar("Sources", html! {
-            "Configuration was read from this Edge home and launching environment at startup; supplier access has not been checked."
-        }))
-        section class="screen" {
+        (topbar("Sources", html! {}))
+        section class="screen surface-screen" {
+            h2 { "Suppliers" }
             @if providers.is_empty() {
-                div class="card" { p class="muted" { "No content providers are configured." } }
+                div class="card" { p class="muted" { "No suppliers listed." } }
             } @else {
                 @for provider in providers { (source_row(provider)) }
-                p class="callout" {
-                    "A source tells you where content came from; it never asserts you have the right to use it. Licence stays unknown unless a provider states one."
+                details class="surface-details" {
+                    summary { "Configuration and access" }
+                    dl class="kv" {
+                        div { dt { "Configuration" } dd { "Read from this Edge home and launching environment at startup. Restart after credential changes." } }
+                        div { dt { "Access" } dd { "Not tested by this view." } }
+                        div { dt { "Licence" } dd { "Unknown unless a supplier states one." } }
+                        div { dt { "Credit" } dd { "Not checked by this view." } }
+                    }
                 }
             }
         }
@@ -1532,10 +1490,7 @@ fn sources(providers: &[Value]) -> Markup {
 
 fn source_row(provider: &Value) -> Markup {
     let name = str_of(provider.get("name"), "");
-    let connected = provider
-        .get("connected")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let connected = provider.get("connected").and_then(Value::as_bool);
     let avatar: String = name.chars().take(2).collect();
     html! {
         div class="src" data-provider=(name) {
@@ -1545,10 +1500,12 @@ fn source_row(provider: &Value) -> Markup {
                 div class="src-use" { (provider_description(name)) }
             }
             div class="src-status" {
-                @if connected {
-                    span class="badge b-grounded" { "configured" }
-                } @else {
-                    span class="badge b-plain" { "not configured" }
+                span class="badge b-plain" {
+                    @match connected {
+                        Some(true) => "configured",
+                        Some(false) => "not configured",
+                        None => "configuration unknown",
+                    }
                 }
             }
         }
@@ -1579,6 +1536,7 @@ fn provider_title(name: &str) -> &str {
 
 fn provider_description(name: &str) -> &str {
     match name {
+        "internal" => "Search internal corpus",
         "dataville" => "One Wikipedia or arXiv record per search",
         "exa" => "Web search and page contents",
         "firecrawl" => "Scrape a known URL to clean content",
@@ -1587,7 +1545,10 @@ fn provider_description(name: &str) -> &str {
         "tinyfish" => "Web search and fetch",
         "redpine" => "Licensed datasets and real-time signals",
         "ozone" => "Licensed publisher passages and full text",
-        _ => "Web search",
+        "tavily" | "linkup" | "search1api" | "serpdive" | "keenable" | "you" | "nimble" => {
+            "Web search"
+        }
+        _ => "Capability not recorded",
     }
 }
 
@@ -1602,11 +1563,14 @@ fn compare_heading() -> Markup {
 fn compare(query: Option<&str>, results: &[Value], providers: &[Value]) -> Markup {
     html! {
         section class="screen compare-workspace" {
-            p class="callout" { "The query goes to the providers you select and may incur supplier charges. Results pass through this Edge's source policy and admission screens. This measures retrieval, supplier charge and request latency; answer quality is not evaluated." }
-            p class="muted" { "The comparison record stays in this Edge home and is excluded from Hub reporting. Configuration is read at console startup; restart after credential changes. Configured does not establish supplier access or remaining credit." }
             form method="post" action="/app/compare" {
+                div class="compare-query-field" {
+                    label for="compare-query" { "Query" }
+                    input class="compare-q" type="text" name="query" id="compare-query" required maxlength="4096"
+                        value=(query.unwrap_or(""));
+                }
                 fieldset class="compare-providers" {
-                    legend { "Providers receiving this query" }
+                    legend { "Suppliers receiving this query" }
                     @for provider in providers {
                         @let name = str_of(provider.get("name"), "");
                         @let available = provider["comparable"].as_bool().unwrap_or(provider["connected"] == true);
@@ -1620,13 +1584,22 @@ fn compare(query: Option<&str>, results: &[Value], providers: &[Value]) -> Marku
                         }
                     }
                 }
-                div class="compare-form" {
-                    label class="sr-only" for="compare-query" { "Query" }
-                    input class="compare-q" type="text" name="query" id="compare-query" required maxlength="4096"
-                        value=(query.unwrap_or("")) placeholder="Query for selected providers";
-                    button class="btn" type="submit" { "Compare selected" }
+                div class="compare-action" {
+                    p class="compare-note" id="compare-disclosure" {
+                        "The query goes to the selected suppliers and may incur supplier charges, including for results withheld by source policy or admission screens."
+                    }
+                    button class="btn" type="submit" aria-describedby="compare-disclosure" { "Compare selected" }
                 }
             }
+            details class="surface-details" {
+                summary { "Measurement and reporting limits" }
+                dl class="kv" {
+                    div { dt { "Measures" } dd { "Retrieval, supplier charge and request latency; answer quality is not evaluated." } }
+                    div { dt { "Reporting" } dd { "The comparison record stays in this Edge home and is excluded from Hub reporting." } }
+                    div { dt { "Configuration" } dd { "Read at console startup; restart after credential changes. Configured does not establish supplier access or remaining credit." } }
+                }
+            }
+
             @if !providers.iter().any(|p| p["comparable"].as_bool().unwrap_or(p["connected"] == true)) {
                 p class="muted" role="status" { "Unavailable: no searchable provider is configured. " a href="/app/sources" { "Check Sources" } }
             }
@@ -1652,7 +1625,10 @@ fn provider_result(result: &Value) -> Markup {
                 h2 class="cmp-name" { (provider_title(name)) }
                 @match error {
                     Some(_) => span class="badge b-plain" { (str_of(result.get("status"), "unavailable")) },
-                    None => span class="cmp-count" { (u(result.get("results_count"))) " results" },
+                    None => span class="cmp-count" {
+                        (u(result.get("results_count")))
+                        (if result["results_count"].as_u64() == Some(1) { " result" } else { " results" })
+                    },
                 }
             }
             @match error {
@@ -2036,6 +2012,8 @@ mod tests {
         let egress = egress_for("{not json");
         let page = overview_page(&json!({ "egress": egress }), &json!([]), READ);
         assert!(!page.contains("Not enrolled"), "{page}");
+        assert!(!page.contains("nothing leaves this machine"), "{page}");
+        assert!(page.contains("<dt>Receiver</dt><dd>Unknown:"), "{page}");
         let line = commonmeasure_relay::enrolment_error_line(&egress).unwrap();
         assert!(line.contains("is not a valid enrolment record"), "{line}");
         assert!(
@@ -2045,6 +2023,18 @@ mod tests {
             )),
             "{page}"
         );
+    }
+
+    #[test]
+    fn an_unenrolled_home_has_no_receiver() {
+        let home = tempfile::tempdir().unwrap();
+        let egress = commonmeasure_relay::egress_report(home.path());
+        let page = overview_page(&json!({ "egress": egress }), &json!([]), READ);
+        assert!(
+            page.contains("<dt>Receiver</dt><dd>none configured; nothing leaves this machine</dd>")
+        );
+        assert!(page.contains("Not enrolled with a hub"));
+        assert!(!page.contains("<dt>Receiver</dt><dd>Unknown:"));
     }
 
     /// `cleartext_hub` is every URL `connect`'s transport rule refuses,
@@ -2083,7 +2073,7 @@ mod tests {
         assert!(page.contains(r#"aria-current="page""#));
         // Delivered events are counted on the Overview, and the
         // hub card names the receiver and the enrolled key with its standing.
-        assert!(page.contains("events delivered"));
+        assert_eq!(page.matches("events delivered").count(), 1);
         assert!(page.contains("https://hub.example/api/v1/telemetry"));
         assert!(page.contains("kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"));
         assert!(page.contains("enrolled."));
@@ -2129,7 +2119,7 @@ mod tests {
         assert!(!empty.contains("checked"));
         assert!(empty.contains("class=\"app\""));
         assert!(
-            empty.contains(r#"<label class="sr-only" for="compare-query">Query</label>"#),
+            empty.contains(r#"<label for="compare-query">Query</label>"#),
             "the query input is labelled"
         );
 
@@ -2176,26 +2166,26 @@ mod tests {
         let rules =
             json!({"revision": "abc", "rules": [{"match": "code/ozone", "engagement": "ozone"}]});
         let page = policy_page(&declared, &rules, None, READ.at);
-        assert!(page.contains(r#"value="observe" checked"#)); // the active mode radio
+        assert!(page.contains("Default policy"));
         assert!(page.contains("~/work/ozone"));
-        assert!(page.contains("everything else")); // the top-level scope
-        assert!(page.contains("1 clearing to the hub"));
-        assert!(page.contains("Every scope's governing engagement"));
+        assert!(page.contains("Historical forecast"));
+        assert!(page.contains("Reporting"));
+        assert!(!page.contains(r#"id="divergences""#));
         assert!(
             page.contains(r#"name="revision" value="abc""#),
             "the rules form states its revision"
         );
         // The screen states the file it read, its revision and the time.
         assert!(page.contains("/home/op/.commonmeasure/policy.json"));
-        assert!(page.contains("revision <span class=\"mono\">0123456789ab</span>"));
+        assert!(page.contains("0123456789abcdef0123"));
         assert!(page.contains("2026-09-13 09:00 UTC"));
         // Every rule input is labelled, and the per-scope controls are named
         // for their scope.
         assert!(page.contains(r#"aria-label="Directory contains, rule 1""#));
         assert!(page.contains(r#"aria-label="Reported engagement, rule 1""#));
         assert!(page.contains(r#"aria-label="Directory contains, new rule""#));
-        assert!(page.contains(r#"aria-label="Mode for ~/work/ozone""#));
-        assert!(page.contains(r#"aria-label="Save the mode for everything else""#));
+        assert!(page.contains("data-policy-edit"));
+        assert!(!page.contains("/app/policy/mode"));
 
         let undeclared =
             json!({"declared": false, "source": "/home/op/.commonmeasure/policy.json"});
@@ -2247,8 +2237,8 @@ mod tests {
         assert!(page.contains("Saved: something."));
         assert_eq!(
             page.matches(r#"name="revision" value="f00d""#).count(),
-            4,
-            "the top-level dial, both scope rows and the block form state the policy revision"
+            0,
+            "read view contains no policy mutation forms"
         );
         assert!(page.contains(r#"name="revision" value="absent""#));
         assert!(page.contains("2. *.example.com → refuse"));
