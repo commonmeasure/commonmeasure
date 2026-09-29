@@ -129,6 +129,11 @@ impl CredentialsFile {
         }
     }
 
+    /// Whether the file sets `name` to a non-empty value.
+    pub fn sets(&self, name: &str) -> bool {
+        self.value_of(name).is_some()
+    }
+
     /// The values for the named variables. Crate-visible on purpose: only
     /// `apply` moves values, and it moves them into the process environment
     /// and nowhere else.
@@ -174,6 +179,10 @@ pub fn apply(home: &Path) -> Result<CredentialsStatus, String> {
         let value = file
             .value_of(name)
             .expect("an applied name came from this file's own entries");
+        // `set_var` panics on an empty name, a name holding `=` or NUL, or a
+        // value holding NUL, and prints both in the panic. `parse` admits
+        // only names of ASCII letters, digits and `_`, and no value holding
+        // NUL, so file contents cannot reach that panic.
         // SAFETY: called at process start before any thread is spawned, per
         // this function's contract; no concurrent environment access exists.
         unsafe { std::env::set_var(name, value) };
@@ -194,6 +203,193 @@ pub fn apply(home: &Path) -> Result<CredentialsStatus, String> {
 /// file may fill it.
 pub(crate) fn environment_supplies(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+}
+
+/// Where a provider's variable is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// `credentials.env` sets it and the launching environment does not.
+    File,
+    /// The launching environment sets it, and wins over the file.
+    Environment,
+    /// Neither sets it.
+    Unset,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Environment => "environment",
+            Self::Unset => "unset",
+        }
+    }
+}
+
+/// One implemented provider, the variable it reads and where that variable
+/// is set. Names only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderVariable {
+    pub provider: &'static str,
+    pub variable: &'static str,
+    pub origin: Origin,
+    /// The file also sets the variable, and the environment wins over it.
+    pub shadowed_in_file: bool,
+}
+
+/// Every provider in [`crate::IMPLEMENTED_PROVIDERS`], in that order, with
+/// its variable and where it is set. The credentials doctor and the
+/// console's Sources screen both list this, so they cannot list different
+/// providers or name different variables.
+///
+/// `launch_environment` says whether the launching environment sets a
+/// variable, not counting what [`apply`] copied in from the file; `in_file`
+/// says whether `credentials.env` sets it.
+pub fn provider_variables(
+    launch_environment: impl Fn(&str) -> bool,
+    in_file: impl Fn(&str) -> bool,
+) -> Vec<ProviderVariable> {
+    crate::IMPLEMENTED_PROVIDERS
+        .iter()
+        .filter_map(|&provider| {
+            let variable = crate::required_variable(provider)?;
+            let environment = launch_environment(variable);
+            let file = in_file(variable);
+            Some(ProviderVariable {
+                provider,
+                variable,
+                origin: if environment {
+                    Origin::Environment
+                } else if file {
+                    Origin::File
+                } else {
+                    Origin::Unset
+                },
+                shadowed_in_file: environment && file,
+            })
+        })
+        .collect()
+}
+
+impl CredentialsStatus {
+    /// [`provider_variables`] for this process after [`apply`]: a variable
+    /// the file supplied is the file's, and any other set variable is the
+    /// launching environment's.
+    pub fn provider_variables(&self) -> Vec<ProviderVariable> {
+        let applied = |name: &str| {
+            self.loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.applied.iter().any(|entry| entry == name))
+        };
+        let shadowed = |name: &str| {
+            self.loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.shadowed.iter().any(|entry| entry == name))
+        };
+        provider_variables(
+            |name| environment_supplies(name) && !applied(name),
+            |name| applied(name) || shadowed(name),
+        )
+    }
+}
+
+/// The longest value [`edit_text`] writes. Provider keys are far shorter; the
+/// cap keeps a mistaken paste of a document out of the file.
+pub const MAX_VALUE_BYTES: usize = 4096;
+
+/// A credentials file's text after one edit.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Edited {
+    pub text: String,
+    /// False when the edit left the text as it was.
+    pub changed: bool,
+}
+
+/// `text` with `name` set to `value`, or with `name` removed when `value` is
+/// `None`. Every other line, comment and blank line is kept byte for byte.
+///
+/// Setting replaces the first line that assigns `name` (with or without
+/// `export`, empty placeholders included) and drops any later one, because
+/// the last assignment wins and a later line would override the new value;
+/// with no such line the assignment is appended. Removing drops every line
+/// that assigns `name`.
+///
+/// The result is parsed as [`CredentialsFile::load`] would parse it, and
+/// refused unless it loads and reads `name` back as `value` (or as unset). A
+/// refusal never quotes the value or a line of the file.
+pub fn edit_text(
+    text: &str,
+    name: &str,
+    value: Option<&str>,
+    path: &Path,
+) -> Result<Edited, String> {
+    let value = match value {
+        Some(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err("the key is empty".to_owned());
+            }
+            if value.len() > MAX_VALUE_BYTES {
+                return Err(format!("the key is longer than {MAX_VALUE_BYTES} bytes"));
+            }
+            if value.chars().any(char::is_control) {
+                return Err("the key contains a line break or another control character".to_owned());
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    parse(text, path).map_err(|reason| format!("{reason}; repair the file first"))?;
+
+    let mut edited = String::with_capacity(text.len() + name.len() + 2);
+    let mut written = false;
+    for line in text.split_inclusive('\n') {
+        if !assigns(line, name) {
+            edited.push_str(line);
+            continue;
+        }
+        if let (Some(value), false) = (value, written) {
+            let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
+            edited.push_str(&format!("{name}={value}"));
+            edited.push_str(if ending.is_empty() { "\n" } else { ending });
+            written = true;
+        }
+    }
+    if let (Some(value), false) = (value, written) {
+        if !edited.is_empty() && !edited.ends_with('\n') {
+            edited.push('\n');
+        }
+        edited.push_str(&format!("{name}={value}\n"));
+    }
+
+    let entries = parse(&edited, path)?;
+    let read_back = entries
+        .iter()
+        .find(|(entry, _)| entry == name)
+        .map(|(_, stored)| stored.as_str());
+    if read_back != value {
+        return Err(match value {
+            Some(_) => "the key would not read back as entered; enter it without surrounding \
+                        quotes or spaces"
+                .to_owned(),
+            None => format!("{name} would still be set after removing it"),
+        });
+    }
+    Ok(Edited {
+        changed: edited != text,
+        text: edited,
+    })
+}
+
+/// Whether `line` assigns `name`, by the rules [`parse`] reads it with.
+fn assigns(line: &str, name: &str) -> bool {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return false;
+    }
+    let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+    line.split_once('=')
+        .is_some_and(|(assigned, _)| assigned.trim() == name)
 }
 
 /// One credential a hub released to this edge
@@ -509,8 +705,11 @@ fn parse(text: &str, path: &Path) -> Result<Vec<(String, String)>, String> {
         }
         let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
         let Some((name, value)) = line.split_once('=') else {
+            // The line itself is not quoted: a key pasted without its name is
+            // exactly what fails here, and this message reaches terminals,
+            // tool errors and the console.
             return Err(format!(
-                "{} line {} is not KEY=VALUE: {raw:?}",
+                "{} line {} is not KEY=VALUE",
                 path.display(),
                 index + 1
             ));
@@ -522,12 +721,22 @@ fn parse(text: &str, path: &Path) -> Result<Vec<(String, String)>, String> {
                 .all(|character| character.is_ascii_alphanumeric() || character == '_')
         {
             return Err(format!(
-                "{} line {} does not name a variable: {raw:?}",
+                "{} line {} does not name a variable",
                 path.display(),
                 index + 1
             ));
         }
         let value = unquote(value.trim());
+        if value.contains('\0') {
+            // `apply` hands every value to `std::env::set_var`, which panics
+            // on a NUL and prints the value in its message. Refusing here, by
+            // line number only, keeps the value out of every output.
+            return Err(format!(
+                "{} line {} contains a NUL character",
+                path.display(),
+                index + 1
+            ));
+        }
         if value.starts_with("gopass:") {
             // `.env.template` spells values as secret-store references for a
             // renderer to resolve. A file holding one was copied without
@@ -661,6 +870,127 @@ mod tests {
             !error.contains("exa-api-key"),
             "the reference path is the operator's secret layout and stays out of errors: {error}"
         );
+    }
+
+    #[test]
+    fn a_malformed_line_is_named_by_number_and_never_quoted() {
+        let home = tempfile::tempdir().expect("tempdir");
+        write_private(home.path(), "sk-pasted-without-a-name\n=sk-nameless\n");
+        let error = CredentialsFile::load(home.path()).expect_err("malformed");
+        assert!(!error.contains("sk-pasted"), "{error}");
+        write_private(home.path(), "=sk-nameless\n");
+        let error = CredentialsFile::load(home.path()).expect_err("nameless");
+        assert!(
+            error.contains("line 1") && !error.contains("sk-nameless"),
+            "{error}"
+        );
+    }
+
+    /// A NUL in a stored value would panic `std::env::set_var`, which prints
+    /// the value. The loader refuses it by line number, and an edit of any
+    /// other variable refuses rather than rewrite the file around it.
+    #[test]
+    fn a_nul_in_a_stored_value_is_refused_by_line_number() {
+        let home = tempfile::tempdir().expect("tempdir");
+        for content in [
+            "# keys\nEXA_API_KEY=sk-nul\0held\n",
+            "# keys\nEXA_API_KEY=\"sk-nul\0held\"\n",
+            "# keys\nexport EXA_API_KEY=\0sk-nul-held\n",
+        ] {
+            write_private(home.path(), content);
+            let error = CredentialsFile::load(home.path()).expect_err("NUL");
+            assert!(error.contains("line 2") && error.contains("NUL"), "{error}");
+            assert!(!error.contains("sk-nul"), "{error}");
+            let error = apply(home.path()).expect_err("apply refuses before set_var");
+            assert!(!error.contains("sk-nul"), "{error}");
+
+            let refused = edit(content, "TAVILY_API_KEY", Some("tv")).expect_err("edit");
+            assert!(refused.contains("repair the file first"), "{refused}");
+            assert!(!refused.contains("sk-nul"), "{refused}");
+        }
+    }
+
+    /// The doctor and the console list every implemented provider once, in
+    /// the fixed order, and say where each variable is set.
+    #[test]
+    fn provider_variables_name_every_provider_and_where_its_variable_is_set() {
+        let listed = provider_variables(
+            |name| name == "EXA_API_KEY" || name == "TAVILY_API_KEY",
+            |name| name == "TAVILY_API_KEY" || name == "DATAVILLE_API_KEY",
+        );
+        assert_eq!(
+            listed.iter().map(|row| row.provider).collect::<Vec<_>>(),
+            crate::IMPLEMENTED_PROVIDERS.to_vec()
+        );
+        let row = |provider: &str| {
+            listed
+                .iter()
+                .find(|row| row.provider == provider)
+                .expect("listed")
+        };
+        assert_eq!(row("exa").origin, Origin::Environment);
+        assert!(!row("exa").shadowed_in_file);
+        assert_eq!(row("tavily").origin, Origin::Environment);
+        assert!(row("tavily").shadowed_in_file);
+        assert_eq!(row("dataville").origin, Origin::File);
+        assert_eq!(row("dataville").variable, "DATAVILLE_API_KEY");
+        assert_eq!(row("internal").variable, "COMMONMEASURE_INTERNAL_CORPUS");
+        assert_eq!(row("internal").origin, Origin::Unset);
+    }
+
+    fn edit(text: &str, name: &str, value: Option<&str>) -> Result<Edited, String> {
+        edit_text(text, name, value, Path::new("/home/op/credentials.env"))
+    }
+
+    #[test]
+    fn setting_a_key_keeps_every_other_line_and_comment() {
+        let before = "# operator credentials\n\nexport EXA_API_KEY=old\n# tavily\nTAVILY_API_KEY=t\nEXA_API_KEY=older\n";
+        let edited = edit(before, "EXA_API_KEY", Some(" sk-new \n")).expect("edits");
+        assert!(edited.changed);
+        assert_eq!(
+            edited.text,
+            "# operator credentials\n\nEXA_API_KEY=sk-new\n# tavily\nTAVILY_API_KEY=t\n"
+        );
+
+        let appended = edit("# only a comment", "YOU_API_KEY", Some("y")).expect("appends");
+        assert_eq!(appended.text, "# only a comment\nYOU_API_KEY=y\n");
+        let created = edit("", "YOU_API_KEY", Some("y")).expect("creates");
+        assert_eq!(created.text, "YOU_API_KEY=y\n");
+        let placeholder = edit("EXA_API_KEY=\r\nX=1\r\n", "EXA_API_KEY", Some("e")).expect("fills");
+        assert_eq!(placeholder.text, "EXA_API_KEY=e\r\nX=1\r\n");
+    }
+
+    #[test]
+    fn removing_a_key_drops_its_lines_and_nothing_else() {
+        let before = "# keep\nEXA_API_KEY=a\nTAVILY_API_KEY=t\nexport EXA_API_KEY=b\n";
+        let edited = edit(before, "EXA_API_KEY", None).expect("removes");
+        assert_eq!(edited.text, "# keep\nTAVILY_API_KEY=t\n");
+        assert!(edited.changed);
+        let absent = edit("TAVILY_API_KEY=t\n", "EXA_API_KEY", None).expect("nothing to do");
+        assert!(!absent.changed);
+    }
+
+    /// A value that would add a line, read back as something else or be
+    /// refused at load is refused before anything is written, and the
+    /// refusal quotes neither the value nor the file.
+    #[test]
+    fn an_edit_that_would_not_read_back_is_refused_without_quoting_the_value() {
+        for (value, expected) in [
+            ("sk-a\nOTHER=planted", "line break"),
+            ("", "empty"),
+            ("\"sk-quoted\"", "read back"),
+            ("gopass:vault/sk-ref", "unrendered"),
+        ] {
+            let error = edit("", "EXA_API_KEY", Some(value)).expect_err(value);
+            assert!(error.contains(expected), "{value:?}: {error}");
+            assert!(!error.contains("sk-"), "{error}");
+        }
+        let long = "k".repeat(MAX_VALUE_BYTES + 1);
+        assert!(edit("", "EXA_API_KEY", Some(&long)).is_err());
+
+        let broken = edit("sk-secret-line\n", "EXA_API_KEY", Some("new")).expect_err("broken");
+        assert!(broken.contains("repair the file first"), "{broken}");
+        assert!(!broken.contains("sk-secret-line"), "{broken}");
     }
 
     #[cfg(unix)]

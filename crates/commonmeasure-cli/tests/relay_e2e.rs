@@ -1357,6 +1357,43 @@ fn make_retries_due(home: &Path) {
 }
 
 #[test]
+fn a_due_batch_delivers_while_another_waits_for_its_deadline() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let home = tempfile::tempdir().unwrap();
+    clear_personal_egress(home.path());
+    record_crossing(home.path(), "waiting", "https://public.example/waiting");
+    let accept = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let flag = accept.clone();
+    let seen = calls.clone();
+    let mut receiver = commonmeasure_http::Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if flag.load(Ordering::SeqCst) {
+                commonmeasure_http::Response::json(201, r#"{"status":"ok","events_created":2}"#)
+            } else {
+                commonmeasure_http::Response::text(503, "fixture outage")
+            }
+        })
+        .unwrap();
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+    assert!(!relay(home.path(), &[]).status.success());
+    record_crossing(home.path(), "due", "https://public.example/due");
+    accept.store(true, Ordering::SeqCst);
+    let text = relay_text(home.path(), &[]);
+    assert!(text.contains("delivered 2 events in 1 batches"), "{text}");
+    assert!(text.contains("1 queued, next due "), "{text}");
+    assert!(!text.contains("no batches are due"), "{text}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    receiver.stop();
+}
+
+#[test]
 fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
     use commonmeasure_relay::spool::{MAX_ATTEMPTS, Spool};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1385,10 +1422,37 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
     .unwrap();
     assert!(!relay(home.path(), &[]).status.success());
     let deferred = relay_text(home.path(), &[]);
+    assert!(deferred.contains("1 queued, next due "), "{deferred}");
+    assert!(deferred.contains("no batches are due"), "{deferred}");
     assert!(
-        deferred.contains("1 queued batches and 0 dead batches remain undelivered"),
+        !deferred.contains("delivered 0 events in 0 batches"),
         "{deferred}"
     );
+    let deadline = Spool::read_only(home.path()).delivery_states().unwrap()[&0]
+        .next_attempt_at
+        .unwrap();
+    assert!(
+        deferred.contains(&deadline.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+        "{deferred}"
+    );
+    for args in [
+        vec!["status"],
+        vec!["doctor", "claude-code"],
+        vec!["status", "--json"],
+        vec!["doctor", "claude-code", "--json"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(args)
+            .env("COMMONMEASURE_HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains(&deadline.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
+            "{text}"
+        );
+    }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(
         !relay(home.path(), &["requeue", "--batch", "0"])
@@ -1416,7 +1480,12 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
         make_retries_due(home.path());
         assert!(!relay(home.path(), &[]).status.success());
     }
-    for args in [vec!["status"], vec!["doctor", "claude-code"]] {
+    for args in [
+        vec!["status"],
+        vec!["doctor", "claude-code"],
+        vec!["status", "--json"],
+        vec!["doctor", "claude-code", "--json"],
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
             .args(args)
             .env("COMMONMEASURE_HOME", home.path())
@@ -1428,7 +1497,17 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8(output.stdout).unwrap();
-        assert!(text.contains("0 queued, 1 dead, 0 delivered"), "{text}");
+        if !text.trim_start().starts_with('{') {
+            assert!(text.contains("0 queued, 1 dead, 0 delivered"), "{text}");
+        }
+        assert!(
+            text.contains(&format!("1 dead after {MAX_ATTEMPTS} attempts")),
+            "{text}"
+        );
+        assert!(
+            text.contains("commonmeasure relay requeue` starts another schedule"),
+            "{text}"
+        );
         assert!(text.contains("fixture outage"), "{text}");
     }
     let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
@@ -1439,6 +1518,13 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
     assert!(output.status.success());
     let status: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(status["egress"]["dead"], 1);
+    assert_eq!(status["egress"]["max_attempts"], MAX_ATTEMPTS);
+    let dead = relay_text(home.path(), &[]);
+    assert!(
+        dead.contains(&format!("1 dead after {MAX_ATTEMPTS} attempts")),
+        "{dead}"
+    );
+    assert!(!dead.contains("next due"), "{dead}");
     assert_eq!(status["egress"]["delivered_batches"], 0);
     let console = Console::start(home.path());
     let page = send(&format!("{}/app", console.base), Request::get("/app")).unwrap();
@@ -1463,6 +1549,7 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
         delivered.contains("delivered 2 events in 1 batches"),
         "{delivered}"
     );
+    assert!(!delivered.contains("next due"), "{delivered}");
     assert_eq!(
         Spool::read_only(home.path()).delivery_states().unwrap()[&0].attempts,
         1

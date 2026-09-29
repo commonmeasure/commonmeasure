@@ -8,7 +8,7 @@ audience: contributor
 
 How a release of `commonmeasure` is cut and checked, and how its notes are
 written. What a release holds and how an operator installs it are in
-`docs/GETTING-STARTED.md` §1.
+`docs/INSTALL.md`.
 
 ## One version
 
@@ -65,7 +65,7 @@ The release workflow (`.github/workflows/release.yml`) runs four jobs:
 4. **verify** runs the stricter workflow form of §The clean-container check
    on the published release.
 
-The asset names are those in `docs/GETTING-STARTED.md` §1; the binaries are
+The asset names are those in `docs/INSTALL.md`; the binaries are
 named as the plugin's launcher names them. The release is public, and
 reading it needs no account, token or GitHub client.
 
@@ -167,7 +167,7 @@ routes on Linux, x64 in the workflow and arm64 where the check is run on an
 Apple silicon machine. The macOS arm64 binary is built and run on the
 workflow's macOS runner; the macOS x64, Linux arm64 (in the workflow) and
 Windows binaries are built and checksummed by the same run. Where the
-installer has been run by hand is in `docs/GETTING-STARTED.md` §1.
+installer has been run by hand is in `docs/INSTALL.md`.
 `crates/commonmeasure-cli/tests/installer.rs` drives both installer forms
 and every refusal against a loopback origin standing where the release
 stands.

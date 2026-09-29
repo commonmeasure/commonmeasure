@@ -81,7 +81,7 @@ const RESOURCE_METADATA_PREFIX: &str = "/.well-known/oauth-protected-resource";
 pub(crate) const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The service configuration under the operator home.
-pub(crate) const SERVICE_CONFIG_FILE: &str = "hosted-service.json";
+pub(crate) use commonmeasure_harness::delivery::SERVICE_CONFIG_FILE;
 
 /// The lock one service process holds on the home for as long as it runs.
 /// The kernel releases it when the process ends, however it ends.

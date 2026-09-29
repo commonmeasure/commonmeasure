@@ -14,6 +14,7 @@ commonmeasure-types.workspace = true
 # amount shown is the amount enforcement reads (`console/budget.rs`).
 commonmeasure-runtime.workspace = true
 commonmeasure-relay.workspace = true
+commonmeasure-supply.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true

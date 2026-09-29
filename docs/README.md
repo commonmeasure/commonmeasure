@@ -20,8 +20,12 @@ Get started:
 - [`docs/GETTING-STARTED.md`](GETTING-STARTED.md): from the installer to a
   recorded session, policy, the console, import, the relay and a build from
   source.
+- [Installing and updating](INSTALL.md): release assets, updates and login services.
 
 Use:
+
+- [Sessions, policy and reporting](OPERATING.md): credentials, scopes, import,
+  relay and directory enrolment.
 
 - [`docs/CONSOLE.md`](CONSOLE.md): the operator console, section by section.
 

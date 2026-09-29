@@ -18,29 +18,91 @@ terms such as crossing, host and edge are in [`docs/GLOSSARY.md`](../GLOSSARY.md
 You need `commonmeasure` 0.4.0 or later on `PATH`
 ([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). The release download and
 `commonmeasure --version` were checked on 0.4.4 on macOS (Apple silicon). The integration commands below were run on 0.4.0
-with loopback servers standing in for the web; they have not been rerun
-since.
+with loopback servers standing in for the web. Claude Code registration
+and `doctor claude` were rerun on 0.4.6 (29 September 2026), in a scratch
+home. Other host and integration commands retain their 0.4.0 verification
+baseline and have not been rerun here.
 
 ## 1. A host the binary already knows
 
 For Claude Code, Codex, Pi, Claude Desktop, Cursor, the Copilot CLI and VS
-Code the binary writes its own registration and reads it back:
+Code the binary writes its own registration and reads it back. The host
+words, files and capabilities are in the host-integration contract, §1 and §2.
+
+### Register with the host
 
 ```sh
 commonmeasure install claude
+```
+
+This writes the five hooks (`SessionStart`, `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionEnd`) into `~/.claude/settings.json` and the MCP
+server at user scope into `~/.claude.json`, each naming the binary by its
+resolved absolute path, because a hook runs outside your login shell's
+`PATH`. Only this product's entries are written; everything else in those
+files is kept. Replacing the binary at that path changes what the next
+session runs, with no reinstall. `commonmeasure uninstall claude` removes
+exactly those entries and leaves `~/.commonmeasure/` alone.
+
+The Claude Code plugin in `plugin/` is the other registration route, for
+marketplace and archive installs; it declares the same hooks and carries no
+binary (`plugin/README.md`). With the binary installed, the repository
+itself is a marketplace, and the plugin's launcher finds the binary on
+`PATH` or in `~/.local/bin`:
+
+```sh
+claude plugin marketplace add commonmeasure/commonmeasure
+claude plugin install commonmeasure@commonmeasure
+```
+
+Use one route or the other: `install claude`
+refuses while the plugin is enabled, because two registrations record every
+crossing twice. `commonmeasure install codex` and `commonmeasure install
+pi` register the mediated tools with those hosts the same way
+(`plugin/README.md` §Codex and Pi); the Codex table also carries the
+approval mode Codex needs to call the tools without asking, and it serves
+the Codex CLI, the ChatGPT desktop app and the Codex IDE extension alike.
+`commonmeasure install claude-desktop` and `commonmeasure install cursor`
+register with those two applications (`plugin/README.md` §Claude Desktop
+and Cursor). Neither sends a session-end event, so a source whose licence
+demands usage reporting is refused in their sessions until a background
+relay runs on the Edge home; `install claude-desktop` says so and names the
+command ([Relay without a session end](../INSTALL.md#relay-without-a-session-end)). `commonmeasure install copilot`
+and `commonmeasure install vscode` register with the Copilot CLI and VS
+Code (`plugin/README.md` §GitHub Copilot and VS Code). `commonmeasure install chrome` registers the binary
+for the browser extension in `browser/`, which records the sources ChatGPT
+on the web and Bing Copilot Search show (`browser/README.md`).
+
+The host-registration command supports every host listed above.
+
+### Check what arrived
+
+```sh
 commonmeasure doctor claude
 ```
 
-```text
-claude-code: five hooks (SessionStart, PostToolUse, UserPromptSubmit, Stop, SessionEnd) registered in ~/.claude/settings.json, each naming ~/.local/bin/commonmeasure
-claude-code: MCP server commonmeasure registered at user scope in ~/.claude.json, naming the same binary
-claude-code: a running session picks this up on its next start
-```
+`doctor` prints one report: the Edge home (whether the sessions directory
+can be written, whether the policy file loads), the console (whether one
+answers and where its Policy page is), the relay, and then the host: which
+of the five hooks are registered and in which file, whether the MCP server
+is registered and its command, the binary each names and the version that
+binary reports when run, and whether a plugin is installed beside the
+registration. Each finding is marked `✓`, `!` (something to act on), `?`
+(could not be determined) or `·` (a fact), and the report ends with what
+needs attention. A registration whose binary has gone is reported as not
+found and marked `!`, which is the one state in which every hook exits
+without recording and nothing in the session says so. `commonmeasure doctor`
+with no host reports every host; `--json` prints the same findings as a
+document for a script or a support thread; `--color never` drops the colour
+in a terminal.
 
-The output prints the home directory in full where this shows `~`. The
-host words, the files each `install` writes and what each host supplies are
-in the contract, §1 and §2. The rest of this page is what those
-registrations do, for wiring a host by hand.
+If every fetch is refused with a name that "resolves to a local or private
+address", `commonmeasure doctor --resolve <name>` looks the name up and says
+which range answered. `198.18.0.0/15` means a fake-IP proxy (Clash, Surge,
+sing-box) is answering names on this machine: set it to return real addresses
+to the machine running the edge. `100.64.0.0/10` is a tailnet or carrier-grade
+NAT; [source policy §Recording](../contracts/source-policy.md#recording) says how
+to allow one host.
 
 ## 2. The mediated tools over stdio
 

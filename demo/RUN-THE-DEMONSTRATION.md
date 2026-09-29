@@ -151,7 +151,7 @@ the other engagement appears nowhere in what arrived.
 
 Attendees can take the plugin away and install it with no repository access
 and no Rust toolchain. Every release publishes the archive, and the installer
-fetches it with its checksum verified ([`docs/GETTING-STARTED.md`](../docs/GETTING-STARTED.md) §1). To build it from
+fetches it with its checksum verified ([`docs/INSTALL.md`](../docs/INSTALL.md)). To build it from
 this checkout instead:
 
 ```sh

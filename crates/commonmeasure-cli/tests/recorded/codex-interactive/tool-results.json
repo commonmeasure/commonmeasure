@@ -1,0 +1,23 @@
+{
+  "host": {
+    "source": "cli",
+    "originator": "codex-tui",
+    "cli_version": "0.157.1"
+  },
+  "admitted": {
+    "url": "https://commonmeasure.ai/",
+    "content_hash": "sha256:be1197e7f35052df09052d91f0e95607f7fc11998a1f283748ee32bc302efeb1",
+    "retrieved_hash": "sha256:96ce48cfa20b9ac2c9658fa31bb7c2cd012f4a732fa1a81fc44111d328d258b3",
+    "http_status": 200,
+    "content_range": {
+      "offset": 0,
+      "chars": 500,
+      "total_chars": 2562
+    },
+    "recorded_in": "/operator/.commonmeasure/sessions/local-1790657573677-56626.ndjson",
+    "delivered_hash": "sha256:b82366bbeca04a4fed2e05a4d1d817931f6f744514e6403c4d0a091702fe8a59"
+  },
+  "refused": {
+    "error": "refused before the crossing: https://www.google.com/robots.txt disallows CommonMeasureBot at https://www.google.com/search?q=commonmeasure: the `User-agent: *` group, which addresses every fetcher because no group names CommonMeasureBot; rule `Disallow: /search`, a literal path prefix. A `Disallow` binds in every policy mode: refused before the request. (the source's robots.txt, https://www.google.com/robots.txt; the source's declarations are recorded in /operator/.commonmeasure/sessions/local-1790657573677-56626.ndjson)"
+  }
+}

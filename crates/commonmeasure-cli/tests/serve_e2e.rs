@@ -24,12 +24,35 @@ impl Console {
 
     fn with_credentials(home: &Path, credentials: &[(&str, &str)]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+        command.envs(credentials.iter().copied());
+        Self::spawn(home, command)
+    }
+
+    /// The console under `umask`, set in the child between fork and exec so
+    /// this test process and its other tests keep theirs.
+    #[cfg(unix)]
+    fn with_umask(home: &Path, umask: libc::mode_t) -> Self {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+        // SAFETY: `umask` is async-signal-safe and changes only the child's
+        // own process state.
+        unsafe {
+            command.pre_exec(move || {
+                libc::umask(umask);
+                Ok(())
+            });
+        }
+        Self::spawn(home, command)
+    }
+
+    fn spawn(home: &Path, mut command: Command) -> Self {
         for name in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
-            if let Some(variable) = commonmeasure_supply::required_variable(name) {
+            if let Some(variable) = commonmeasure_supply::required_variable(name)
+                && !command.get_envs().any(|(set, _)| set == variable)
+            {
                 command.env_remove(variable);
             }
         }
-        command.envs(credentials.iter().copied());
         let mut child = command
             .args(["serve", "--listen", "127.0.0.1:0"])
             .env("COMMONMEASURE_HOME", home)
@@ -815,6 +838,160 @@ fn post_json(console: &Console, path: &str, body: &Value) -> (u16, Value) {
     )
 }
 
+/// A key saved from the Sources screen lands in the operator file the real
+/// binary's credentials doctor reads, which then lists the same providers in
+/// the same order and says where each variable comes from. The key is in no
+/// answer.
+#[test]
+fn a_key_saved_on_sources_is_what_the_credentials_doctor_reads() {
+    let home = tempfile::tempdir().unwrap();
+    let console = Console::with_credentials(home.path(), &[("TAVILY_API_KEY", "tv-from-shell")]);
+    let mut request = Request::post(
+        "/",
+        b"provider=exa&action=set&key=sk-e2e-5d0c".to_vec(),
+        "application/x-www-form-urlencoded",
+    );
+    request.headers.set("Origin", &console.base);
+    let response = send(&format!("{}/app/sources/key", console.base), request).unwrap();
+    let page = String::from_utf8(response.body).unwrap();
+    assert_eq!(response.status, 200, "{page}");
+    assert!(page.contains("Saved EXA_API_KEY to"), "{page}");
+    assert!(!page.contains("sk-e2e"), "the key is not echoed");
+    assert!(!console.text("/app/sources").contains("sk-e2e"));
+
+    let sources = console.get_json("/api/sources");
+    let listed: Vec<&str> = sources["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    let origin = |name: &str| {
+        sources["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap()["origin"]
+            .clone()
+    };
+    assert_eq!(origin("exa"), "file");
+    assert_eq!(origin("tavily"), "environment");
+    assert_eq!(origin("dataville"), "unset");
+
+    let mut doctor = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    for name in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
+        if let Some(variable) = commonmeasure_supply::required_variable(name) {
+            doctor.env_remove(variable);
+        }
+    }
+    let output = doctor
+        .arg("credentials")
+        .env("COMMONMEASURE_HOME", home.path())
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{report}");
+    assert!(
+        report.contains("configured (EXA_API_KEY from the operator file)"),
+        "{report}"
+    );
+    assert!(!report.contains("sk-e2e"));
+    let doctor_order: Vec<&str> = report
+        .lines()
+        .filter_map(|line| {
+            listed
+                .iter()
+                .copied()
+                .find(|name| line.split_whitespace().any(|word| word == *name))
+        })
+        .collect();
+    assert_eq!(doctor_order, listed, "{report}");
+}
+
+/// The credentials doctor, as an operator runs it, with no provider variable
+/// in its environment.
+fn credentials_doctor(home: &Path) -> std::process::Output {
+    let mut doctor = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    for name in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
+        if let Some(variable) = commonmeasure_supply::required_variable(name) {
+            doctor.env_remove(variable);
+        }
+    }
+    doctor
+        .arg("credentials")
+        .env("COMMONMEASURE_HOME", home)
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap()
+}
+
+/// A console started under a umask that removes the owner's read bit still
+/// leaves `credentials.env` at exactly 0600, when it creates the file and
+/// when it replaces it, and the next process loads it.
+#[cfg(unix)]
+#[test]
+fn a_key_saved_under_a_umask_without_owner_read_is_0600_and_loads() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = tempfile::tempdir().unwrap();
+    let console = Console::with_umask(home.path(), 0o400);
+    let file = home.path().join("credentials.env");
+    for key in ["sk-umask-first-2c4d", "sk-umask-second-2c4d"] {
+        let mut request = Request::post(
+            "/",
+            format!("provider=exa&action=set&key={key}").into_bytes(),
+            "application/x-www-form-urlencoded",
+        );
+        request.headers.set("Origin", &console.base);
+        request.headers.set("Accept", "application/json");
+        let response = send(&format!("{}/app/sources/key", console.base), request).unwrap();
+        let answer = String::from_utf8(response.body).unwrap();
+        assert_eq!(response.status, 200, "{answer}");
+        assert!(answer.contains("Saved EXA_API_KEY"), "{answer}");
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "after saving {key}"
+        );
+        let output = credentials_doctor(home.path());
+        let report = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{report}{stderr}");
+        assert!(
+            report.contains("configured (EXA_API_KEY from the operator file)"),
+            "{report}"
+        );
+        assert!(!report.contains("sk-umask") && !stderr.contains("sk-umask"));
+    }
+}
+
+/// A stored value holding a NUL stops the credentials doctor with the line
+/// number, as an error rather than a panic, and the value is in no output.
+#[test]
+fn a_nul_bearing_credential_is_refused_by_the_doctor_without_its_value() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join("credentials.env");
+    std::fs::write(&file, b"EXA_API_KEY=existing\0value-93fa\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let output = credentials_doctor(home.path());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("line 1 contains a NUL"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    for text in [&stdout, &stderr] {
+        assert!(
+            !text.contains("value-93fa") && !text.contains("existing"),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn providers_and_compare_share_the_real_binarys_adapter_results() {
     let home = tempfile::tempdir().unwrap();
@@ -844,9 +1021,9 @@ fn providers_and_compare_share_the_real_binarys_adapter_results() {
             .next()
             .unwrap();
         assert!(row.contains(if provider["connected"] == true {
-            "configured"
+            "from the launching environment"
         } else {
-            "not configured"
+            ">not configured<"
         }));
     }
     let (status, result) = post_json(
@@ -1547,6 +1724,7 @@ fn console_with_probe(
         allow_remote: false,
         home: home.to_path_buf(),
         providers: Vec::new(),
+        launch_environment: Vec::new(),
         search: None,
         liveness: Some(probe),
     })

@@ -51,8 +51,9 @@ of the same guide, Updating). `GET /api/version`
 answers the running binary's version and process id, which `service status`
 compares with the `commonmeasure` on `PATH`.
 
-The console saves personal source policies, local attribution rules and the
-record of each comparison Compare runs.
+The console saves personal source policies, local attribution rules,
+provider keys in `credentials.env` and the record of each comparison Compare
+runs.
 
 ## From the command line
 
@@ -105,7 +106,10 @@ the remedy as `commonmeasure status` prints them. Where the spool is
 refused, a callout states what it still owes in the words `status` uses; a
 count it could not complete reads as unknown. Where `enrolment.json` exists
 but cannot be read, the receiver and key read as unknown and a callout gives
-the error as `status` prints it.
+the error as `status` prints it. Lookup failures, including inaccessible symlink
+targets and symlink loops, leave enrolment unknown. An unreadable `relay.json`
+also makes the receiver unknown, with the configuration error and the fact
+that nothing is sent until it reads.
 
 ### Record
 
@@ -257,16 +261,61 @@ The form's artifact and host adapter contract are documented in
 
 ### Sources
 
-Supplier rows show the name, capability and configuration state. Missing
-configuration evidence is unknown. Configuration and access contains the
-startup read basis and separate access, licence and credit limitations;
-configured credentials do not establish any of those states.
+`/app/sources`; the same data, names only, is `GET /api/sources`. One row
+per provider the adapters implement, in the order `commonmeasure
+credentials` lists them. Each row names the provider's variable and where
+it is set:
 
-`/app/sources`. Every provider that takes a key, and whether a key is
-present in the operator's credentials. The console checks presence and
-never calls the provider. A source says where content came from, not that
-the operator may use it; the licence stays unknown unless a provider states
-one.
+- `EXA_API_KEY from credentials.env`: the operator file supplies it.
+- `EXA_API_KEY from the launching environment`: the environment the console
+  started in sets it, and it wins over the file. The row says so where the
+  file also sets it.
+- `EXA_API_KEY not set`: neither sets it. The row gives the line to add,
+  `EXA_API_KEY=…`, and the `chmod 600` the file needs. The internal corpus
+  row names `COMMONMEASURE_INTERNAL_CORPUS`, a directory path.
+
+The heading line gives the file's full path. The file is read again for
+every page; the launching environment is the one the console started in.
+A file that does not load is stated with the loader's reason, because
+sessions refuse to start with it. Configured means a value is present. The
+console never calls a provider, so access, licence and credit stay
+unknown.
+
+**Add key**, **Replace key** and **Remove key** change one variable in
+`credentials.env` and keep every other line and comment. The write holds
+`credentials.lock`, is refused unless the result loads as the MCP server
+will load it (no line breaks, no surrounding quotes, no unrendered
+`gopass:` reference), and replaces the file atomically at mode 0600
+whatever the umask, tightening a file other users could read. An existing
+file that does not load, such as one with a line that is not `KEY=VALUE` or
+a value holding a NUL character, refuses every write and is left as it was;
+the notice names the line by number. A symbolic link is refused rather than
+replaced. The corpus directory is set by hand.
+
+A saved key reaches sessions that start after the save. Running sessions,
+and Compare on this console, keep the keys they started with; restart the
+console for Compare to use a new key.
+
+The key is never shown or returned: not on the page, in an answer, a
+notice or a record. Each change is appended to
+`<home>/credentials-changes.ndjson` as `credentials_changed` with the
+variable, the action and the new file digest
+([`docs/contracts/session-evidence.md`](contracts/session-evidence.md)
+§Local credential changes). The next session's `credentials_loaded` names
+the same digest.
+
+Key writes follow the Policy writes' rules: the `Host` and `Origin` checks,
+form or JSON input, and a notice with the outcome. They are refused on a
+bind that is not loopback, even with `--allow-remote`. On a managed edge
+whose `hosted-service.json` sets `supplier_custody`, the organisation's Hub
+supplies supplier keys, so the controls are absent, the page says so, and
+the write endpoint refuses. A `deployment.json` or `hosted-service.json`
+that cannot be read, a `hosted-service.json` that is not a JSON object, or
+a `supplier_custody` that is not `true` or `false` refuses writes with the
+reason.
+
+`POST /app/sources/key` (or `/api/sources/key` for JSON) takes `provider`,
+`action` (`set` or `remove`) and, for `set`, `key`.
 
 ### Compare
 

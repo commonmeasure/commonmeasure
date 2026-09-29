@@ -1986,6 +1986,14 @@ fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
     assert!(stdout.contains("first policy sync:"), "{stdout}");
     assert!(stdout.contains("outcome       no_revision"), "{stdout}");
     assert!(
+        stdout.contains("publish a revision on the hub's Policy page"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("then run `commonmeasure policy sync`"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("waiting for the organisation's first policy revision"),
         "{stdout}"
     );

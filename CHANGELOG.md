@@ -6,6 +6,25 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.7 (29 September 2026)
+
+Upgrading: from 0.4.5 or earlier, `update` still refuses while hosts run the binary; run `curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh` once to replace it in place. From 0.4.6 onwards, `update` asks you to close nothing ([updating](https://github.com/commonmeasure/commonmeasure/blob/main/docs/GETTING-STARTED.md#updating)).
+
+### Changed
+
+- The console's Sources page names each provider's variable and whether it comes from `credentials.env` or the launching environment, and an unconfigured row gives the line to add and the `chmod 600` it needs. It lists the same providers as `commonmeasure credentials`, from one list. Where the operator holds supplier keys, a row adds, replaces or removes its key in `credentials.env`, keeping every other line, at mode 0600, on a loopback bind only; each change is recorded by variable and file digest in `credentials-changes.ndjson`, and the key appears in no answer or record. Under supplier custody the controls are absent ([the console](https://github.com/commonmeasure/commonmeasure/blob/main/docs/CONSOLE.md#sources)).
+- A malformed line in `credentials.env` is named by its line number and no longer quoted in the error, which reaches terminals, tool errors and the console.
+- The Codex host evidence includes an interactive admission and robots refusal with matching tool-output hashes; its verification state remains `fixture-tested` pending confirmation of the receiving Hub organisation.
+
+### Fixed
+
+- A value holding a NUL character in `credentials.env` is refused by its line number. Before, the MCP server, `credentials` and the other commands that load the file stopped with a panic that printed the value.
+- Files written owner-only (`credentials.env` from the console, relay state, enrolment, hosted tokens) and new lock files are exactly mode 0600 whatever the umask. Under a umask that removed the owner's read bit they were left unreadable to the next process.
+- An evidence log path that is not a regular file, or a read error while opening a log for appending, is an error. Before, a directory at the path could make the reader retry without end; on the console's Sources page this held `credentials.lock` and left the save unanswered.
+- `relay` names the next due time of queued batches and explains when none are due; `relay`, `status` and `doctor` name the dead-batch attempt limit and the requeue remedy ([delivery state](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#delivery-state)).
+- When the hub has no policy revision, managed connect and policy sync direct the operator to publish on the hub's Policy page and state that an applied revision stays in force after expiry, reported stale by doctor ([policy staleness](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/policy-envelope.md#cadence-and-staleness)).
+- Enrolment lookup failures remain errors, including inaccessible symlink targets and symlink loops; the console reports an unreadable telemetry configuration as an unknown receiver with its error ([the console](https://github.com/commonmeasure/commonmeasure/blob/main/docs/CONSOLE.md)).
+
 ## 0.4.6 (28 September 2026)
 
 Upgrading: `update` no longer asks the operator to close hosts or uninstall

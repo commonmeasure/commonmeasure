@@ -1,4 +1,4 @@
-//! The committed real sessions (`host-sessions/`), read by the real
+//! The recorded real sessions, read by the real
 //! binary: the records a real Claude Code session and a real Pi session
 //! left through the registrations, and the report `commonmeasure session`
 //! prints over them. The figures asserted here are the ones those sessions
@@ -12,6 +12,88 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+
+/// A public, redacted extract from an interactive Codex session. The paired
+/// tool metadata comes from the host transcript, independently of the log.
+/// This checks the record reader; it does not replay transport or prove Hub receipt.
+#[test]
+fn the_interactive_codex_record_matches_the_host_admission_and_refusal() {
+    const SESSION: &str = "local-1790657573677-56626";
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    std::fs::create_dir(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{SESSION}.ndjson")),
+        include_str!("recorded/codex-interactive/local-1790657573677-56626.ndjson"),
+    )
+    .unwrap();
+    let tool: Value =
+        serde_json::from_str(include_str!("recorded/codex-interactive/tool-results.json")).unwrap();
+    let recorded = records(home.path(), SESSION);
+    let crossings = |event| {
+        recorded
+            .iter()
+            .filter(|r| r["event"] == event)
+            .map(|r| &r["payload"])
+            .collect::<Vec<_>>()
+    };
+    let clients = crossings("client_identified");
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0]["client"]["name"], "codex-mcp-client");
+    assert_eq!(clients[0]["client"]["version"], tool["host"]["cli_version"]);
+    let admitted = crossings("crossing_mediated");
+    let refused = crossings("crossing_refused");
+    assert_eq!(admitted.len(), 1);
+    assert_eq!(refused.len(), 1);
+    let admitted = admitted[0];
+    let refused = refused[0];
+    for crossing in [admitted, refused] {
+        assert_eq!(crossing["host"], "codex");
+        assert_eq!(crossing["session_id"], SESSION);
+        assert_eq!(crossing["client"], clients[0]["client"]);
+    }
+    assert_eq!(admitted["policy_identity"], refused["policy_identity"]);
+    assert_eq!(admitted["url"], "https://commonmeasure.ai/");
+    assert_eq!(admitted["grounded"], true);
+    assert_eq!(admitted["http_status"], 200);
+    for field in ["url", "content_hash", "retrieved_hash", "http_status"] {
+        assert_eq!(admitted[field], tool["admitted"][field]);
+    }
+    assert_eq!(
+        admitted["delivered"]["hash"],
+        tool["admitted"]["delivered_hash"]
+    );
+    for field in ["offset", "chars", "total_chars"] {
+        assert_eq!(
+            admitted["delivered"][field],
+            tool["admitted"]["content_range"][field]
+        );
+    }
+    assert!(
+        tool["admitted"]["recorded_in"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/{SESSION}.ndjson"))
+    );
+    assert_eq!(
+        refused["url"],
+        "https://www.google.com/search?q=commonmeasure"
+    );
+    assert_eq!(refused["grounded"], false);
+    assert!(refused.get("content_hash").is_none());
+    let error = tool["refused"]["error"].as_str().unwrap();
+    assert!(error.contains(refused["refusal"].as_str().unwrap()));
+    assert!(error.contains(&format!("/{SESSION}.ndjson")));
+    let report = session_report(home.path(), SESSION);
+    assert!(
+        report.contains("crossings  0 observed, 1 mediated, 1 refused, 0 reconstructed"),
+        "{report}"
+    );
+    assert!(
+        report.contains("client     codex-mcp-client 0.157.1 via host codex"),
+        "{report}"
+    );
+}
 
 const CLAUDE_SESSION: &str = "0e680a01-b902-4e86-85dc-4130d88ff14e";
 const CLAUDE_MEDIATED_SESSION: &str = "local-1788698405319-2755715";

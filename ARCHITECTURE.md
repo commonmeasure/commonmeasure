@@ -231,7 +231,10 @@ over the unchanged store. The console saves personal source policies and local
 attribution rules, each revision-checked and saved through the artefact's own
 loader. Managed policy writes are refused from the deployment declaration.
 The console also saves the record of each Compare
-comparison, kept in `<home>/comparisons/` outside the relay's session scan.
+comparison, kept in `<home>/comparisons/` outside the relay's session scan,
+and, on a loopback bind where the operator holds supplier keys, one provider
+key at a time in `credentials.env`, each change recorded by name and file
+digest in `<home>/credentials-changes.ndjson`.
 It cannot start a run or modify existing evidence, and it sends no record
 anywhere. It is the one component that reads both engagement identities, so
 its Policy section names every scope where they differ. A published run
@@ -315,7 +318,7 @@ Local acquisition needs no continuously running Common Measure service:
 
 - `install.sh` places a released, checksum-verified binary on `PATH`, or
   `cargo install --locked --path crates/commonmeasure-cli` builds one from a
-  checkout (`docs/GETTING-STARTED.md` §1 and §8).
+  checkout (`docs/INSTALL.md`).
 - `commonmeasure install <host>` writes the host's registration naming the
   binary by absolute path, `doctor` reads it back and `uninstall` removes
   it; the plugin declares the same hooks and MCP server for the marketplace

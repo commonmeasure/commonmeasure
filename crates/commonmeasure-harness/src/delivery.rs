@@ -82,6 +82,11 @@ const OTHER_CLIENT_PREFIXES: [&str; 1] = ["local-agent-mode-"];
 /// takes it (`commonmeasure hosted service`).
 pub const SERVICE_LOCK_FILE: &str = "hosted-service.lock";
 
+/// The hosted service's configuration under the operator home. The service
+/// parses it; the console reads its `supplier_custody` to know whether the
+/// organisation's Hub supplies this edge's supplier keys.
+pub const SERVICE_CONFIG_FILE: &str = "hosted-service.json";
+
 /// The lock a running background relay holds on its home, as `commonmeasure
 /// relay --every` takes it. Apart from the spool's `relay/spool/delivery.lock`,
 /// which every relay run takes only while it runs: the background relay holds

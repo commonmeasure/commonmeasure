@@ -149,6 +149,10 @@ pub struct RelayReport {
     pub events_enqueued: u64,
     /// Undelivered batches retained after this invocation.
     pub batches_queued: u64,
+    /// Earliest persisted deadline among unheld queued batches.
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    /// Every remaining queued batch is unheld and waiting for its deadline.
+    pub all_queued_undue: bool,
     pub batches_dead: u64,
     pub batches_delivered: u64,
     pub events_delivered: u64,
@@ -920,6 +924,16 @@ pub fn relay_with_clock(
     let report = RelayReport {
         batches_queued,
         batches_dead,
+        next_attempt_at: states
+            .values()
+            .filter(|s| s.status == spool::DeliveryStatus::Queued && s.hold_reason.is_none())
+            .filter_map(|s| s.next_attempt_at)
+            .min(),
+        all_queued_undue: batches_queued > 0
+            && states
+                .values()
+                .filter(|s| s.status == spool::DeliveryStatus::Queued)
+                .all(|s| s.hold_reason.is_none() && s.next_attempt_at.is_some_and(|at| at > now())),
         dry_run: options.dry_run,
         hosts,
         receiver,

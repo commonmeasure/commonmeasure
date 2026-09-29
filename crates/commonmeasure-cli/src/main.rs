@@ -1336,20 +1336,14 @@ fn credentials_report(palette: report::Palette) -> Result<(), String> {
         )),
     }
     let _ = write!(out, "\n{}\n", palette.heading("Providers"));
-    for provider in commonmeasure_supply::IMPLEMENTED_PROVIDERS {
-        let Some(variable) = commonmeasure_supply::required_variable(provider) else {
-            continue;
-        };
+    // The same list, in the same order, as the console's Sources screen.
+    for row in status.provider_variables() {
+        let (provider, variable) = (row.provider, row.variable);
         let finding = match commonmeasure_supply::supplier_from_environment(provider) {
             Ok(_) => {
-                let from_file = status
-                    .loaded
-                    .as_ref()
-                    .is_some_and(|loaded| loaded.applied.iter().any(|name| name == variable));
-                let source = if from_file {
-                    "the operator file"
-                } else {
-                    "the environment"
+                let source = match row.origin {
+                    commonmeasure_supply::credentials::Origin::File => "the operator file",
+                    _ => "the environment",
                 };
                 Finding::ok(format!("configured ({variable} from {source})"))
             }
@@ -1738,6 +1732,8 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
             "would deliver {} events in {} batches to {} (new at the receiver: unknown)\n",
             report.events_delivered, report.batches_delivered, report.receiver
         ));
+    } else if report.batches_delivered == 0 && report.all_queued_undue {
+        out.push_str("no batches are due; queued batches are waiting for their next attempt\n");
     } else {
         out.push_str(&format!(
             "delivered {} events in {} batches to {} ({})\n",
@@ -1824,10 +1820,18 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
         ));
     }
     if report.batches_queued > 0 || report.batches_dead > 0 {
-        out.push_str(&format!(
-            "{} queued batches and {} dead batches remain undelivered\n",
-            report.batches_queued, report.batches_dead
-        ));
+        let _ = write!(out, "{} queued", report.batches_queued);
+        if let Some(next) = report.next_attempt_at {
+            let _ = write!(out, ", next due {}", next.format("%Y-%m-%d %H:%M:%S UTC"));
+        }
+        if report.batches_dead > 0 {
+            let _ = write!(
+                out,
+                "; {}",
+                commonmeasure_relay::state::dead_batches_text(report.batches_dead)
+            );
+        }
+        out.push('\n');
     }
     if report.dry_run {
         if report.hosts.is_empty() {
@@ -1918,7 +1922,12 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
                         out.push_str(&format!("  {line}\n"));
                     }
                     if sync.awaiting_first_revision() {
-                        out.push_str("  managed enrolment complete; waiting for the organisation's first policy revision.\n  Publish a policy in the hub, then run `commonmeasure policy sync`; sessions also refresh automatically.\n");
+                        out.push_str("  managed enrolment complete; waiting for the organisation's first policy revision.\n");
+                    } else if sync.sync.outcome == "no_revision" {
+                        managed_failure = Some(format!(
+                            "enrolled and pinned to signer {}, but the hub has no published policy revision; publish a revision on the hub's Policy page",
+                            pin.key_id
+                        ));
                     } else if !sync.converged() {
                         managed_failure = Some(format!(
                             "enrolled and pinned to signer {}, but the first policy \
@@ -2021,6 +2030,15 @@ fn serve_console(listen: String, allow_remote: bool) -> Result<(), String> {
             .join(home)
     };
     let credentials = commonmeasure_supply::credentials::apply(&home)?;
+    // Taken now, before anything else reads the environment: the Sources
+    // screen re-reads the file per page but cannot tell a variable the
+    // launching shell set from one `apply` copied in later.
+    let launch_environment = credentials
+        .provider_variables()
+        .into_iter()
+        .filter(|row| row.origin == commonmeasure_supply::credentials::Origin::Environment)
+        .map(|row| row.variable.to_owned())
+        .collect();
     let providers: Vec<serde_json::Value> = commonmeasure_supply::IMPLEMENTED_PROVIDERS
         .iter().map(|name| {
             let adapter = commonmeasure_supply::supplier_from_environment(name).ok();
@@ -2047,6 +2065,7 @@ fn serve_console(listen: String, allow_remote: bool) -> Result<(), String> {
         allow_remote,
         home,
         providers,
+        launch_environment,
         search: Some(search),
         // The harness's process-table probe: present, absent, or `None` when
         // the table cannot be read or the recorded start time does not parse.
@@ -2881,6 +2900,19 @@ fn sync_report_text(report: &commonmeasure_harness::managed::SyncReport) -> Stri
             );
         }
     }
+    if report.sync.outcome == "no_revision" {
+        let _ = writeln!(
+            out,
+            "next          publish a revision on the hub's Policy page; sessions and relay runs refresh automatically"
+        );
+        if let Some(applied) = &report.applied {
+            let _ = writeln!(
+                out,
+                "              revision {} stays in force after {} (stale) until the hub publishes a revision; doctor reports the staleness",
+                applied.revision, applied.expires_at
+            );
+        }
+    }
     out
 }
 
@@ -3063,6 +3095,44 @@ mod tests {
     use serde_json::json;
 
     use super::crossing_outcome;
+
+    #[test]
+    fn no_revision_names_publication_and_preserves_the_expired_revision() {
+        use commonmeasure_harness::managed::{Applied, Sync, SyncReport};
+        let mut report = SyncReport {
+            policy_url: "https://hub.example/api/v1/policy/desired".into(),
+            sync: Sync {
+                at: "2026-09-29T00:00:00Z".into(),
+                outcome: "no_revision".into(),
+                revision: None,
+                digest: None,
+                reason: None,
+            },
+            applied: None,
+            stale_since: None,
+        };
+        let text = super::sync_report_text(&report);
+        assert!(
+            text.contains("publish a revision on the hub's Policy page"),
+            "{text}"
+        );
+        assert!(text.contains("the local policy file"), "{text}");
+        assert!(!text.contains("run `commonmeasure policy sync`"), "{text}");
+        report.applied = Some(Applied {
+            revision: 8,
+            digest: "digest".into(),
+            issued_at: "2026-09-29T00:00:00Z".into(),
+            expires_at: "2026-10-04T00:00:00Z".into(),
+            activated_at: "2026-09-29T00:00:00Z".into(),
+            signer_key_id: "signer".into(),
+        });
+        for stale in [None, Some("2026-10-04T00:00:00Z".into())] {
+            report.stale_since = stale;
+            let text = super::sync_report_text(&report);
+            assert!(text.contains("revision 8 stays in force after 2026-10-04T00:00:00Z (stale) until the hub publishes a revision; doctor reports the staleness"), "{text}");
+            assert!(!report.converged());
+        }
+    }
 
     /// A managed home's forecast names the revision on disk, and where the
     /// hub has not renewed it, since when it has been stale; before any

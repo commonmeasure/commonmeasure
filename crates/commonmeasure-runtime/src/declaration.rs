@@ -52,7 +52,9 @@ pub fn replace(target: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// [`replace`] for a file that holds a credential: the temporary file is
 /// created readable by the owner only, where the platform has modes, so the
-/// secret is never on disk under a wider mode, not even before a rename.
+/// secret is never on disk under a wider mode, not even before a rename. The
+/// mode is exactly 0600 whatever the umask: a umask that removed the owner's
+/// read bit would otherwise leave a file its own reader cannot open.
 pub fn replace_private(target: &Path, bytes: &[u8]) -> Result<(), String> {
     replace_as(target, bytes, Access::Owner)
 }
@@ -207,8 +209,28 @@ fn refused_open(path: &Path, error: std::io::Error) -> LockRefused {
 /// another local user can open is one they can hold, and every change
 /// behind it is then refused as busy. The home is not always 0700 (it is
 /// made under the umask, or named by the operator), so the lock file cannot
-/// rely on it. A lock file that exists already keeps its mode.
+/// rely on it. A lock file that exists already keeps its mode. A created one
+/// is exactly 0600 whatever the umask: one created without the owner's read
+/// bit could not be opened again, and every later change would be refused.
 pub fn open_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+        let created = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(path);
+        match created {
+            Ok(file) => {
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+                return Ok(file);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
     let mut options = std::fs::OpenOptions::new();
     options.create(true).read(true).write(true).truncate(false);
     #[cfg(unix)]
@@ -311,28 +333,27 @@ fn create_unique_temp(
 /// file must not exist: `create_new` refuses rather than writing into a file
 /// someone else made, whose mode would be theirs. The mode is set in the
 /// same call that creates the file. The umask can only narrow that mode, so
-/// [`Access::Mode`] then sets the bits exactly, still before any byte is
-/// written.
+/// [`Access::Owner`] and [`Access::Mode`] then set the bits exactly, still
+/// before any byte is written.
 fn create_temp(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
-        match access {
-            Access::Default => {}
-            Access::Owner => {
-                options.mode(0o600);
+        let exact = match access {
+            Access::Default => None,
+            Access::Owner => Some(0o600),
+            Access::Mode(mode) => Some(mode),
+        };
+        if let Some(mode) = exact {
+            options.mode(mode);
+            let file = options.open(path)?;
+            if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(mode)) {
+                std::fs::remove_file(path).ok();
+                return Err(error);
             }
-            Access::Mode(mode) => {
-                options.mode(mode);
-                let file = options.open(path)?;
-                if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(mode)) {
-                    std::fs::remove_file(path).ok();
-                    return Err(error);
-                }
-                return Ok(file);
-            }
+            return Ok(file);
         }
     }
     #[cfg(not(unix))]
@@ -598,6 +619,55 @@ mod tests {
             0o600,
             "created under umask 022"
         );
+    }
+
+    /// Under a umask that removes the owner's read bit, a private file is
+    /// still exactly 0600 when created and when replaced, and a created lock
+    /// file can be opened again. Run in a child of this test binary with
+    /// umask 0400, as the test above runs with 022.
+    #[cfg(unix)]
+    #[test]
+    fn private_files_and_lock_files_are_0600_under_a_umask_without_owner_read() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::os::unix::process::CommandExt as _;
+        const CHILD_HOME: &str = "COMMONMEASURE_TEST_UMASK_0400_CHILD_HOME";
+        const NAME: &str = "declaration::tests::private_files_and_lock_files_are_0600_under_a_umask_without_owner_read";
+        let mode_of = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        if let Some(home) = std::env::var_os(CHILD_HOME) {
+            let home = Path::new(&home);
+            let target = home.join("credentials.env");
+            replace_private(&target, b"A=1\n").unwrap();
+            assert_eq!(mode_of(&target), 0o600, "created");
+            replace_private(&target, b"A=2\n").unwrap();
+            assert_eq!(mode_of(&target), 0o600, "replaced");
+            assert_eq!(std::fs::read(&target).unwrap(), b"A=2\n");
+            let lock_path = home.join("credentials.lock");
+            drop(lock(&lock_path).unwrap());
+            drop(lock(&lock_path).expect("a created lock file opens again"));
+            assert_eq!(mode_of(&lock_path), 0o600);
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env(CHILD_HOME, home.path());
+        // SAFETY: `umask` is async-signal-safe and changes only the child's
+        // own process state, between fork and exec.
+        unsafe {
+            child.pre_exec(|| {
+                libc::umask(0o400);
+                Ok(())
+            });
+        }
+        let output = child.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran no test: {stdout}"
+        );
+        assert_eq!(mode_of(&home.path().join("credentials.env")), 0o600);
     }
 
     /// A credential's temporary file is owner-only from the call that

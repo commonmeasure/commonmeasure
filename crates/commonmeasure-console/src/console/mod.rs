@@ -14,6 +14,7 @@ pub mod forecast;
 pub mod form;
 pub mod html;
 pub mod policy;
+pub mod sources;
 
 /// How many URLs the content projection asks for, named in one place so the
 /// query and any sentence about it read the same number.

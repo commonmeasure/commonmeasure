@@ -1643,6 +1643,25 @@ mod operator_credentials {
         assert!(stderr.contains("chmod 600"), "{stderr}");
     }
 
+    /// A stored value holding a NUL fails the server at start with the line
+    /// number, as an error rather than a panic, and the value is in no output.
+    #[test]
+    fn a_nul_bearing_credential_fails_the_mediator_at_start_without_its_value() {
+        let home = tempfile::tempdir().expect("tempdir");
+        write_policy(home.path(), r#"{"policy_mode":"observe"}"#);
+        write_credentials(home.path(), "# keys\nEXA_API_KEY=existing\0value-71c3\n");
+
+        let output = spawn(home.path(), &[], &[initialize(None)]);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+        assert!(stderr.contains("line 2 contains a NUL"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+        for text in [&stdout, &stderr] {
+            assert!(!text.contains("value-71c3"), "{text}");
+        }
+    }
+
     /// A server started with an operator file and asked for nothing leaves its
     /// start record only, as one without a file does: the load is recorded before
     /// the first record a tool call leaves, not at start. `context_status`

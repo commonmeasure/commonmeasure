@@ -459,6 +459,8 @@ pub fn egress_report(home: &Path) -> Value {
     json!({
         "queued": queue.as_ref().map(|q| q.queued),
         "dead": queue.as_ref().map(|q| q.dead),
+        "max_attempts": crate::spool::MAX_ATTEMPTS,
+        "dead_remedy": queue.as_ref().filter(|q| q.dead > 0).map(|q| dead_batches_text(q.dead)),
         "delivered_batches": queue.as_ref().and_then(|q| q.delivered),
         "close_error": queue.as_ref().and_then(|q| q.close_error.as_deref()),
         "close_error_unreadable": queue
@@ -472,7 +474,8 @@ pub fn egress_report(home: &Path) -> Value {
         "last_error": last_error,
         // Null when the file did not read; `unavailable` says why.
         "skipped_sessions": skipped,
-        "unavailable": state_error.or(config_error),
+        "unavailable": state_error.or(config_error.clone()),
+        "receiver_error": config_error,
         "receiver": receiver,
         "delivered": delivered,
         "pending": pending,
@@ -613,6 +616,14 @@ pub fn egress_text(report: &Value) -> String {
     Finding::lines(&egress_findings(report))
 }
 
+/// Why dead batches stopped retrying and how to start another schedule.
+pub fn dead_batches_text(dead: u64) -> String {
+    format!(
+        "{dead} dead after {} attempts: `commonmeasure relay requeue` starts another schedule",
+        crate::spool::MAX_ATTEMPTS
+    )
+}
+
 /// The delivery standing of an egress report ([`egress_report`]) as
 /// findings. Dead batches, a relay error, a skipped session and a spool
 /// close that did not fold need the operator; a count the report could not
@@ -661,17 +672,19 @@ pub fn egress_findings(report: &Value) -> Vec<Finding> {
         });
     let queue = format!(
         "oldest queued: {age}; next attempt: {}",
-        report["next_attempt_at"]
-            .as_str()
-            .unwrap_or(if report["queued"].is_null() {
-                "unknown"
-            } else if report["due_now"].as_u64().is_some_and(|n| n > 0) {
-                "due now"
-            } else if report["held"].as_u64().is_some_and(|n| n > 0) {
-                "held"
-            } else {
-                "none"
-            })
+        if report["due_now"].as_u64().is_some_and(|n| n > 0) {
+            "due now"
+        } else {
+            report["next_attempt_at"]
+                .as_str()
+                .unwrap_or(if report["queued"].is_null() {
+                    "unknown"
+                } else if report["held"].as_u64().is_some_and(|n| n > 0) {
+                    "held"
+                } else {
+                    "none"
+                })
+        }
     );
     findings.push(if report["queued"].is_null() {
         Finding::unknown(queue)
@@ -710,10 +723,8 @@ pub fn egress_findings(report: &Value) -> Vec<Finding> {
             "relay state unavailable: {error}"
         )));
     }
-    if dead.is_some_and(|n| n > 0) {
-        findings.push(Finding::attention(
-            "requeue dead batches with `commonmeasure relay requeue`, then run `commonmeasure relay`",
-        ));
+    if let Some(dead) = dead.filter(|n| *n > 0) {
+        findings.push(Finding::attention(dead_batches_text(dead)));
     }
     findings
 }
@@ -805,6 +816,60 @@ mod tests {
             "{}",
             egress_text(&report)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enrolment_and_receiver_lookup_faults_remain_unknown() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+        for (file, field) in [
+            ("enrolment.json", "enrolment_error"),
+            ("relay.json", "receiver_error"),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let path = home.path().join(file);
+            assert!(egress_report(home.path())[field].is_null());
+            std::fs::write(&path, "{").unwrap();
+            assert!(egress_report(home.path())[field].is_string());
+            let unprivileged = std::fs::metadata(home.path()).unwrap().uid() != 0;
+            if unprivileged {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+                let report = egress_report(home.path());
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                assert!(report[field].as_str().unwrap().contains("cannot read"));
+            }
+            std::fs::remove_file(&path).unwrap();
+            let protected = home.path().join("protected");
+            std::fs::create_dir(&protected).unwrap();
+            std::fs::write(protected.join("record.json"), "{}").unwrap();
+            symlink(protected.join("record.json"), &path).unwrap();
+            if unprivileged {
+                // Deny directory search to this user, as a different owner's
+                // private directory would, without requiring privileged chown.
+                std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+                let lookup = std::fs::metadata(&path);
+                let report = egress_report(home.path());
+                std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+                assert_eq!(
+                    lookup.unwrap_err().kind(),
+                    std::io::ErrorKind::PermissionDenied
+                );
+                assert!(report[field].as_str().unwrap().contains("cannot read"));
+                assert!(report["key_standing"].is_null());
+            }
+            std::fs::remove_file(&path).unwrap();
+            symlink(&path, &path).unwrap();
+            assert!(std::fs::metadata(&path).is_err());
+            let report = egress_report(home.path());
+            assert!(report[field].as_str().unwrap().contains("cannot read"));
+            assert!(report["key_standing"].is_null());
+            assert!(egress_text(&report).contains("cannot read"));
+            std::fs::remove_file(&path).unwrap();
+            symlink(home.path().join("missing"), &path).unwrap();
+            assert!(egress_report(home.path())[field].is_null());
+        }
     }
 
     /// A hand-edited record's value never reaches `enrolment_error`: serde

@@ -970,13 +970,13 @@ without having decided anything. The refusal text and the agent's
 `declarations.robots.explanation` carry the same attribution in words; the
 refusal ends "A `Disallow` binds in every policy mode: refused before the
 request." A refusal on the access rule ends with the source's file, "(the
-source's robots.txt, <url>; …)", where other refusals name the operator's
+source's robots.txt, `<url>`; …)", where other refusals name the operator's
 policy file. Two refusals on the access rule name something else, because
 the source's file is not where the reader can act. A file unreachable
 because its redirect went to a host the operator's policy refuses, or to a
-private address the policy could admit, ends "(operator policy in <file>,
-which does not admit <target>, where the source's robots.txt redirected;
-…)". A file this edge cut short ends "(this edge did not read <url>, and
+private address the policy could admit, ends "(operator policy in `<file>`,
+which does not admit `<target>`, where the source's robots.txt redirected;
+…)". A file this edge cut short ends "(this edge did not read `<url>`, and
 the next crossing asks for it again; …)".
 
 A `robots.txt` over 512 KiB is parsed up to its last complete line within
@@ -1002,8 +1002,8 @@ A declined redirect is one to an address this edge does not mediate, to the
 hub's origin, to a host the operator's policy refuses, or to a host in
 back-off. Like any failure it is cached for five minutes, so while the
 target's back-off lasts the file is not asked for on every crossing. `unavailable`
-reads "<file> redirected to <target>, which this edge does not follow:
-<reason>", `declined_redirect` names the target, and the refusal cites RFC
+reads "`<file>` redirected to `<target>`, which this edge does not follow:
+`<reason>`", `declined_redirect` names the target, and the refusal cites RFC
 9309 §2.3.1.2 beside §2.3.1.4. §2.3.1.2 expects a crawler to follow at
 least five redirects; this edge follows five, and a sixth leaves the file
 unreachable ("redirect limit exceeded").
@@ -1012,10 +1012,10 @@ Under `observe` and `prefer` the host policy records a breach rather than
 refusing, so a `robots.txt` redirect to a host outside an allowlist is
 followed there, and the file it reaches rules the page (§2.3.1.2).
 `final_url` names that file, and the explanation and any refusal name it
-too: "<url> (redirected to <final_url>) disallows …". The crossing that
+too: "`<url>` (redirected to `<final_url>`) disallows …". The crossing that
 sent the request carries the host policy's breach in `breach`, as a
-crossing whose page redirected to such a host does: "<url> redirected to
-<final_url>, which was requested for its rules: <reason>". A later crossing
+crossing whose page redirected to such a host does: "`<url>` redirected to
+`<final_url>`, which was requested for its rules: `<reason>`". A later crossing
 that reuses the cached copy sends nothing to that host and carries no
 breach for it.
 Where the cache holds an earlier answer from the host, `reading` is read
@@ -2825,6 +2825,26 @@ records are neither sealed batch runs nor a Hub summary upload format.
 The local JSON download contains private evidence. The separate
 [comparison export](comparison-export.md) projects permitted measurements into
 an offline report bundle, with explicit query inclusion and no supplier rerun.
+
+## Local credential changes
+
+The console's Sources page writes provider keys to
+`<home>/credentials.env` (`docs/CONSOLE.md` §Sources). Each change it makes
+is appended to `<home>/credentials-changes.ndjson` with the same durable
+NDJSON writer as sessions, under the event `credentials_changed`. The relay
+scans only `sessions/`, so these records have no Hub egress.
+
+The payload names what changed and never a value: `path` (the file),
+`action` (`set` or `removed`), `provider`, `variable`, `sha256` (the file's
+digest after the write), `previous_sha256` (before it, `null` where no file
+existed) and `written_by` (`console`). The digest is computed over the file
+bytes as `credentials_loaded` computes it, so a session whose
+`credentials_loaded.sha256` equals a change's `sha256` loaded the file as
+that change left it. A setting that repeats the stored value is still a
+write and still recorded. Where the log cannot be read or appended to,
+including a log path that is not a regular file, the file has already
+changed; the Sources notice says the change was not recorded and names
+the log, and the lock is released.
 
 ## Provider policy ruling
 

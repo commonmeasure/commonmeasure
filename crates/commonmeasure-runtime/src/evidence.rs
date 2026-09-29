@@ -62,14 +62,25 @@ impl EvidenceLog {
     /// interleave for writes of this size. Sequence numbers can therefore
     /// collide under concurrency where positions cannot; a reader orders by
     /// position and treats `seq` as a hint.
+    ///
+    /// A path that exists but is not a regular file (a directory, a FIFO) is
+    /// refused before it is opened, and the first read error ends the count:
+    /// opening a directory succeeds on some platforms, and a reader that
+    /// skipped its errors would retry the same failed read without end.
     pub fn open_append(path: &Path) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let sequence = if path.exists() {
-            BufReader::new(File::open(path)?).lines().count() as u64
-        } else {
-            0
+        let sequence = match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => count_lines(File::open(path)?)?,
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{} is not a regular file", path.display()),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error),
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -180,6 +191,22 @@ impl EvidenceLog {
 /// When this append is the one that creates the file, the directory entry is
 /// synced too: `sync_all` makes the bytes durable, but a file whose directory
 /// entry is lost to a crash was never recorded in any sense a reader can use.
+/// Count lines as `BufRead::lines` would, a final line without its newline
+/// included, but on bytes, so a record that is not UTF-8 still counts, and
+/// stopping at the first read error.
+fn count_lines(source: impl std::io::Read) -> std::io::Result<u64> {
+    let mut reader = BufReader::new(source);
+    let mut line = Vec::new();
+    let mut count = 0;
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            return Ok(count);
+        }
+        count += 1;
+    }
+}
+
 fn append_line(path: &Path, record: &Value) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
     line.push(b'\n');
@@ -339,4 +366,58 @@ fn write_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
     sync_parent(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A source that yields one line and then fails every read, as a
+    /// directory opened for reading does on macOS.
+    struct FailsAfterOneLine {
+        served: bool,
+        reads: u32,
+    }
+
+    impl std::io::Read for FailsAfterOneLine {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            assert!(self.reads < 100, "the count kept reading after an error");
+            if !self.served {
+                self.served = true;
+                buffer[..2].copy_from_slice(b"{\n");
+                return Ok(2);
+            }
+            Err(std::io::Error::other("injected read error"))
+        }
+    }
+
+    #[test]
+    fn a_read_error_ends_the_count_with_that_error() {
+        let error = count_lines(FailsAfterOneLine {
+            served: false,
+            reads: 0,
+        })
+        .expect_err("the injected error");
+        assert_eq!(error.to_string(), "injected read error");
+    }
+
+    #[test]
+    fn lines_are_counted_as_bufread_lines_counts_them() {
+        for text in [&b""[..], b"a\n", b"a\nb", b"a\n\xff\n", b"\n\n"] {
+            let expected = BufReader::new(text).lines().count() as u64;
+            assert_eq!(count_lines(text).unwrap(), expected, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_log_path_that_is_not_a_regular_file_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().join("credentials-changes.ndjson");
+        fs::create_dir(&directory).unwrap();
+        let error = EvidenceLog::open_append(&directory)
+            .err()
+            .expect("a directory is refused");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+    }
 }

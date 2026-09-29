@@ -4007,6 +4007,8 @@ fn cadence_counts_claims_honours_backoff_and_requeues_dead_batches() {
             let report =
                 commonmeasure_relay::relay_with_clock(home.path(), &options, &|| before).unwrap();
             assert_eq!(report.batches_delivered, 0);
+            assert!(report.all_queued_undue);
+            assert_eq!(report.next_attempt_at, Some(due));
             assert_eq!(report.events_enqueued, 0);
             assert_eq!(calls.load(Ordering::SeqCst), attempt as usize);
             now = due;

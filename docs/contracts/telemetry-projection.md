@@ -493,7 +493,13 @@ no automatic grace period. `commonmeasure status`, `commonmeasure doctor` and
 the console show queued, dead and delivered **batch** counts, oldest queued age,
 next attempt and last error. The existing delivered and pending **event** counts
 remain separate; pending includes dead batches. Unreadable delivery state is
-reported as unavailable, with unknown counts.
+reported as unavailable, with unknown counts. The relay's closing summary names
+queued batches' next due time; when every queued batch is waiting for its
+deadline, it says none are due instead of reporting a zero delivery. Relay,
+status and doctor name the attempt limit for dead batches and explain that
+`commonmeasure relay requeue` starts another schedule. Status JSON includes
+`max_attempts` and `dead_remedy`; doctor JSON carries the same findings as its
+text report.
 `next_attempt_at` reports only a persisted deadline for an unheld queued batch;
 it remains null when none exists. Status and doctor distinguish due batches
 from policy holds, and report the hold reason separately from delivery errors.

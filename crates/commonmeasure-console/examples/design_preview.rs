@@ -56,6 +56,21 @@ fn main() -> Result<()> {
     } else if variant == "deployment-error" {
         std::fs::write(fixture.path().join("deployment.json"), "{")?;
     }
+    // One provider keyed in the synthetic home's credentials file and one
+    // named as set by the launching environment, so the Sources screen shows
+    // each origin. The key is synthetic, and the environment is not read.
+    std::fs::write(
+        fixture.path().join("credentials.env"),
+        "# synthetic\nEXA_API_KEY=synthetic-preview-key\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            fixture.path().join("credentials.env"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
     let surface = std::env::var("CM_DESIGN_PREVIEW_SURFACE").unwrap_or_default();
     match surface.as_str() {
         "" => {}
@@ -131,6 +146,7 @@ fn main() -> Result<()> {
         } else {
             vec![json!({"name":"Synthetic source with a long operational name", "connected":false})]
         },
+        launch_environment: vec!["TAVILY_API_KEY".to_owned()],
         search: None,
         liveness: None,
     })

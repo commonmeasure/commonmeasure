@@ -38,11 +38,11 @@ impl RelayConfig {
     /// act on, is an error naming the file and the fault.
     pub fn load(home: &Path) -> Result<Option<Self>, String> {
         let source = home.join("relay.json");
-        if !source.exists() {
-            return Ok(None);
-        }
-        let encoded = std::fs::read(&source)
-            .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
+        let encoded = match std::fs::read(&source) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read {}: {error}", source.display())),
+        };
         Self::parse(&encoded)
             .map(Some)
             .map_err(|error| format!("{} is not a valid relay config: {error}", source.display()))

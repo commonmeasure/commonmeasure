@@ -122,8 +122,9 @@ pub fn policy_fragment(policy: &Value, rules: &Value, notice: Option<(&str, &str
     policy_body(policy, rules, notice).into_string()
 }
 
-pub fn sources_page(providers: &[Value]) -> String {
-    shell(Some(Section::Sources), sources(providers)).into_string()
+/// The Sources screen, with an outcome notice when a key write just happened.
+pub fn sources_page(projection: &Value, notice: Option<(&str, &str)>) -> String {
+    shell(Some(Section::Sources), sources(projection, notice)).into_string()
 }
 
 pub fn compare_page(query: Option<&str>, results: &[Value], providers: &[Value]) -> String {
@@ -417,6 +418,10 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
                                 dd {
                                     @match receiver {
                                         Some(receiver) => { span class="mono" { (receiver) } }
+                                        None if egress["receiver_error"].is_string() => {
+                                            "Unknown: " (egress["receiver_error"].as_str().unwrap())
+                                            "; nothing is sent until the telemetry configuration reads."
+                                        }
                                         None if egress["enrolment_error"].is_string() => {
                                             "Unknown: the enrolment record could not be read."
                                         }
@@ -1462,22 +1467,42 @@ pub fn forecast_fragment(forecast: &Value, draft: &Value) -> String {
     markup.into_string()
 }
 
-/// The Sources screen: the providers the agent may pull content from, and
-/// which hold a key. The connected flag is computed by the CLI at start from
-/// the operator's own credentials — the console never holds a key.
-fn sources(providers: &[Value]) -> Markup {
+/// The Sources screen: each provider, the variable it reads and where that
+/// variable is set, from `super::sources::projection`. Names only; the
+/// projection carries no value. Where the operator keeps supplier keys, each
+/// key-taking row can add, replace or remove its key in `credentials.env`.
+fn sources(sources: &Value, notice: Option<(&str, &str)>) -> Markup {
+    let providers = sources["providers"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let path = str_of(sources["file"].get("path"), "credentials.env");
+    let editable = sources["custody"] == "local";
     html! {
-        (topbar("Sources", html! {}))
+        (topbar("Sources", html! { "Keys from " span class="mono" { (path) } " and the launching environment" }))
         section class="screen surface-screen" {
+            @if let Some((kind, text)) = notice {
+                div class=(format!("notice {kind}")) role="status" data-outcome=(kind) { (text) }
+            }
+            @if let Some(error) = sources["file"].get("error").and_then(Value::as_str) {
+                p class="notice refused" role="alert" { "The credentials file does not load, and sessions refuse to start with it: " (error) }
+            }
+            @if sources["custody"] == "organisation" {
+                p class="notice" { "Supplier keys on this edge are managed by your organisation's Hub." }
+            }
+            @if let Some(reason) = sources.get("edit_error").and_then(Value::as_str) {
+                p class="notice refused" role="alert" { (reason) }
+            }
+            p class="muted src-reach" { "A saved key reaches sessions that start after the save. Running sessions, and Compare on this console, keep the keys they started with." }
             h2 { "Suppliers" }
             @if providers.is_empty() {
                 div class="card" { p class="muted" { "No suppliers listed." } }
             } @else {
-                @for provider in providers { (source_row(provider)) }
+                @for provider in providers { (source_row(provider, editable)) }
                 details class="surface-details" {
                     summary { "Configuration and access" }
                     dl class="kv" {
-                        div { dt { "Configuration" } dd { "Read from this Edge home and launching environment at startup. Restart after credential changes." } }
+                        div { dt { "Configuration" } dd { "The credentials file is read for each page; the launching environment as it was when the console started. The launching environment wins where both set a variable." } }
                         div { dt { "Access" } dd { "Not tested by this view." } }
                         div { dt { "Licence" } dd { "Unknown unless a supplier states one." } }
                         div { dt { "Credit" } dd { "Not checked by this view." } }
@@ -1488,24 +1513,64 @@ fn sources(providers: &[Value]) -> Markup {
     }
 }
 
-fn source_row(provider: &Value) -> Markup {
+fn source_row(provider: &Value, editable: bool) -> Markup {
     let name = str_of(provider.get("name"), "");
-    let connected = provider.get("connected").and_then(Value::as_bool);
+    let variable = str_of(provider.get("variable"), "");
+    let origin = str_of(provider.get("origin"), "unset");
+    let in_file = origin == "file" || provider["shadowed_in_file"] == true;
+    let takes_key = provider["takes_key"] == true;
     let avatar: String = name.chars().take(2).collect();
     html! {
-        div class="src" data-provider=(name) {
+        div class="src" data-provider=(name) data-origin=(origin) {
             div class="src-avatar" aria-hidden="true" { (avatar) }
             div class="src-body" {
                 div class="src-name" { (provider_title(name)) }
                 div class="src-use" { (provider_description(name)) }
+                p class="src-config" {
+                    @match origin {
+                        "file" => { code { (variable) } " from " code { "credentials.env" } }
+                        "environment" => {
+                            code { (variable) } " from the launching environment"
+                            @if in_file { ", which wins over the value in the file" }
+                        }
+                        _ => {
+                            code { (variable) } " not set. Add "
+                            code class="src-line" { (variable) "=…" }
+                            @if !takes_key { " (the corpus directory)" }
+                            " to " code { "credentials.env" } " and "
+                            code { "chmod 600" } " it."
+                        }
+                    }
+                }
+                @if takes_key && editable {
+                    div class="src-actions" {
+                        details class="src-key" {
+                            summary { @if in_file { "Replace key" } @else { "Add key" } }
+                            form method="post" action="/app/sources/key" class="src-key-form" {
+                                input type="hidden" name="provider" value=(name);
+                                input type="hidden" name="action" value="set";
+                                label for=(format!("key-{name}")) { (variable) }
+                                input id=(format!("key-{name}")) type="password" name="key" required
+                                    autocomplete="off" spellcheck="false" autocapitalize="off";
+                                button type="submit" class="btn quiet" { "Save" }
+                            }
+                        }
+                        @if in_file {
+                            details class="src-key" {
+                                summary { "Remove key" }
+                                form method="post" action="/app/sources/key" class="src-key-form" {
+                                    input type="hidden" name="provider" value=(name);
+                                    input type="hidden" name="action" value="remove";
+                                    button type="submit" class="btn quiet" { "Remove " (variable) " from the file" }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             div class="src-status" {
                 span class="badge b-plain" {
-                    @match connected {
-                        Some(true) => "configured",
-                        Some(false) => "not configured",
-                        None => "configuration unknown",
-                    }
+                    @if origin == "unset" { "not configured" } @else { "configured" }
                 }
             }
         }
@@ -2037,6 +2102,22 @@ mod tests {
         assert!(!page.contains("<dt>Receiver</dt><dd>Unknown:"));
     }
 
+    #[test]
+    fn an_unreadable_telemetry_config_leaves_the_receiver_unknown() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("relay.json"), "{not json").unwrap();
+        let egress = commonmeasure_relay::egress_report(home.path());
+        let error = egress["receiver_error"].as_str().unwrap();
+        let page = overview_page(&json!({ "egress": egress }), &json!([]), READ);
+        assert!(page.contains("<dt>Receiver</dt><dd>Unknown:"), "{page}");
+        assert!(page.contains(&html! { (error) }.into_string()), "{page}");
+        assert!(
+            page.contains("nothing is sent until the telemetry configuration reads"),
+            "{page}"
+        );
+        assert!(!page.contains("none configured"), "{page}");
+    }
+
     /// `cleartext_hub` is every URL `connect`'s transport rule refuses,
     /// including an https URL that does not parse, so the key row states
     /// the rule rather than calling the URL cleartext.
@@ -2093,7 +2174,7 @@ mod tests {
     /// shell rather than a bare body.
     #[test]
     fn the_shell_names_the_product_and_errors_render_inside_it() {
-        let page = sources_page(&[]);
+        let page = sources_page(&json!({}), None);
         assert!(page.contains(r#"<div class="wordmark">Common Measure</div>"#));
         assert!(
             !page.contains("context"),
@@ -2276,22 +2357,99 @@ mod tests {
         assert!(failed.contains("No forecast: "));
     }
 
+    fn sources_projection(custody: &str) -> Value {
+        json!({
+            "file": {"path": "/home/op/.commonmeasure/credentials.env", "present": true, "error": null},
+            "custody": custody,
+            "edit_error": null,
+            "providers": [
+                {"name": "exa", "variable": "EXA_API_KEY", "origin": "file",
+                 "shadowed_in_file": false, "takes_key": true},
+                {"name": "tavily", "variable": "TAVILY_API_KEY", "origin": "environment",
+                 "shadowed_in_file": false, "takes_key": true},
+                {"name": "dataville", "variable": "DATAVILLE_API_KEY", "origin": "unset",
+                 "shadowed_in_file": false, "takes_key": true},
+                {"name": "internal", "variable": "COMMONMEASURE_INTERNAL_CORPUS", "origin": "unset",
+                 "shadowed_in_file": false, "takes_key": false},
+            ],
+        })
+    }
+
+    /// The row the page renders for `provider`, from its opening tag to the next row.
+    fn row<'a>(page: &'a str, provider: &str) -> &'a str {
+        let start = page
+            .find(&format!("data-provider=\"{provider}\""))
+            .unwrap_or_else(|| panic!("no row for {provider}"));
+        let rest = &page[start..];
+        &rest[..rest[1..]
+            .find("data-provider=")
+            .map_or(rest.len(), |end| end + 1)]
+    }
+
+    /// Each row names its variable and where it is set; an unset row names the
+    /// file, a copyable line and the mode; the internal corpus names its
+    /// variable and takes no key from the page.
     #[test]
-    fn sources_show_connected_and_no_key_providers() {
-        let providers = vec![
-            json!({"name": "exa", "connected": true}),
-            json!({"name": "tollbit", "connected": false}),
-        ];
-        let page = sources_page(&providers);
-        assert!(page.contains("Exa"));
-        assert!(page.contains("Web search and page contents"));
-        assert!(page.contains("configured"));
-        assert!(page.contains("TollBit"));
-        assert!(page.contains("not configured"));
+    fn sources_rows_say_where_each_variable_is_set() {
+        let page = sources_page(&sources_projection("local"), None);
+        let file = row(&page, "exa");
+        assert!(
+            file.contains("<code>EXA_API_KEY</code> from <code>credentials.env</code>"),
+            "{file}"
+        );
+        assert!(page.contains(
+            "Keys from <span class=\"mono\">/home/op/.commonmeasure/credentials.env</span>"
+        ));
+        assert!(
+            file.contains(">configured<")
+                && file.contains("Replace key")
+                && file.contains("Remove key")
+        );
+
+        let environment = row(&page, "tavily");
+        assert!(
+            environment.contains("<code>TAVILY_API_KEY</code> from the launching environment"),
+            "{environment}"
+        );
+        assert!(environment.contains("Add key") && !environment.contains("Remove key"));
+
+        let unset = row(&page, "dataville");
+        assert!(
+            unset.contains("<code>DATAVILLE_API_KEY</code> not set."),
+            "{unset}"
+        );
+        assert!(unset.contains("<code class=\"src-line\">DATAVILLE_API_KEY=…</code>"));
+        assert!(unset.contains("<code>credentials.env</code>") && unset.contains("chmod 600"));
+        assert!(unset.contains(">not configured<") && unset.contains("Add key"));
+        assert!(
+            unset.contains(r#"type="password""#) && unset.contains(r#"action="/app/sources/key""#)
+        );
+
+        let corpus = row(&page, "internal");
+        assert!(
+            corpus.contains("COMMONMEASURE_INTERNAL_CORPUS=…")
+                && corpus.contains("corpus directory"),
+            "{corpus}"
+        );
+        assert!(
+            !corpus.contains("<form"),
+            "the corpus root is a path, set by hand"
+        );
+
+        assert!(page.contains("A saved key reaches sessions that start after the save"));
         assert!(
             !page.contains("role=\"switch\"") && !page.contains("type=\"checkbox\""),
             "provider connection states must not be rendered as switches"
         );
+    }
+
+    /// Where the Hub supplies supplier keys, no row offers to write one.
+    #[test]
+    fn sources_under_supplier_custody_offer_no_key_controls() {
+        let page = sources_page(&sources_projection("organisation"), None);
+        assert!(page.contains("managed by your organisation's Hub"));
+        assert!(!page.contains("<form"), "{page}");
+        assert!(row(&page, "exa").contains("<code>EXA_API_KEY</code> from"));
     }
 
     #[test]

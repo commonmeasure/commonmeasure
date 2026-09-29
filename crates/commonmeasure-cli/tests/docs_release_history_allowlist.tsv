@@ -89,3 +89,4 @@ docs/guide/untrusted-context.md	shared storage, follows open redirects or is no 
 docs/guide/untrusted-context.md	between a vendor's output and the outside material used to produce it. google explicitly includes specified grounding services, while microsoft's, openai's,	Describes source ownership or the purpose of grounding material.
 schema/telemetry-session.v1.json	id from the content-telemetry-id http header, used to deduplicate retrieval events reported by multiple observers" }, "content_url": { "type": ["string",	Defines the purpose of a protocol correlation field.
 crates/commonmeasure-relay/src/supplier_credentials.rs	used to sign it.	Describes the clock used for request signing, not a change between releases.
+docs/GETTING-STARTED.md	When upgrading from 0.4.5 or earlier, that release's `update` still refuses while hosts run the binary.	Required installer route for operators whose installed updater still refuses running hosts.

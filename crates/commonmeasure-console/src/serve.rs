@@ -20,7 +20,9 @@
 //! from the Policy screen: the shared form at `POST /api/policy/save`, the field endpoints
 //! `POST /app/policy/mode`, `POST /app/policy/deny` and
 //! `POST /app/attribution`, each revision-checked and saved through the
-//! artefact's own loader (`console::edit`). `GET /app/policy/forecast` is the
+//! artefact's own loader (`console::edit`); and one provider key in
+//! `credentials.env` from the Sources screen at `POST /app/sources/key`,
+//! loopback binds only (`console::sources`). `GET /app/policy/forecast` is the
 //! dry run over recorded history for a draft rule and writes nothing.
 //! `GET /app/agents` and `/api/agents` read the host sessions, with liveness
 //! from the injected [`LivenessProbe`]. Every
@@ -65,8 +67,12 @@ pub struct ServeOptions {
     pub home: PathBuf,
     /// The content providers and whether each is connected, computed by the
     /// caller from the operator's own credentials. The sink never holds a key;
-    /// each entry is `{name, connected}`, for the Sources screen.
+    /// each entry is `{name, connected}`, for the Compare screen.
     pub providers: Vec<Value>,
+    /// The provider variables the launching environment set at start, by
+    /// name, not counting what `credentials.env` supplied. The Sources screen
+    /// re-reads the file per answer and takes the environment from this.
+    pub launch_environment: Vec<String>,
     /// Runs a live comparison search for the Compare screen. `None` disables
     /// it; the screen says so. Making real, credit-spending calls is why this
     /// is injected rather than built into the sink.
@@ -129,6 +135,7 @@ pub fn start(options: ServeOptions) -> Result<commonmeasure_http::ServerHandle> 
     std::io::stdout().flush().ok();
 
     let providers = options.providers.clone();
+    let launch_environment = options.launch_environment.clone();
     let search = options.search.clone();
     let liveness = options.liveness.clone();
     let guard = HostGuard {
@@ -138,6 +145,7 @@ pub fn start(options: ServeOptions) -> Result<commonmeasure_http::ServerHandle> 
     let handle = server.spawn(move |request| {
         let injected = Injected {
             providers: &providers,
+            launch_environment: &launch_environment,
             search: search.as_ref(),
             liveness: liveness.as_ref(),
         };
@@ -271,6 +279,7 @@ fn path_id(segment: &str) -> std::result::Result<String, String> {
 /// as one value.
 struct Injected<'a> {
     providers: &'a [Value],
+    launch_environment: &'a [String],
     search: Option<&'a SearchRunner>,
     liveness: Option<&'a LivenessProbe>,
 }
@@ -285,6 +294,7 @@ fn route(
 ) -> Response {
     let Injected {
         providers,
+        launch_environment,
         search,
         liveness,
     } = *injected;
@@ -316,9 +326,13 @@ fn route(
             "/app/policy/mode" | "/app/policy/deny" | "/app/attribution" | "/api/policy/mode"
             | "/api/policy/deny" | "/api/attribution" | "/api/policy/save"
             | "/api/policy/check" => policy_write(state, home, sessions_dir, path, request),
+            "/app/sources/key" | "/api/sources/key" => {
+                key_write(home, launch_environment, guard, request)
+            }
             _ => json_error(
                 405,
-                "the console writes comparison records, personal source policies and local attribution rules",
+                "the console writes comparison records, personal source policies, local \
+                 attribution rules and provider keys",
             ),
         };
     }
@@ -346,7 +360,7 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Overview,
-            providers,
+            injected,
             session.as_deref(),
         ),
         "/app/record" => app_page(
@@ -355,7 +369,7 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Record,
-            providers,
+            injected,
             session.as_deref(),
         ),
         "/app/policy" => app_page(
@@ -364,7 +378,7 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Policy,
-            providers,
+            injected,
             session.as_deref(),
         ),
         "/app/sources" => app_page(
@@ -373,9 +387,10 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Sources,
-            providers,
+            injected,
             session.as_deref(),
         ),
+        "/api/sources" => json_value(200, &console::sources::projection(home, launch_environment)),
         "/api/compare/export" => export_compare(home, request),
         "/app/compare" | "/api/compare" => get_compare(home, request, providers, search.is_some()),
         // The Agents screen, its JSON twin and its detail fragment, all
@@ -420,7 +435,7 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Budget,
-            providers,
+            injected,
             None,
         ),
         "/favicon.svg" => asset(
@@ -474,7 +489,7 @@ fn route(
             sessions_dir,
             engagement.as_deref(),
             console::app::Section::Record,
-            providers,
+            injected,
             session.as_deref(),
         ),
         // The egress block is read fresh per answer, so a delivery that
@@ -932,10 +947,12 @@ fn app_page(
     sessions_dir: &std::path::Path,
     engagement: Option<&str>,
     section: console::app::Section,
-    providers: &[Value],
+    injected: &Injected<'_>,
     session: Option<&str>,
 ) -> Response {
     use console::app::Section;
+    let providers = injected.providers;
+    let launch_environment = injected.launch_environment.to_vec();
     // The Policy screen carries the editor that repairs a broken rule file,
     // so it renders with no attribution rather than refusing to render.
     if section == Section::Policy {
@@ -1001,7 +1018,10 @@ fn app_page(
                         &budget_projection(store, &home, &rules, engagement.as_deref())?,
                         read,
                     ),
-                    Section::Sources => console::app::sources_page(&providers),
+                    Section::Sources => console::app::sources_page(
+                        &console::sources::projection(&home, &launch_environment),
+                        None,
+                    ),
                     Section::Compare => console::app::compare_page(None, &[], &providers),
                     // `/app/agents` is answered by `agents_route`, which
                     // needs the probe; this arm serves the same screen with
@@ -1022,6 +1042,75 @@ fn app_page(
         }
         Err(error) => html_error(500, &format!("{error:#}")),
     }
+}
+
+/// A provider key written to or removed from `credentials.env` from the
+/// Sources screen (`console::sources::write_key`). Refused on a bind that is
+/// not loopback whatever `--allow-remote` says: a key is a secret to a third
+/// party's service, and a remote bind authenticates nobody. The answer is the
+/// Sources screen with the outcome, or its JSON; neither carries the key.
+fn key_write(
+    home: &std::path::Path,
+    launch_environment: &[String],
+    guard: &HostGuard,
+    request: &Request,
+) -> Response {
+    use console::edit::Outcome;
+    let outcome = if !guard.address.ip().is_loopback() {
+        Outcome::Refused {
+            status: 403,
+            notice: format!(
+                "Not saved: this console listens on {}, which is not loopback, and takes \
+                 provider keys only on a loopback address.",
+                guard.address
+            ),
+        }
+    } else {
+        match request_fields(request) {
+            // The decoder's message is not passed on: it may quote the body.
+            Err(_) => Outcome::Refused {
+                status: 400,
+                notice: "Not saved: the form could not be read.".into(),
+            },
+            Ok(fields) => {
+                let field = |name: &str| {
+                    fields
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.as_str())
+                };
+                let provider = field("provider").unwrap_or_default();
+                match field("action") {
+                    Some("set") => console::sources::write_key(
+                        home,
+                        provider,
+                        Some(field("key").unwrap_or_default()),
+                        launch_environment,
+                    ),
+                    Some("remove") => {
+                        console::sources::write_key(home, provider, None, launch_environment)
+                    }
+                    _ => Outcome::Refused {
+                        status: 400,
+                        notice: "Not saved: the action must be set or remove.".into(),
+                    },
+                }
+            }
+        }
+    };
+    if wants_json(request) {
+        return json_value(
+            outcome.status(),
+            &json!({"kind": outcome.kind(), "status": outcome.status(), "notice": outcome.notice()}),
+        );
+    }
+    html(
+        outcome.status(),
+        &console::app::sources_page(
+            &console::sources::projection(home, launch_environment),
+            Some((outcome.kind(), outcome.notice())),
+        ),
+    )
 }
 
 /// One of the Policy screen's writes. The form is decoded, the edit is made
@@ -1552,6 +1641,7 @@ mod tests {
                 &home.path().join("sessions"),
                 &Injected {
                     providers: &[],
+                    launch_environment: &[],
                     search: None,
                     liveness: None,
                 },
@@ -1590,6 +1680,7 @@ mod tests {
             allow_remote: false,
             home: home.path().to_path_buf(),
             providers: Vec::new(),
+            launch_environment: Vec::new(),
             search: None,
             liveness: None,
         })
@@ -1674,5 +1765,338 @@ mod tests {
         assert!(guard.permits(Some("localhost:4173")));
         assert!(guard.permits(Some("[::1]:4173")));
         assert!(guard.permits(Some("[::1]")));
+    }
+
+    /// A key write from the Sources screen, as the page's form posts it.
+    fn post_key(
+        home: &std::path::Path,
+        guard: &HostGuard,
+        body: &str,
+        origin: Option<&str>,
+        json_answer: bool,
+    ) -> Response {
+        let state = Mutex::new(Store::open(&home.join("telemetry.db")).unwrap());
+        let mut request = Request::post(
+            "/app/sources/key",
+            body.as_bytes().to_vec(),
+            "application/x-www-form-urlencoded",
+        );
+        request.headers.set("Host", "127.0.0.1:4173");
+        if let Some(origin) = origin {
+            request.headers.set("Origin", origin);
+        }
+        if json_answer {
+            request.headers.set("Accept", "application/json");
+        }
+        route(
+            &state,
+            home,
+            &home.join("sessions"),
+            &Injected {
+                providers: &[],
+                launch_environment: &["TAVILY_API_KEY".to_owned()],
+                search: None,
+                liveness: None,
+            },
+            guard,
+            &request,
+        )
+    }
+
+    fn get_page(home: &std::path::Path, path: &str) -> String {
+        let state = Mutex::new(Store::open(&home.join("telemetry.db")).unwrap());
+        let response = route(
+            &state,
+            home,
+            &home.join("sessions"),
+            &Injected {
+                providers: &[],
+                launch_environment: &["TAVILY_API_KEY".to_owned()],
+                search: None,
+                liveness: None,
+            },
+            &loopback_guard(),
+            &Request::get(path),
+        );
+        assert_eq!(response.status, 200, "{path}");
+        String::from_utf8(response.body).unwrap()
+    }
+
+    const OWN_PAGE: Option<&str> = Some("http://127.0.0.1:4173");
+
+    /// Add, replace and remove through the route: other lines and comments
+    /// are kept, the file stays 0600, each change is recorded by variable
+    /// and digest, and the key is in no answer, page or record.
+    #[test]
+    fn a_key_is_added_replaced_and_removed_and_never_echoed() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("credentials.env");
+        std::fs::write(&file, "# operator keys\nTAVILY_API_KEY=tv\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let mut answers = Vec::new();
+
+        let added = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=exa&action=set&key=sk-first-4f2a",
+            OWN_PAGE,
+            false,
+        );
+        assert_eq!(added.status, 200);
+        let body = String::from_utf8(added.body.clone()).unwrap();
+        assert!(body.contains("Saved EXA_API_KEY to"), "{body}");
+        assert!(body.contains("now owner-only (600)"), "{body}");
+        answers.push(body);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# operator keys\nTAVILY_API_KEY=tv\nEXA_API_KEY=sk-first-4f2a\n"
+        );
+
+        let replaced = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=exa&action=set&key=sk-second-9c1e",
+            OWN_PAGE,
+            true,
+        );
+        assert_eq!(replaced.status, 200);
+        let answer: Value = serde_json::from_slice(&replaced.body).unwrap();
+        assert_eq!(answer["kind"], "saved");
+        answers.push(answer.to_string());
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# operator keys\nTAVILY_API_KEY=tv\nEXA_API_KEY=sk-second-9c1e\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        let page = get_page(home.path(), "/app/sources");
+        assert!(
+            row_of(&page, "exa").contains("<code>EXA_API_KEY</code> from"),
+            "{page}"
+        );
+        assert!(row_of(&page, "tavily").contains("launching environment, which wins"));
+        answers.push(page);
+        answers.push(get_page(home.path(), "/api/sources"));
+
+        let removed = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=exa&action=remove",
+            OWN_PAGE,
+            true,
+        );
+        let answer: Value = serde_json::from_slice(&removed.body).unwrap();
+        assert_eq!(answer["kind"], "saved", "{answer}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# operator keys\nTAVILY_API_KEY=tv\n"
+        );
+        let again = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=exa&action=remove",
+            OWN_PAGE,
+            true,
+        );
+        let answer: Value = serde_json::from_slice(&again.body).unwrap();
+        assert_eq!(answer["kind"], "unchanged", "{answer}");
+
+        // A refused key is not quoted either.
+        let refused = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=exa&action=set&key=%22sk-quoted-77aa%22",
+            OWN_PAGE,
+            true,
+        );
+        assert_eq!(refused.status, 400);
+        answers.push(String::from_utf8(refused.body).unwrap());
+
+        let log = std::fs::read_to_string(home.path().join(console::sources::CHANGES_LOG)).unwrap();
+        let records: Vec<Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 3, "{log}");
+        assert!(records.iter().all(|r| r["event"] == "credentials_changed"));
+        assert_eq!(records[0]["payload"]["variable"], "EXA_API_KEY");
+        assert_eq!(records[0]["payload"]["action"], "set");
+        assert_eq!(records[2]["payload"]["action"], "removed");
+        assert_eq!(
+            records[2]["payload"]["sha256"],
+            commonmeasure_types::canonical::sha256_digest(b"# operator keys\nTAVILY_API_KEY=tv\n")
+        );
+        assert_eq!(
+            records[1]["payload"]["previous_sha256"],
+            records[0]["payload"]["sha256"]
+        );
+        answers.push(log);
+
+        for text in &answers {
+            for secret in ["sk-first-4f2a", "sk-second-9c1e", "sk-quoted-77aa"] {
+                assert!(!text.contains(secret), "{secret} echoed: {text}");
+            }
+        }
+    }
+
+    /// A stored value holding a NUL refuses a save of another variable, by
+    /// line number, and the file keeps every byte it had.
+    #[test]
+    fn a_save_beside_a_nul_bearing_value_refuses_and_leaves_the_file_as_it_was() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("credentials.env");
+        let before = b"# keys\nEXA_API_KEY=existing\0value-5e1d\n";
+        std::fs::write(&file, before).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let refused = post_key(
+            home.path(),
+            &loopback_guard(),
+            "provider=tavily&action=set&key=tv-new-0b7c",
+            OWN_PAGE,
+            true,
+        );
+        assert_eq!(refused.status, 400);
+        let answer = String::from_utf8(refused.body).unwrap();
+        assert!(answer.contains("line 2 contains a NUL"), "{answer}");
+        assert!(answer.contains("repair the file first"), "{answer}");
+        assert!(
+            !answer.contains("value-5e1d") && !answer.contains("tv-new"),
+            "{answer}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        assert!(!home.path().join(console::sources::CHANGES_LOG).exists());
+        let page = get_page(home.path(), "/app/sources");
+        assert!(!page.contains("value-5e1d"), "{page}");
+    }
+
+    /// When the change log cannot be read, the save still answers, says the
+    /// change was not recorded, and releases the lock, so the next save is
+    /// not refused as busy.
+    #[test]
+    fn an_unreadable_change_log_is_reported_and_the_lock_is_released() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(console::sources::CHANGES_LOG)).unwrap();
+        for key in ["sk-first-a61f", "sk-second-a61f"] {
+            let saved = post_key(
+                home.path(),
+                &loopback_guard(),
+                &format!("provider=exa&action=set&key={key}"),
+                OWN_PAGE,
+                true,
+            );
+            assert_eq!(saved.status, 200);
+            let answer: Value = serde_json::from_slice(&saved.body).unwrap();
+            assert_eq!(answer["kind"], "saved", "{answer}");
+            let notice = answer["notice"].as_str().unwrap();
+            assert!(
+                notice.contains("The change was not recorded in"),
+                "{notice}"
+            );
+            assert!(notice.contains("not a regular file"), "{notice}");
+            assert!(!answer.to_string().contains("sk-"), "{answer}");
+            assert_eq!(
+                std::fs::read_to_string(home.path().join("credentials.env")).unwrap(),
+                format!("EXA_API_KEY={key}\n")
+            );
+        }
+    }
+
+    fn row_of<'a>(page: &'a str, provider: &str) -> &'a str {
+        let start = page.find(&format!("data-provider=\"{provider}\"")).unwrap();
+        let rest = &page[start..];
+        &rest[..rest[1..]
+            .find("data-provider=")
+            .map_or(rest.len(), |end| end + 1)]
+    }
+
+    /// A page elsewhere cannot post a key, a remote bind takes none, and an
+    /// edge whose Hub supplies supplier keys refuses one; none writes a byte.
+    #[test]
+    fn key_writes_are_refused_cross_origin_remotely_and_under_custody() {
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("credentials.env");
+        let body = "provider=exa&action=set&key=sk-refused-31b0";
+
+        let foreign = post_key(
+            home.path(),
+            &loopback_guard(),
+            body,
+            Some("http://evil.example"),
+            true,
+        );
+        assert_eq!(foreign.status, 403);
+
+        let remote = HostGuard {
+            address: "192.0.2.10:4173".parse().unwrap(),
+            allow_remote: true,
+        };
+        let exposed = post_key(home.path(), &remote, body, None, true);
+        assert_eq!(exposed.status, 403);
+        assert!(String::from_utf8_lossy(&exposed.body).contains("not loopback"));
+
+        let managed = json!({"mode": "managed", "organisation": "example",
+            "policy_url": "https://hub.example/api/v1/policy/desired",
+            "signer": {"key_id": "test", "algorithm": "ed25519", "public_key": "00".repeat(32)}});
+        std::fs::write(home.path().join("deployment.json"), managed.to_string()).unwrap();
+        std::fs::write(
+            home.path().join("hosted-service.json"),
+            json!({"origin": "https://edge.example", "hosts": ["chatgpt"], "supplier_custody": true})
+                .to_string(),
+        )
+        .unwrap();
+        let custody = post_key(home.path(), &loopback_guard(), body, OWN_PAGE, false);
+        assert_eq!(custody.status, 403);
+        let page = String::from_utf8(custody.body).unwrap();
+        assert!(
+            page.contains("managed by your organisation's Hub"),
+            "{page}"
+        );
+        assert!(!page.contains("<form"), "no key controls under custody");
+
+        for answer in [&foreign.body, &exposed.body] {
+            assert!(!String::from_utf8_lossy(answer).contains("sk-refused"));
+        }
+        assert!(!page.contains("sk-refused"));
+        assert!(!file.exists(), "nothing was written");
+        assert!(!home.path().join(console::sources::CHANGES_LOG).exists());
+
+        // A custody field or file the hosted service would refuse leaves
+        // custody unknown, and editing refuses.
+        for config in [
+            json!({"origin": "https://edge.example", "hosts": ["chatgpt"], "supplier_custody": "true"}),
+            json!({"origin": "https://edge.example", "hosts": ["chatgpt"], "supplier_custody": 1}),
+            json!({"origin": "https://edge.example", "hosts": ["chatgpt"], "supplier_custody": null}),
+            json!(["supplier_custody", false]),
+        ] {
+            std::fs::write(home.path().join("hosted-service.json"), config.to_string()).unwrap();
+            let unknown = post_key(home.path(), &loopback_guard(), body, OWN_PAGE, true);
+            assert_eq!(unknown.status, 403, "{config}");
+            let answer = String::from_utf8(unknown.body).unwrap();
+            assert!(answer.contains("Key editing unavailable"), "{answer}");
+            assert!(!answer.contains("sk-refused"));
+            assert!(!file.exists(), "nothing was written for {config}");
+        }
+
+        // Managed policy without custody keeps its keys local.
+        std::fs::write(
+            home.path().join("hosted-service.json"),
+            json!({"origin": "https://edge.example", "hosts": ["chatgpt"]}).to_string(),
+        )
+        .unwrap();
+        let local_keys = post_key(home.path(), &loopback_guard(), body, OWN_PAGE, true);
+        assert_eq!(local_keys.status, 200);
     }
 }

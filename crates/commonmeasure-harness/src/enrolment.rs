@@ -462,14 +462,15 @@ impl EnrolmentRecord {
         home.join("enrolment.json")
     }
 
-    /// Load `<home>/enrolment.json`. Absent means not enrolled.
+    /// Load `<home>/enrolment.json`. Only a confirmed missing file means not
+    /// enrolled; lookup and read errors leave enrolment unknown.
     pub fn load(home: &Path) -> Result<Option<Self>, String> {
         let source = Self::path(home);
-        if !source.exists() {
-            return Ok(None);
-        }
-        let encoded = std::fs::read(&source)
-            .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
+        let encoded = match std::fs::read(&source) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read {}: {error}", source.display())),
+        };
         let record: Self = serde_json::from_slice(&encoded).map_err(|error| {
             format!(
                 "{} is not a valid enrolment record: {}",
