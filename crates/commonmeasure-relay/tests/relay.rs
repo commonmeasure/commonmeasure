@@ -3541,9 +3541,11 @@ fn a_manifest_record_is_never_projected() {
 }
 
 /// Terms naming institution identifiers require `access_context` on the
-/// session. The event batch carries no session data, so such a session is
-/// withheld and counted apart; a session under terms naming no identifier,
-/// and one under no terms, are delivered as before.
+/// session. The event batch carries no session data, so a crossing of a host
+/// under such terms is withheld and counted apart, and a session with
+/// nothing else to send is counted as withheld for it; a session under
+/// terms naming no identifier, and one under no terms, are delivered as
+/// before.
 #[test]
 fn a_session_under_terms_naming_institution_identifiers_is_withheld_and_said_so() {
     let home = tempfile::tempdir().unwrap();
@@ -3601,6 +3603,7 @@ fn a_session_under_terms_naming_institution_identifiers_is_withheld_and_said_so(
     .expect("relay");
     assert_eq!(report.sessions_read, 3);
     assert_eq!(report.sessions_withheld_access_context, 1);
+    assert_eq!(report.crossings_withheld_access_context, 1);
     assert_eq!(report.sessions_withheld, 0);
     assert_eq!(report.sessions_projected, 2);
     let delivered = bodies.lock().unwrap();
@@ -3620,6 +3623,132 @@ fn a_session_under_terms_naming_institution_identifiers_is_withheld_and_said_so(
                 .unwrap()
                 .contains("host.example"),
         "nothing of the withheld session was spooled"
+    );
+}
+
+/// Review F2 (P1), 29 September 2026: the hold reaches the crossings under
+/// terms needing `access_context` and no further. One session holds, in
+/// order, a crossing of a host with no terms, a crossing of the host whose
+/// terms name a ROR identifier, a refusal of that host, and another crossing
+/// of the plain host. The relay sends the two plain crossings, whose event
+/// ids are the ones their positions give whatever is held beside them, and
+/// the session's refused count; nothing of the held host leaves, and the
+/// report counts one crossing held in a session that was sent.
+#[test]
+fn only_the_crossings_under_terms_needing_access_context_are_held() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"scopes":[{"match":"/work/personal","engagement":"personal","allow_telemetry_egress":true}],
+            "terms":[
+              {"host":"host.example","reference":"consortium-4471",
+               "access_context":[{"scheme":"ror","value":"https://ror.org/013meh722"}]}]}"#,
+    )
+    .unwrap();
+    let plain = |url: &str| {
+        crossing_line("crossing_mediated", "s-mixed", url, true).replace(
+            "\"host_name\":\"host.example\"",
+            "\"host_name\":\"plain.example\"",
+        )
+    };
+    write_session(
+        home.path(),
+        "s-mixed",
+        &[
+            plain("https://plain.example/before"),
+            crossing_line(
+                "crossing_mediated",
+                "s-mixed",
+                "https://host.example/a",
+                true,
+            ),
+            crossing_line(
+                "crossing_refused",
+                "s-mixed",
+                "https://host.example/b",
+                false,
+            ),
+            plain("https://plain.example/after"),
+        ],
+    );
+
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let receiver = accepting_receiver(Arc::clone(&bodies));
+    let report = commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    assert_eq!(report.sessions_projected, 1);
+    assert_eq!(report.crossings_withheld_access_context, 1);
+    assert_eq!(report.sessions_withheld_access_context, 0);
+    assert_eq!(report.sessions_withheld, 0);
+    let delivered = bodies.lock().unwrap();
+    let text: String = delivered.iter().map(|body| body.to_string()).collect();
+    assert!(
+        !text.contains("host.example"),
+        "nothing of the held host left"
+    );
+    assert!(!text.contains("ror.org"));
+    let urls: Vec<&str> = delivered
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap())
+        .filter_map(|event| event["content_url"].as_str())
+        .collect();
+    assert!(
+        urls.contains(&"https://plain.example/before")
+            && urls.contains(&"https://plain.example/after"),
+        "{urls:?}"
+    );
+    assert!(
+        delivered.iter().any(|body| body["refused"] == json!(1)),
+        "the refused count still leaves: {delivered:?}"
+    );
+
+    // The same log with the terms removed sends the held crossing under the
+    // id its position gave it, beside the ids already delivered.
+    let ids = |bodies: &[Value]| -> std::collections::BTreeMap<String, String> {
+        bodies
+            .iter()
+            .flat_map(|body| body["events"].as_array().unwrap().clone())
+            .map(|event| {
+                (
+                    event["id"].as_str().unwrap().to_owned(),
+                    event["content_url"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    let first = ids(&delivered);
+    drop(delivered);
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"scopes":[{"match":"/work/personal","engagement":"personal","allow_telemetry_egress":true}]}"#,
+    )
+    .unwrap();
+    commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    let all = ids(&bodies.lock().unwrap());
+    for (id, url) in &first {
+        assert_eq!(
+            all.get(id),
+            Some(url),
+            "an id sent earlier kept its crossing"
+        );
+    }
+    assert!(
+        all.iter()
+            .any(|(id, url)| url == "https://host.example/a" && !first.contains_key(id)),
+        "{all:?}"
     );
 }
 
@@ -4497,4 +4626,179 @@ fn a_dry_run_forecasts_per_type_exactly_what_the_real_run_then_sends() {
         "the newly spooled count leaves out the batch an earlier run queued"
     );
     assert_eq!(real.events_delivered, 13);
+}
+
+/// A crossing whose licence demanded reporting, as the edge records it once
+/// the demand is ruled on: `met` and the consent it was ruled under.
+fn demanded_line(url: &str, cwd: &str, met: bool, consent: Option<&str>) -> String {
+    let mut record: Value = serde_json::from_str(&crossing_in_cwd(
+        "crossing_mediated",
+        "s-consent",
+        url,
+        true,
+        cwd,
+    ))
+    .unwrap();
+    let mut reporting = json!({
+        "profile": "https://contenttelemetry.org/profiles/spur",
+        "conformance_level": "grounding",
+        "receiver": "https://receiver.example/v1",
+        "telemetry_egress_cleared": false,
+        "met": met,
+    });
+    if let Some(state) = consent {
+        reporting["consent"] = json!({"state": state, "text_version": "1"});
+    }
+    record["payload"]["declarations"] = json!({"reporting": reporting});
+    record.to_string()
+}
+
+/// Owner decision, 27 September 2026 (consent before an obligated crossing),
+/// the relay's half. In a scope that sets `allow_telemetry_egress: false`,
+/// the one crossing the edge admitted under reporting consent leaves, with
+/// its retrieval and grounding, under the consent's clearance; nothing else
+/// of the session does: not the turn boundaries, not the crossing without a
+/// demand, not a met demand recorded before consent existed, and no refused
+/// count, which counts nothing when no scope cleared the session. The home's
+/// consent file says withdrawn by the time the relay runs, and the crossing
+/// still leaves: withdrawal applies to crossings after it.
+#[test]
+fn reporting_consent_carries_the_demanded_crossing_and_nothing_else_of_its_session() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"scopes":[{"match":"/work/client","engagement":"client","allow_telemetry_egress":false}]}"#,
+    )
+    .unwrap();
+    let lines = [
+        turn_line("turn_started", Some("t1"), Some("/work/client")),
+        demanded_line(
+            "https://demands.example/article",
+            "/work/client",
+            true,
+            Some("agreed"),
+        ),
+        crossing_in_cwd(
+            "crossing_mediated",
+            "s-consent",
+            "https://plain.example/page",
+            true,
+            "/work/client",
+        ),
+        crossing_in_cwd(
+            "crossing_refused",
+            "s-consent",
+            "https://refused.example/page",
+            false,
+            "/work/client",
+        ),
+        demanded_line(
+            "https://unconsented.example/article",
+            "/work/client",
+            true,
+            None,
+        ),
+        turn_line("turn_completed", Some("t1"), Some("/work/client")),
+    ];
+    write_session(home.path(), "s-consent", &lines);
+    commonmeasure_harness::consent::record(
+        home.path(),
+        commonmeasure_harness::consent::Answer::Withdrawn,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    relay_json(home.path(), &receiver.url());
+
+    let report =
+        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+            .expect("relay");
+    receiver.stop();
+
+    let bodies = bodies.lock().unwrap();
+    let events: Vec<(String, String)> = bodies
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap())
+        .map(|event| {
+            (
+                event["type"].as_str().unwrap().to_owned(),
+                event["content_url"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        [
+            (
+                "content_retrieved".to_owned(),
+                "https://demands.example/article".to_owned()
+            ),
+            (
+                "content_grounded".to_owned(),
+                "https://demands.example/article".to_owned()
+            ),
+        ]
+    );
+    assert!(
+        bodies.iter().all(|body| body.get("refused").is_none()),
+        "{bodies:?}"
+    );
+    assert_eq!(
+        report
+            .delivered_by_clearance
+            .iter()
+            .map(|delivered| (delivered.clearance.clone(), delivered.events))
+            .collect::<Vec<_>>(),
+        [(commonmeasure_relay::Clearance::ReportingConsent, 2)]
+    );
+}
+
+/// The same crossing in a scope that clears egress leaves under the scope's
+/// engagement, with the rest of the session and its refused count as before:
+/// consent adds the demanded crossing where a scope clears nothing, and takes
+/// nothing from a scope that clears.
+#[test]
+fn a_cleared_scope_keeps_its_engagement_and_refused_count_beside_consent() {
+    let home = tempfile::tempdir().unwrap();
+    let lines = [
+        demanded_line(
+            "https://demands.example/article",
+            "/work/personal",
+            true,
+            Some("agreed"),
+        ),
+        crossing_line(
+            "crossing_mediated",
+            "s-consent",
+            "https://plain.example/page",
+            true,
+        ),
+        crossing_line(
+            "crossing_refused",
+            "s-consent",
+            "https://refused.example/page",
+            false,
+        ),
+    ];
+    write_session(home.path(), "s-consent", &lines);
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    relay_json(home.path(), &receiver.url());
+    let report =
+        commonmeasure_relay::relay(home.path(), &commonmeasure_relay::RelayOptions::default())
+            .expect("relay");
+    receiver.stop();
+    assert_eq!(bodies.lock().unwrap()[0]["refused"], json!(1));
+    assert_eq!(
+        report
+            .delivered_by_clearance
+            .iter()
+            .map(|delivered| (delivered.clearance.clone(), delivered.events))
+            .collect::<Vec<_>>(),
+        [(
+            commonmeasure_relay::Clearance::GoverningEngagement("personal".to_owned()),
+            4
+        )]
+    );
 }

@@ -469,8 +469,11 @@ integration uses this path. The cloud machine runs Edge, its private records,
 console and background management/reporting; Word and the host's model run
 elsewhere. It must be reachable when the host calls its tools.
 
-Each MCP session binds to its authenticated principal and has no working
-directory, so no directory scope governs it.
+Each MCP session binds to its authenticated principal. Its working directory
+is the one `hosted-service.json` declares as `session_directory`, whose scope
+governs it and whose clearance its crossings are relayed under; with none
+declared it has no directory and the top-level policy governs it
+(`docs/contracts/session-evidence.md` §Hosted scope).
 User identity remains in the private record; the Content Telemetry projection
 identifies the enrolled Edge and separates eligible sessions without exporting
 their authenticated subjects. Separately registered working instances follow

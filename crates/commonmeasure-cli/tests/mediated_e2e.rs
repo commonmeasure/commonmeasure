@@ -75,7 +75,7 @@ fn converse(home: &Path, requests: &[Value]) -> Vec<Value> {
 /// starts resolves to loopback through the debug binary's
 /// `COMMONMEASURE_TEST_HOSTS` ([`TEST_HOSTS`]).
 const PUBLIC_NAME: &str = "publisher.test";
-const TEST_HOSTS: &str = "publisher.test=127.0.0.1";
+const TEST_HOSTS: &str = "publisher.test=127.0.0.1,institution.test=127.0.0.1";
 
 /// A publisher's URL under [`PUBLIC_NAME`] rather than the loopback address
 /// its server listens on. The relay never projects a crossing of a local or
@@ -2136,7 +2136,7 @@ Allow: /
         assert!(
             detail.contains("withheld from context")
                 && detail.contains("requires telemetry reporting")
-                && detail.contains("clears no telemetry egress"),
+                && detail.contains("no telemetry receiver is configured"),
             "{detail}"
         );
 
@@ -4248,6 +4248,22 @@ mod reporting_demand {
     </reporting>
   </license></content></rsl>"#;
 
+    /// Record the operator's reporting consent in `home` through the command
+    /// an operator runs (owner decision, 27 September 2026: without it every
+    /// demand below is refused whatever the scope clears).
+    fn agree(home: &Path) {
+        consent(home, "agree");
+    }
+
+    fn consent(home: &Path, action: &str) {
+        let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["consent", action])
+            .env("COMMONMEASURE_HOME", home)
+            .output()
+            .expect("the consent command runs");
+        assert!(output.status.success(), "{output:?}");
+    }
+
     fn reporting_home(mode: &str) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
         let home = tempfile::tempdir().expect("tempdir");
         let workspace = tempfile::tempdir().expect("tempdir");
@@ -4265,6 +4281,7 @@ mod reporting_demand {
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
+        agree(home.path());
         (home, workspace, cleared)
     }
 
@@ -4288,29 +4305,43 @@ mod reporting_demand {
         (handle, hits)
     }
 
+    /// Owner decision, 27 September 2026 (consent before an obligated
+    /// crossing). Without the operator's reporting consent a demand is
+    /// refused before the request in a cleared scope as in any other, and the
+    /// refusal the agent reads and the record's refusal reason both say what
+    /// is missing: the source, that it needs reporting, and the command to
+    /// agree. The record marks it `consent_needed`, with the consent state.
+    /// Once the operator agrees, the same page is admitted in a scope that
+    /// clears no egress and in one that sets `allow_telemetry_egress: false`
+    /// explicitly. Before a receiver is configured, agreeing would admit
+    /// nothing, so that refusal names the receiver and not the consent.
     #[test]
-    fn strict_refuses_an_unmet_reporting_demand_and_admits_a_met_one() {
+    fn a_reporting_demand_is_refused_without_consent_and_admitted_in_every_scope_with_it() {
         let (site, hits) = publisher(REPORTING_LICENCE);
         let home = tempfile::tempdir().expect("tempdir");
         let workspaces = tempfile::tempdir().expect("tempdir");
         let cleared = workspaces.path().join("reporting-cleared");
-        let uncleared = workspaces.path().join("reporting-uncleared");
-        std::fs::create_dir_all(&cleared).unwrap();
-        std::fs::create_dir_all(&uncleared).unwrap();
+        let unscoped = workspaces.path().join("reporting-unscoped");
+        let refused_egress = workspaces.path().join("reporting-false");
+        for dir in [&cleared, &unscoped, &refused_egress] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
         write_policy(
             home.path(),
             r#"{"policy_mode":"strict","allow_private_hosts":true,
-                "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
+                "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true},
+                          {"match":"reporting-false","engagement":"client","allow_telemetry_egress":false}]}"#,
         );
         let url = format!("{}/article", public(&site));
+        let fetch_in = |cwd: &Path| {
+            converse_in(
+                home.path(),
+                Some(cwd),
+                &[call("context_fetch", json!({"url": url}))],
+            )
+        };
 
-        // Cleared, but no receiver is configured: nothing would be reported,
-        // so the demand is not met and the record says which check failed.
-        let no_receiver = converse_in(
-            home.path(),
-            Some(&cleared),
-            &[call("context_fetch", json!({"url": url}))],
-        );
+        let no_receiver = fetch_in(&cleared);
         assert_eq!(no_receiver[0]["result"]["isError"], true);
         assert!(
             error_text(&no_receiver[0]).contains("no telemetry receiver is configured"),
@@ -4323,67 +4354,830 @@ mod reporting_demand {
         )
         .unwrap();
 
-        let refused = converse_in(
-            home.path(),
-            Some(&uncleared),
-            &[call("context_fetch", json!({"url": url}))],
-        );
-        assert_eq!(refused[0]["result"]["isError"], true);
-        let detail = error_text(&refused[0]);
-        assert!(
-            detail.contains("requires telemetry reporting")
-                && detail.contains("clears no telemetry egress"),
-            "{detail}"
-        );
+        for cwd in [&cleared, &unscoped, &refused_egress] {
+            let refused = fetch_in(cwd);
+            assert_eq!(refused[0]["result"]["isError"], true);
+            let detail = error_text(&refused[0]);
+            assert!(
+                detail.contains(&format!("{PUBLIC_NAME} needs reporting"))
+                    && detail.contains("requires telemetry reporting of each use")
+                    && detail.contains("has not agreed to report to sources that require it")
+                    && detail.contains("`commonmeasure consent agree`"),
+                "{detail}"
+            );
+            assert!(!detail.contains("policy.json"), "{detail}");
+        }
         assert_eq!(
             hits.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "refused before the request"
         );
 
-        let admitted = converse_in(
-            home.path(),
-            Some(&cleared),
-            &[call("context_fetch", json!({"url": url}))],
-        );
-        assert_eq!(admitted[0]["result"]["isError"], false, "{admitted:?}");
-        assert_eq!(payload(&admitted[0])["content"], "the reported article");
+        agree(home.path());
+        for cwd in [&unscoped, &refused_egress] {
+            let admitted = fetch_in(cwd);
+            assert_eq!(admitted[0]["result"]["isError"], false, "{admitted:?}");
+            assert_eq!(payload(&admitted[0])["content"], "the reported article");
+        }
 
         let recorded = crossings(home.path());
-        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded.len(), 6);
         let unmet = &recorded[0]["payload"]["declarations"]["reporting"];
         assert_eq!(unmet["met"], false);
         assert_eq!(unmet["telemetry_egress_cleared"], true);
+        assert!(unmet.get("consent_needed").is_none(), "{unmet}");
         assert!(
             unmet["receiver"].is_null(),
             "the record says no receiver was configured"
         );
-        assert_eq!(recorded[1]["event"], "crossing_refused");
+        for (index, cleared) in [(1, true), (2, false), (3, false)] {
+            let crossing = &recorded[index];
+            assert_eq!(crossing["event"], "crossing_refused");
+            assert!(
+                crossing["payload"]["refusal"]
+                    .as_str()
+                    .unwrap()
+                    .contains("needs reporting")
+            );
+            let reporting = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], false, "{reporting}");
+            assert_eq!(reporting["consent_needed"], true, "{reporting}");
+            assert_eq!(reporting["consent"]["state"], "not_given", "{reporting}");
+            assert_eq!(
+                reporting["telemetry_egress_cleared"], cleared,
+                "{reporting}"
+            );
+        }
+        for index in [4, 5] {
+            let crossing = &recorded[index];
+            assert_eq!(crossing["event"], "crossing_mediated");
+            assert!(
+                crossing["payload"]["breach"].is_null(),
+                "the demand is met under consent"
+            );
+            let met = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(met["met"], true);
+            assert_eq!(met["telemetry_egress_cleared"], false);
+            assert_eq!(met["consent"]["state"], "agreed");
+            assert_eq!(met["consent"]["text_version"], "1");
+            assert_eq!(met["receiver"], "http://127.0.0.1:9/telemetry");
+            assert_eq!(met["conformance_level"], "grounding");
+            assert_eq!(met["profile"], "https://contenttelemetry.org/profiles/spur");
+        }
+    }
+
+    /// Owner decision, 27 September 2026: a refusal for want of reporting
+    /// consent is shown as what the operator is missing. After two refused
+    /// fetches through the real MCP path, `status` and `doctor` (text and
+    /// `--json`) name the source, that it needs reporting, the count and the
+    /// command to agree; once the operator agrees, the list is empty.
+    #[test]
+    fn status_and_doctor_name_the_sources_refused_for_want_of_consent() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let (home, _workspace, cleared) = reporting_home("strict");
+        consent(home.path(), "withdraw");
+        let responses = converse_in(
+            home.path(),
+            Some(&cleared),
+            &[
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/one", public(&site))}),
+                ),
+                call(
+                    "context_fetch",
+                    json!({"url": format!("{}/two", public(&site))}),
+                ),
+            ],
+        );
         assert!(
-            recorded[1]["payload"]["refusal"]
-                .as_str()
+            responses.iter().all(|r| r["result"]["isError"] == true),
+            "{responses:?}"
+        );
+        let run = |args: &[&str]| {
+            let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .args(args)
+                .args(["--color", "never"])
+                .env("COMMONMEASURE_HOME", home.path())
+                .current_dir(&cleared)
+                .output()
+                .expect("the command runs");
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).expect("utf-8")
+        };
+
+        let status: Value = serde_json::from_str(&run(&["status", "--json"])).unwrap();
+        let block = &status["reporting_consent"];
+        assert_eq!(block["state"], "withdrawn", "{block}");
+        assert_eq!(block["refusals"], 2, "{block}");
+        assert_eq!(block["refused_source_count"], 1, "{block}");
+        assert_eq!(
+            block["refused_sources"][0]["source"], PUBLIC_NAME,
+            "{block}"
+        );
+        assert_eq!(block["agree_command"], "commonmeasure consent agree");
+        let text = run(&["status"]);
+        let line = text
+            .lines()
+            .find(|line| line.contains("refused for want of reporting consent"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(
+            line.contains("1 source that needs reporting")
+                && line.contains(&format!("{PUBLIC_NAME} (2 refusals)"))
+                && line.contains("commonmeasure consent agree"),
+            "{line}"
+        );
+        let doctor: Value = serde_json::from_str(&run(&["doctor", "--json"])).unwrap();
+        let section = doctor["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|section| section["id"] == "reporting_consent")
+            .expect("a reporting consent section");
+        assert!(
+            section["findings"]
+                .as_array()
                 .unwrap()
-                .contains("requires telemetry reporting")
+                .iter()
+                .any(|finding| finding["standing"] == "attention"
+                    && finding["text"].as_str().unwrap().contains(PUBLIC_NAME)),
+            "{section}"
         );
-        assert_eq!(
-            recorded[1]["payload"]["declarations"]["reporting"]["telemetry_egress_cleared"],
-            false
+        assert!(run(&["doctor"]).contains("needs reporting refused"));
+
+        agree(home.path());
+        let status: Value = serde_json::from_str(&run(&["status", "--json"])).unwrap();
+        assert_eq!(status["reporting_consent"]["state"], "agreed");
+        assert_eq!(status["reporting_consent"]["refused_sources"], json!([]));
+        assert!(!run(&["status"]).contains("refused for want"));
+    }
+
+    /// Owner decision, 27 September 2026, end to end through the edge and the
+    /// relay: in a scope that sets `allow_telemetry_egress: false`, a session
+    /// under consent fetches a page whose licence demands reporting and a
+    /// page with no demand. `commonmeasure relay` then delivers to a loopback
+    /// receiver the demanded crossing's retrieval and grounding and nothing
+    /// else of the session: no event of the other page, no turn boundary and
+    /// no refused count. The operator withdraws before the relay runs; the
+    /// admitted crossing still leaves, and the next fetch of the demanding
+    /// page is refused.
+    #[test]
+    fn what_the_edge_admits_under_consent_is_what_the_relay_delivers() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let plain = Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(|request| match request.target.as_str() {
+                "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+                "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+                _ => Response::text(200, "an undemanding page"),
+            })
+            .unwrap();
+        let bodies: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
+        let mut receiver = {
+            let bodies = std::sync::Arc::clone(&bodies);
+            Server::bind("127.0.0.1:0")
+                .unwrap()
+                .spawn(move |request| {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                    let events = body["events"].as_array().map(Vec::len).unwrap_or(0);
+                    bodies.lock().unwrap().push(body);
+                    Response::json(
+                        201,
+                        &json!({"status": "ok", "events_created": events}).to_string(),
+                    )
+                })
+                .unwrap()
+        };
+        let home = tempfile::tempdir().expect("tempdir");
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let client = workspace.path().join("reporting-false");
+        std::fs::create_dir_all(&client).unwrap();
+        write_policy(
+            home.path(),
+            r#"{"policy_mode":"strict","allow_private_hosts":true,
+                "scopes":[{"match":"reporting-false","engagement":"client","allow_telemetry_egress":false}]}"#,
         );
-        assert_eq!(recorded[2]["event"], "crossing_mediated");
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver": receiver.url()}).to_string(),
+        )
+        .unwrap();
+        agree(home.path());
+        let demanded = format!("{}/article", public(&site));
+        let undemanding = format!("{}/page", plain.url().replace("127.0.0.1", PUBLIC_NAME));
+
+        let responses = converse_in(
+            home.path(),
+            Some(&client),
+            &[
+                call("context_fetch", json!({"url": demanded})),
+                call("context_fetch", json!({"url": undemanding})),
+            ],
+        );
+        assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
+        assert_eq!(responses[1]["result"]["isError"], false, "{responses:?}");
+
+        consent(home.path(), "withdraw");
+        let relayed = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .arg("relay")
+            .env("COMMONMEASURE_HOME", home.path())
+            .output()
+            .expect("the relay runs");
+        assert!(relayed.status.success(), "{relayed:?}");
+        receiver.stop();
+        // Review F3: the count left off the wire is stated as absent, not
+        // summed as a reported zero.
+        let summary = String::from_utf8_lossy(&relayed.stdout);
         assert!(
-            recorded[2]["payload"]["breach"].is_null(),
-            "the demand is met under the cleared scope"
+            summary.contains("1 projected session carries no refused count")
+                && !summary.contains("refused crossings in the projected sessions"),
+            "{summary}"
         );
-        let met = &recorded[2]["payload"]["declarations"]["reporting"];
-        assert_eq!(met["met"], true);
-        assert_eq!(met["receiver"], "http://127.0.0.1:9/telemetry");
-        assert_eq!(met["conformance_level"], "grounding");
-        assert_eq!(met["profile"], "https://contenttelemetry.org/profiles/spur");
+
+        let bodies = bodies.lock().unwrap();
+        let events: Vec<(String, String)> = bodies
+            .iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .map(|event| {
+                (
+                    event["type"].as_str().unwrap_or_default().to_owned(),
+                    event["content_url"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect();
         assert_eq!(
-            recorded[2]["payload"]["declarations"]["licences"][0]["terms"]["reporting"][0]["config"]
-                ["conformance_level"],
-            "grounding"
+            events,
+            [
+                ("content_retrieved".to_owned(), demanded.clone()),
+                ("content_grounded".to_owned(), demanded.clone()),
+            ],
+            "{bodies:?}"
         );
+        assert!(
+            bodies.iter().all(|body| body.get("refused").is_none()),
+            "{bodies:?}"
+        );
+        drop(bodies);
+
+        let after = converse_in(
+            home.path(),
+            Some(&client),
+            &[call("context_fetch", json!({"url": demanded}))],
+        );
+        assert_eq!(after[0]["result"]["isError"], true, "{after:?}");
+        assert!(
+            error_text(&after[0]).contains("withdrew consent"),
+            "{}",
+            error_text(&after[0])
+        );
+    }
+
+    /// A loopback telemetry receiver that keeps every batch posted to it.
+    fn recording_receiver() -> (ServerHandle, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        let bodies: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
+        let kept = std::sync::Arc::clone(&bodies);
+        let receiver = Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(move |request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                let events = body["events"].as_array().map(Vec::len).unwrap_or(0);
+                kept.lock().unwrap().push(body);
+                Response::json(
+                    201,
+                    &json!({"status": "ok", "events_created": events}).to_string(),
+                )
+            })
+            .unwrap();
+        (receiver, bodies)
+    }
+
+    /// Run `commonmeasure relay` once on `home` and return its output.
+    fn relay_once(home: &Path) -> std::process::Output {
+        let relayed = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .arg("relay")
+            .env("COMMONMEASURE_HOME", home)
+            .output()
+            .expect("the relay runs");
+        assert!(relayed.status.success(), "{relayed:?}");
+        relayed
+    }
+
+    /// The `(type, content_url)` of every event posted, in order.
+    fn posted_events(bodies: &std::sync::Mutex<Vec<Value>>) -> Vec<(String, String)> {
+        bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .map(|event| {
+                (
+                    event["type"].as_str().unwrap_or_default().to_owned(),
+                    event["content_url"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Review F1 (P1), 29 September 2026, through admission and delivery.
+    /// A consent file the operator cannot be taken to have written is not
+    /// consent: a symbolic link to a valid agreement outside the home, a
+    /// link to a world-writable agreement, and a regular agreement at mode
+    /// 0666. Each has `consent show --json` state `unreadable` with the
+    /// fault named; a fetch of a page whose licence demands reporting is
+    /// refused in a scope that clears no egress with that fault as its
+    /// reason, never "not agreed"; and the relay sends nothing. Once the
+    /// operator agrees, the file is a 0600 regular file, the link's target
+    /// is untouched, the same page is admitted and the relay delivers its
+    /// retrieval and grounding.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_writable_consent_file_admits_nothing_and_the_relay_sends_nothing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const AGREED: &str =
+            r#"{"reporting":{"answer":"agreed","at":"2026-09-29T10:00:00Z","text_version":"1"}}"#;
+        let (site, _) = publisher(REPORTING_LICENCE);
+        for case in ["symlink", "symlink to writable", "mode 0666"] {
+            let (mut receiver, bodies) = recording_receiver();
+            let home = tempfile::tempdir().expect("tempdir");
+            let elsewhere = tempfile::tempdir().expect("tempdir");
+            let workspace = tempfile::tempdir().expect("tempdir");
+            write_policy(
+                home.path(),
+                r#"{"policy_mode":"strict","allow_private_hosts":true,"scopes":[]}"#,
+            );
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": receiver.url()}).to_string(),
+            )
+            .unwrap();
+            let file = home.path().join("consent.json");
+            let target = elsewhere.path().join("agreed.json");
+            std::fs::write(&target, AGREED).unwrap();
+            let (mode, fault) = match case {
+                "symlink" => (0o600, "is a symbolic link"),
+                "symlink to writable" => (0o666, "is a symbolic link"),
+                _ => (0o666, "is writable by others (mode 666)"),
+            };
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).unwrap();
+            if case.starts_with("symlink") {
+                std::os::unix::fs::symlink(&target, &file).unwrap();
+            } else {
+                std::fs::copy(&target, &file).unwrap();
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+            }
+
+            let shown = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .args(["consent", "show", "--json"])
+                .env("COMMONMEASURE_HOME", home.path())
+                .output()
+                .unwrap();
+            let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+            assert_eq!(shown["state"], "unreadable", "{case}: {shown}");
+            assert!(
+                shown["error"].as_str().unwrap_or_default().contains(fault),
+                "{case}: {shown}"
+            );
+
+            let page = format!("{}/article", public(&site));
+            let refused = converse_in(
+                home.path(),
+                Some(workspace.path()),
+                &[call("context_fetch", json!({"url": page}))],
+            );
+            assert_eq!(refused[0]["result"]["isError"], true, "{case}: {refused:?}");
+            let reporting =
+                crossings(home.path())[0]["payload"]["declarations"]["reporting"].clone();
+            assert_eq!(reporting["met"], false, "{case}");
+            assert_eq!(reporting["consent"]["state"], "unreadable", "{case}");
+            let reason = reporting["reason"].as_str().unwrap_or_default();
+            assert!(
+                reason.contains(fault) && !reason.contains("has not agreed"),
+                "{case}: {reason}"
+            );
+            relay_once(home.path());
+            assert_eq!(posted_events(&bodies), [], "{case}");
+
+            agree(home.path());
+            let metadata = std::fs::symlink_metadata(&file).unwrap();
+            assert!(metadata.file_type().is_file(), "{case}");
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600, "{case}");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), AGREED, "{case}");
+            let admitted = converse_in(
+                home.path(),
+                Some(workspace.path()),
+                &[call("context_fetch", json!({"url": page}))],
+            );
+            assert_eq!(
+                admitted[0]["result"]["isError"], false,
+                "{case}: {admitted:?}"
+            );
+            relay_once(home.path());
+            receiver.stop();
+            assert_eq!(
+                posted_events(&bodies),
+                [
+                    ("content_retrieved".to_owned(), page.clone()),
+                    ("content_grounded".to_owned(), page.clone()),
+                ],
+                "{case}"
+            );
+        }
+    }
+
+    /// A policy with operator terms for `host` naming a ROR identifier, whose
+    /// `access_context` the event-batch format cannot carry, and `scopes`.
+    fn access_context_policy(host: Option<&str>, scopes: &str) -> String {
+        let terms = host
+            .map(|host| {
+                json!([{"host": host, "reference": "institution-7",
+                        "access_context": [{"scheme": "ror", "value": "https://ror.org/013meh722"}]}])
+            })
+            .unwrap_or(json!([]));
+        format!(
+            r#"{{"policy_mode":"strict","allow_private_hosts":true,"terms":{terms},"scopes":{scopes}}}"#
+        )
+    }
+
+    /// The scopes the admission and delivery pairs below run in: none that
+    /// matches (uncleared), one that sets `allow_telemetry_egress: false`
+    /// explicitly, and one that clears egress, where the base already
+    /// admitted what the relay then held.
+    const PAIRED_SCOPES: [(&str, &str); 3] = [
+        ("uncleared", "[]"),
+        (
+            "explicitly false",
+            r#"[{"match":"paired","engagement":"client","allow_telemetry_egress":false}]"#,
+        ),
+        (
+            "cleared",
+            r#"[{"match":"paired","engagement":"client","allow_telemetry_egress":true}]"#,
+        ),
+    ];
+
+    /// Review F2 (P1), 29 September 2026: admission and delivery agree. The
+    /// relay holds a crossing it clears whose host falls under operator
+    /// terms that require `access_context`, which the event-batch format
+    /// cannot carry. Under consent, in each of the paired scopes, a
+    /// page whose licence demands reporting on a host with such terms is
+    /// refused, the reason naming the terms, and the relay sends nothing.
+    /// The same home without the terms admits the page and the relay
+    /// delivers its retrieval and grounding.
+    #[test]
+    fn a_demand_under_terms_needing_access_context_is_refused_and_nothing_is_delivered() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let page = format!("{}/article", public(&site));
+        for (scope, scopes) in PAIRED_SCOPES {
+            for terms in [true, false] {
+                let (mut receiver, bodies) = recording_receiver();
+                let home = tempfile::tempdir().expect("tempdir");
+                let workspace = tempfile::tempdir().expect("tempdir");
+                let cwd = workspace.path().join("paired");
+                std::fs::create_dir_all(&cwd).unwrap();
+                write_policy(
+                    home.path(),
+                    &access_context_policy(terms.then_some(PUBLIC_NAME), scopes),
+                );
+                std::fs::write(
+                    home.path().join("relay.json"),
+                    json!({"receiver": receiver.url()}).to_string(),
+                )
+                .unwrap();
+                agree(home.path());
+
+                let responses = converse_in(
+                    home.path(),
+                    Some(&cwd),
+                    &[call("context_fetch", json!({"url": page}))],
+                );
+                let reporting =
+                    crossings(home.path())[0]["payload"]["declarations"]["reporting"].clone();
+                let relayed = relay_once(home.path());
+                receiver.stop();
+                let label = format!("{scope}, terms {terms}");
+                if terms {
+                    assert_eq!(
+                        responses[0]["result"]["isError"], true,
+                        "{label}: {responses:?}"
+                    );
+                    assert_eq!(reporting["met"], false, "{label}");
+                    let reason = reporting["reason"].as_str().unwrap_or_default();
+                    assert!(
+                        reason.contains("institution-7")
+                            && reason.contains("access_context")
+                            && reason.contains("nothing would be reported"),
+                        "{label}: {reason}"
+                    );
+                    assert_eq!(posted_events(&bodies), [], "{label}");
+                } else {
+                    assert_eq!(
+                        responses[0]["result"]["isError"], false,
+                        "{label}: {responses:?}"
+                    );
+                    assert_eq!(reporting["met"], true, "{label}");
+                    assert_eq!(
+                        posted_events(&bodies),
+                        [
+                            ("content_retrieved".to_owned(), page.clone()),
+                            ("content_grounded".to_owned(), page.clone()),
+                        ],
+                        "{label}: {}",
+                        String::from_utf8_lossy(&relayed.stdout)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The policy of the ordering pairs below: `scopes` for the directory
+    /// `paired`, then a directory `later` whose scope clears egress, and
+    /// terms needing `access_context` for `institution.test`.
+    fn ordering_policy(scopes: &str) -> String {
+        let mut scopes: Vec<Value> = serde_json::from_str(scopes).unwrap();
+        scopes
+            .push(json!({"match": "later", "engagement": "later", "allow_telemetry_egress": true}));
+        access_context_policy(Some(INSTITUTION), &Value::Array(scopes).to_string())
+    }
+
+    const INSTITUTION: &str = "institution.test";
+
+    /// A loopback site that serves one page and demands nothing.
+    fn undemanding_site() -> ServerHandle {
+        Server::bind("127.0.0.1:0")
+            .unwrap()
+            .spawn(|request| match request.target.as_str() {
+                "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+                "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+                _ => Response::text(200, "an undemanding page"),
+            })
+            .unwrap()
+    }
+
+    /// Review F2 (P1), second review, 29 September 2026: a later crossing of
+    /// the same session, admitted or refused, does not strand an earlier
+    /// crossing admitted with its reporting demand met. The relay holds a
+    /// crossing whose host falls under terms needing `access_context`, and
+    /// that crossing alone.
+    ///
+    /// Under consent, one session (`test-session`) is worked by two
+    /// processes in two directories. The first, in `paired` (uncleared,
+    /// explicitly false or cleared), fetches a page on `publisher.test` whose
+    /// licence demands reporting: admitted, the demand met. The second, in
+    /// `later`, whose scope clears egress, fetches a page on
+    /// `institution.test`, whose terms need `access_context`: either a page
+    /// that demands nothing, admitted and cleared by the scope, or one whose
+    /// licence demands reporting, refused for the terms. The relay then
+    /// delivers the first page's retrieval and grounding and nothing of
+    /// `institution.test`; the admitted later crossing is counted as held.
+    #[test]
+    fn a_later_crossing_admitted_or_refused_does_not_strand_an_earlier_reported_one() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let plain = undemanding_site();
+        let demanded = format!("{}/first", public(&site));
+        let later_pages = [
+            (
+                "admitted",
+                format!("{}/page", plain.url().replace("127.0.0.1", INSTITUTION)),
+            ),
+            (
+                "refused",
+                format!("{}/demanding", site.url().replace("127.0.0.1", INSTITUTION)),
+            ),
+        ];
+        for (scope, scopes) in PAIRED_SCOPES {
+            for (later, later_page) in &later_pages {
+                let label = format!("{scope}, later {later}");
+                let (mut receiver, bodies) = recording_receiver();
+                let home = tempfile::tempdir().expect("tempdir");
+                let workspace = tempfile::tempdir().expect("tempdir");
+                let (earlier_dir, later_dir) = (
+                    workspace.path().join("paired"),
+                    workspace.path().join("later"),
+                );
+                std::fs::create_dir_all(&earlier_dir).unwrap();
+                std::fs::create_dir_all(&later_dir).unwrap();
+                write_policy(home.path(), &ordering_policy(scopes));
+                std::fs::write(
+                    home.path().join("relay.json"),
+                    json!({"receiver": receiver.url()}).to_string(),
+                )
+                .unwrap();
+                agree(home.path());
+
+                let first = converse_in(
+                    home.path(),
+                    Some(&earlier_dir),
+                    &[call("context_fetch", json!({"url": demanded}))],
+                );
+                assert_eq!(first[0]["result"]["isError"], false, "{label}: {first:?}");
+                let ruling =
+                    crossings(home.path())[0]["payload"]["declarations"]["reporting"].clone();
+                assert_eq!(ruling["met"], true, "{label}: {ruling}");
+                assert_eq!(
+                    ruling["telemetry_egress_cleared"],
+                    scope == "cleared",
+                    "{label}: {ruling}"
+                );
+
+                let second = converse_in(
+                    home.path(),
+                    Some(&later_dir),
+                    &[call("context_fetch", json!({"url": later_page}))],
+                );
+                let recorded = crossings(home.path());
+                assert_eq!(recorded.len(), 2, "{label}: one session, two crossings");
+                assert_eq!(
+                    second[0]["result"]["isError"],
+                    *later == "refused",
+                    "{label}: {second:?}"
+                );
+                if *later == "refused" {
+                    assert_eq!(recorded[1]["event"], "crossing_refused", "{label}");
+                    let reason = recorded[1]["payload"]["declarations"]["reporting"]["reason"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    assert!(reason.contains("institution-7"), "{label}: {reason}");
+                }
+
+                let relayed = relay_once(home.path());
+                receiver.stop();
+                let stdout = String::from_utf8_lossy(&relayed.stdout);
+                assert_eq!(
+                    posted_events(&bodies),
+                    [
+                        ("content_retrieved".to_owned(), demanded.clone()),
+                        ("content_grounded".to_owned(), demanded.clone()),
+                    ],
+                    "{label}: {stdout}"
+                );
+                assert_eq!(
+                    stdout.contains(
+                        "1 crossing withheld: operator terms for their hosts require access_context"
+                    ),
+                    *later == "admitted",
+                    "{label}: {stdout}"
+                );
+            }
+        }
+    }
+
+    /// Review F2, the order the first fix covered, now under the narrowed
+    /// hold. One session worked by two processes: the first, in `later`,
+    /// whose scope clears egress, fetches a page on `institution.test`,
+    /// whose terms need `access_context`; the relay will hold that crossing.
+    /// The second, in `paired` (uncleared, explicitly false or cleared),
+    /// fetches a page on `publisher.test` whose licence demands reporting.
+    /// The earlier held crossing does not decide the demand: it is admitted
+    /// and met, and the relay delivers its retrieval and grounding, and
+    /// nothing of `institution.test`.
+    #[test]
+    fn a_demand_after_a_held_crossing_is_admitted_and_delivered_without_it() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let plain = undemanding_site();
+        let held = format!("{}/page", plain.url().replace("127.0.0.1", INSTITUTION));
+        let demanded = format!("{}/second", public(&site));
+        for (scope, scopes) in PAIRED_SCOPES {
+            let (mut receiver, bodies) = recording_receiver();
+            let home = tempfile::tempdir().expect("tempdir");
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let (earlier_dir, later_dir) = (
+                workspace.path().join("later"),
+                workspace.path().join("paired"),
+            );
+            std::fs::create_dir_all(&earlier_dir).unwrap();
+            std::fs::create_dir_all(&later_dir).unwrap();
+            write_policy(home.path(), &ordering_policy(scopes));
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": receiver.url()}).to_string(),
+            )
+            .unwrap();
+            agree(home.path());
+
+            let first = converse_in(
+                home.path(),
+                Some(&earlier_dir),
+                &[call("context_fetch", json!({"url": held}))],
+            );
+            assert_eq!(first[0]["result"]["isError"], false, "{scope}: {first:?}");
+            let second = converse_in(
+                home.path(),
+                Some(&later_dir),
+                &[call("context_fetch", json!({"url": demanded}))],
+            );
+            assert_eq!(second[0]["result"]["isError"], false, "{scope}: {second:?}");
+            let ruling = crossings(home.path())[1]["payload"]["declarations"]["reporting"].clone();
+            assert_eq!(ruling["met"], true, "{scope}: {ruling}");
+
+            let relayed = relay_once(home.path());
+            receiver.stop();
+            let stdout = String::from_utf8_lossy(&relayed.stdout);
+            assert_eq!(
+                posted_events(&bodies),
+                [
+                    ("content_retrieved".to_owned(), demanded.clone()),
+                    ("content_grounded".to_owned(), demanded.clone()),
+                ],
+                "{scope}: {stdout}"
+            );
+            assert!(
+                stdout.contains(
+                    "1 crossing withheld: operator terms for their hosts require access_context"
+                ),
+                "{scope}: {stdout}"
+            );
+        }
+    }
+
+    /// Review F1 (P1), third review, 29 September 2026: a demand is not
+    /// admitted into a session log the relay cannot read. The relay skips
+    /// such a log whole, so nothing of a crossing admitted into it would be
+    /// reported.
+    ///
+    /// Under consent, in each paired scope (uncleared, explicitly false,
+    /// cleared), the session's log starts with a torn line, as a short write
+    /// under a full disk leaves one. A fetch of a page whose licence demands
+    /// reporting is refused before the page is requested, the ruling names
+    /// the log, and the relay, run against the same receiver, delivers
+    /// nothing and names the log it skipped.
+    #[test]
+    fn a_demand_into_a_session_log_the_relay_cannot_read_is_refused_and_nothing_is_delivered() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        let demanded = format!("{}/page", public(&site));
+        for (scope, scopes) in PAIRED_SCOPES {
+            let (mut receiver, bodies) = recording_receiver();
+            let home = tempfile::tempdir().expect("tempdir");
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let paired = workspace.path().join("paired");
+            std::fs::create_dir_all(&paired).unwrap();
+            write_policy(home.path(), &access_context_policy(None, scopes));
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": receiver.url()}).to_string(),
+            )
+            .unwrap();
+            agree(home.path());
+            let log = home.path().join("sessions/test-session.ndjson");
+            std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+            std::fs::write(&log, "{\"seq\":1,\"event\":\"host_process\",\"payl\n").unwrap();
+            let before = hits.load(std::sync::atomic::Ordering::SeqCst);
+
+            let responses = converse_in(
+                home.path(),
+                Some(&paired),
+                &[call("context_fetch", json!({"url": demanded}))],
+            );
+            assert_eq!(
+                responses[0]["result"]["isError"], true,
+                "{scope}: {responses:?}"
+            );
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                before,
+                "{scope}: the page is not requested"
+            );
+            // The log's first line does not parse, so it is read line by line.
+            let recorded: Vec<Value> = std::fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|record| {
+                    record["event"]
+                        .as_str()
+                        .is_some_and(|event| event.starts_with("crossing_"))
+                })
+                .collect();
+            assert_eq!(recorded.len(), 1, "{scope}: {recorded:?}");
+            assert_eq!(recorded[0]["event"], "crossing_refused", "{scope}");
+            let ruling = &recorded[0]["payload"]["declarations"]["reporting"];
+            assert_eq!(ruling["met"], false, "{scope}: {ruling}");
+            assert_ne!(ruling["consent_needed"], true, "{scope}: {ruling}");
+            let reason = ruling["reason"].as_str().unwrap_or_default();
+            assert!(
+                reason.contains("this session's log")
+                    && reason.contains("test-session.ndjson")
+                    && reason.contains("does not read"),
+                "{scope}: {reason}"
+            );
+
+            let relayed = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+                .arg("relay")
+                .env("COMMONMEASURE_HOME", home.path())
+                .output()
+                .expect("the relay runs");
+            receiver.stop();
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&relayed.stdout),
+                String::from_utf8_lossy(&relayed.stderr)
+            );
+            assert!(!relayed.status.success(), "{scope}: {said}");
+            assert!(
+                said.contains("session test-session was skipped"),
+                "{scope}: {said}"
+            );
+            assert!(posted_events(&bodies).is_empty(), "{scope}: {said}");
+        }
     }
 
     /// EGR-175. A demand on a page whose crossing the relay would never
@@ -4412,6 +5206,7 @@ mod reporting_demand {
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
+        agree(home.path());
         let responses = converse_in(
             home.path(),
             Some(&cleared),
@@ -4522,6 +5317,7 @@ mod reporting_demand {
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
+        agree(home.path());
         let responses = converse_in(
             home.path(),
             Some(&cleared),
@@ -4753,6 +5549,7 @@ mod reporting_demand {
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
+        agree(home.path());
         let mut requests = Vec::new();
         if let Some(client) = client {
             requests.push(initialize(Some(json!({"name": client, "version": "1"}))));
@@ -4965,6 +5762,7 @@ mod reporting_demand {
             json!({"receiver": receiver.url()}).to_string(),
         )
         .unwrap();
+        agree(home.path());
         let fetch = |page: &str| {
             converse_as_host(
                 home.path(),
@@ -5094,6 +5892,7 @@ mod reporting_demand {
         let relay_json = home.path().join("relay.json");
         let unscoped = json!({"receiver": receiver.url()}).to_string();
         std::fs::write(&relay_json, &unscoped).unwrap();
+        agree(home.path());
         let _background = BackgroundRelay::start(home.path(), &home.path().join("loop.out"));
 
         let mut server = StdioServer::start_as(
@@ -5201,32 +6000,34 @@ mod reporting_demand {
         }
     }
 
-    /// Review P2-A. The reporting ruling predicts whether the relay will
-    /// send, and the relay resolves egress clearance from the source policy
-    /// as it stands at each run. Within one server process: a scope whose
-    /// `allow_telemetry_egress` is withdrawn between two fetches refuses the
-    /// second, and a source policy that that does not load refuses too. A
-    /// grant made after a server started does not widen that session: its
-    /// fetches stay refused.
+    /// Owner decision, 27 September 2026: the reporting consent is read at
+    /// each fetch, as `relay.json` is. Within one server process in a scope
+    /// that clears no egress: a fetch under consent is admitted, one after a
+    /// withdrawal is refused and says so, one after agreeing again is
+    /// admitted, one with the consent file damaged is refused with the file's
+    /// error (an unreadable consent is not consent), and a scope that clears
+    /// egress does not stand in for a withdrawn consent. A source policy that
+    /// does not load still refuses, as the relay refuses to run on it.
     #[test]
-    fn the_reporting_ruling_reads_egress_clearance_at_each_fetch_of_one_session() {
+    fn the_reporting_ruling_reads_the_consent_at_each_fetch_of_one_session() {
         let (site, _) = publisher(REPORTING_LICENCE);
         let home = tempfile::tempdir().expect("tempdir");
         let workspace = tempfile::tempdir().expect("tempdir");
-        let cleared = workspace.path().join("reporting-cleared");
-        std::fs::create_dir_all(&cleared).unwrap();
+        let scoped = workspace.path().join("reporting-scoped");
+        std::fs::create_dir_all(&scoped).unwrap();
         let policy = |allow: bool| {
             format!(
                 r#"{{"policy_mode":"observe","allow_private_hosts":true,
-                    "scopes":[{{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":{allow}}}]}}"#
+                    "scopes":[{{"match":"reporting-scoped","engagement":"research","allow_telemetry_egress":{allow}}}]}}"#
             )
         };
-        write_policy(home.path(), &policy(true));
+        write_policy(home.path(), &policy(false));
         std::fs::write(
             home.path().join("relay.json"),
             r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
         )
         .unwrap();
+        agree(home.path());
         let page = |name: &str| format!("{}/{name}", public(&site));
         let reporting = |index: usize| {
             crossings(home.path())[index]["payload"]["declarations"]["reporting"].clone()
@@ -5238,50 +6039,47 @@ mod reporting_demand {
                 .to_owned()
         };
 
-        let mut server = StdioServer::start(home.path(), &cleared);
-        let first = server.fetch(page("cleared"));
+        let mut server = StdioServer::start(home.path(), &scoped);
+        let first = server.fetch(page("agreed"));
         assert_eq!(first["result"]["isError"], false, "{first}");
         assert_eq!(reporting(0)["met"], true);
-        assert_eq!(reporting(0)["telemetry_egress_cleared"], true);
+        assert_eq!(reporting(0)["telemetry_egress_cleared"], false);
 
-        write_policy(home.path(), &policy(false));
+        consent(home.path(), "withdraw");
         let withdrawn = server.fetch(page("withdrawn"));
         assert_eq!(withdrawn["result"]["isError"], true, "{withdrawn}");
         assert_eq!(reporting(1)["met"], false);
-        assert_eq!(reporting(1)["telemetry_egress_cleared"], false);
-        assert!(
-            reason(1).contains("policy.json as it stands now clears no telemetry egress"),
-            "{}",
-            reason(1)
-        );
+        assert_eq!(reporting(1)["consent"]["state"], "withdrawn");
+        assert!(reason(1).contains("withdrew consent"), "{}", reason(1));
 
-        write_policy(home.path(), &policy(true));
+        agree(home.path());
         let restored = server.fetch(page("restored"));
         assert_eq!(restored["result"]["isError"], false, "{restored}");
         assert_eq!(reporting(2)["met"], true);
 
+        std::fs::write(home.path().join("consent.json"), "{ not json").unwrap();
+        let damaged = server.fetch(page("damaged"));
+        assert_eq!(damaged["result"]["isError"], true, "{damaged}");
+        assert_eq!(reporting(3)["consent"]["state"], "unreadable");
+        assert!(
+            reason(3).contains("consent.json is not a valid consent file")
+                && !reason(3).contains("has not agreed"),
+            "{}",
+            reason(3)
+        );
+
+        consent(home.path(), "withdraw");
+        write_policy(home.path(), &policy(true));
+        let cleared = server.fetch(page("cleared-but-withdrawn"));
+        assert_eq!(cleared["result"]["isError"], true, "{cleared}");
+        assert_eq!(reporting(4)["met"], false);
+
+        agree(home.path());
         std::fs::write(home.path().join("policy.json"), "{ not json").unwrap();
         let broken = server.fetch(page("broken"));
         assert_eq!(broken["result"]["isError"], true, "{broken}");
-        assert_eq!(reporting(3)["met"], false);
-        assert!(reason(3).contains("policy.json"), "{}", reason(3));
-        server.stop();
-
-        // A server started while the scope cleared nothing: the grant that
-        // follows applies from the next session on.
-        write_policy(home.path(), &policy(false));
-        let mut server = StdioServer::start(home.path(), &cleared);
-        let before = server.fetch(page("before-grant"));
-        assert_eq!(before["result"]["isError"], true, "{before}");
-        write_policy(home.path(), &policy(true));
-        let after = server.fetch(page("after-grant"));
-        assert_eq!(after["result"]["isError"], true, "{after}");
         assert_eq!(reporting(5)["met"], false);
-        assert!(
-            reason(5).contains("clears no telemetry egress"),
-            "{}",
-            reason(5)
-        );
+        assert!(reason(5).contains("policy.json"), "{}", reason(5));
         server.stop();
     }
 

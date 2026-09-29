@@ -63,9 +63,10 @@ record in the file are joined without a lookup table. The file is opened at
 the session's first request that is not `initialize`,
 `notifications/initialized`, `tools/list` or `ping`; a session that is asked
 for nothing else leaves no file. On the enrolled edge a hosted session runs
-on, the file's first records are `policy_sync` (trigger `server_start`,
-where the edge is managed) and `edge_identity`, written at open, before any
-crossing (`crates/commonmeasure-cli/src/mcp_session.rs`).
+on, the file's first records are `hosted_scope` (where the service declares
+a directory, §Hosted scope), `policy_sync` (trigger `server_start`, where the
+edge is managed) and `edge_identity`, written at open, before any crossing
+(`crates/commonmeasure-cli/src/mcp_session.rs`).
 
 One file per session, opened for append. A session spans many short-lived hook
 processes, so `seq` resumes from what is already in the file. Under concurrent
@@ -107,6 +108,7 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `policy_sync` | a hook at session start (Claude Code: `SessionStart`), or the MCP server's start for a session no hook refreshed | on a managed edge, what refreshing the policy from the hub did for this session: the outcome, the revision in force and whether its envelope has expired (§Policy synchronisation). Absent on a local edge |
 | `host_process` | a hook at session start (Claude Code: `SessionStart`), and the MCP server's start | the host process this path runs under, so the hook log and the MCP log of one host session can be joined (§Host process) |
 | `session_ended` | a hook at session end (Claude Code: `SessionEnd`) | the host reported the session ending, with the reason word the host gave (§Host process) |
+| `hosted_scope` | nothing; the hosted service writes it at a session's open, where `hosted-service.json` declares `session_directory` | the directory the session's scope is resolved against and its crossings record as `cwd`, and that its basis is the service's configuration, not a directory the client reported (§Hosted scope) |
 | `client_identified` | the MCP client's `initialize` request; the MCP server writes it before the first record a tool call or host observation leaves | how the program on the other end of the stdio pipe named itself: `clientInfo.name` and `clientInfo.version`, with the protocol version it asked for and the one the server answered with (§Client identity) |
 | `instance_refused` | nothing; the MCP server writes it | a mediated fetch or search was stopped before anything crossed because the session's registered instance could not be shown to hold authority: `refused` where the authority is known to have ended, `unavailable` where a required check could not be made (§Instance registration); never a crossing |
 | `allowance_gap` | nothing; the MCP server writes it | the allowance ledger did not record a settlement or release for a mediated search: the reservation id, the observed charge where a receipt reported one, and the reason; the reservation stays held until the expiry sweep releases it |
@@ -741,8 +743,9 @@ first match wins, `unattributed` otherwise). Editing a
 rule re-attributes history without rewriting any evidence. No engagement
 label enters this log. Observed and mediated crossings carry a `cwd`;
 reconstructed ones do not, because a directory read back from a transcript
-would be a claim, not a witnessed fact. A hosted session records none: it
-has no working directory, and the process's own directory is never inferred.
+would be a claim, not a witnessed fact. A hosted session records the
+directory its service declares (§Hosted scope), and none where the service
+declares none; the process's own directory is never inferred.
 Older logs without the field read as absent.
 
 `policy_scope` names the scoped policy overlay (`scopes` in `policy.json`,
@@ -1559,28 +1562,43 @@ the session's or that of `policy.json` as it stands at the ruling ([telemetry
 projection](telemetry-projection.md): the relay projects neither; a private
 address is reached only under `allow_private_hosts` or a prefix named in
 `record_internal_prefixes`, and under neither on a hosted edge in service
-mode, which holds the private-address floor), the policy scope clears
-telemetry egress both in the policy the session started under and in
-`policy.json` as it stands at the ruling, `$COMMONMEASURE_HOME/relay.json` is
-one the relay loads and names a receiver, and automatic delivery is in
-force. A `relay.json` the relay refuses leaves the demand unmet with the load
+mode, which holds the private-address floor), `policy.json` as it stands at
+the ruling loads, `$COMMONMEASURE_HOME/relay.json` is
+one the relay loads and names a receiver, automatic delivery is in force, no
+operator terms hold the session back (below), and the operator has agreed to
+reporting (§Reporting consent). A
+`relay.json` the relay refuses leaves the demand unmet with the load
 error as the reason, because the relay sends nothing under it. `relay.json`
 is read at each ruling, not once when the MCP server starts, so a receiver
 removed during a long-lived session (Claude
 Desktop keeps its server for the life of the app) leaves the next demand
-unmet. Egress clearance is read the same way, because the relay resolves it
-from the current policy and reporting approvals at each run: a scope's
-`allow_telemetry_egress` withdrawn in `policy.json`, or a directory's
-reporting approval that has expired, leaves the next demand unmet, and a
-`policy.json` that does not load at the ruling leaves it unmet with the load
-error as the reason. On a managed home the ruling reads the policy and the
-approvals as last synced to the home: a withdrawal or a revocation made at the
-hub reaches it at the next sync, which a session start makes (the policy on
-each start, the approvals when their snapshot is due, [directory
-enrolment](directory-enrolment.md)). A relay run and `enrol --sync` sync
-both; `policy sync` syncs the policy only. The relay syncs before it projects, so a crossing admitted in
-between has its events withheld. A clearance granted after the server started
-does not widen that session; it applies from the next one. Automatic delivery
+unmet. A `policy.json` that does not load at the ruling leaves it unmet with
+the load error as the reason, as the relay refuses to run on it. The scope's
+telemetry clearance does not decide the demand: a crossing admitted under
+consent leaves under consent in a scope that clears nothing, or that sets
+`allow_telemetry_egress: false`, and a cleared scope does not stand in for
+consent that was not given.
+
+The relay withholds each crossing it clears whose host falls under operator
+terms naming institution identifiers (`terms[].access_context`), because the
+event-batch delivery format carries no session data to state them
+([telemetry projection](telemetry-projection.md)); the other crossings of
+the session leave as their clearance says. A demand is therefore unmet, in
+every scope, when the top-level `terms` of `policy.json` as it stands at the
+ruling declare such terms for the page's host. A scope carries no terms, so
+the session's scope does not change the answer. The ruling
+reads the relay's own predicate (`commonmeasure_harness::egress`), and since
+the relay holds a crossing by its own host alone, no other crossing of the
+session, recorded before the ruling or after it, admitted or refused, in the
+same process or another, changes what the relay does with the crossing ruled
+on. Terms added to `policy.json` for the page's host after an admission still
+hold that crossing at the relay, which reads the policy at projection, and
+the relay's report counts it. A session log that does not read leaves the
+demand unmet, naming the log, because the relay skips such a log whole and
+nothing of the crossing would leave; a log not yet written is not a fault.
+Only the log's readability is read, not its other crossings. A log damaged
+after the ruling is skipped by the relay like any other, and the crossing
+goes unreported. Automatic delivery
 means the events leave without anyone typing a command — the session-end relay
 ([telemetry projection §Relay at session
 end](telemetry-projection.md#relay-at-session-end)), or the hosted service's
@@ -1691,8 +1709,12 @@ mode discipline above. Tested in `crates/commonmeasure-cli/tests/mediated_e2e.rs
 
 The telemetry ruling is on the record as `declarations.reporting`: the
 profile and level demanded, the receiver named or its absence, whether the
-scope clears egress, `met`, and the first reason it is not, the marker
-included. A demand of another type has no entry there; its refusal is the
+scope clears egress (`telemetry_egress_cleared`, recorded for the reader; it
+does not decide the demand), `consent` (§Reporting consent), `met`, and the
+first reason it is not, the marker included. `consent_needed` is `true` where every other
+check passed and the demand is unmet for want of consent alone, so agreeing
+would admit the source; `status`, `doctor` and the console count those
+refusals. A demand of another type has no entry there; its refusal is the
 record of it.
 
 `content_telemetry_id` is the UUID a mediated fetch sent as its
@@ -1740,15 +1762,89 @@ supplies no reuse permission and no declared licence.
 Terms may name the institution identifiers the agreement attributes usage
 to (`access_context`). They require the standard's session-level
 `access_context` container on any report. The event batch the relay delivers
-has no session data, so a session under such terms is withheld by the relay
-and counted as withheld for that reason, until session-document delivery is
-built. `licence.state` is `declared` with the licence URL where RSL terms
+has no session data, so the relay withholds a crossing whose host falls
+under such terms and counts it as withheld for that reason, until
+session-document delivery is built. The session's other crossings report no
+use of that host and are delivered as their clearance says. `licence.state` is `declared` with the licence URL where RSL terms
 were read, and `unknown` otherwise. Reaching a page establishes no
 permission.
 
 [Embedded credentials on acquisition](#embedded-credentials-on-acquisition)
 describes verification before transformation; the pasted-content reader below
 is a separate path.
+
+### Reporting consent
+
+Owner decision, 27 September 2026 (consent before an obligated crossing).
+The operator's consent to report to sources whose licence demands it, not a
+scope's `allow_telemetry_egress`, fills the reporting slot of the ruling
+above. It is asked once, at install, and recorded in
+`$COMMONMEASURE_HOME/consent.json`:
+
+```json
+{"reporting": {"answer": "agreed", "at": "2026-09-29T10:00:00Z", "text_version": "1"}}
+```
+
+`answer` is `agreed` or `withdrawn`; `text_version` is the version of the
+consent text `commonmeasure consent show` prints. The file is written by
+`commonmeasure consent agree` and `withdraw` and by the installer on the
+operator's answer, and by nothing else: `deployment.json` and a hub-managed
+policy cannot set it, since both refuse members they do not define and
+neither names this file. A scope's clearance is not read as consent, and an
+existing home has no consent until the operator gives it.
+
+- With consent agreed, a telemetry demand is met in every scope, including
+  one that sets `allow_telemetry_egress: false`, where the other checks
+  above pass.
+- Without it (no file, or `withdrawn`), a demand is refused in every scope,
+  a cleared one included. The refusal the agent reads and the record's
+  `refusal` name the source, that it needs reporting, and the command that
+  agrees: "`<host>` needs reporting: its licence `<url>` requires telemetry
+  reporting of each use (profile `<profile>`), and the operator has not
+  agreed to report to sources that require it; agree with `commonmeasure
+  consent agree`."
+- A file that does not read or parse, or records a text version this binary
+  does not know, is not consent: the demand is refused and the reason names
+  the file's error rather than saying consent was never given.
+- Consent counts only from a regular file owned by the user running Common
+  Measure and writable by neither its group nor others. The file is opened
+  without following a symbolic link (`O_NOFOLLOW`) and its type, owner and
+  mode are read from the open descriptor, so the file checked is the file
+  read. A link, whatever it points to, a file of another user and a group- or
+  world-writable file have `consent.state` `unreadable`, and the reason names
+  the fault, for example "`consent.json` is a symbolic link" or "is writable
+  by others (mode 666)". The writers replace the file atomically at mode 0600
+  whatever the umask; a link at the name is replaced, and its target is left
+  as it was. Where the platform has no unix owner or modes, only the link and
+  file-type checks apply.
+
+The file is read at each ruling, so a withdrawal refuses the next crossing
+of a server already running. Withdrawal recalls nothing: a crossing admitted
+under consent records `consent` `{"state": "agreed", "at", "text_version"}`,
+and the relay reports it by that record whatever the file says when it runs
+([telemetry projection](telemetry-projection.md)). `consent.state` is
+`agreed`, `withdrawn`, `not_given` or `unreadable`. The consent of the
+operator home governs every session in it: stdio sessions, the hosted
+service's sessions and the background relay alike. Payment and use-limit
+obligations do not take this consent; the decision leaves them open. Tested
+in `crates/commonmeasure-harness/src/mcp.rs`
+`the_reporting_consent_decides_a_demand_in_every_scope` and in
+`crates/commonmeasure-cli/tests/mediated_e2e.rs`
+`reporting_demand::a_reporting_demand_is_refused_without_consent_and_admitted_in_every_scope_with_it`,
+`the_reporting_ruling_reads_the_consent_at_each_fetch_of_one_session`,
+`what_the_edge_admits_under_consent_is_what_the_relay_delivers`,
+`status_and_doctor_name_the_sources_refused_for_want_of_consent`,
+`a_linked_or_writable_consent_file_admits_nothing_and_the_relay_sends_nothing`,
+`a_demand_under_terms_needing_access_context_is_refused_and_nothing_is_delivered`,
+`a_demand_into_a_session_log_the_relay_cannot_read_is_refused_and_nothing_is_delivered`,
+`a_later_crossing_admitted_or_refused_does_not_strand_an_earlier_reported_one`
+and
+`a_demand_after_a_held_crossing_is_admitted_and_delivered_without_it`, and on
+a hosted session in `crates/commonmeasure-cli/tests/hosted_service/reporting.rs`
+`a_hosted_session_keeps_its_earlier_report_when_a_later_crossing_is_held`;
+the file checks in `crates/commonmeasure-harness/src/consent.rs`, and the
+installer's mode under umask 000 in `crates/commonmeasure-cli/tests/installer.rs`
+`the_installer_writes_trusted_consent_under_umask_000_and_names_what_leaves`.
 
 ## Manifest discovery
 
@@ -2667,9 +2763,9 @@ log carries no refresh when it starts, whatever the host; a session is
 refreshed once. The refresh precedes every other record of the session, so
 the `nudge_issued` record and every crossing name the policy the refresh
 left in force. The
-outcomes are the ones the envelope contract enumerates, plus `unavailable`
-when the deployment or state file did not load and nothing was asked of the
-hub. `applied` is the revision in force after the refresh, whatever the
+outcomes are the ones the envelope contract enumerates, `superseded`
+included, plus `unavailable` when the deployment or state file did not load
+and nothing was asked of the hub. `applied` is the revision in force after the refresh, whatever the
 outcome, and `stale_since` is its envelope's expiry once that has passed:
 the policy stays in force and the record says since when it has been stale
 ([`docs/contracts/policy-envelope.md`](policy-envelope.md) §Cadence and
@@ -2794,6 +2890,39 @@ recorded host sessions, which this repository does not carry
 transcript with its text replaced by same-length filler
 (`crates/commonmeasure-harness/tests/recorded/claude-code-transcript.jsonl`).
 
+
+## Hosted scope
+
+`hosted-service.json` may declare `session_directory`, an absolute directory
+that exists ([host integration](host-integration.md) §1, the hosted path).
+Every session of the service is then resolved as a local session working in
+that directory: its policy scope is the scope that directory selects, its
+`context_status` names the directory as `cwd`, and each crossing records it
+as `cwd`, so the relay resolves the crossing's clearance by it as it does a
+local session's. At each session's open, after the managed policy refresh,
+the directory must be selected by a scope of the policy in force or by an
+enrolled directory ([directory enrolment](directory-enrolment.md)); where
+neither selects it the session is not opened, and the answer names the
+directory, because its sessions would otherwise run under the top-level
+policy the operator declared them out of.
+
+The service writes one `hosted_scope` record when it opens a session's file,
+before any crossing. Its payload carries `session_id`, `host`, `timestamp`,
+`basis: "service_configuration"` and the canonical `directory`. It attests
+the operator's declaration only, and no remote client supplies it. The
+declaration grants nothing by itself: what the scope clears, the directory's
+enrolment and approvals, a scope's `allow_telemetry_egress: false` and the
+reporting consent (§Reporting consent) decide what leaves, as they do for a
+local session in the directory. The session's principal is the bearer's
+([host integration](host-integration.md) §1, the bearer token), and its
+binding and the declared directory's scope apply together as they do for a
+local principal ([source policy](source-policy.md) §Scopes and principals). This record
+and its path never enter Content Telemetry. Tested in
+`crates/commonmeasure-cli/tests/hosted_service/reporting.rs`
+`a_hosted_session_under_a_declared_scope_is_governed_by_it_and_its_report_is_delivered`,
+`a_hosted_service_without_a_declared_scope_runs_its_sessions_under_the_top_level_policy`,
+`a_declared_scope_nothing_selects_opens_no_session` and
+`a_declared_scope_and_a_principal_binding_resolve_as_the_contract_says`.
 
 ## Local comparison records
 

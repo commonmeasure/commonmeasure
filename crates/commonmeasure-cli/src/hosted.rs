@@ -60,9 +60,9 @@ pub(crate) const HOST_WORDS: [&str; 4] = [
 ];
 
 /// What a hosted endpoint serves: the three tools that read, and the two
-/// revisions the hosts speak. `context_enrol` acts on the directory the
-/// server runs in, which a hosted session has none of, and 2025-03-26 brings
-/// JSON-RPC batching no hosted client asks for. The stdio server is
+/// revisions the hosts speak. `context_enrol` enrols and syncs directories
+/// in the operator home, which a tenant must not change, and 2025-03-26
+/// brings JSON-RPC batching no hosted client asks for. The stdio server is
 /// unchanged (`Served::default`).
 pub(crate) const HOSTED_SERVED: Served = Served {
     tools: &["context_fetch", "context_search", "context_status"],
@@ -112,6 +112,9 @@ pub(crate) struct Options {
 pub(crate) struct ServiceOptions {
     pub(crate) interval: Duration,
     pub(crate) supplier_custody: bool,
+    /// The declared directory every session is scoped to
+    /// ([`ServiceConfig::session_directory`]), canonical.
+    pub(crate) session_directory: Option<String>,
 }
 
 /// `<home>/hosted-service.json`: what the deployed service needs beyond the
@@ -132,6 +135,17 @@ pub(crate) struct ServiceConfig {
     /// the idle sweep.
     #[serde(default = "default_interval")]
     pub(crate) interval_seconds: u64,
+    /// The directory every session of this service is scoped to: its policy
+    /// scope is resolved against it and its crossings record it as their
+    /// `cwd`, as a local session's record the directory it runs in, so the
+    /// relay resolves their clearance the same way. The operator declares
+    /// it; no remote client reports a directory. It must be absolute, exist,
+    /// and be selected by a scope of the policy or an enrolled directory.
+    /// It grants nothing by itself: the scope's own clearance, the directory
+    /// approvals and the reporting consent decide what leaves. Unset, a
+    /// session has no directory and runs under the top-level policy.
+    #[serde(default)]
+    pub(crate) session_directory: Option<String>,
     /// Fetch the supplier credentials the hub releases to this edge and use
     /// one where neither the environment nor `credentials.env` supplies the
     /// provider's variable. Unset, the service makes no release request and
@@ -162,7 +176,7 @@ impl ServiceConfig {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(format!("cannot read {}: {error}", source.display())),
         };
-        let config: Self = serde_json::from_slice(&encoded).map_err(|error| {
+        let mut config: Self = serde_json::from_slice(&encoded).map_err(|error| {
             format!(
                 "{} is not a valid service configuration: {error}",
                 source.display()
@@ -180,6 +194,17 @@ impl ServiceConfig {
                 "{}: interval_seconds must be at least 1",
                 source.display()
             ));
+        }
+        if let Some(directory) = &config.session_directory {
+            if !Path::new(directory).is_absolute() {
+                return Err(format!(
+                    "{}: session_directory {directory:?} must be an absolute path",
+                    source.display()
+                ));
+            }
+            let root = commonmeasure_harness::directory::selected(Path::new(directory))
+                .map_err(|reason| format!("{}: session_directory: {reason}", source.display()))?;
+            config.session_directory = root.to_str().map(str::to_owned);
         }
         Ok(Some(config))
     }
@@ -210,6 +235,16 @@ pub(crate) fn service(home: &Path, listen: Option<String>) -> Result<(), String>
         }
         Err(reason) => return Err(reason),
     }
+    // Said, not refused: the policy in force now may predate the first
+    // sync, and each session checks again against the policy it opens under.
+    if let Some(directory) = &config.session_directory {
+        match declared_scope(home, directory) {
+            Ok(scope) => {
+                eprintln!("commonmeasure: every session is scoped to {directory}: {scope}")
+            }
+            Err(reason) => eprintln!("commonmeasure: {reason}"),
+        }
+    }
     let lock = HomeLock::take(home)?;
     let options = Options {
         listen: listen.unwrap_or(config.listen),
@@ -218,6 +253,7 @@ pub(crate) fn service(home: &Path, listen: Option<String>) -> Result<(), String>
         service: Some(ServiceOptions {
             interval: Duration::from_secs(config.interval_seconds),
             supplier_custody: config.supplier_custody,
+            session_directory: config.session_directory,
         }),
     };
     run(home, options, Some(lock))
@@ -388,10 +424,20 @@ pub(crate) fn service_finding(home: &Path) -> Finding {
                     format!("configured, whether it is running cannot be read ({reason})"),
                 ),
             };
+            // A declared directory nothing selects stops every session the
+            // service would open.
+            let standing = match &config.session_directory {
+                Some(directory)
+                    if standing == Standing::Ok && declared_scope(home, directory).is_err() =>
+                {
+                    Standing::Attention
+                }
+                _ => standing,
+            };
             Finding {
                 standing,
                 text: format!(
-                    "hosted service: {state} at {}, endpoints {}, every {}s{}",
+                    "hosted service: {state} at {}, endpoints {}, every {}s; {}{}",
                     config.origin,
                     config
                         .hosts
@@ -400,6 +446,7 @@ pub(crate) fn service_finding(home: &Path) -> Finding {
                         .collect::<Vec<_>>()
                         .join(" "),
                     config.interval_seconds,
+                    scope_standing(home, config.session_directory.as_deref()),
                     if config.supplier_custody {
                         format!("; {}", custody_standing(home, config.interval_seconds))
                     } else {
@@ -409,6 +456,66 @@ pub(crate) fn service_finding(home: &Path) -> Finding {
             }
         }
     }
+}
+
+/// What the service's configuration declares for its sessions' scope, for
+/// the service line.
+fn scope_standing(home: &Path, directory: Option<&str>) -> String {
+    match directory {
+        None => "no scope declared: sessions have no directory and run under the top-level \
+                 policy, and nothing of them leaves but a crossing reported under the \
+                 reporting consent"
+            .to_owned(),
+        Some(directory) => match declared_scope(home, directory) {
+            Ok(scope) => format!("sessions scoped to {directory}: {scope}"),
+            Err(reason) => reason,
+        },
+    }
+}
+
+/// Which scope the declared `directory` falls under in the policy as it
+/// stands, described for the operator: the policy scope that selects it,
+/// with its engagement and whether it clears telemetry egress, or the
+/// enrolled directory. An error names the gap: a directory nothing selects
+/// would run its sessions under the top-level policy, which is not what the
+/// operator declared, so no session opens on it.
+pub(crate) fn declared_scope(home: &Path, directory: &str) -> Result<String, String> {
+    let document = commonmeasure_harness::policy::PolicyDocument::read(home)?;
+    let egress = |cleared: bool| match cleared {
+        true => "telemetry egress cleared",
+        false => "telemetry egress not cleared",
+    };
+    if let Some(scope) = document.scope_selecting(directory) {
+        let cleared = document.resolve(Some(directory)).allows_telemetry_egress();
+        return Ok(format!(
+            "scope \"{}\"{}, engagement {}, {}",
+            scope.matcher,
+            scope
+                .principal
+                .as_ref()
+                .map(|owner| format!(" (principal {owner:?})"))
+                .unwrap_or_default(),
+            scope.engagement.as_deref().unwrap_or("none"),
+            egress(cleared)
+        ));
+    }
+    let registry = commonmeasure_harness::directory::Registry::read(home)?;
+    if let Some(project) = registry
+        .as_ref()
+        .and_then(|registry| registry.matching(directory))
+    {
+        let cleared = document.resolve(Some(directory)).allows_telemetry_egress();
+        return Ok(format!(
+            "enrolled directory \"{}\", {}",
+            project.name,
+            egress(cleared)
+        ));
+    }
+    Err(format!(
+        "hosted-service.json declares session_directory {directory}, which no scope of the \
+         policy in force and no enrolled directory selects; its sessions would run under the \
+         top-level policy, so none is opened until a scope selects it or the key is removed"
+    ))
 }
 
 /// What the last supplier credential fetch did, by name, for a service
@@ -465,6 +572,9 @@ struct HostedEdge {
     /// Whether the interval loop relays this home (`hosted service`), which
     /// is automatic delivery for every session's reporting demands.
     interval_relay: bool,
+    /// The operator's declared directory for every session
+    /// ([`ServiceConfig::session_directory`]).
+    session_directory: Option<String>,
     /// The operator home's path in each form a served string may carry it.
     home_named: HomeNamed,
     sessions: Mutex<HashMap<String, Arc<Mutex<HostedSession>>>>,
@@ -528,6 +638,10 @@ impl HostedEdge {
             verifier,
             hold_private_floor: options.service.is_some(),
             interval_relay: options.service.is_some(),
+            session_directory: options
+                .service
+                .as_ref()
+                .and_then(|service| service.session_directory.clone()),
             home_named: HomeNamed::new(home),
             sessions: Mutex::new(HashMap::new()),
         })
@@ -869,12 +983,13 @@ impl HostedEdge {
                 &self.home,
                 host,
                 session_id,
-                None,
+                self.session_directory.clone(),
                 Some(session.bearer.principal()),
                 self.credentials.clone(),
                 crate::mcp_session::Transport {
                     served: HOSTED_SERVED,
                     hold_private_floor: self.hold_private_floor,
+                    declared_directory: self.session_directory.is_some(),
                     local_host: false,
                     interval_relay: self.interval_relay,
                 },

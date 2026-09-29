@@ -46,11 +46,15 @@ impl Signer {
     /// it publishes; a policy the loader would not load is carried as
     /// submitted, and the edge refuses it after the digest is checked.
     fn envelope(&self, revision: u64, policy: Value) -> Vec<u8> {
+        self.envelope_for("org-1", revision, policy)
+    }
+
+    fn envelope_for(&self, organisation: &str, revision: u64, policy: Value) -> Vec<u8> {
         let carried = serde_json::from_value::<PolicyFile>(policy.clone())
             .map(|policy| serde_json::to_value(&policy).expect("serialises"))
             .unwrap_or(policy);
         let payload = json!({
-            "organisation": "org-1",
+            "organisation": organisation,
             "edge_key_id": null,
             "revision": revision,
             "issued_at": "2026-09-06T00:00:00Z",
@@ -169,6 +173,10 @@ fn status(home: &Path, cwd: &Path) -> Value {
 }
 
 fn write_deployment(home: &Path, signer: &Signer, policy_url: &str) {
+    write_deployment_for(home, signer, policy_url, "org-1");
+}
+
+fn write_deployment_for(home: &Path, signer: &Signer, policy_url: &str, organisation: &str) {
     std::fs::write(
         home.join("deployment.json"),
         json!({
@@ -176,7 +184,7 @@ fn write_deployment(home: &Path, signer: &Signer, policy_url: &str) {
             "signer": {"key_id": signer.key_id, "algorithm": "ed25519",
                        "public_key": signer.public_key_hex()},
             "policy_url": policy_url,
-            "organisation": "org-1",
+            "organisation": organisation,
         })
         .to_string(),
     )
@@ -1084,4 +1092,361 @@ fn an_expired_envelope_has_no_clock_skew_tolerance() {
             )
         );
     }
+}
+
+/// EDG-91 through the binary. After re-enrolment into another organisation
+/// under another signer, the previous revision keeps governing and `status`
+/// and `doctor` name the organisation it came from; the new organisation's
+/// first revision, numbered lower, is accepted by `policy sync`, after which
+/// neither names a previous organisation.
+#[test]
+fn a_re_enrolled_edge_names_the_previous_organisation_until_the_new_one_is_accepted() {
+    let previous = Signer::new("hub-policy-previous");
+    let pinned = Signer::new("hub-policy-pinned");
+    let strict: Value = serde_json::from_str(STRICT).expect("policy");
+    let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+    let hub = endpoint(
+        previous.envelope_for("org-previous", 8, strict),
+        Arc::clone(&directory),
+    );
+    let policy_url = format!("{}/api/v1/policy/desired", hub.handle.url());
+    let home = tempfile::tempdir().expect("tempdir");
+    let workspace = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"policy_mode":"observe","allow_private_hosts":true}"#,
+    )
+    .expect("policy");
+    webbotauth::enrol(
+        home.path(),
+        &hub.handle.url(),
+        "https://hub.example",
+        &mut directory.lock().expect("lock"),
+    );
+    write_deployment_for(home.path(), &previous, &policy_url, "org-previous");
+    let accepted = run(home.path(), workspace.path(), &["policy", "sync"]);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stdout)
+    );
+    assert_eq!(policy_mode(home.path()), "strict");
+    assert!(status(home.path(), workspace.path())["previous_enrolment"].is_null());
+
+    // Re-enrolment pins the new pair; the hub still serves the previous
+    // organisation's envelope, which is refused by its signer.
+    write_deployment_for(home.path(), &pinned, &policy_url, "org-pinned");
+    let refused = run(home.path(), workspace.path(), &["policy", "sync"]);
+    assert!(!refused.status.success());
+    let text = String::from_utf8_lossy(&refused.stdout);
+    assert!(text.contains("wrong_signer"), "{text}");
+    assert!(
+        text.contains("from previous organisation org-previous (signer hub-policy-previous)"),
+        "{text}"
+    );
+    assert_eq!(
+        policy_mode(home.path()),
+        "strict",
+        "the previous revision governs"
+    );
+    let document = status(home.path(), workspace.path());
+    assert_eq!(
+        document["previous_enrolment"],
+        json!({"organisation": "org-previous", "signer_key_id": "hub-policy-previous",
+               "pinned_organisation": "org-pinned", "pinned_signer_key_id": "hub-policy-pinned"})
+    );
+    assert_eq!(document["applied"]["revision"], 8);
+    let named = "from previous organisation org-previous (signer hub-policy-previous); this edge \
+                 is pinned to organisation org-pinned";
+    for args in [&["status"][..], &["doctor"][..]] {
+        let output = run(home.path(), workspace.path(), args);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(named), "{args:?}: {text}");
+    }
+
+    // The new organisation's first revision is lower and is accepted.
+    *hub.served.lock().expect("lock") = pinned.envelope_for(
+        "org-pinned",
+        1,
+        json!({"policy_mode": "prefer", "allow_private_hosts": true}),
+    );
+    let accepted = run(home.path(), workspace.path(), &["policy", "sync"]);
+    let text = String::from_utf8_lossy(&accepted.stdout);
+    assert!(accepted.status.success(), "{text}");
+    assert!(
+        text.contains("outcome       accepted (revision 1)"),
+        "{text}"
+    );
+    assert!(!text.contains("previous organisation"), "{text}");
+    assert_eq!(policy_mode(home.path()), "prefer");
+    assert!(status(home.path(), workspace.path())["previous_enrolment"].is_null());
+    for args in [&["status"][..], &["doctor"][..]] {
+        let output = run(home.path(), workspace.path(), args);
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("previous organisation"), "{args:?}: {text}");
+    }
+
+    // Within the new pair a reused revision is refused.
+    *hub.served.lock().expect("lock") = pinned.envelope_for(
+        "org-pinned",
+        1,
+        json!({"policy_mode": "observe", "allow_private_hosts": true}),
+    );
+    let reused = run(home.path(), workspace.path(), &["policy", "sync"]);
+    assert!(!reused.status.success());
+    assert!(
+        String::from_utf8_lossy(&reused.stdout).contains("names one policy"),
+        "{}",
+        String::from_utf8_lossy(&reused.stdout)
+    );
+    assert_eq!(policy_mode(home.path()), "prefer");
+}
+
+/// A policy origin that answers at once with the envelope set in `current`,
+/// except for the one request after [`HeldOrigin::hold`], which it answers
+/// with the envelope given there once [`HeldOrigin::release`] is called.
+/// It does not verify request signatures: what is under test is what the
+/// edge does with an answer that arrives late.
+struct HeldOrigin {
+    handle: ServerHandle,
+    current: Arc<Mutex<Vec<u8>>>,
+    held: Arc<Mutex<Option<Vec<u8>>>>,
+    gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    arrival: std::sync::mpsc::Receiver<()>,
+}
+
+impl HeldOrigin {
+    fn new(current: Vec<u8>) -> Self {
+        let current = Arc::new(Mutex::new(current));
+        let held = Arc::new(Mutex::new(None::<Vec<u8>>));
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (arrived, arrival) = std::sync::mpsc::channel();
+        let (handler_current, handler_held, handler_gate) =
+            (Arc::clone(&current), Arc::clone(&held), Arc::clone(&gate));
+        let handle = Server::bind("127.0.0.1:0")
+            .expect("bind")
+            .spawn(move |_| {
+                let held = handler_held.lock().expect("lock").take();
+                let body = match held {
+                    Some(body) => {
+                        arrived.send(()).ok();
+                        let (released, wake) = &*handler_gate;
+                        let mut released = released.lock().expect("lock");
+                        while !*released {
+                            released = wake.wait(released).expect("wait");
+                        }
+                        body
+                    }
+                    None => handler_current.lock().expect("lock").clone(),
+                };
+                let mut response = Response::new(200, body);
+                response.headers.set("Content-Type", "application/json");
+                response
+            })
+            .expect("spawn");
+        Self {
+            handle,
+            current,
+            held,
+            gate,
+            arrival,
+        }
+    }
+
+    fn policy_url(&self) -> String {
+        format!("{}/api/v1/policy/desired", self.handle.url())
+    }
+
+    /// Hold the next request and answer it with `body` once released.
+    fn hold(&self, body: Vec<u8>) {
+        *self.held.lock().expect("lock") = Some(body);
+    }
+
+    fn arrived(&self) {
+        self.arrival
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the held request arrives");
+    }
+
+    fn release(&self) {
+        let (released, wake) = &*self.gate;
+        *released.lock().expect("lock") = true;
+        wake.notify_all();
+    }
+}
+
+/// An envelope bound to one edge key, as the hub binds the envelopes it
+/// serves an enrolled edge.
+fn bound(signer: &Signer, organisation: &str, revision: u64, edge: &str, policy: Value) -> Vec<u8> {
+    let mut envelope: Value =
+        serde_json::from_slice(&signer.envelope_for(organisation, revision, policy)).expect("json");
+    envelope["payload"]["edge_key_id"] = json!(edge);
+    signed_by(signer, &envelope["payload"])
+}
+
+/// What replaces the enrolment while the previous enrolment's request is
+/// outstanding.
+#[derive(Clone, Copy, Debug)]
+enum Replacement {
+    /// Another organisation under the same signer.
+    OrganisationSharedSigner,
+    /// Another organisation under another signer.
+    OrganisationAndSigner,
+    /// The same organisation and signer under a new edge key.
+    EdgeKey,
+    /// `commonmeasure disconnect`: the deployment becomes local.
+    Local,
+}
+
+/// The files the current enrolment owns, byte for byte; `None` for one
+/// that does not exist.
+fn owned_files(home: &Path) -> Vec<(&'static str, Option<Vec<u8>>)> {
+    [
+        "managed/state.json",
+        "managed/last-known-good.json",
+        "policy.json",
+        "deployment.json",
+    ]
+    .into_iter()
+    .map(|name| (name, std::fs::read(home.join(name)).ok()))
+    .collect()
+}
+
+/// EDG-91, from the review's probe. A synchronisation from enrolment A is
+/// held at the hub while the enrolment is replaced and, where the
+/// replacement is managed, its first revision accepted. When A's response
+/// is released it must change nothing the current enrolment owns: the
+/// process reports `superseded`, names what changed and exits non-zero.
+/// Every held response here is one the edge would otherwise accept.
+fn check_a_held_response_from_a_replaced_enrolment_is_superseded(replacement: Replacement) {
+    let a = Signer::new("hub-policy-a");
+    let b = Signer::new("hub-policy-b");
+    let strict: Value = serde_json::from_str(STRICT).expect("policy");
+    let origin = HeldOrigin::new(a.envelope_for("org-A", 8, strict.clone()));
+    let home = tempfile::tempdir().expect("tempdir");
+    let home = home.path();
+    let mut directory = webbotauth::Directory::default();
+    let first_key = webbotauth::enrol(
+        home,
+        &origin.handle.url(),
+        "https://hub.example",
+        &mut directory,
+    );
+    write_deployment_for(home, &a, &origin.policy_url(), "org-A");
+    let accepted = run(home, home, &["policy", "sync"]);
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stdout)
+    );
+    assert_eq!(policy_mode(home), "strict");
+
+    let observe = json!({"policy_mode": "observe", "allow_private_hosts": true});
+    let prefer = json!({"policy_mode": "prefer", "allow_private_hosts": true});
+    origin.hold(match replacement {
+        // A revision below A's own 8: accepted before only because the
+        // applied pair is by then B's.
+        Replacement::OrganisationSharedSigner | Replacement::OrganisationAndSigner => {
+            bound(&a, "org-A", 1, &first_key, observe)
+        }
+        // Above every revision applied under the same pair.
+        Replacement::EdgeKey | Replacement::Local => bound(&a, "org-A", 10, &first_key, observe),
+    });
+    let pending = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["policy", "sync"])
+        .env("COMMONMEASURE_HOME", home)
+        .current_dir(home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    origin.arrived();
+
+    let expected = match replacement {
+        Replacement::OrganisationSharedSigner => {
+            write_deployment_for(home, &a, &origin.policy_url(), "org-B");
+            *origin.current.lock().expect("lock") = a.envelope_for("org-B", 4, prefer);
+            "the pinned organisation changed from org-A to org-B while this request was \
+             outstanding"
+                .to_owned()
+        }
+        Replacement::OrganisationAndSigner => {
+            write_deployment_for(home, &b, &origin.policy_url(), "org-B");
+            *origin.current.lock().expect("lock") = b.envelope_for("org-B", 4, prefer);
+            "the pinned organisation changed from org-A to org-B; the pinned signer changed from \
+             hub-policy-a to hub-policy-b while"
+                .to_owned()
+        }
+        Replacement::EdgeKey => {
+            let second_key = webbotauth::enrol(
+                home,
+                &origin.handle.url(),
+                "https://hub.example",
+                &mut directory,
+            );
+            *origin.current.lock().expect("lock") = bound(&a, "org-A", 9, &second_key, prefer);
+            format!("the enrolled edge key changed from {first_key} to {second_key} while")
+        }
+        Replacement::Local => {
+            // The real writer. The origin answers its revocation request
+            // with an envelope, so the hub revokes nothing and the local
+            // files go regardless.
+            run(home, home, &["disconnect"]);
+            assert!(!home.join("deployment.json").exists());
+            format!("the deployment is now local; edge key {first_key} is not enrolled now while")
+        }
+    };
+    if !matches!(replacement, Replacement::Local) {
+        let accepted = run(home, home, &["policy", "sync"]);
+        let text = String::from_utf8_lossy(&accepted.stdout);
+        assert!(accepted.status.success(), "{replacement:?}: {text}");
+        assert!(
+            text.contains("outcome       accepted"),
+            "{replacement:?}: {text}"
+        );
+        assert_eq!(policy_mode(home), "prefer");
+    }
+    let owned = owned_files(home);
+
+    origin.release();
+    let stale = pending.wait_with_output().expect("wait");
+    let text = String::from_utf8_lossy(&stale.stdout);
+    assert!(!stale.status.success(), "{replacement:?}: {text}");
+    assert!(
+        text.contains("outcome       superseded\n"),
+        "{replacement:?}: {text}"
+    );
+    assert!(text.contains(&expected), "{replacement:?}: {text}");
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("(superseded)"),
+        "{replacement:?}: {}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    for ((name, before), (_, after)) in owned.iter().zip(owned_files(home)) {
+        assert_eq!(before, &after, "{replacement:?}: {name} changed");
+    }
+}
+
+#[test]
+fn a_held_response_from_another_organisation_under_the_same_signer_is_superseded() {
+    check_a_held_response_from_a_replaced_enrolment_is_superseded(
+        Replacement::OrganisationSharedSigner,
+    );
+}
+
+#[test]
+fn a_held_response_from_another_organisation_and_signer_is_superseded() {
+    check_a_held_response_from_a_replaced_enrolment_is_superseded(
+        Replacement::OrganisationAndSigner,
+    );
+}
+
+#[test]
+fn a_held_response_to_a_replaced_edge_key_is_superseded() {
+    check_a_held_response_from_a_replaced_enrolment_is_superseded(Replacement::EdgeKey);
+}
+
+#[test]
+fn a_held_response_after_a_switch_to_local_mode_is_superseded() {
+    check_a_held_response_from_a_replaced_enrolment_is_superseded(Replacement::Local);
 }

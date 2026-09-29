@@ -496,11 +496,15 @@ fn route(
         // happened after the console started is reported, not staled over.
         "/api/status" => {
             let egress = commonmeasure_relay::egress_report(home);
+            let consent = commonmeasure_harness::consent::report(home);
             match attribution() {
                 Ok(rules) => with_store(state, sessions_dir, move |store| {
                     store
                         .status(egress, &rules, engagement.as_deref())
-                        .map(|status| (200, status))
+                        .map(|mut status| {
+                            status["reporting_consent"] = consent;
+                            (200, status)
+                        })
                 }),
                 Err(error) => json_error(500, &format!("{error:#}")),
             }
@@ -978,7 +982,8 @@ fn app_page(
                 };
                 Ok(match section {
                     Section::Overview => {
-                        let status = store.status(egress, &rules, engagement.as_deref())?;
+                        let mut status = store.status(egress, &rules, engagement.as_deref())?;
+                        status["reporting_consent"] = commonmeasure_harness::consent::report(&home);
                         let content =
                             store.content(console::CONTENT_CAP, &rules, engagement.as_deref())?;
                         console::app::overview_page(&status, &content, read)

@@ -302,6 +302,74 @@ pub(super) fn record_heading(title: &str, read: ReadFrom<'_>) -> Markup {
     }
 }
 
+/// What the operator is missing for want of reporting consent (owner
+/// decision, 27 September 2026): the sources refused because they need
+/// reporting, with a count, and the command that agrees. Nothing once the
+/// operator has agreed, or where the status carries no consent block.
+fn reporting_consent(report: &Value) -> Markup {
+    let Some(state) = report["state"].as_str().filter(|state| *state != "agreed") else {
+        return html! {};
+    };
+    let sources = report["refused_sources"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let refusals = report["refusals"].as_u64();
+    html! {
+        div class="card consent-state" {
+            h2 { "Reporting consent" }
+            p {
+                @match state {
+                    "withdrawn" => { "Withdrawn. " }
+                    "unreadable" => {
+                        "Unreadable: " (report["error"].as_str().unwrap_or("no error recorded"))
+                        ". An unreadable consent is not consent. "
+                    }
+                    _ => { "Not given. " }
+                }
+                "Sources whose licence demands usage reporting are refused."
+            }
+            @if !sources.is_empty() {
+                p {
+                    strong { (sources.len()) }
+                    @if sources.len() == 1 { " source" } @else { " sources" }
+                    " refused because "
+                    @if sources.len() == 1 { "it needs" } @else { "they need" }
+                    " reporting"
+                    @if let Some(refusals) = refusals {
+                        ", " (refusals) @if refusals == 1 { " refusal" } @else { " refusals" }
+                    }
+                    ":"
+                }
+                div class="rows" {
+                    @for source in &sources {
+                        div class="row" {
+                            span class="host" { (source["source"].as_str().unwrap_or("unnamed")) }
+                            span class="eng" {
+                                "needs reporting · "
+                                span class="mono" {
+                                    (source["refusals"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
+                                }
+                                @if source["refusals"] == 1 { " refusal" } @else { " refusals" }
+                            }
+                        }
+                    }
+                }
+            }
+            @if let Some(n) = report["unreadable_sessions"].as_u64() {
+                p class="muted" { (n) " session logs did not read; the list may be short." }
+            }
+            @if let Some(error) = report["refused_sources_error"].as_str() {
+                p class="muted" { "Refused sources unknown: " (error) }
+            }
+            p {
+                "Agree in a terminal: "
+                code { (report["agree_command"].as_str().unwrap_or(commonmeasure_harness::consent::AGREE_COMMAND)) }
+            }
+        }
+    }
+}
+
 /// The Overview screen: the counts, the most recent crossings, the crossings
 /// by engagement, and the hub.
 fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
@@ -365,6 +433,7 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
                 (metric(&cleared, "events delivered", ""))
             }
             (host_observation_counts(&status["host_observed"]))
+            (reporting_consent(&status["reporting_consent"]))
             div class="cards grid-2" {
                 div class="card hub-state" {
                     h2 { "Hub" }
@@ -2168,6 +2237,41 @@ mod tests {
                                       "key_id": null, "key_standing": null});
         let page = overview_page(&unenrolled, &json!([]), READ);
         assert!(page.contains("Not enrolled with a hub"));
+    }
+
+    /// Owner decision, 27 September 2026: the Overview shows what the
+    /// operator is missing for want of reporting consent, each refused source
+    /// with "needs reporting" and its count, and the command that agrees; an
+    /// unreadable consent names its error; nothing once consent is agreed.
+    #[test]
+    fn the_overview_names_the_sources_refused_for_want_of_reporting_consent() {
+        let mut missing = status();
+        missing["reporting_consent"] = json!({
+            "state": "not_given", "agree_command": "commonmeasure consent agree",
+            "refusals": 3, "refused_source_count": 2,
+            "refused_sources": [
+                {"source": "news.publisher.example", "refusals": 2},
+                {"source": "journal.example", "refusals": 1},
+            ],
+        });
+        let page = overview_page(&missing, &json!([]), READ);
+        assert!(page.contains("Reporting consent"));
+        assert!(page.contains("news.publisher.example") && page.contains("journal.example"));
+        assert_eq!(page.matches("needs reporting").count(), 2);
+        assert!(page.contains("<strong>2</strong> sources refused"));
+        assert!(page.contains("commonmeasure consent agree"));
+
+        let mut unreadable = status();
+        unreadable["reporting_consent"] = json!({
+            "state": "unreadable", "error": "consent.json is not a valid consent file",
+            "refused_sources": [], "refusals": 0,
+        });
+        let page = overview_page(&unreadable, &json!([]), READ);
+        assert!(page.contains("consent.json is not a valid consent file"));
+
+        let mut agreed = status();
+        agreed["reporting_consent"] = json!({"state": "agreed", "refused_sources": []});
+        assert!(!overview_page(&agreed, &json!([]), READ).contains("Reporting consent"));
     }
 
     /// The sidebar names the product, and an error answers as a page in the

@@ -97,7 +97,22 @@ pub fn run(args: Update) -> Result<(), String> {
         .iter()
         .map(|(service, context)| (*service, context))
         .collect();
-    replacement.run(&services, &service::System)
+    replacement.run(&services, &service::System)?;
+    // An upgraded home has no reporting consent until the operator gives it
+    // (owner decision, 27 September 2026); the embedded installer does not
+    // ask under --update, so the line is printed here. A withdrawal was the
+    // operator's choice and is not repeated at each update.
+    if let Ok(home) = commonmeasure_harness::home_dir() {
+        let standing = commonmeasure_harness::consent::Standing::load(&home);
+        if matches!(
+            standing,
+            commonmeasure_harness::consent::Standing::NotGiven
+                | commonmeasure_harness::consent::Standing::Unreadable(_)
+        ) {
+            println!("\n{}", crate::consent::line(&standing));
+        }
+    }
+    Ok(())
 }
 
 /// The release location. A debug build honours `COMMONMEASURE_RELEASE_URL`,

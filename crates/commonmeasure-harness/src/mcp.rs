@@ -79,9 +79,9 @@ pub const TOOLS: [&str; 4] = [
 /// What one transport serves of the whole: which tools it advertises and
 /// dispatches, and which protocol revisions it negotiates. The stdio server
 /// serves everything. The hosted edge serves the three tools that read and
-/// the two revisions its hosts speak: `context_enrol` acts on the directory
-/// the server runs in, which a hosted session does not have, and 2025-03-26
-/// brings JSON-RPC batching no hosted client asks for.
+/// the two revisions its hosts speak: `context_enrol` enrols and syncs
+/// directories in the operator home, which a tenant must not change, and
+/// 2025-03-26 brings JSON-RPC batching no hosted client asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Served {
     /// Tool names, a subset of [`TOOLS`]. A call to a tool outside it is
@@ -284,9 +284,14 @@ fn system_resolve(url: &str) -> Result<Vec<SocketAddr>, String> {
 /// from a loopback server, as `mcp::tests` do through [`McpServer`]'s
 /// `resolve`: the ruling on a reporting demand refuses a local or private
 /// address, and no public name resolves to loopback on every test machine.
-/// Everything after the lookup is the production path, the private-address
-/// check of the resolved address included. A release build does not read
-/// the variable.
+/// The address it supplies stands for the public address the name would
+/// have, so the private-address check of the resolved address
+/// ([`reaches_allowed_addresses`]) passes it, and a hosted service, which
+/// holds the private-address floor, can reach the loopback server too. The
+/// check of the name before the lookup, and everything after the lookup,
+/// is the production path; an address reached by any other route, a
+/// literal loopback address included, meets the floor as it would in a
+/// release build. A release build does not read the variable.
 #[cfg(debug_assertions)]
 fn test_hosts(url: &str) -> Option<Vec<SocketAddr>> {
     let hosts = std::env::var("COMMONMEASURE_TEST_HOSTS").ok()?;
@@ -2072,6 +2077,17 @@ impl McpServer {
         refused_url: &str,
         reason: &str,
     ) -> Option<String> {
+        // A refusal for want of reporting consent names the command that
+        // lifts it; the policy file did not refuse it.
+        if declarations
+            .and_then(|d| d.reporting.as_ref())
+            .is_some_and(|ruling| {
+                ruling.consent_needed
+                    && ruling.reason.as_deref().is_some_and(|r| reason.contains(r))
+            })
+        {
+            return None;
+        }
         if reason.contains(HUB_ORIGIN_REFUSAL)
             || declarations.is_some_and(|d| {
                 d.backoff.iter().any(|event| {
@@ -2281,7 +2297,23 @@ impl McpServer {
                     continue;
                 }
                 let ruling = self.reporting_ruling(url, demand);
-                if let Some(reason) = &ruling.reason {
+                if let Some(reason) = ruling.reason.as_ref().filter(|_| ruling.consent_needed) {
+                    // Owner decision, 27 September 2026: a refusal for want
+                    // of consent says what the operator is missing, the
+                    // source, that it needs reporting, and how to agree,
+                    // which `reason` ends with.
+                    rulings.push(binding_breach(
+                        format!(
+                            "{} needs reporting: its licence {} requires telemetry reporting \
+                                 of each use (profile {}), and {reason}.",
+                            grounding::host_of(url),
+                            licence.url,
+                            demand.profile
+                        ),
+                        "A source whose licence demands reporting is refused until the operator \
+                         agrees to report to such sources.",
+                    ));
+                } else if let Some(reason) = &ruling.reason {
                     rulings.push(binding_breach(
                         format!(
                             "The licence {} requires telemetry reporting (profile {}) and the \
@@ -2317,66 +2349,81 @@ impl McpServer {
             .map(str::to_owned);
         let mut ruling =
             self.reporting_ruling_for(url, Some(demand.profile.clone()), level.clone());
-        if demand.profile != TELEMETRY_PROFILE {
-            ruling.reason = Some(format!(
+        let unsupported = if demand.profile != TELEMETRY_PROFILE {
+            Some(format!(
                 "this runtime reports under {TELEMETRY_PROFILE} only and does not recognise the \
                  profile"
-            ));
+            ))
         } else {
             match level.as_deref() {
-                Some("retrieval" | "grounding") => {}
-                Some(other) => {
-                    ruling.reason = Some(format!(
-                        "the licence demands {other} conformance and this runtime emits retrieval \
-                         and grounding events only"
-                    ));
-                }
-                None => {
-                    ruling.reason = Some(
-                        "the reporting configuration names no conformance_level this runtime can \
-                         read"
-                            .to_owned(),
-                    );
-                }
+                Some("retrieval" | "grounding") => None,
+                Some(other) => Some(format!(
+                    "the licence demands {other} conformance and this runtime emits retrieval \
+                     and grounding events only"
+                )),
+                None => Some(
+                    "the reporting configuration names no conformance_level this runtime can \
+                     read"
+                        .to_owned(),
+                ),
             }
+        };
+        if unsupported.is_some() {
+            ruling.reason = unsupported;
+            // A demand this runtime cannot comply with is not one consent
+            // would admit.
+            ruling.consent_needed = false;
         }
         ruling.met = ruling.reason.is_none();
         ruling
     }
 
     /// The session's half of any reporting ruling: whether the relay would
-    /// project a crossing of `url` at all, the scope clears telemetry
-    /// egress, a receiver is configured and delivery happens without a
-    /// person, with the receiver named in the record.
+    /// project a crossing of `url` at all, the policy loads, a receiver is
+    /// configured, delivery happens without a person and the operator has
+    /// agreed to reporting, with the receiver named in the record.
     ///
     /// The first check is the relay's own predicate
     /// ([`grounding::projectable`]): a local or private address, or a URL
     /// under an internal prefix, never leaves the machine, whatever the
-    /// scope clears. The prefixes are the session's, which stamp the
+    /// operator agreed to. The prefixes are the session's, which stamp the
     /// crossing `internal` at capture, and those of the policy as it stands
     /// now, which the relay applies at each run.
     ///
-    /// The third check is the owner decision of 22 September 2026: a demand
-    /// is met only where the events will actually leave, so an operator who
-    /// switched automatic delivery off has an unmet demand until they switch
-    /// it back on, and the reason names the marker that caused it.
+    /// The delivery check is the owner decision of 22 September 2026: a
+    /// demand is met only where the events will actually leave, so an
+    /// operator who switched automatic delivery off has an unmet demand until
+    /// they switch it back on, and the reason names the marker that caused
+    /// it.
     ///
     /// `<home>/relay.json` is read here, by the relay's own parser, at each
     /// ruling: a server can outlive many changes to it (Claude Desktop keeps
     /// one for the life of the app), and a demand ruled on a receiver since
     /// removed would be admitted with nothing to report it. A file the relay
-    /// refuses or no receiver leaves the demand unmet.
+    /// refuses or no receiver leaves the demand unmet. The source policy is
+    /// read the same way, and one that does not load now leaves the demand
+    /// unmet, as the relay refuses to run on it.
     ///
-    /// Egress clearance is likewise the session's AND that of the source
-    /// policy as it stands now, read and resolved against this session's
-    /// working directory as the relay resolves each crossing's: the relay
-    /// reads the current policy and the reporting approvals at each run, so
-    /// a clearance withdrawn since the server started, or an approval
-    /// snapshot that has since expired, would admit a crossing whose events
-    /// the relay then withholds. A grant made after the server started does
-    /// not widen the session, whose crossings keep the policy they started
-    /// under. A policy that does not load now leaves the demand unmet, as the
-    /// relay refuses to run on it.
+    /// Operator terms that require `access_context` for this host leave the
+    /// demand unmet: the relay holds every crossing of a host under such
+    /// terms ([`Self::access_context_hold`]). This holds in every scope,
+    /// cleared or not. The session's other crossings do not decide it,
+    /// before or after, since the relay holds each crossing by its own host
+    /// alone. A session log that does not read leaves the demand unmet, as
+    /// the relay skips such a log whole ([`Self::unreadable_session_log`]).
+    ///
+    /// The operator's reporting consent (`crate::consent`), not a scope's
+    /// telemetry clearance, fills the reporting slot (owner decision, 27
+    /// September 2026: consent before an obligated crossing): with it, the
+    /// demand can be met in every scope, including one that sets
+    /// `allow_telemetry_egress: false`; without it, never, whatever the
+    /// scope clears. `<home>/consent.json` is read at each ruling, so a
+    /// withdrawal refuses the next crossing of a running server. The relay
+    /// reports a crossing admitted here by the consent on its record, so what
+    /// is admitted under consent is what leaves. The consent check comes
+    /// last so that a demand refused for want of consent is one agreeing
+    /// would admit, which is what `consent_needed` tells status and the
+    /// console. The scope's clearance is still recorded, for the reader.
     fn reporting_ruling_for(
         &self,
         url: &str,
@@ -2389,11 +2436,16 @@ impl McpServer {
             .ok()
             .and_then(Option::as_ref)
             .map(|config| config.receiver.clone());
-        let current = SessionPolicy::load(self.home(), self.cwd.as_deref());
+        let document = crate::policy::PolicyDocument::read(self.home());
+        let current = document
+            .as_ref()
+            .map(|document| document.resolve(self.cwd.as_deref()))
+            .map_err(Clone::clone);
         let cleared = self.policy.allows_telemetry_egress()
             && current
                 .as_ref()
                 .is_ok_and(SessionPolicy::allows_telemetry_egress);
+        let consent = crate::consent::Standing::load(self.home());
         let policy = self.policy.source();
         let internal: Vec<String> = self
             .policy
@@ -2402,6 +2454,7 @@ impl McpServer {
             .chain(current.iter().flat_map(SessionPolicy::internal_prefixes))
             .cloned()
             .collect();
+        let mut consent_needed = false;
         let reason = if !grounding::recordable(url) {
             Some(format!(
                 "{url} is a local or private address, whose events the relay never sends, so \
@@ -2413,22 +2466,10 @@ impl McpServer {
                  the relay never sends, so nothing would be reported",
                 self.path_named(policy)
             ))
-        } else if !self.policy.allows_telemetry_egress() {
-            Some(
-                "this session's policy scope clears no telemetry egress, so nothing would be \
-                 reported"
-                    .to_owned(),
-            )
         } else if let Err(error) = &current {
             Some(format!(
                 "{}, so nothing would be reported",
                 self.home_named_in(error)
-            ))
-        } else if !cleared {
-            Some(format!(
-                "{} as it stands now clears no telemetry egress for this session's scope, so \
-                 nothing would be reported",
-                self.path_named(policy)
             ))
         } else if let Err(error) = &relay {
             // The relay refuses the whole file, so nothing leaves for the
@@ -2443,27 +2484,92 @@ impl McpServer {
                 "no telemetry receiver is configured in {}, so nothing would be reported",
                 self.path_named(&self.policy.source().with_file_name("relay.json"))
             ))
-        } else {
-            crate::delivery::SessionDelivery {
-                host: &self.host,
-                client: self.client.as_ref().map(|client| client.name.as_str()),
-                interval_relay: self.interval_relay,
-            }
-            .withheld_reason(self.home())
+        } else if let Some(reason) = (crate::delivery::SessionDelivery {
+            host: &self.host,
+            client: self.client.as_ref().map(|client| client.name.as_str()),
+            interval_relay: self.interval_relay,
+        })
+        .withheld_reason(self.home())
+        {
             // The reason names the manual marker, which a hosted tenant is
             // told relative to the operator home.
-            .map(|reason| {
-                let marker = crate::delivery::manual_marker(self.home());
-                reason.replace(&marker.display().to_string(), &self.path_named(&marker))
-            })
+            let marker = crate::delivery::manual_marker(self.home());
+            Some(reason.replace(&marker.display().to_string(), &self.path_named(&marker)))
+        } else if let Some(reason) = document
+            .as_ref()
+            .ok()
+            .and_then(|document| self.access_context_hold(document, url))
+        {
+            Some(reason)
+        } else if let Some(reason) = self.unreadable_session_log() {
+            Some(reason)
+        } else {
+            let file = self.path_named(&crate::consent::path(self.home()));
+            consent
+                .unmet_reason(&file)
+                .map(|reason| self.home_named_in(&reason))
+                .inspect(|_| consent_needed = true)
         };
         crate::discovery::ReportingRuling {
             profile,
             conformance_level,
             receiver,
             telemetry_egress_cleared: cleared,
+            consent: Some(consent.on_record()),
+            consent_needed,
             met: reason.is_none(),
             reason,
+        }
+    }
+
+    /// Why the relay would hold back a crossing of `url` admitted with its
+    /// reporting demand met, or `None`.
+    ///
+    /// A met demand clears the crossing for egress, under the consent on its
+    /// record or its scope, and the relay holds every cleared crossing whose
+    /// host falls under operator terms naming institution identifiers: those
+    /// terms require `access_context` on the session, and the event-batch
+    /// delivery format carries no session data. Admitting the crossing would
+    /// then promise a report the relay never sends. The relay's own predicate
+    /// is read ([`crate::egress::access_context_terms`], under the scope this
+    /// session's directory resolves to), and it reads the crossing's host
+    /// alone, so what the session recorded before or records after does not
+    /// change the answer.
+    fn access_context_hold(
+        &self,
+        document: &crate::policy::PolicyDocument,
+        url: &str,
+    ) -> Option<String> {
+        let host = grounding::host_of(url);
+        crate::egress::access_context_terms(document, self.cwd.as_deref(), &host).map(|reference| {
+            format!(
+                "the operator terms {reference} for {host} require access_context on the \
+                     session, which the event-batch delivery format cannot carry, so the relay \
+                     would hold this crossing and nothing would be reported"
+            )
+        })
+    }
+
+    /// Why the relay would skip this session's log whole, or `None`.
+    ///
+    /// The relay reads a session's log with [`SessionLog::read`] and sends
+    /// nothing from a log that does not read (a torn line left by a short
+    /// write, for example), so a crossing admitted into it with its demand
+    /// met would never be reported. A log not yet written is fine: this
+    /// crossing starts it. Only the log's readability is read here; what the
+    /// session's other crossings are does not decide the demand
+    /// ([`Self::access_context_hold`]). A log damaged after the ruling is
+    /// beyond what any ruling can see.
+    fn unreadable_session_log(&self) -> Option<String> {
+        let log = self.session.path();
+        match SessionLog::read(log) {
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => Some(format!(
+                "this session's log {} does not read ({error}), and the relay sends nothing \
+                 from a log it cannot read, so nothing would be reported",
+                self.path_named(log)
+            )),
         }
     }
 
@@ -3741,6 +3847,10 @@ fn reaches_allowed_addresses(
     url: &str,
     addresses: &[SocketAddr],
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    if test_hosts(url).is_some_and(|mapped| mapped == addresses) {
+        return Ok(());
+    }
     // Supply the operator named as internal is theirs by construction, and
     // that consent is about the name: an intranet name resolving inside the
     // intranet is where it was always going. Not where the floor is held:
@@ -5573,6 +5683,8 @@ mod tests {
             r#"{"receiver":"https://receiver.example/v1/events"}"#,
         )
         .expect("relay.json");
+        crate::consent::record(home.path(), crate::consent::Answer::Agreed, Utc::now())
+            .expect("consent");
         let open = |interval_relay: bool| {
             let loaded = SessionPolicy::load(home.path(), work.to_str()).expect("the policy loads");
             let log = SessionLog::open(home.path(), "test-session").expect("session log");
@@ -5626,6 +5738,8 @@ mod tests {
             r#"{"receiver":"https://receiver.example/v1"}"#,
         )
         .expect("relay.json");
+        crate::consent::record(home.path(), crate::consent::Answer::Agreed, Utc::now())
+            .expect("consent");
         let policy = |prefixes: &str| {
             std::fs::write(
                 home.path().join("policy.json"),
@@ -5739,6 +5853,113 @@ mod tests {
                 assert!(reason.contains(origin), "{planted}: {reason}");
             }
         }
+    }
+
+    /// Owner decision, 27 September 2026 (consent before an obligated
+    /// crossing): the operator's install consent, not a scope's clearance,
+    /// fills the reporting slot. Without it a demand is unmet in every scope,
+    /// a cleared one included, and the reason names the command to agree;
+    /// with it the demand is met in a scope that clears nothing and in one
+    /// that sets `allow_telemetry_egress: false`. The file is read at each
+    /// ruling, so a withdrawal refuses the next ruling of a running server,
+    /// and an unreadable file is not consent: the reason names the error.
+    /// A demand unmet for another reason is not one consent would admit.
+    #[test]
+    fn the_reporting_consent_decides_a_demand_in_every_scope() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let scopes = ["reporting-cleared", "reporting-false", "unscoped"];
+        for scope in scopes {
+            std::fs::create_dir_all(home.path().join(scope)).expect("workspace");
+        }
+        std::fs::write(
+            home.path().join("policy.json"),
+            r#"{"policy_mode":"strict","scopes":[
+                {"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true},
+                {"match":"reporting-false","engagement":"client","allow_telemetry_egress":false}]}"#,
+        )
+        .expect("policy");
+        std::fs::write(
+            home.path().join("relay.json"),
+            r#"{"receiver":"https://receiver.example/v1"}"#,
+        )
+        .expect("relay.json");
+        let server = |scope: &str| {
+            let cwd = home.path().join(scope);
+            let loaded = SessionPolicy::load(home.path(), cwd.to_str()).expect("the policy loads");
+            let log = SessionLog::open(home.path(), "test-session").expect("session log");
+            let credentials = commonmeasure_supply::credentials::CredentialsStatus {
+                path: home
+                    .path()
+                    .join(commonmeasure_supply::credentials::CREDENTIALS_FILE),
+                loaded: None,
+            };
+            McpServer::new(
+                log,
+                loaded,
+                "claude-code",
+                cwd.to_str().map(str::to_owned),
+                credentials,
+            )
+        };
+        let page = "https://publisher.example/article";
+        let servers: Vec<McpServer> = scopes.iter().map(|scope| server(scope)).collect();
+
+        for (scope, server) in scopes.iter().zip(&servers) {
+            let ruling = server.reporting_ruling_for(page, None, None);
+            assert!(!ruling.met, "{scope}");
+            assert!(ruling.consent_needed, "{scope}");
+            assert_eq!(ruling.consent.as_ref().unwrap().state, "not_given");
+            let reason = ruling.reason.expect("a reason");
+            assert!(
+                reason.contains("has not agreed to report to sources that require it")
+                    && reason.contains(crate::consent::AGREE_COMMAND),
+                "{scope}: {reason}"
+            );
+        }
+
+        crate::consent::record(home.path(), crate::consent::Answer::Agreed, Utc::now())
+            .expect("consent");
+        for ((scope, server), cleared) in scopes.iter().zip(&servers).zip([true, false, false]) {
+            let ruling = server.reporting_ruling_for(page, None, None);
+            assert!(ruling.met, "{scope}: {:?}", ruling.reason);
+            assert!(!ruling.consent_needed, "{scope}");
+            assert_eq!(ruling.telemetry_egress_cleared, cleared, "{scope}");
+            let consent = ruling.consent.expect("the consent is recorded");
+            assert_eq!(consent.state, "agreed");
+            assert_eq!(
+                consent.text_version.as_deref(),
+                Some(crate::consent::CONSENT_TEXT_VERSION)
+            );
+        }
+
+        crate::consent::record(home.path(), crate::consent::Answer::Withdrawn, Utc::now())
+            .expect("withdrawal");
+        let withdrawn = servers[1].reporting_ruling_for(page, None, None);
+        assert!(!withdrawn.met && withdrawn.consent_needed);
+        assert_eq!(withdrawn.consent.unwrap().state, "withdrawn");
+        assert!(withdrawn.reason.unwrap().contains("withdrew consent"));
+
+        std::fs::write(crate::consent::path(home.path()), "{\"reporting\":").expect("damage");
+        let unreadable = servers[1].reporting_ruling_for(page, None, None);
+        assert!(!unreadable.met && unreadable.consent_needed);
+        assert_eq!(unreadable.consent.unwrap().state, "unreadable");
+        let reason = unreadable.reason.unwrap();
+        assert!(
+            reason.contains("is not a valid consent file") && !reason.contains("has not agreed"),
+            "{reason}"
+        );
+
+        // Without a receiver agreeing would admit nothing, so the reason is
+        // the receiver's and the demand is not counted as wanting consent.
+        std::fs::remove_file(home.path().join("relay.json")).expect("remove relay.json");
+        let no_receiver = servers[1].reporting_ruling_for(page, None, None);
+        assert!(!no_receiver.met && !no_receiver.consent_needed);
+        assert!(
+            no_receiver
+                .reason
+                .unwrap()
+                .contains("no telemetry receiver is configured")
+        );
     }
 
     /// A refused redirect hop keeps the breaches carried on the hops before

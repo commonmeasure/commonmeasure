@@ -141,8 +141,10 @@ answered by then, or a refused snapshot, leaves the saved snapshot as it
 was, and the session starts under it. The outcome is not recorded in the
 session log; a failure is one line on stderr. A renewal that finishes after
 the budget changes no clearance the session resolved at its start: a session
-opened under an expired snapshot refuses every reporting demand until it
-ends. Between session starts, every relay run renews the approvals,
+opened under an expired snapshot clears no egress until it ends. A licence's
+reporting demand does not depend on that clearance; the operator's reporting
+consent decides it ([session evidence §Reporting
+consent](session-evidence.md#reporting-consent)). Between session starts, every relay run renews the approvals,
 `relay --every` and the hosted service's interval relay included; the hub
 pushes nothing. Because a start renews only past the midpoint, a withdrawal
 or revocation made at the hub reaches a session start on a home with no

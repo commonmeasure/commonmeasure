@@ -1104,6 +1104,19 @@ impl PolicyDocument {
         resolved
     }
 
+    /// The scope whose `match` selects `directory`, first match winning as
+    /// in [`Self::resolve`], whoever the principal. A scope that names an
+    /// owner is returned even where the principal this document was read
+    /// for is not that owner: the caller asks which scope the directory
+    /// falls under, and [`Self::resolve`] decides whether a principal may
+    /// use it. `directory` is compared as given; pass it canonical.
+    pub fn scope_selecting(&self, directory: &str) -> Option<&PolicyScope> {
+        self.file
+            .scopes
+            .iter()
+            .find(|scope| scope_matches(scope, directory))
+    }
+
     fn resolve_source(&self, cwd: Option<&str>) -> SessionPolicy {
         let mut file = self.file.clone();
         let mut principal = self.principal.clone();
@@ -1144,13 +1157,10 @@ impl PolicyDocument {
         // The directory alone selects the scope, exactly as it did before
         // principals existed: first match wins.
         let matched = cwd.and_then(|cwd| {
-            let position = file.scopes.iter().position(|scope| {
-                cwd.contains(&scope.matcher)
-                    || (Path::new(&scope.matcher).is_absolute()
-                        && std::fs::canonicalize(&scope.matcher)
-                            .ok()
-                            .is_some_and(|root| Path::new(cwd).starts_with(root)))
-            })?;
+            let position = file
+                .scopes
+                .iter()
+                .position(|scope| scope_matches(scope, cwd))?;
             Some(file.scopes.swap_remove(position))
         });
         // Ownership is then checked, never searched past. Walking on to the
@@ -1218,6 +1228,17 @@ impl PolicyDocument {
             private_floor_held: false,
         }
     }
+}
+
+/// Whether `scope` selects the working directory `cwd`: its `match` is a
+/// substring of `cwd`, or names an existing absolute directory `cwd` is at or
+/// under.
+fn scope_matches(scope: &PolicyScope, cwd: &str) -> bool {
+    cwd.contains(&scope.matcher)
+        || (Path::new(&scope.matcher).is_absolute()
+            && std::fs::canonicalize(&scope.matcher)
+                .ok()
+                .is_some_and(|root| Path::new(cwd).starts_with(root)))
 }
 
 impl SessionPolicy {

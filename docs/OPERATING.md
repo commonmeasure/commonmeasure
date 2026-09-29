@@ -210,7 +210,10 @@ session start and before every relay run, and `commonmeasure doctor` adds a
 line naming the revision in force and its expiry. An envelope that has
 expired keeps enforcing its policy and that line says `stale since` when;
 [`docs/contracts/policy-envelope.md`](contracts/policy-envelope.md) §Cadence
-and staleness has the rest.
+and staleness has the rest. After `connect --managed` into another
+organisation, the previous organisation's revision stays in force until the
+new organisation's first revision is accepted, and that line names the
+organisation it came from (§Re-enrolment in the same contract).
 
 ## Import history from before Common Measure
 
@@ -259,6 +262,24 @@ matched their working directory carries `allow_telemetry_egress: true`
 ([Source policy](contracts/source-policy.md)). What may leave, under whose clearance, and the wire format are
 [`docs/contracts/telemetry-projection.md`](contracts/telemetry-projection.md).
 
+The exception is a source whose licence demands usage reporting. With your
+reporting consent ([Installing](INSTALL.md#reporting-consent)) it is
+admitted in every scope, including one that sets
+`allow_telemetry_egress: false`, and the relay sends the retrieval and
+grounding of that crossing and nothing else of its session: not the turn
+boundaries, not the other crossings and not the refused count. Without
+consent such a source is refused in every scope, a cleared one included, and
+the refusal names the source, says it needs reporting and gives the command
+that agrees. Withdrawing consent refuses the next fetch of such a source; a
+crossing admitted before the withdrawal is still reported, and nothing
+already queued is recalled.
+
+Operator terms that name institution identifiers (`terms[].access_context`)
+need them on the session, which a Content Telemetry event batch cannot
+carry. The relay holds each crossing of a host under such terms and sends
+the rest of its session as cleared, and a source on such a host whose
+licence demands reporting is refused, since nothing of it would leave.
+
 The first run reads every session log in the home, including sessions
 recorded before a receiver was configured, and decides each crossing under
 the policy in force at that run. A later run under a wider policy sends
@@ -294,8 +315,12 @@ session-end event, so with them run `commonmeasure relay` yourself, and a
 source whose licence demands usage reporting is refused there, unless a
 background relay runs ([Background relay](INSTALL.md#relay-without-a-session-end)). On a managed home, `commonmeasure hosted
 service` relays every session in the home on an interval while it runs,
-which meets that demand too. `commonmeasure doctor` prints the last
-delivery and how automatic relaying is set up.
+which meets that demand too. Its sessions have the directory
+`hosted-service.json` declares as `session_directory`, and are governed and
+cleared by that directory's scope as a local session there would be; with
+none declared they run under the top-level policy
+([host integration](contracts/host-integration.md)). `commonmeasure doctor`
+prints the last delivery and how automatic relaying is set up.
 
 ## Joining Common Measure Hub
 

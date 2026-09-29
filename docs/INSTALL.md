@@ -44,10 +44,70 @@ of `<version>`:
 installed ~/.local/bin/commonmeasure: commonmeasure <version>, checksum verified
 ~/.local/bin is not on PATH. This installer does not edit shell profiles; add this line to yours:
   export PATH="~/.local/bin:$PATH"
-Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine.
+Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Session records stay on this machine, and no use of a source is reported until relay.json names a telemetry receiver and a policy scope clears egress.
 ```
 
 The home directory is written as `~` above; the installer prints it in full.
+With a terminal, the installer also asks for reporting consent between the
+`PATH` lines and `Next:` (below).
+
+### Reporting consent
+
+Some sources license their content only if each use of it is reported. They
+are refused until you agree to report to them. When the Edge home records no
+answer and the installer has a terminal, it shows the consent text and asks
+once; the answer is read from the terminal, so the `curl | sh` form above
+asks too:
+
+```text
+reporting consent: not given; sources whose licence demands reporting are refused. Agree with: commonmeasure consent agree
+
+Consent text 1:
+Some sources license their content only if each use of it is reported. If you agree, Common Measure admits those sources in every policy scope and reports each use of them through the telemetry receiver named in relay.json: the page address, when it was retrieved and entered context, its licence, its content hash and token estimate, and this edge's key id. Prompts, answers and page text are not sent. If you do not agree, sources that demand reporting are refused. Withdrawing applies to later fetches; uses already admitted are still reported.
+
+Agree to report to sources that require it? [y/N] y
+reporting consent agreed at 2026-09-29T10:00:00Z (consent text 1), recorded in ~/.commonmeasure/consent.json
+no receiver is configured in ~/.commonmeasure/relay.json, so sources that demand reporting stay refused until one is (commonmeasure connect)
+```
+
+The closing `Next:` line ends by what the recorded answer lets leave:
+
+- agreed: "Session records stay on this machine. With reporting consent
+  agreed, each use of a source whose licence demands reporting is reported
+  to the telemetry receiver relay.json names, once one is named."
+- no answer recorded: the line shown above.
+- withdrawn, or a `consent.json` that does not count: "Session records stay
+  on this machine. Without reporting consent agreed, sources whose licence
+  demands reporting are refused; a use admitted while consent was agreed is
+  still reported to the telemetry receiver relay.json names, and no other
+  use is reported until a policy scope clears egress."
+
+Any answer but `y` or `yes` records nothing, and the installer prints the
+command that agrees later. An install with no terminal records nothing and
+prints the same line, unless it is given `--agree-reporting` or
+`COMMONMEASURE_REPORTING_CONSENT=agree`, which record agreement without
+asking. A home that already records an answer is not asked again, and
+`--update` never asks. The same answer is shown, given and withdrawn at any
+time with one command:
+
+```sh
+commonmeasure consent            # the answer recorded and the text it refers to
+commonmeasure consent agree
+commonmeasure consent withdraw
+```
+
+The answer is yours alone: `deployment.json` and a hub-managed policy cannot
+set it, and a scope's `allow_telemetry_egress` is not read as it. It counts
+only from `consent.json` as a regular file in the Edge home, owned by the
+user who runs Common Measure and writable by no one else. A symbolic link, a
+file owned by another user and a file writable by its group or by others are
+refused, and the refusal names which, as it names the error of a file that
+does not read. `consent agree` and the installer write the file at mode
+0600 whatever the umask, replacing a link rather than writing through it. A
+home that records no answer, an existing one included, has no consent until
+you give it; until you agree, `commonmeasure status`, `commonmeasure doctor`
+and the console's Overview list the sources refused for want of it. What
+leaves under consent is in [Reporting](OPERATING.md#egress-only-when-you-ask-for-it).
 
 To pin a release, download that release's installer into a directory of its
 own (a checkout has an `install.sh` of its own at the root) and name the
@@ -348,8 +408,8 @@ relay --every 300` under your own service manager; `service` names a
 `systemd-run` command, whose unit is transient (not restarted, not started at
 login), as for the console above. While it runs, `status` and `doctor` show
 `background relay: running`, and a Claude Desktop session may use a source
-whose licence demands usage reporting, where its policy scope clears
-telemetry egress and `relay.json` names a receiver. A
+whose licence demands usage reporting, where you have agreed to reporting
+([Reporting consent](#reporting-consent)) and `relay.json` names a receiver. A
 second one on the same home is refused. Each run sends what a session-end run
 would send, no more.
 

@@ -309,6 +309,12 @@ them: entitlements, CM Attestation and the network they make up.
   machine: a session's running total of them, carried as `refused` on every
   batch the relay sends for the session, with no address, reason or hash.
   A receiver keeps the larger value it has seen.
+- **Reporting consent** — the operator's agreement, asked once at install
+  and kept in `consent.json` in the Edge home, to report each use of a
+  source whose licence demands reporting. With it such sources are admitted
+  in every scope; without it they are refused and the refusal names the
+  command that agrees (`commonmeasure consent agree`). Distinct from a
+  scope's egress clearance and from a directory's reporting approval.
 - **Source policy** — the operator's policy file, `policy.json`: the mode,
   the rules admission applies, the scopes and principals that replace them,
   and the clearance for records to leave. Its format, and every check the
@@ -428,8 +434,10 @@ them: entitlements, CM Attestation and the network they make up.
   only from its vendor's cloud. Its identifier, `hosted-<milliseconds>-<128
   random bits in hex>`, is minted at `initialize`, bound to the bearer token
   that opened it, and is both the `Mcp-Session-Id` header and the record's
-  `session_id`. It has no working directory, so no scope matches it
-  (`docs/contracts/session-evidence.md` §Where).
+  `session_id`. Its directory is the one its service declares in
+  `hosted-service.json` as `session_directory`, which selects its scope;
+  with none declared it has no working directory and no scope matches it
+  (`docs/contracts/session-evidence.md` §Hosted scope).
 - **Host process** — the process that started a session's hooks and its MCP
   server, identified by its pid and start time together, recorded by both
   paths at start as `host_process` (`docs/contracts/session-evidence.md`

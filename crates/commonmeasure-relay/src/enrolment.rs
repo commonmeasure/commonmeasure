@@ -336,7 +336,10 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
     let receiver = relay_config.receiver.clone();
 
     // The private key first: an enrolment record without its key is a
-    // worse state than a key without its record.
+    // worse state than a key without its record. Both under the policy
+    // file's lock: a policy synchronisation outstanding under the key being
+    // replaced rechecks the key under that lock before it writes.
+    let identity_lock = policy_lock(home).map_err(|error| anyhow::anyhow!(error))?;
     key.store(home).map_err(|error| anyhow::anyhow!(error))?;
     let record = EnrolmentRecord {
         hub: hub.clone(),
@@ -350,6 +353,7 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
         revocation_learnt_at: None,
     };
     record.store(home).map_err(|error| anyhow::anyhow!(error))?;
+    drop(identity_lock);
 
     let replaced_receiver = RelayConfig::load(home)
         .ok()
@@ -398,6 +402,31 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
         directory_proof,
         relay,
         managed,
+    })
+}
+
+/// How long `connect` and `disconnect` wait for the policy file's lock. Its
+/// holders keep it for one policy save or one synchronisation's writes, never
+/// across a request, so a longer wait than the editor's is a process that is
+/// not letting go.
+const ENROLMENT_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Hold the policy file's lock while the enrolment a policy synchronisation
+/// asks under (`deployment.json`, the edge key and its record) is replaced,
+/// the lock the synchronisation rechecks that enrolment under
+/// (`docs/contracts/policy-envelope.md` §Activation and the last-known-good).
+fn policy_lock(
+    home: &Path,
+) -> std::result::Result<commonmeasure_harness::declaration::Lock, String> {
+    use commonmeasure_harness::declaration::{LockRefused, lock_within};
+    lock_within(&home.join("policy.lock"), ENROLMENT_LOCK_WAIT).map_err(|refused| match refused {
+        LockRefused::Busy(_) => format!(
+            "another process held {} for {}s, so the enrolment was not changed; run the \
+             command again",
+            home.join("policy.lock").display(),
+            ENROLMENT_LOCK_WAIT.as_secs()
+        ),
+        other => format!("cannot hold the policy file while the enrolment changes: {other}"),
     })
 }
 
@@ -460,6 +489,11 @@ fn pin_signer(
     let mut encoded = serde_json::to_vec_pretty(&deployment)
         .map_err(|error| format!("the deployment could not be encoded: {error}"))?;
     encoded.push(b'\n');
+    // Under the policy file's lock, so a synchronisation outstanding under
+    // the deployment being replaced finds it replaced when it rechecks under
+    // that lock, and cannot activate the previous enrolment's response over
+    // what this one accepts next.
+    let _lock = policy_lock(home)?;
     // Through a temporary file of this writer's own and a rename, so a
     // synchronisation reading the file mid-write sees the old deployment or
     // the new one, and two `connect --managed` runs cannot rename each
@@ -1291,6 +1325,10 @@ pub fn disconnect(home: &Path) -> Result<DisconnectReport> {
         }
     };
 
+    // The key, the record and the deployment go under the policy file's
+    // lock, so a policy synchronisation outstanding under them finds them
+    // gone when it rechecks under that lock and writes nothing.
+    let enrolment_lock = policy_lock(home).map_err(|error| anyhow::anyhow!(error))?;
     let mut removed = Vec::new();
     for path in [home.join("relay.json"), EdgeKey::path(home)] {
         if path.exists() {
@@ -1326,6 +1364,7 @@ pub fn disconnect(home: &Path) -> Result<DisconnectReport> {
             kept_deployment = Some(policy_at);
         }
     }
+    drop(enrolment_lock);
     let retired_instance_sessions = commonmeasure_harness::instance::retire_session_pointers(home);
     Ok(DisconnectReport {
         at_hub,
@@ -1592,6 +1631,71 @@ mod tests {
             .filter(|name| name.contains("tmp"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// EDG-91. The enrolment a policy synchronisation asks under is replaced
+    /// only under the policy file's lock, the lock the synchronisation
+    /// rechecks that enrolment under before it writes. While another holder
+    /// keeps it, neither pinning nor disconnecting changes a file; each
+    /// proceeds once it is released.
+    #[test]
+    fn pin_and_disconnect_wait_for_the_policy_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let hub = "http://127.0.0.1:1";
+        let key = EdgeKey::generate().unwrap();
+        key.store(home.path()).unwrap();
+        let mut answer = enrolled(0);
+        answer.key_id = key.thumbprint();
+        EnrolmentRecord {
+            hub: hub.to_owned(),
+            organization: answer.organization.clone(),
+            name: answer.name.clone(),
+            key_id: answer.key_id.clone(),
+            identity: answer.identity.clone(),
+            enrolled_at: "2026-09-29T00:00:00.000Z".to_owned(),
+            revoked_at: None,
+            revocation: None,
+            revocation_learnt_at: None,
+        }
+        .store(home.path())
+        .unwrap();
+        let wait = std::time::Duration::from_millis(300);
+
+        let held = commonmeasure_harness::policy::PolicyDocument::lock(home.path()).unwrap();
+        let pinning = std::thread::spawn({
+            let home = home.path().to_owned();
+            move || pin_signer(&home, hub, &answer)
+        });
+        std::thread::sleep(wait);
+        assert!(
+            !Deployment::path(home.path()).exists(),
+            "pinned while the lock was held"
+        );
+        drop(held);
+        pinning.join().unwrap().unwrap();
+        assert!(Deployment::path(home.path()).exists());
+
+        let held = commonmeasure_harness::policy::PolicyDocument::lock(home.path()).unwrap();
+        let leaving = std::thread::spawn({
+            let home = home.path().to_owned();
+            move || disconnect(&home).map(|report| report.removed_deployment)
+        });
+        std::thread::sleep(wait);
+        for path in [
+            Deployment::path(home.path()),
+            EdgeKey::path(home.path()),
+            EnrolmentRecord::path(home.path()),
+        ] {
+            assert!(
+                path.exists(),
+                "{} removed while the lock was held",
+                path.display()
+            );
+        }
+        drop(held);
+        assert!(leaving.join().unwrap().unwrap().is_some());
+        assert!(!EdgeKey::path(home.path()).exists());
+        assert!(!Deployment::path(home.path()).exists());
     }
 
     #[test]

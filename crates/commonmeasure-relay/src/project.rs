@@ -25,6 +25,11 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_harness::declarations::MAX_CRAWL_DELAY;
 use commonmeasure_harness::grounding::projectable;
+// The record predicates projection shares with the relay's clearance and
+// the edge's reporting ruling.
+pub use commonmeasure_harness::egress::{
+    is_refused, is_turn_boundary, is_witnessed, reported_under_consent,
+};
 use commonmeasure_types::canonical::canonical_json;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -326,35 +331,6 @@ fn wire_url(url: &str) -> String {
         }
         _ => url.to_owned(),
     }
-}
-
-/// Whether an evidence record is a crossing this machine watched happen.
-/// `crossing_refused` is a rejected source and `crossing_reconstructed` is a
-/// transcript claim; neither is witnessed, and neither leaves. The one home for
-/// the predicate, because the caller deciding what may be projected and the
-/// projection deciding what to build must be asking the same question.
-pub fn is_witnessed(record: &Value) -> bool {
-    matches!(
-        record["event"].as_str(),
-        Some("crossing_observed" | "crossing_mediated")
-    )
-}
-
-/// Whether the host recorded a turn boundary. Its clearance is resolved from
-/// `payload.detail.cwd`, independently of any neighbouring crossing.
-pub fn is_turn_boundary(record: &Value) -> bool {
-    matches!(
-        record["event"].as_str(),
-        Some("turn_started" | "turn_completed")
-    )
-}
-
-/// Whether an evidence record is a crossing policy refused. Nothing of it is
-/// projected; the session's batches carry how many there were. The event
-/// name alone decides: a refused file's `content_type` and `breach` are not
-/// read.
-pub fn is_refused(record: &Value) -> bool {
-    record["event"] == json!("crossing_refused")
 }
 
 /// The `content_hash` of a crossing's grounding: the hash of the part the

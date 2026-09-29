@@ -121,6 +121,31 @@ fn main() -> Result<()> {
                     .collect::<String>(),
             )?;
         }
+        // Sources refused because they need reporting and the operator has
+        // not agreed: the Overview's reporting consent block with a count.
+        "consent" => {
+            let refused = |seq: u64, host: &str| {
+                json!({"seq":seq,"timestamp":"2026-09-29T10:00:00Z","event":"crossing_refused","payload":{
+                    "session_id":"design-consent","timestamp":"2026-09-29T10:00:00Z","mode":"mediated",
+                    "host":"claude-code","url":format!("https://{host}/licensed-article"),"host_name":host,
+                    "cwd":"/synthetic/design-preview","grounded":false,"licence":{"state":"declared"},
+                    "refusal":format!("{host} needs reporting"),
+                    "declarations":{"reporting":{"telemetry_egress_cleared":false,
+                        "consent":{"state":"not_given"},"consent_needed":true,"met":false}}
+                }})
+            };
+            std::fs::write(
+                sessions.join("design-consent.ndjson"),
+                [
+                    refused(1, "news.publisher.example.test"),
+                    refused(2, "news.publisher.example.test"),
+                    refused(3, "journal.example.test"),
+                ]
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+            )?;
+        }
         "error" => {
             std::fs::write(fixture.path().join("enrolment.json"), "{")?;
             std::fs::write(fixture.path().join("policy.json"), "{")?;

@@ -92,10 +92,24 @@ pub fn replace_keeping_mode(target: &Path, bytes: &[u8]) -> Result<(), String> {
                 ));
             }
         };
-        replace_as(target, bytes, Access::Mode(mode))
+        replace_with_mode(target, bytes, mode)
     }
     #[cfg(not(unix))]
     replace(target, bytes)
+}
+
+/// [`replace`] with exactly the permission bits `mode`, whatever the umask,
+/// set on the temporary file before a byte is written, for a file whose
+/// reader refuses a wider mode. Where the platform has no modes this is
+/// [`replace`].
+pub fn replace_with_mode(target: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    return replace_as(target, bytes, Access::Mode(mode));
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        replace(target, bytes)
+    }
 }
 
 #[derive(Clone, Copy)]

@@ -39,6 +39,11 @@ Checkpoint: `doctor` names the registered hooks and MCP server. Act on any
 `!` or `?` beside them before starting a new session. A missing console or
 receiver does not stop local recording.
 
+With a terminal, the installer asks once whether to report to sources whose
+licence requires it; without that consent those sources are refused. Change
+the answer at any time with `commonmeasure consent agree` or `withdraw`
+([Reporting consent](INSTALL.md#reporting-consent)).
+
 [Installing and updating](INSTALL.md) covers platforms, checksums and
 pinning. [Connect an agent host](integrate/host.md#register-with-the-host)
 covers other hosts and the alternative Claude Code plugin registration.
@@ -264,8 +269,8 @@ too, under the policy in force when it runs.
 
 Hosts without a session-end event need a
 [background relay](INSTALL.md#relay-without-a-session-end) for sources whose
-licences require automatic usage reporting. A configured receiver and
-policy clearance are still required.
+licences require automatic usage reporting. A configured receiver and your
+[reporting consent](INSTALL.md#reporting-consent) are still required.
 
 ### Joining Common Measure Hub
 

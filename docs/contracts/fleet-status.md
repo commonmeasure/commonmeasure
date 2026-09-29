@@ -33,6 +33,15 @@ Hub-supplied reasons retain their text with a `hub:` prefix. This is a local
 status extension; it does not change the fleet policy document. Reading it
 makes no network request.
 
+On a managed edge whose applied revision was verified under an organisation
+or signer other than the pinned one, the local CLI also includes
+`previous_enrolment`: `organisation` and `signer_key_id` of the applied
+revision, and `pinned_organisation` and `pinned_signer_key_id` from
+`deployment.json` ([`policy-envelope.md`](policy-envelope.md)
+§Re-enrolment). `organisation` is `null` where a state written by 0.4.6 or
+earlier and its kept envelope do not name one. The key is absent otherwise.
+This is a local status extension; the fleet policy document is unchanged.
+
 ```json
 {
   "contract": "contextops-fleet-status/v1",

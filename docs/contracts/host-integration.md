@@ -186,8 +186,9 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
 - The endpoint serves `context_fetch`, `context_search` and
   `context_status`, each declaring `readOnlyHint`, and negotiates protocol
   revisions `2025-06-18` and `2025-11-25`. `context_enrol` is not
-  advertised and a call to it is answered as an unknown tool: it acts on
-  the directory the server runs in, which a hosted session does not have.
+  advertised and a call to it is answered as an unknown tool: it enrols
+  and syncs directories in the operator home, which a tenant must not
+  change.
   An `initialize` asking for another revision is answered with
   `2025-11-25`.
 - The tenant can act on none of the operator's files, so they are named
@@ -228,7 +229,7 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
   |---|---|
   | the path names a served host word | `404`, naming the endpoints |
   | the method is `POST` or `DELETE` | `405` with `Allow: POST, DELETE` |
-  | `Origin`, when present, is the edge's origin or one the operator listed | `403`, quoting the header only when it is an origin (scheme and authority, no path) |
+  | `Origin`, when present, is the edge's origin | `403`, quoting the header only when it is an origin (scheme and authority, no path) |
   | a `Bearer` token is present and verifies (§The bearer token) | `401` with `WWW-Authenticate` naming the resource metadata and the check that failed; a check before the signature quotes no value from the token |
   | `MCP-Protocol-Version`, when present, is `2025-06-18` or `2025-11-25` | `400` naming the revisions served |
   | a request other than `initialize` names a session in `Mcp-Session-Id` | `400` |
@@ -242,13 +243,40 @@ only from their vendor's cloud (`crates/commonmeasure-cli/src/hosted.rs`).
 
 `commonmeasure hosted service` is the deployed form. It reads
 `~/.commonmeasure/hosted-service.json`: `origin`, `hosts` (the words
-served), and optionally `listen` (default `127.0.0.1:8765`) and
-`interval_seconds` (default 300). A hosted session has no working directory,
-so no directory scope matches it and its crossings remain private. Relay
-clearance for the home's own sessions resolves under the service OS
-principal. Policies restricted to bearer principals or their owned scopes can
-therefore withhold reporting even when acquisition succeeds; that
-configuration is not verified. The Microsoft 365
+served), and optionally `listen` (default `127.0.0.1:8765`),
+`interval_seconds` (default 300) and `session_directory`.
+
+`session_directory` is the declared service scope: an absolute directory that
+exists, which every session of the service is scoped to. Each session
+resolves its policy as a local session working in that directory would, and
+its crossings record it as `cwd`, so the relay resolves their clearance by it
+([session evidence §Hosted scope](session-evidence.md#hosted-scope)). At each
+session's open the directory must be selected by a scope of the policy in
+force or by an enrolled directory; otherwise the session is not opened
+(`500`, naming the directory), rather than run under the top-level policy.
+The service writes `hosted_scope` on each session's log, basis
+`service_configuration`. The endpoint rewrites only the operator home, so a
+declared directory outside the home reaches the tenant as an absolute path
+in `context_status` (`cwd`, `policy.scope`). The declaration grants nothing by itself: the
+scope's clearance, directory approvals and the reporting consent decide what
+leaves. With no `session_directory`, a hosted session has no working
+directory, no directory scope matches it, it runs under the top-level policy,
+and nothing of it leaves but a crossing admitted under the reporting consent.
+`commonmeasure status` and `doctor` say which: the scope, its engagement and
+whether it clears egress, that none is declared, or that nothing selects the
+declared directory.
+
+A hosted session's policy is resolved for the bearer's principal: its binding
+and the declared scope apply together as they do for a local principal
+([source policy](source-policy.md) §Scopes and principals), so a scope that
+names another principal is refused to it and an unbound subject fails closed
+where the policy declares principals. Relay clearance for the home's own
+sessions resolves under the service OS principal. Where the policy declares
+principals and none binds that OS user, or the declared scope names a bearer
+principal, the scope's clearance does not reach the relay and only crossings
+admitted under the reporting consent leave; that is tested
+(`a_declared_scope_and_a_principal_binding_resolve_as_the_contract_says`), and
+not verified against a live host. The Microsoft 365
 Copilot verification (§6) used top-level policy with no principal bindings or
 scopes. The service refuses to start
 without that file, unenrolled, under local deployment mode, or while
@@ -404,6 +432,19 @@ closing sentence as `text`). A finding is `{"standing", "text"}`. The
 console is probed on loopback with a two-second bound; nothing else is
 contacted, and the one lookup `--resolve` makes is made only when asked
 for.
+
+Under Reporting consent, `doctor` prints whether the operator agreed to
+report to sources whose licence demands it (`ok` when agreed, `note` when not
+given or withdrawn, `attention` when `consent.json` does not read) and, while
+consent is not agreed, one `attention` finding naming the sources refused
+because they need reporting, each with its count of refusals, and the command
+that agrees ([session evidence §Reporting
+consent](session-evidence.md#reporting-consent)). The section's `id` is
+`reporting_consent`. `status` prints the same findings after its host
+observations, and `status --json` carries the block as `reporting_consent`:
+`state`, `at`, `text_version`, `error`, `file`, `agree_command`,
+`refused_sources` (each `source`, `refusals`, `last_refused_at`),
+`refused_source_count` and `refusals`.
 
 Under Relay, `doctor` prints the relay's delivery state for the
 operator home: queued, dead and delivered batches; the last delivery from
@@ -833,8 +874,10 @@ its own contract in this directory.
   edge does. Its relay and policy refresh run in the process on an
   interval. Where the machine sits beside a cloud metadata service the
   private-address floor is held whatever the policy says (§1). A hosted
-  session has no working directory, so no directory scope matches and its
-  crossings remain private.
+  session has the directory `hosted-service.json` declares as
+  `session_directory` and is scoped and cleared as a local session there;
+  with none declared, no directory scope matches and only crossings
+  admitted under the reporting consent leave (§1).
 - **Local policy remains authoritative.** Common Measure Hub receives cleared
   records and coordinates managed policy. Current acquisition does not require
   Hub entitlement issuance. The planned organisational entitlement route may

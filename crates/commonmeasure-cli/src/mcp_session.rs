@@ -23,6 +23,11 @@ pub(crate) struct Transport {
     /// (`SessionPolicy::hold_private_floor`): the service's setting. The
     /// stdio server leaves the floor to the policy.
     pub(crate) hold_private_floor: bool,
+    /// `cwd` is the directory the hosted service's configuration declares
+    /// (`hosted-service.json` `session_directory`), not one a client
+    /// reported: it must still be selected by a scope, and the log records
+    /// its basis.
+    pub(crate) declared_directory: bool,
     /// The session was started by a host process on this machine, so its
     /// log records that process for the join with the hook log
     /// (`docs/contracts/session-evidence.md` §Host process). A hosted
@@ -39,6 +44,7 @@ impl Transport {
     pub(crate) const STDIO: Self = Self {
         served: Served::DEFAULT,
         hold_private_floor: false,
+        declared_directory: false,
         local_host: true,
         interval_relay: false,
     };
@@ -52,8 +58,9 @@ impl Transport {
 /// a hosted edge answers several hosts from one process, one session each.
 /// `cwd` is the directory the session's policy scope is resolved against and
 /// the one its crossings record; the stdio server inherits the harness's own,
-/// and an unscoped transport passes none; a hosted session has no working
-/// directory. `principal` is the
+/// and an unscoped transport passes none; a hosted session has the directory
+/// its service declares, and sets `declared_directory`, or none. `principal`
+/// is the
 /// identity the policy is resolved for when a transport authenticated one
 /// (the hosted edge's verified token); the stdio server passes none and the
 /// policy reads the process's own user, as it always has. `transport` says
@@ -91,6 +98,17 @@ pub(crate) fn open(
         .flatten();
     crate::finish_directory_proof_refresh(directory_proof, started);
     finish_approvals_renewal(approvals, started);
+    // Checked against the policy the refresh above left in force: a scope
+    // the organisation has since removed stops the session opening, rather
+    // than letting it run under the top-level policy.
+    let declared = match (transport.declared_directory, cwd.as_deref()) {
+        (true, Some(directory)) => {
+            crate::hosted::declared_scope(home, directory)?;
+            Some(directory)
+        }
+        (true, None) => return Err("the declared hosted directory is missing".into()),
+        (false, _) => None,
+    };
     let document = PolicyDocument::read(home)?;
     let policy = match principal {
         Some(principal) => document.with_principal(principal),
@@ -104,6 +122,14 @@ pub(crate) fn open(
     };
     let mut log = SessionLog::open(home, session_id).map_err(|error| error.to_string())?;
     log.set_policy_identity(&policy.identity());
+    if let Some(directory) = declared {
+        log.record_hosted_scope(host, directory).map_err(|error| {
+            format!(
+                "could not record hosted_scope to {}: {error}",
+                log.path().display()
+            )
+        })?;
+    }
     if let Some(sync) = policy_sync {
         log.record_policy_sync(host, "server_start", sync)
             .map_err(|error| {

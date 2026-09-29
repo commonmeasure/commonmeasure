@@ -3,6 +3,7 @@
 # release of the product repository, github.com/commonmeasure/commonmeasure:
 #
 #   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR] [--update]
+#                 [--agree-reporting]
 #
 # A release holds one binary per supported platform, the plugin archive and
 # SHA256SUMS over every asset. The installer picks the binary for this
@@ -12,8 +13,20 @@
 # --dir chooses where the binary goes; the default is ~/.local/bin. --plugin
 # also downloads and verifies the plugin archive, unpacks it into DIR and
 # prints the commands that install it into Claude Code. --update leaves out
-# the first-install next steps; `commonmeasure update` runs this script, as
-# embedded in the binary, with it.
+# the first-install next steps and the consent question; `commonmeasure
+# update` runs this script, as embedded in the binary, with it.
+#
+# Reporting consent: some sources license their content only if each use is
+# reported, and they are refused until the operator agrees to report to
+# them. When the operator home records no answer, the installer shows the
+# consent text and asks once, reading the answer from the terminal
+# (/dev/tty, since `curl | sh` has no stdin). --agree-reporting, or
+# COMMONMEASURE_REPORTING_CONSENT=agree in the environment, records
+# agreement without asking, for an unattended install. Without a terminal
+# and without either, nothing is recorded and the installer prints the
+# command that agrees later: `commonmeasure consent agree`. A declined answer
+# records nothing either. The answer is the binary's to record, in the
+# operator home it resolves (COMMONMEASURE_HOME or its default).
 #
 # The release is public, so no account, token or GitHub client is needed:
 # every download is an anonymous request to the release's download URL.
@@ -39,9 +52,11 @@ tag=""
 dir="$HOME/.local/bin"
 plugin=""
 update=""
+agree_reporting=""
+[ "${COMMONMEASURE_REPORTING_CONSENT:-}" = agree ] && agree_reporting=1
 
 usage() {
-  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update]"
+  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update] [--agree-reporting]"
 }
 
 while [ $# -gt 0 ]; do
@@ -50,6 +65,7 @@ while [ $# -gt 0 ]; do
     --dir)    dir=$2; shift 2 ;;
     --plugin) plugin=$2; shift 2 ;;
     --update) update=1; shift ;;
+    --agree-reporting) agree_reporting=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "commonmeasure installer: unknown argument $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -169,4 +185,55 @@ if [ -n "$plugin" ]; then
   echo "  cd \"$plugin/commonmeasure-plugin\" && claude plugin marketplace add ./ && claude plugin install commonmeasure@commonmeasure"
 fi
 
-[ -n "$update" ] || echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. Nothing leaves this machine."
+# The binary just installed reads and records the consent, so the file's
+# format and the text shown are the binary's own. Only a home that records
+# no answer is asked; an unreadable file is reported, not overwritten.
+consent_state=$("$target" consent show --json 2>/dev/null | sed -n 's/^ *"state": *"\([a-z_]*\)".*/\1/p')
+agree_later="Sources whose licence demands usage reporting are refused until you agree: commonmeasure consent agree"
+case "$consent_state" in
+  not_given)
+    if [ -n "$agree_reporting" ]; then
+      "$target" consent agree || echo "commonmeasure installer: recording reporting consent failed; run: commonmeasure consent agree" >&2
+    elif [ -n "$update" ]; then
+      :
+    elif (: </dev/tty) 2>/dev/null; then
+      {
+        echo
+        "$target" consent show
+        echo
+        printf 'Agree to report to sources that require it? [y/N] '
+      } >/dev/tty
+      answer=""
+      read -r answer </dev/tty || answer=""
+      case "$answer" in
+        y|Y|yes|YES|Yes) "$target" consent agree || echo "commonmeasure installer: recording reporting consent failed; run: commonmeasure consent agree" >&2 ;;
+        *) echo "$agree_later" ;;
+      esac
+    else
+      echo "$agree_later (or rerun the installer with --agree-reporting)"
+    fi
+    ;;
+  unreadable)
+    "$target" consent show | head -n 1
+    ;;
+esac
+
+# The closing line states what can leave, by the consent now recorded:
+# with it, reports of uses of sources that demand reporting go to the
+# receiver relay.json names. A home that never recorded an answer has
+# nothing reported until a receiver is named and a policy scope clears
+# egress. A withdrawn or unreadable consent refuses the next demanding
+# source, but a use admitted while consent was agreed carries that consent
+# on its record and is still reported.
+if [ -z "$update" ]; then
+  consent_state=$("$target" consent show --json 2>/dev/null | sed -n 's/^ *"state": *"\([a-z_]*\)".*/\1/p')
+  case "$consent_state" in
+    agreed)
+      boundary="Session records stay on this machine. With reporting consent agreed, each use of a source whose licence demands reporting is reported to the telemetry receiver relay.json names, once one is named." ;;
+    not_given)
+      boundary="Session records stay on this machine, and no use of a source is reported until relay.json names a telemetry receiver and a policy scope clears egress." ;;
+    *)
+      boundary="Session records stay on this machine. Without reporting consent agreed, sources whose licence demands reporting are refused; a use admitted while consent was agreed is still reported to the telemetry receiver relay.json names, and no other use is reported until a policy scope clears egress." ;;
+  esac
+  echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. $boundary"
+fi

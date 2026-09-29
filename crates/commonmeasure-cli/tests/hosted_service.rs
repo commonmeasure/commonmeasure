@@ -89,6 +89,8 @@ struct Hub {
     /// Set, the policy route holds each request for ten seconds before it
     /// answers, as `approvals_stalled` does for the approvals route.
     policy_stalled: Arc<AtomicBool>,
+    /// The signed envelope the policy route serves ([`Hub::publish`]).
+    served_policy: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Hub {
@@ -103,7 +105,7 @@ impl Hub {
             ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("pkcs8")
         };
         let signer_public_hex = encode_hex(pair.public_key().as_ref());
-        let envelope = envelope(&pair, 1, policy());
+        let served_policy = Arc::new(Mutex::new(envelope(&pair, 1, policy())));
         let token_key = EdgeKey::generate().expect("a key");
         let jwk_x = token_key.jwk_x();
         let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
@@ -139,6 +141,7 @@ impl Hub {
                 let (approval_requests, approvals_stalled) =
                     (Arc::clone(&approval_requests), Arc::clone(&approvals_stalled));
                 let policy_stalled = Arc::clone(&policy_stalled);
+                let served_policy = Arc::clone(&served_policy);
                 let url = url.clone();
                 move |request| match request.target.as_str() {
                     "/api/v1/edge/reporting-approvals" => {
@@ -163,7 +166,8 @@ impl Hub {
                             &directory.lock().expect("lock"),
                         ) {
                             Ok(_) => {
-                                let mut response = Response::new(200, envelope.clone());
+                                let envelope = served_policy.lock().expect("lock").clone();
+                                let mut response = Response::new(200, envelope);
                                 response.headers.set("Content-Type", "application/json");
                                 response
                             }
@@ -287,11 +291,17 @@ impl Hub {
             approval_requests,
             approvals_stalled,
             policy_stalled,
+            served_policy,
         }
     }
 
     fn url(&self) -> String {
         self.handle.url()
+    }
+
+    /// Serve `policy` at `revision`, signed, from the next policy request.
+    fn publish(&self, revision: u64, policy: Value) {
+        *self.served_policy.lock().expect("lock") = envelope(&self.policy_signer, revision, policy);
     }
 
     /// An operator home enrolled with this hub under managed policy, as

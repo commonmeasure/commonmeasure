@@ -596,7 +596,7 @@ fn a_mediated_fetch_over_http_returns_the_bytes_and_records_the_crossing_under_t
         assert_eq!(crossing["payload"]["client"], client);
         assert!(
             crossing["payload"].get("cwd").is_none_or(Value::is_null),
-            "a hosted session has no working directory: {}",
+            "a hosted session with no declared directory has no working directory: {}",
             crossing["payload"]
         );
     }

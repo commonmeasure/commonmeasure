@@ -982,9 +982,10 @@ fn a_licence_with_no_current_reading_is_read_before_the_page_and_its_demand_rule
         "the page's turn is not taken for a crossing its licence refused: {declarations}"
     );
 
-    // Met: the scope clears egress and a receiver is named. The licence is
-    // read first, the page waits a whole delay behind it, and a second page
-    // on the same host reuses the licence and takes one turn only.
+    // Met: the operator agreed to reporting and a receiver is named. The
+    // licence is read first, the page waits a whole delay behind it, and a
+    // second page on the same host reuses the licence and takes one turn
+    // only.
     let home = tempfile::tempdir().expect("tempdir");
     let site = paced_licensed_origin(home.path(), LICENSED_TWO_SECONDS, REPORTING_LICENCE);
     std::fs::write(
@@ -998,6 +999,12 @@ fn a_licence_with_no_current_reading_is_read_before_the_page_and_its_demand_rule
         r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
     )
     .expect("relay");
+    commonmeasure_harness::consent::record(
+        home.path(),
+        commonmeasure_harness::consent::Answer::Agreed,
+        chrono::Utc::now(),
+    )
+    .expect("consent");
     let workspace = tempfile::tempdir().expect("tempdir");
     let cleared = workspace.path().join("reporting-cleared");
     std::fs::create_dir_all(&cleared).expect("workspace");

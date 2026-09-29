@@ -160,9 +160,10 @@ scope that sets the flag false vetoes (§Directory reporting consent). In
 either case a directory the policy cannot resolve safely does not clear: an
 unbound principal, a scope owned by another principal, or a symbolic link or
 linked worktree that resolves to another scope. Managed reporting approvals also apply
-where directory reporting is configured. A session any of whose cleared
-crossings falls under operator terms naming institution identifiers
-(`access_context`) is withheld whole ([session evidence §Source declarations](session-evidence.md#source-declarations)). A run explicitly named to the relay contributes its admitted
+where directory reporting is configured. A cleared crossing
+whose host falls under operator terms naming institution identifiers
+(`access_context`) is withheld, and the rest of its session is projected as
+its clearance says ([session evidence §Source declarations](session-evidence.md#source-declarations)); the edge's reporting ruling reads the same predicate and leaves a licence's reporting demand unmet where this hold would apply. Event ids are derived from positions in the log as read, so a held crossing keeps its id and the ids around it do not move. A run explicitly named to the relay contributes its admitted
 sources. Both paths exclude private addresses and named internal prefixes.
 A session also excludes crossings marked internal, reconstructed crossings,
 failed fetches and non-2xx responses. Refused sources leave only as the existing
@@ -170,6 +171,26 @@ session count; rejected run sources do not leave. Prompts, answers, evaluator
 output, costs and private record detail are excluded. Unobserved host activity
 and records missing a usable URL or timestamp cannot establish an event.
 These exclusions mean absence of an event cannot establish absence of use.
+
+One crossing is cleared without a scope's clearance: a witnessed crossing
+whose licence demanded reporting and which the edge admitted under the
+operator's reporting consent, recorded as `declarations.reporting` with
+`met` `true` and `consent.state` `agreed` ([session evidence §Reporting
+consent](session-evidence.md#reporting-consent); owner decision, 27 September
+2026). Where its scope clears nothing, or sets `allow_telemetry_egress:
+false`, the consent clears that crossing alone: its `content_retrieved` and
+`content_grounded` events, including grounding from a host's observation of
+it. The session's turn boundaries, its other crossings and its refused count
+keep their scope's clearance, so a session that leaves under consent alone
+carries the demanded crossings and nothing else (§The refused count on the
+wire). The relay reads the consent from the crossing's record, not from
+`consent.json` at the run: the edge admitted the crossing on the condition
+that it is reported, and a withdrawal applies to crossings after it and
+recalls nothing. A record made before the consent existed carries no
+`consent` and is not cleared by it. Every other exclusion above applies
+unchanged, and the relay's summary names these events under "reporting
+consent". Queued directory batches are rechecked under the same rule
+(§Directory reporting consent).
 
 A turn boundary requires its own clearance, resolved from `payload.detail.cwd`.
 It accompanies a session only when at least one source event is eligible.
@@ -765,7 +786,9 @@ session, the highest count a receiver has accepted, whatever the receiver
 (`relay/refused-delivered.json`), and treats a count in a batch still in the
 spool as sent. Its summary states the totals it queued for the wire this run and nothing
 more. A session that was refused and admitted nothing produces no batch and
-its count does not cross; a batch without the field comes from an edge that
+its count does not cross; a session no scope cleared, whose events leave
+under reporting consent alone (§Selected coverage), carries no `refused`
+member, since the count is taken over cleared scopes and there is none; a batch without the field comes from an edge that
 does not report it, which is not the same as a count of zero.
 `conformance/session-refused.json` is the vector.
 

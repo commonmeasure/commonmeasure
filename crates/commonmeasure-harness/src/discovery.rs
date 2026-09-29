@@ -1150,8 +1150,10 @@ pub struct Declarations {
 /// The ruling on a reporting demand: what was demanded, the receiver the
 /// session would report through, and whether the demand is met. A demand is
 /// met only where the profile is the Content Telemetry binding, the level
-/// is one the relay emits, the session's scope clears telemetry egress and
-/// a receiver is configured; `reason` names the first of those that fails.
+/// is one the relay emits, the page is one the relay projects, the policy
+/// loads, a receiver is configured, delivery happens without a person and
+/// the operator has agreed to reporting (`crate::consent`); `reason` names
+/// the first of those that fails.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportingRuling {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1161,7 +1163,20 @@ pub struct ReportingRuling {
     /// The receiver named in `relay.json`, or absent when none is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver: Option<String>,
+    /// Whether the session's scope clears telemetry egress. Recorded for the
+    /// reader; the operator's reporting consent, not this, decides whether
+    /// the demand is met (owner decision, 27 September 2026).
     pub telemetry_egress_cleared: bool,
+    /// The operator's reporting consent as this ruling read it. Absent on
+    /// records made before the consent existed. The relay reports a met
+    /// demand's crossing under `agreed` consent whatever the scope clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<crate::consent::ConsentOnRecord>,
+    /// The demand is unmet for want of the operator's consent alone: every
+    /// other check passed, so agreeing would admit the source. Status, doctor
+    /// and the console count the sources refused this way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub consent_needed: bool,
     pub met: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

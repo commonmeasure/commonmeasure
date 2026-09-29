@@ -178,6 +178,128 @@ fn installs_the_verified_binary_and_reports_the_release_version() {
     assert_installed(&output, &dir);
 }
 
+/// The installer run under umask 000 in a new session, so it has no
+/// controlling terminal to ask on, with `args` after the tag and directory.
+fn install_under_umask_000(
+    origin: &ServerHandle,
+    home: &Path,
+    dir: &Path,
+    tag: &str,
+    args: &[&str],
+) -> Output {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg(repo_root().join("install.sh"))
+        .args(["--tag", tag, "--dir"])
+        .arg(dir)
+        .args(args)
+        .env("HOME", home)
+        .env("COMMONMEASURE_HOME", home.join(".commonmeasure"))
+        .env_remove("COMMONMEASURE_REPORTING_CONSENT")
+        .env(
+            "COMMONMEASURE_RELEASE_URL",
+            format!("{}/{REPOSITORY}/releases", origin.url()),
+        );
+    // SAFETY: `setsid` and `umask` are async-signal-safe and change only the
+    // child's own process state, between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            libc::umask(0o000);
+            Ok(())
+        });
+    }
+    command.output().expect("sh runs the installer")
+}
+
+/// Review F1 and F4, 29 September 2026. An install that agrees to reporting
+/// under umask 000 records consent at mode 0600, which the binary then
+/// reads as agreed, and its closing line states what leaves under that
+/// consent. An install that records no answer ends with a line that stays
+/// true: no use is reported until a receiver is named and a scope clears
+/// egress. A reinstall on a home whose consent was withdrawn says that
+/// demanding sources are refused and that a use admitted while consent was
+/// agreed is still reported, as the relay does (second review, F4
+/// residual). None says nothing leaves the machine.
+#[test]
+fn the_installer_writes_trusted_consent_under_umask_000_and_names_what_leaves() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let binary = this_binary();
+    let sum = sha256_hex(&binary);
+    let tag = format!("v{VERSION}");
+    let origin = release(&tag, binary, &sum, true);
+
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = home.path().join("bin");
+    let output = install_under_umask_000(&origin, home.path(), &dir, &tag, &["--agree-reporting"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    let consent = home.path().join(".commonmeasure").join("consent.json");
+    let mode = std::fs::symlink_metadata(&consent)
+        .expect("consent recorded")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "{stdout}");
+    let shown = Command::new(dir.join("commonmeasure"))
+        .args(["consent", "show", "--json"])
+        .env("COMMONMEASURE_HOME", home.path().join(".commonmeasure"))
+        .output()
+        .unwrap();
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["state"], "agreed", "{shown}");
+    assert!(
+        stdout.contains(
+            "With reporting consent agreed, each use of a source whose licence demands \
+             reporting is reported to the telemetry receiver relay.json names"
+        ) && !stdout.contains("Nothing leaves this machine"),
+        "{stdout}"
+    );
+
+    let declined = tempfile::tempdir().expect("tempdir");
+    let dir = declined.path().join("bin");
+    let output = install_under_umask_000(&origin, declined.path(), &dir, &tag, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !declined
+            .path()
+            .join(".commonmeasure")
+            .join("consent.json")
+            .exists(),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("commonmeasure consent agree")
+            && stdout.contains(
+                "no use of a source is reported until relay.json names a telemetry receiver \
+                 and a policy scope clears egress"
+            )
+            && !stdout.contains("Nothing leaves this machine"),
+        "{stdout}"
+    );
+
+    let withdrawn = Command::new(home.path().join("bin").join("commonmeasure"))
+        .args(["consent", "withdraw"])
+        .env("COMMONMEASURE_HOME", home.path().join(".commonmeasure"))
+        .output()
+        .unwrap();
+    assert!(withdrawn.status.success(), "{withdrawn:?}");
+    let dir = home.path().join("bin");
+    let output = install_under_umask_000(&origin, home.path(), &dir, &tag, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stdout.contains(
+            "Without reporting consent agreed, sources whose licence demands reporting are \
+             refused; a use admitted while consent was agreed is still reported to the \
+             telemetry receiver relay.json names, and no other use is reported until a policy \
+             scope clears egress."
+        ) && !stdout.contains("no use of a source is reported until"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn installs_the_latest_release_when_no_tag_is_given() {
     let binary = this_binary();

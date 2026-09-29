@@ -62,7 +62,7 @@ pub struct RelayOptions {
 
 /// Under whose clearance a delivered event left the machine.
 ///
-/// Only the first variant is a clearance an operator declared. The other two
+/// The first two variants are clearances the operator gave. The other two
 /// are absences, and they are different absences: a published run has no
 /// engagement to be cleared by, while an event spooled by an earlier
 /// invocation was cleared by something this run never resolved. Neither is a
@@ -82,6 +82,11 @@ pub enum Clearance {
     /// crate cannot read and must not, because attribution may not feed
     /// enforcement (`docs/contracts/session-evidence.md` §Importing history).
     GoverningEngagement(String),
+    /// The operator's reporting consent, recorded on a crossing whose
+    /// licence demanded reporting and whose scope cleared no egress (owner
+    /// decision, 27 September 2026: consent before an obligated crossing).
+    /// It carries that crossing's events and nothing else of its session.
+    ReportingConsent,
     /// A published run passed with `--run`. Runs are outside the
     /// session-engagement filter because the run contract carries no
     /// engagement, so nothing named cleared these events.
@@ -96,6 +101,10 @@ impl fmt::Display for Clearance {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::GoverningEngagement(name) => write!(formatter, "governing engagement {name}"),
+            Self::ReportingConsent => write!(
+                formatter,
+                "reporting consent: a licence demanded reporting of these crossings"
+            ),
             Self::RunWithoutEngagement => {
                 write!(formatter, "no engagement: a published run carries none")
             }
@@ -131,13 +140,19 @@ pub struct RelayReport {
     /// leave. An absence to state rather than a row to omit: an operator whose
     /// work stayed home should read that it did.
     pub sessions_withheld: usize,
-    /// Sessions cleared to leave whose crossings fall under operator terms
+    /// Crossings cleared to leave whose host falls under operator terms
     /// that require the institution's identifiers on the session
     /// (`access_context`, standard section 5.1.3). The event-batch envelope
-    /// this relay delivers has no place for that container, and a delivery
+    /// this relay delivers has no place for that container, and a report
     /// whose required context cannot be established is withheld rather than
-    /// sent without it. Counted apart from `sessions_withheld`, because the
-    /// operator cleared these and the wire could not carry them.
+    /// sent without it. Only those crossings are held; the rest of their
+    /// sessions leave as their clearance says
+    /// ([`commonmeasure_harness::egress::held_for_access_context`]).
+    pub crossings_withheld_access_context: usize,
+    /// Sessions that sent nothing because every crossing cleared to leave
+    /// was held for `access_context`. Counted apart from
+    /// `sessions_withheld`, because the operator cleared these and the wire
+    /// could not carry them.
     pub sessions_withheld_access_context: usize,
     pub runs_projected: usize,
     /// The refused counts put on the wire this run: the running total of
@@ -146,6 +161,12 @@ pub struct RelayReport {
     /// already holds contributes nothing. The URLs and reasons stay home
     /// (`docs/contracts/telemetry-projection.md` §The refused count on the wire).
     pub refused_reported: u64,
+    /// Projected sessions whose batches carry no refused count: reporting
+    /// consent alone cleared their crossings, and it clears no refusal, so
+    /// the count is left off the wire rather than sent as zero. Counted
+    /// apart so that a summary does not read their absence as a reported
+    /// zero (`docs/FAIL-POLICY.md` §7).
+    pub sessions_without_refused_count: usize,
     pub events_enqueued: u64,
     /// Undelivered batches retained after this invocation.
     pub batches_queued: u64,
@@ -581,7 +602,9 @@ pub fn relay_with_clock(
     let mut sessions_projected = 0usize;
     let mut sessions_withheld = 0usize;
     let mut sessions_withheld_access_context = 0usize;
+    let mut crossings_withheld_access_context = 0usize;
     let mut refused_reported = 0u64;
+    let mut sessions_without_refused_count = 0usize;
     // A log that does not read is skipped and named when the run ends. The
     // other sessions of the home, and the batches already spooled, do not
     // wait on it: a reporting duty that depends on them would otherwise stay
@@ -618,36 +641,47 @@ pub fn relay_with_clock(
             }
             continue;
         }
-        if let Some(reference) = access_context_required(&policy_document, &records, &cleared) {
-            // The terms the operator declared for a host in this session
+        let held = held_for_access_context(&policy_document, &records, &cleared);
+        if !held.is_empty() {
+            // The terms the operator declared for these crossings' hosts
             // require the institution's identifiers on the session document.
             // An event batch carries no session `data`, so the delivery
-            // format cannot state them; the session stays home and the
-            // report says which terms held it.
+            // format cannot state them; those crossings stay home, and the
+            // report says which terms held them. The session's other
+            // crossings report no use of those hosts and leave as cleared.
+            let references: BTreeSet<&str> = held.values().map(String::as_str).collect();
             eprintln!(
-                "commonmeasure: session {session_id} withheld: the terms {reference} require \
+                "commonmeasure: session {session_id}: {} withheld: the terms {} require \
                  access_context on the session, and the event-batch delivery format carries no \
-                 session data; delivery as a session document waits on the receiver"
+                 session data; delivery as a session document waits on the receiver",
+                match held.len() {
+                    1 => "1 crossing".to_owned(),
+                    held => format!("{held} crossings"),
+                },
+                references.into_iter().collect::<Vec<_>>().join(", ")
             );
-            sessions_withheld_access_context += 1;
-            continue;
+            crossings_withheld_access_context += held.len();
+            if !cleared.iter().any(|(position, _)| {
+                !held.contains_key(position) && project::is_witnessed(&records[*position])
+            }) {
+                sessions_withheld_access_context += 1;
+                continue;
+            }
         }
-        let projected = project::project_session(
+        let mut projected = project::project_session(
             Some(&receiver),
             session_id,
             &records,
             &internal_prefixes,
-            &|at| cleared.contains_key(&at),
+            &|at| cleared.contains_key(&at) && !held.contains_key(&at),
         );
+        without_uncounted_refusals(&mut projected, &cleared);
         for (event, position) in &projected.event_positions {
             // Every projected event comes from a record this filter cleared,
-            // and a crossing is cleared only under a named governing
-            // engagement, so the lookup cannot miss.
-            if let Some(engagement) = cleared.get(position) {
-                clearance_of.insert(
-                    *event,
-                    Clearance::GoverningEngagement(engagement.to_owned()),
-                );
+            // under a named governing engagement or the reporting consent on
+            // its record, so the lookup cannot miss.
+            if let Some(clearance) = cleared.get(position) {
+                clearance_of.insert(*event, clearance.clone());
             }
         }
         if !projected.batches.is_empty() {
@@ -660,6 +694,9 @@ pub fn relay_with_clock(
                 .any(|event| !already.contains(&event.id));
             // A scoped projection has no count, so it reports none and
             // needs no carrier.
+            if projected.refused.is_none() {
+                sessions_without_refused_count += 1;
+            }
             if let Some(refused) = projected.refused {
                 if has_new {
                     refused_reported += refused;
@@ -941,8 +978,10 @@ pub fn relay_with_clock(
         sessions_projected,
         sessions_withheld,
         sessions_withheld_access_context,
+        crossings_withheld_access_context,
         runs_projected,
         refused_reported,
+        sessions_without_refused_count,
         events_enqueued,
         batches_delivered,
         events_delivered,
@@ -988,65 +1027,77 @@ pub fn relay_with_clock(
 /// a duplicate. Excluding by position is what keeps a crossing's identity
 /// independent of what the policy says about its neighbours.
 ///
-/// Each value is the governing engagement that cleared that crossing, kept
-/// rather than discarded so the report can name whose clearance let the events
-/// leave. It names the decision; it never takes part in it.
+/// Each value is the clearance that let that crossing leave, kept rather
+/// than discarded so the report can name it. It names the decision; it never
+/// takes part in it.
+///
+/// A scope's clearance comes first. Where the scope clears nothing, a
+/// witnessed crossing whose licence demanded reporting, met at the edge
+/// under the operator's reporting consent, is cleared by that consent
+/// ([`project::reported_under_consent`]): the edge admitted it on the
+/// promise that it would be reported, so the relay carries it. The consent
+/// clears that crossing alone; turn boundaries, refusals and every other
+/// crossing of the session still need their scope's clearance. The consent
+/// is read from the crossing's record, not from the home's consent file now:
+/// a withdrawal applies to crossings after it and recalls nothing admitted
+/// before it. The rule for one record is
+/// [`commonmeasure_harness::egress::clearance`], which the edge's reporting
+/// ruling reads as well.
 fn egress_clearances(
     policy: &commonmeasure_harness::policy::PolicyDocument,
     records: &[serde_json::Value],
-) -> HashMap<usize, String> {
+) -> HashMap<usize, Clearance> {
+    use commonmeasure_harness::egress::{self, Cleared};
     records
         .iter()
         .enumerate()
-        .filter(|(_, record)| {
-            project::is_witnessed(record)
-                || project::is_refused(record)
-                || project::is_turn_boundary(record)
-        })
         .filter_map(|(at, record)| {
-            let cwd = if project::is_turn_boundary(record) {
-                record["payload"]["detail"]["cwd"].as_str()
-            } else {
-                record["payload"]["cwd"].as_str()
+            let clearance = match egress::clearance(policy, record)? {
+                Cleared::Scope(name) => Clearance::GoverningEngagement(name),
+                Cleared::ReportingConsent => Clearance::ReportingConsent,
             };
-            let resolved = policy.resolve(cwd);
-            // Clearance implies a named engagement: `allows_telemetry_egress`
-            // is false without one, and the loader refuses a policy that clears
-            // egress under no name.
-            resolved
-                .allows_telemetry_egress()
-                .then(|| {
-                    resolved
-                        .governing_engagement()
-                        .map(|name| (at, name.to_owned()))
-                })
-                .flatten()
+            Some((at, clearance))
         })
         .collect()
 }
 
-/// The reference of the first operator terms, among the cleared crossings of
-/// one session, that name institution identifiers for the crossing's host.
-/// Such terms require `access_context` on the session
-/// (`docs/contracts/session-evidence.md` §Source declarations); `None` when no
-/// cleared crossing falls under terms naming any.
-fn access_context_required(
+/// Drop the refused count from a session none of whose work a scope cleared.
+/// The count is taken over refusals under scopes cleared for egress, and the
+/// reporting consent clears single crossings, never a refusal; a session that
+/// leaves under consent alone would otherwise carry a count of zero over
+/// refusals that were never counted (`docs/FAIL-POLICY.md` §7).
+fn without_uncounted_refusals(
+    projected: &mut project::SessionProjection,
+    cleared: &HashMap<usize, Clearance>,
+) {
+    if cleared
+        .values()
+        .any(|clearance| matches!(clearance, Clearance::GoverningEngagement(_)))
+    {
+        return;
+    }
+    projected.refused = None;
+    for batch in &mut projected.batches {
+        batch.refused = None;
+    }
+}
+
+/// The cleared crossings of one session whose host falls under operator
+/// terms naming institution identifiers, by position, each with the terms'
+/// reference ([`commonmeasure_harness::egress::held_for_access_context`],
+/// which the edge's reporting ruling reads too). Nothing of them is sent.
+fn held_for_access_context(
     policy: &commonmeasure_harness::policy::PolicyDocument,
     records: &[serde_json::Value],
-    cleared: &HashMap<usize, String>,
-) -> Option<String> {
-    records
-        .iter()
-        .enumerate()
-        .filter(|(at, record)| cleared.contains_key(at) && !project::is_turn_boundary(record))
-        .find_map(|(_, record)| {
-            let payload = &record["payload"];
-            let resolved = policy.resolve(payload["cwd"].as_str());
-            resolved
-                .terms_for(payload["host_name"].as_str().unwrap_or_default())
-                .filter(|terms| !terms.access_context.is_empty())
-                .map(|terms| terms.reference.clone())
+    cleared: &HashMap<usize, Clearance>,
+) -> BTreeMap<usize, String> {
+    cleared
+        .keys()
+        .filter_map(|&at| {
+            commonmeasure_harness::egress::held_for_access_context(policy, &records[at])
+                .map(|reference| (at, reference))
         })
+        .collect()
 }
 
 /// The wire session a spooled batch belongs to.
@@ -1139,17 +1190,16 @@ fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<Rechec
     let prefixes = policy.resolve(None).internal_prefixes().to_vec();
     // Only the event ids and the refused count are read from this projection,
     // and neither depends on the receiver.
-    let projected = project::project_session(None, id, &records, &prefixes, &|at| {
-        cleared.contains_key(&at)
+    let held = held_for_access_context(&policy, &records, &cleared);
+    let mut projected = project::project_session(None, id, &records, &prefixes, &|at| {
+        cleared.contains_key(&at) && !held.contains_key(&at)
     });
-    let mut permitted: HashSet<Uuid> = projected
+    without_uncounted_refusals(&mut projected, &cleared);
+    let permitted: HashSet<Uuid> = projected
         .event_positions
         .iter()
         .map(|(id, _)| *id)
         .collect();
-    if access_context_required(&policy, &records, &cleared).is_some() {
-        permitted.clear();
-    }
     if let Some(events) = entry.document["events"].as_array_mut() {
         events.retain(|event| {
             event["id"]
@@ -1158,7 +1208,14 @@ fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<Rechec
                 .is_some_and(|id| permitted.contains(&id))
         });
     }
-    entry.document["refused"] = serde_json::json!(projected.refused);
+    match projected.refused {
+        Some(refused) => entry.document["refused"] = serde_json::json!(refused),
+        None => {
+            if let Some(document) = entry.document.as_object_mut() {
+                document.remove("refused");
+            }
+        }
+    }
     Ok(Recheck::Rechecked)
 }
 

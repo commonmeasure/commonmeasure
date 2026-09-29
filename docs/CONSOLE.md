@@ -111,6 +111,14 @@ targets and symlink loops, leave enrolment unknown. An unreadable `relay.json`
 also makes the receiver unknown, with the configuration error and the fact
 that nothing is sent until it reads.
 
+Until the operator agrees to reporting, a Reporting consent card sits
+between the counts and the Hub card. It states whether consent was not
+given, withdrawn or does not read (with the file's error), lists each source
+refused because it needs reporting with its count of refusals, and gives the
+command that agrees, `commonmeasure consent agree`; the console does not
+record consent itself. The card is absent once consent is agreed. The same
+block is `reporting_consent` in `/api/status`, as `status --json` prints it.
+
 ### Record
 
 `/app/record`. The sessions in a rail, grouped by the engagement the

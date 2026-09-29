@@ -2029,6 +2029,80 @@ fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
     );
 }
 
+/// EDG-91. An edge that applied a revision from another organisation under
+/// 0.4.6, re-enrolled into an organisation that has published nothing yet,
+/// is enrolled and awaiting that organisation's first revision. The
+/// previous revision stays in force, named as the previous organisation's:
+/// the policy file, the kept envelope and the applied revision are
+/// unchanged, and the synchronisation that follows records its outcome.
+#[test]
+fn managed_re_enrolment_keeps_the_previous_organisations_revision_named_as_such() {
+    let server = hub(Arc::new(Mutex::new(HubState::default())));
+    let home = tempfile::tempdir().unwrap();
+    let policy = br#"{"policy_mode":"strict"}"#;
+    std::fs::write(home.path().join("policy.json"), policy).unwrap();
+    std::fs::create_dir_all(home.path().join("managed")).unwrap();
+    // Synthetic data in the shape 0.4.6 writes: the applied revision names
+    // its signer and no organisation; the kept envelope names the
+    // organisation. Only the fields this path reads are carried.
+    let kept = json!({"payload": {"organisation": "22222222-2222-2222-2222-222222222222",
+                                  "revision": 8, "digest": "sha256:aa"}});
+    std::fs::write(
+        home.path().join("managed/last-known-good.json"),
+        kept.to_string(),
+    )
+    .unwrap();
+    let state = json!({
+        "applied": {"revision": 8, "digest": "sha256:aa",
+                    "issued_at": "2026-09-27T13:18:22Z", "expires_at": "2099-01-01T00:00:00Z",
+                    "activated_at": "2026-09-22T05:37:59.307Z",
+                    "signer_key_id": "hub-policy-previous"},
+    });
+    std::fs::write(home.path().join("managed/state.json"), state.to_string()).unwrap();
+
+    let output = commonmeasure(
+        home.path(),
+        &["connect", &server.url(), "--token", TOKEN, "--managed"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("outcome       no_revision"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "from previous organisation 22222222-2222-2222-2222-222222222222 (signer \
+             hub-policy-previous); this edge is pinned to organisation \
+             11111111-1111-1111-1111-111111111111"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("waiting for the organisation's first policy revision"),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read(home.path().join("policy.json")).unwrap(),
+        policy
+    );
+    assert_eq!(
+        std::fs::read(home.path().join("managed/last-known-good.json")).unwrap(),
+        kept.to_string().as_bytes()
+    );
+    let written: Value =
+        serde_json::from_slice(&std::fs::read(home.path().join("managed/state.json")).unwrap())
+            .unwrap();
+    assert_eq!(written["applied"], state["applied"]);
+    assert!(
+        !commonmeasure(home.path(), &["policy", "sync"])
+            .status
+            .success(),
+        "the previous organisation's revision is not convergence"
+    );
+}
+
 /// The hub's signer can carry the absolute `policy_url` built from its
 /// public origin; the edge pins that, not the address it was typed under,
 /// because the policy endpoint verifies signatures over that origin alone.

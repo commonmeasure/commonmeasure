@@ -299,8 +299,8 @@ supplies no declared licence, and a supplier API subscription or access
 reference alone supplies no reuse permission. `requires_reporting` says the
 agreement requires usage reporting and `access_context` names the
 institution identifiers it attributes usage to, never a person; the relay
-withholds a session under terms naming identifiers until session-document
-delivery is built. Which agreement permits what, and how an edge proves it,
+withholds each crossing of a host under terms naming identifiers until
+session-document delivery is built. Which agreement permits what, and how an edge proves it,
 is settled by the network design (roadmap NET-14 and NET-15), which these
 fields wait on.
 

@@ -6,6 +6,34 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.8 (29 September 2026)
+
+Upgrading: without reporting consent, sources whose licence demands usage
+reporting are refused until you agree with `commonmeasure consent agree`. An
+existing Edge home has no consent until you give it; a scope's
+`allow_telemetry_egress` is not read as consent. `commonmeasure update` from
+0.4.7 or earlier runs the installer of the release it replaces, which neither
+asks for consent nor names the command: run `commonmeasure consent agree`
+after that first update.
+
+Upgrading: once a 0.4.8 policy synchronisation has accepted a managed revision, or been offered the applied one again, `managed/state.json` records the revision's organisation, which 0.4.7 and earlier cannot read. After a downgrade those releases report policy synchronisation as unavailable and keep enforcing `policy.json` unchanged; upgrade again to resume synchronisation. An edge moved from one organisation to another and back judges the first organisation's revisions afresh: an unexpired earlier revision from it is accepted, bounded only by the expiry that organisation's hub set ([re-enrolment](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/policy-envelope.md#re-enrolment)).
+
+### Added
+
+- `commonmeasure consent` shows the reporting consent and its text; `consent agree` and `consent withdraw` record the answer. The installer asks once, from the terminal, when the Edge home records no answer; `--agree-reporting` or `COMMONMEASURE_REPORTING_CONSENT=agree` agree without asking. The installer's closing line says what leaves under the answer recorded, a withdrawn answer included: uses admitted while consent was agreed are still reported.
+- `status`, `doctor` (text and `--json`) and the console's Overview list the sources refused for want of reporting consent, each with its count, and the command that agrees.
+- `hosted-service.json` takes `session_directory` again, an absolute directory every session of the hosted service is scoped to: a session resolves its policy as a local session in that directory would, records it as `cwd` on each crossing so the relay clears it by that scope, and writes a `hosted_scope` record naming the service configuration as its basis. A session whose declared directory no scope of the policy in force and no enrolled directory selects is not opened, and the answer names the directory. `status` and `doctor` say the scope, its engagement and whether it clears egress, that none is declared, or that nothing selects it ([hosted scope](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#hosted-scope)).
+
+### Changed
+
+- A licence's telemetry reporting demand is met under the operator's reporting consent, asked once at install and kept in `consent.json` in the Edge home, instead of a scope's `allow_telemetry_egress`. With consent the source is admitted in every scope, including one that sets `allow_telemetry_egress: false`; without it the source is refused in every scope, and the refusal names the source, says it needs reporting and gives the command that agrees. An unreadable `consent.json` is not consent and the refusal names its error. Nor is a symbolic link, a file owned by another user or a file writable by its group or others: the refusal names which, and `consent agree` and the installer write the file at mode 0600 whatever the umask. A demand is also refused, in every scope, where operator terms that require `access_context` for its host would make the relay hold its crossing, or where the session's log does not read, which the relay skips whole; the refusal names the log ([reporting consent](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#reporting-consent)).
+- The relay sends a crossing admitted under reporting consent, its retrieval and grounding only, where the scope clears no egress; the session's turn boundaries, other crossings and refused count stay home unless the scope clears them. A withdrawal refuses the next fetch and recalls nothing: a crossing admitted before it is still reported. The relay's summary says how many projected sessions carry no refused count rather than adding them to the count as zero. Where operator terms for a host require `access_context`, the relay holds that host's crossings and sends the rest of the session as cleared, where it held the whole session before; its summary counts the crossings held, so a later crossing of the session, admitted or refused, cannot stop an earlier reported one from leaving ([telemetry projection](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#selected-coverage)).
+
+### Fixed
+
+- A managed edge re-enrolled into another organisation or under another signer accepts that organisation's first policy revision whatever its number, instead of refusing it as a rollback; until then the previous organisation's revision stays in force and `policy sync`, `connect`, `status` and `doctor` name the organisation it came from. Rollback and reuse within one organisation and signer are still refused ([re-enrolment](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/policy-envelope.md#re-enrolment)).
+- A policy synchronisation still waiting for the hub when `connect` or `disconnect` replaces the enrolment no longer acts on the answer. It reports `superseded`, names what changed and exits non-zero, and the policy, the applied revision and the kept envelope stay as the current enrolment left them. Before, an answer to the previous enrolment could replace the policy the current one had accepted ([activation](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/policy-envelope.md#activation-and-the-last-known-good)).
+
 ## 0.4.7 (29 September 2026)
 
 Upgrading: from 0.4.5 or earlier, `update` still refuses while hosts run the binary; run `curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh` once to replace it in place. From 0.4.6 onwards, `update` asks you to close nothing ([updating](https://github.com/commonmeasure/commonmeasure/blob/main/docs/GETTING-STARTED.md#updating)).

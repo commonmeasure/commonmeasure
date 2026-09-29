@@ -158,7 +158,9 @@ that fails, and each failure is recorded as `rejected` with its kind:
 | `digest_mismatch` | `digest` is not the digest of `policy` as the envelope carries it |
 | `invalid_policy` | `policy` does not load through the runtime's loader: an unknown field, an empty scope match, an egress clearance without an engagement, any rule the loader enforces |
 
-Two more checks follow, against the edge's own state:
+Two more checks follow, against the edge's own state, when the applied
+revision was verified under the organisation and signer pinned now
+(§Re-enrolment):
 
 - **rollback**: a `revision` earlier than the applied revision is refused
   however valid its signature, so a captured earlier envelope cannot move
@@ -178,7 +180,22 @@ and the policy file is not touched.
 
 An envelope that passes is activated under the policy file's lock, the
 one the console's editor holds for its own save, so a read, a comparison
-and a replacement are one step against any other writer. The envelope is
+and a replacement are one step against any other writer. `connect` and
+`disconnect` hold the same lock while they replace `deployment.json`, the
+edge key or the enrolment record.
+
+A response answers the enrolment it was requested under. Before the
+response is verified, and before any outcome is recorded, the edge reads
+`deployment.json` and the enrolled key id again under the lock and compares
+them with what it read before the request. If either has changed, the
+response is discarded and the synchronisation reports `superseded`, naming
+what changed: the organisation, the signer, the policy URL, the deployment
+mode or the edge key. Nothing is written. `state.json`, the kept envelope
+and `policy.json` stay as the current enrolment left them, and `policy
+sync` exits non-zero. The next synchronisation asks under the current
+enrolment. Without this, a response to the previous enrolment that arrived
+after the new one had accepted its first revision would replace that
+revision's policy. The envelope is
 kept verbatim at `<home>/managed/last-known-good.json` and
 `<home>/managed/state.json` is written first; then `policy.json` is
 replaced by the loader's atomic save. A failure before the replacement
@@ -188,8 +205,8 @@ status document reports as divergent and the next synchronisation
 reapplies.
 
 `state.json` records what is applied (revision, digest, issue and expiry
-times, activation time, signer key id) and what the last synchronisation
-did, as one of these outcomes:
+times, activation time, signer key id, organisation) and what the last
+synchronisation did, as one of these outcomes:
 
 | Outcome | Meaning |
 |---|---|
@@ -203,6 +220,11 @@ did, as one of these outcomes:
 
 The fleet-status document carries the last outcome and its reason as
 `desired`.
+
+`superseded` is reported and not recorded: `policy sync`, `connect
+--managed` and the session record carry it, with the reason, and
+`state.json` keeps the outcome of the last synchronisation made under the
+current enrolment (§Activation and the last-known-good).
 
 Every failure, including a hub that cannot be reached, leaves the applied
 policy in force and records the failure. An applied policy whose
@@ -278,7 +300,71 @@ policy publication is pending; the policy already on disk stays in force.
 This is not convergence: `policy sync` continues to exit non-zero until a
 revision is accepted. Absence after an applied revision also remains a
 non-zero connect outcome and preserves that revision, its envelope and its
-staleness.
+staleness. A revision applied under a previous enrolment does not count
+here: an edge re-enrolled into an organisation that has published nothing
+is awaiting that organisation's first revision (§Re-enrolment).
+
+## Re-enrolment
+
+Revisions are ordered within one organisation and one signer. The applied
+state records the organisation and the signer key id it was verified under,
+and the rollback and reuse checks compare a verified envelope only with an
+applied revision from the pair `deployment.json` pins now. The first
+revision the pinned pair publishes is accepted whatever its number; from
+then on the counter is that pair's.
+
+`connect --managed` into another organisation, or under another signer,
+replaces `deployment.json` and keeps the applied revision, the kept envelope
+and `policy.json`. The synchronisation it runs next records its outcome in
+`state.json` as any synchronisation does. Until the pinned pair's first
+revision is accepted, the revision applied under the previous
+pair **stays in force as the last-known-good**. The edge does not fall back
+to the local policy or to no managed policy. This follows from the rules
+above: every failure keeps the applied policy in force, expiry never relaxes
+it, and hub absence after an applied revision preserves it. Dropping it on
+re-enrolment would let a change of enrolment, or a hub that has not yet
+published, loosen what the edge enforces without anyone writing a looser
+policy.
+
+The previous revision is marked, not hidden. `policy sync`, `connect
+--managed`, `status` and `doctor` name the organisation and signer it came
+from beside the applied revision, and `status --json` carries them as the
+local extension `previous_enrolment`
+([`fleet-status.md`](fleet-status.md) §The document). It stays stale, and is
+reported stale, on the same terms as any other applied revision (§Cadence
+and staleness). An envelope from the previous organisation or signer is
+refused as `wrong_organisation` or `wrong_signer`, as from any other.
+
+A state written by 0.4.6 or earlier records the signer and no organisation.
+It is judged by the organisation named in the kept `last-known-good.json`,
+when that envelope is the applied revision's by revision and digest. That
+recovery trusts the kept envelope's metadata as it trusts `state.json`: both
+are in the same operator-controlled home, and the kept envelope's signature
+is not checked again. Someone who can write those files can already replace
+`policy.json`. Where the organisation cannot be recovered that way, or is
+empty in either file, an applied revision under the pinned signer keeps its
+counter: the edge refuses as before rather than accepting an earlier
+revision on a guess. No deployment names an empty organisation, so an empty
+one was never verified.
+
+A response requested under a previous enrolment is discarded once the
+enrolment has changed (§Activation and the last-known-good), so it cannot
+activate after the new pair's first revision.
+
+Two limitations follow from this design:
+
+- **The counter covers the applied pair only.** An edge that moves from
+  organisation A to B and later back to A has forgotten A's highest
+  revision and judges A's revisions afresh. An unexpired earlier envelope
+  from A is accepted; one that has expired is refused as `expired`. What
+  this admits is bounded only by the expiry A's hub chose: this edge
+  enforces no maximum validity interval. Keeping each pair's highest
+  revision would close it.
+- **A downgrade cannot read the new state.** From 0.4.8, `state.json`
+  records the applied organisation, which 0.4.7 and earlier refuse as an
+  unknown field. After a downgrade those releases report synchronisation
+  as `unavailable` and keep enforcing `policy.json` unchanged; nothing is
+  relaxed, and synchronisation resumes after an upgrade.
 
 ## What a distributed policy carries
 
@@ -348,14 +434,27 @@ vector holds both to the same signature base.
 the rollback, reuse, reapply and unreachable paths against a loopback
 origin; that the digest is checked over the policy as carried, in the
 owner's form and in the loader's, with the loader's digest kept beside it;
-and that an expired envelope keeps enforcing, is reported stale since its
-own expiry, and is cleared by the hub renewing the revision.
+that an expired envelope keeps enforcing, is reported stale since its
+own expiry, and is cleared by the hub renewing the revision; and that a
+re-enrolled edge keeps the previous organisation's revision in force until
+the new organisation's first, lower-numbered revision is accepted, while
+rollback and reuse within one organisation and signer are still refused,
+including for a state written by 0.4.6 and for an empty organisation; and
+that a pin replaced while a response waits for the policy file's lock
+supersedes the response. `crates/commonmeasure-relay/src/enrolment.rs`
+tests that pinning and `disconnect` wait for that lock.
 `crates/commonmeasure-cli/tests/managed_policy.rs` drives the refresh
 through the real binary: the session-start hook and the MCP server each
 record it, a session is refreshed once, an expired envelope is enforced and
 reported stale by `status`, `doctor`, the relay and the record until the hub
 renews it, and a hub that accepts a connection and never answers costs a
-session start its budget and nothing else. `crates/commonmeasure-cli/tests/managed_policy.rs` drives the real
+session start its budget and nothing else. It also holds a response to
+enrolment A at the origin while the enrolment changes to another
+organisation under the same signer, to another organisation and signer, to
+a new edge key, or to local mode through `disconnect`, and while the
+managed replacements accept their first revision; the released response is
+reported `superseded` and `state.json`, the kept envelope, `policy.json`
+and `deployment.json` stay byte-identical. `crates/commonmeasure-cli/tests/managed_policy.rs` drives the real
 binary against a loopback origin: a local edge makes no request; a managed
 edge activates the signed policy and a mediated crossing meets it; a local
 edit shows as divergent and is reapplied; rollback, forgery, an edge-bound

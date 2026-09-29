@@ -138,6 +138,13 @@ fn gather(host: Option<&str>, resolve: Option<&str>) -> Result<Report, String> {
             title: "Relay",
             findings: relay,
         },
+        Section {
+            id: "reporting_consent",
+            title: "Reporting consent",
+            findings: commonmeasure_harness::consent::findings(
+                &commonmeasure_harness::consent::report(&home),
+            ),
+        },
     ];
     if let Some(name) = resolve {
         sections.push(Section {
@@ -494,8 +501,10 @@ fn carriers_finding(home: &Path, session_end: bool) -> Finding {
 
 /// What `doctor` says about managed policy: nothing on a local edge, the
 /// revision in force and its expiry on a managed one, and since when it has
-/// been stale where the hub has not renewed it. A managed edge with no
-/// revision activated yet, or one gone stale, needs the operator; a
+/// been stale where the hub has not renewed it, and the organisation it
+/// came from where that is not the pinned one. A managed edge with no
+/// revision activated yet, one gone stale, or one still enforcing a
+/// previous enrolment's revision needs the operator; a
 /// management state that cannot be read is unknown.
 fn managed_policy_finding(home: &Path) -> Option<Finding> {
     let management = commonmeasure_harness::managed::management(home, chrono::Utc::now());
@@ -505,10 +514,15 @@ fn managed_policy_finding(home: &Path) -> Option<Finding> {
             match (management.applied_revision, management.applied_expires_at) {
                 (Some(revision), Some(expires_at)) => {
                     let stale = crate::stale_note(&json!(management.stale_since));
+                    let previous = commonmeasure_harness::managed::previous_pin(home);
                     let text = format!(
-                        "managed policy: revision {revision} in force, expires {expires_at}{stale}"
+                        "managed policy: revision {revision} in force, expires {expires_at}{stale}{}",
+                        previous
+                            .as_ref()
+                            .map(|previous| format!(", {}", crate::previous_note(previous)))
+                            .unwrap_or_default()
                     );
-                    if stale.is_empty() {
+                    if stale.is_empty() && previous.is_none() {
                         Finding::ok(text)
                     } else {
                         Finding::attention(text)

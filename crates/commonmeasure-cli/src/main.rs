@@ -7,6 +7,7 @@
 
 mod artifact;
 mod benchmark;
+mod consent;
 mod console;
 mod doctor;
 mod enrol;
@@ -119,6 +120,9 @@ enum Command {
     Benchmark(benchmark::Benchmark),
     /// Set up a project directory, or show its current enrolment.
     Enrol(enrol::Enrol),
+    /// Show, give or withdraw consent to report to sources whose licence
+    /// demands it. Without it those sources are refused.
+    Consent(consent::Consent),
     /// Run one job through each named supply plan and publish the run
     /// directory: the sealed manifest, the exact provider responses, the
     /// admitted context, the inference record and an append-only evidence
@@ -556,6 +560,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Benchmark(args) => benchmark::run(args),
         Command::Enrol(args) => enrol::run(args),
+        Command::Consent(args) => consent::run(args),
         Command::Run {
             suite,
             output,
@@ -1795,11 +1800,19 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
             report.sessions_withheld
         ));
     }
-    if report.sessions_withheld_access_context > 0 {
+    if report.crossings_withheld_access_context > 0 {
         out.push_str(&format!(
-            "  {} withheld: operator terms require access_context on the session, which the \
-             event-batch delivery format cannot carry\n",
-            report.sessions_withheld_access_context
+            "  {} withheld{}: operator terms for their hosts require access_context on the \
+             session, which the event-batch delivery format cannot carry\n",
+            match report.crossings_withheld_access_context {
+                1 => "1 crossing".to_owned(),
+                crossings => format!("{crossings} crossings"),
+            },
+            match report.sessions_withheld_access_context {
+                0 => String::new(),
+                1 => ", leaving 1 session nothing else to send".to_owned(),
+                sessions => format!(", leaving {sessions} sessions nothing else to send"),
+            }
         ));
     }
     // The sessions that were neither projected nor withheld by policy: they
@@ -1812,11 +1825,31 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
     if quiet > 0 {
         out.push_str(&format!("  {quiet} with nothing eligible to project\n"));
     }
-    if report.sessions_projected > 0 {
+    // A session left under reporting consent alone sends no refused count;
+    // its absence is stated, not added to the total as a zero.
+    let uncounted = report.sessions_without_refused_count;
+    if report.sessions_projected > uncounted {
         out.push_str(&format!(
-            "  {} refused crossings in the projected sessions, on the wire as a count per \
+            "  {} refused crossings in the projected sessions{}, on the wire as a count per \
              session with no URL and no reason\n",
-            report.refused_reported
+            report.refused_reported,
+            if uncounted > 0 {
+                " that carry a count"
+            } else {
+                ""
+            }
+        ));
+    }
+    if uncounted > 0 {
+        out.push_str(&format!(
+            "  {uncounted} projected {} no refused count: reporting consent alone cleared \
+             {} crossings, and it clears no refusal, so no count is sent\n",
+            if uncounted == 1 {
+                "session carries"
+            } else {
+                "sessions carry"
+            },
+            if uncounted == 1 { "its" } else { "their" }
         ));
     }
     if report.batches_queued > 0 || report.batches_dead > 0 {
@@ -2432,12 +2465,25 @@ fn show_status(json: bool, palette: report::Palette) -> Result<(), String> {
         };
     }
     document["egress"] = commonmeasure_relay::egress_report(&home);
+    // Local status extension: the revision in force came from a previous
+    // enrolment. The fleet policy document is unchanged.
+    if let Some(previous) = commonmeasure_harness::managed::previous_pin(&home) {
+        document["previous_enrolment"] = serde_json::json!({
+            "organisation": previous.applied.organisation,
+            "signer_key_id": previous.applied.signer_key_id,
+            "pinned_organisation": previous.pinned.organisation,
+            "pinned_signer_key_id": previous.pinned.signer_key_id,
+        });
+    }
     // Private local status extension, separate from the fleet policy contract.
     let host_observed = local_host_observations(&home);
     document["host_observed"] = match &host_observed {
         Ok(summary) => summary.to_value(),
         Err(error) => serde_json::json!({"unavailable": error}),
     };
+    // Private local status extension: what the operator is missing for want
+    // of reporting consent (owner decision, 27 September 2026).
+    document["reporting_consent"] = commonmeasure_harness::consent::report(&home);
     if json {
         return write_stdout(&format!(
             "{}\n",
@@ -2482,6 +2528,10 @@ fn status_text(
             0,
         )),
     }
+    out.push_str(&palette.findings(
+        &commonmeasure_harness::consent::findings(&document["reporting_consent"]),
+        0,
+    ));
     let mut row = |standing: Option<Standing>, key: &str, value: String| {
         out.push_str(&palette.row(standing, key, &value, KEY));
     };
@@ -2572,6 +2622,13 @@ fn status_text(
                 inspect::text(&applied["expires_at"])
             ),
         );
+        if let Some(previous) = commonmeasure_harness::managed::previous_pin(home) {
+            row(
+                Some(Standing::Attention),
+                "applied origin",
+                previous_note(&previous),
+            );
+        }
     }
     match applied["unavailable"].as_str() {
         Some(reason) => row(
@@ -2765,6 +2822,14 @@ fn sync_managed_policy(home: &Path, budget: std::time::Duration) -> Option<serde
 /// The suffix a policy line carries once the applied envelope has expired:
 /// the policy stays in force and the line says since when it has been
 /// stale. Empty while the envelope is current.
+/// The line naming a revision in force from a previous enrolment, shared by
+/// `policy sync`, `connect --managed`, `status` and `doctor`.
+fn previous_note(previous: &commonmeasure_harness::managed::Previous) -> String {
+    format!(
+        "{previous}; it stays in force until the pinned organisation's first revision is accepted"
+    )
+}
+
 fn stale_note(stale_since: &serde_json::Value) -> String {
     stale_since
         .as_str()
@@ -2892,6 +2957,9 @@ fn sync_report_text(report: &commonmeasure_harness::managed::SyncReport) -> Stri
                 applied.expires_at,
                 stale_note(&serde_json::json!(report.stale_since))
             );
+            if let Some(previous) = &report.previous {
+                let _ = writeln!(out, "              {}", previous_note(previous));
+            }
         }
         None => {
             let _ = writeln!(
@@ -3110,6 +3178,7 @@ mod tests {
             },
             applied: None,
             stale_since: None,
+            previous: None,
         };
         let text = super::sync_report_text(&report);
         assert!(
@@ -3125,6 +3194,7 @@ mod tests {
             expires_at: "2026-10-04T00:00:00Z".into(),
             activated_at: "2026-09-29T00:00:00Z".into(),
             signer_key_id: "signer".into(),
+            organisation: Some("org-1".into()),
         });
         for stale in [None, Some("2026-10-04T00:00:00Z".into())] {
             report.stale_since = stale;

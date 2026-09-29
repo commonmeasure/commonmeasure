@@ -180,7 +180,7 @@ fn doctor_json_is_a_document_of_the_same_findings() {
         .iter()
         .map(|section| section["id"].as_str().unwrap())
         .collect();
-    assert_eq!(sections, ["home", "console", "relay"]);
+    assert_eq!(sections, ["home", "console", "relay", "reporting_consent"]);
     let recording = &document["sections"][0]["findings"][0];
     assert_eq!(recording["standing"], "ok");
     assert!(

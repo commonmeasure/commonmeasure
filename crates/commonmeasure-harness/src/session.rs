@@ -1089,6 +1089,24 @@ impl SessionLog {
         self.log.append("session_ended", record)
     }
 
+    /// The directory a hosted service's configuration declares for its
+    /// sessions. The session's policy scope is resolved against it and its
+    /// crossings record it as their `cwd`; this record says where it came
+    /// from, so a reader does not take it for a directory the remote client
+    /// reported.
+    pub fn record_hosted_scope(&mut self, host: &str, directory: &str) -> std::io::Result<u64> {
+        self.append(
+            "hosted_scope",
+            json!({
+                "session_id": self.session_id,
+                "host": host,
+                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                "basis": "service_configuration",
+                "directory": directory,
+            }),
+        )
+    }
+
     /// The MCP client's own name and version, as it sent them in the
     /// protocol's `initialize` request, with the protocol version it asked
     /// for and the one the server answered with. Written once, before the

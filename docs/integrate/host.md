@@ -289,6 +289,8 @@ on their own, that is Claude Code alone, through its `session-end` hook; a sessi
 count. Elsewhere such a source is refused unless `commonmeasure hosted
 service` or a background relay (`commonmeasure relay --every`, or
 `commonmeasure service install relay` on macOS) runs on the same home. In
-every case the session's policy scope must clear telemetry egress and
-`relay.json` must name a receiver ([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
-§Source declarations).
+every case the operator must have agreed to reporting (`commonmeasure
+consent agree`) and `relay.json` must name a receiver; the session's policy
+scope need not clear telemetry egress
+([`docs/contracts/session-evidence.md`](../contracts/session-evidence.md)
+§Source declarations and §Reporting consent).
