@@ -569,6 +569,66 @@ before it exits.
 Processes of two releases may share an Edge home while an update settles;
 each checks the files it reads (`ARCHITECTURE.md` §What runs where).
 
+## Withheld sessions
+
+A session is withheld when it witnessed crossings and the relay cleared none
+of them to leave: no scope cleared its directory and no crossing was admitted
+under the reporting consent. A session skipped because its log does not read
+is not withheld and is not counted with them; it is named with the log and the
+line (§Delivery state). For each withheld session the relay records the
+directories its witnessed crossings ran in (`payload.cwd`), each resolved once
+against the policy the run read, and the rule that kept that directory's
+crossings here. The rule is one branch of the scope resolution
+(`crates/commonmeasure-harness/src/policy.rs` `EgressWithheld`), serialised as
+`cause`:
+
+| `cause` | Rule | Further members |
+|---|---|---|
+| `no_directory` | the crossings recorded no working directory | |
+| `no_scope` | no scope's `match` selects the directory | |
+| `scope_not_cleared` | the scope that selects it does not set `allow_telemetry_egress: true`, whether it sets it to false or leaves it out | `scope`, the scope's `match` |
+| `directory_not_selected` | directory selection is on and no selected directory holds it | |
+| `directory_local_only` | the selected directory holding it was selected local-only | `root` |
+| `directory_not_approved` | on a managed edge, the hub's reporting approvals do not include the selected directory holding it | `root` |
+| `failed_closed` | resolving the scope failed closed | `reason` |
+
+Other causes of an empty report, such as an approvals renewal the edge did not
+record (EDG-41), are to be added as further `cause` values with their own
+line; a reader treats a value it does not know as a reason it cannot name.
+
+`commonmeasure relay` prints, under "N withheld: no crossing cleared to
+leave", one line per rule with the number of sessions it withheld and the
+directories they ran in, three by name at most:
+
+```text
+  2 withheld: no crossing cleared to leave
+    1 session: no scope in /home/op/.commonmeasure/policy.json selects /home/op
+    1 session: the scope "/work/client-a" in /home/op/.commonmeasure/policy.json selects /work/client-a and does not set allow_telemetry_egress: true
+```
+
+`relay --json` prints the run's session accounting: `dry_run`, `receiver`,
+`policy`, `sessions_read`, `sessions_projected`, `sessions_withheld`,
+`withheld_sessions` (each `session`, `path`, `withheld_at` and
+`directories`, each `directory`, `crossings`, `cause` and its members, and
+`reason`, the rule in words), `withheld_summary` (the lines above),
+`sessions_withheld_access_context`, `crossings_withheld_access_context`,
+`sessions_unreadable`, `unreadable_sessions` (each `session`, `path`,
+`cause`, `batches_held`), `runs_projected`, `events_enqueued`,
+`events_delivered`, `batches_delivered`, `batches_queued` and `batches_dead`.
+A run that skipped a log prints the document and exits non-zero; a delivery
+failure prints no document.
+
+A run that is not a forecast keeps the sessions it withheld in
+`relay/withheld-sessions.json`, replaced as `relay/skipped-sessions.json` is (a
+run scoped with `--session` replaces only the entries of the sessions it
+read). `commonmeasure doctor` prints each rule's line from it under Relay as a
+`note` ("the relay run at <time> withheld 1 session: …"), and `doctor --json`
+carries the entries as `sessions.withheld` beside `sessions.unreadable`. The
+egress block of `/api/status` carries `withheld_sessions`, `withheld_text` and,
+where the file does not read, `withheld_error`. `commonmeasure session` states
+the same rules for one session against the policy on disk now
+([session evidence §Reading it](session-evidence.md#reading-it)).
+
 ## Receiver and key
 
 The API key in `relay.json` belongs to the receiver in `relay.json`; on an
@@ -693,10 +753,11 @@ session as far as its log reads, as the hosted service's interval relay
 does. Event ids are derived from the records they project from
 (§Delivery state), and an event already in `relay/delivered.idx` or in a
 spooled batch is not projected again, so a crossing written after one run
-leaves on the next and nothing leaves twice. A session whose log does not read, such
-as one whose last line is being written at that moment, is skipped for that
-run and named (`relay/skipped-sessions.json`), and the next run reads it
-again.
+leaves on the next and nothing leaves twice. A last line being written at that
+moment is waited for, and one a writer that died left cut short is marked
+before the log is read ([session evidence §Reading a log](session-evidence.md#reading-a-log)).
+A session whose log does not read is skipped for that run and named, with the
+line (`relay/skipped-sessions.json`), and the next run reads it again.
 
 Tested against loopback receivers: `crates/commonmeasure-cli/tests/mediated_e2e.rs`
 `reporting_demand::a_claude_desktop_session_is_admitted_and_delivered_only_while_the_background_relay_runs`

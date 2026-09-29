@@ -236,4 +236,8 @@ if [ -z "$update" ]; then
       boundary="Session records stay on this machine. Without reporting consent agreed, sources whose licence demands reporting are refused; a use admitted while consent was agreed is still reported to the telemetry receiver relay.json names, and no other use is reported until a policy scope clears egress." ;;
   esac
   echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. $boundary"
+  case "$os" in
+    Darwin) echo "For Codex and other hosts without a session end, configure a reporting receiver, then run: commonmeasure service install relay" ;;
+    *) echo "For Codex and other hosts without a session end, configure a reporting receiver, then run under your service manager: commonmeasure relay --every 300" ;;
+  esac
 fi

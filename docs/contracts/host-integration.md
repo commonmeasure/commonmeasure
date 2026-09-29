@@ -426,7 +426,11 @@ finds: the report is the result.
 `console` (`url`, `answering`, `version` and `pid` where a console answers,
 `standing`, `text`, and `pages`, the address of each page by name),
 `sections` (each with `id`, `title` and `findings`), `hosts` (each with
-`host`, `registered`, `standing` and `findings`) and `summary` (the counts
+`host`, `registered`, `standing` and `findings`), `sessions` (`withheld`,
+the sessions the last relay run withheld with each directory and the rule that
+kept it here, and `unreadable`, the sessions it skipped because their logs did
+not read; [telemetry projection §Withheld
+sessions](telemetry-projection.md#withheld-sessions)) and `summary` (the counts
 by standing, `hosts_registered`, `hosts`, the overall `standing` and the
 closing sentence as `text`). A finding is `{"standing", "text"}`. The
 console is probed on loopback with a two-second bound; nothing else is
@@ -466,7 +470,10 @@ whose licence demands usage reporting is refused while the marker is there
 ([`docs/contracts/session-evidence.md`](session-evidence.md) §Source
 declarations). A `background relay:` line above it says whether a
 background relay holds the home, with its pid and interval, and `status`
-prints the same as `background relay`
+prints the same as `background relay`. When neither the background relay nor
+the hosted service holds the home, it also names the consequence: hosts
+without a session-end event, including Codex, refuse sources whose licences
+demand usage reporting until a relay runs
 ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval)).
 
 Two more hosts take the same commands. `install claude-desktop` writes one
@@ -624,9 +631,14 @@ background relay holds the same home and relays it on its interval
 declarations). The background relay is `commonmeasure relay --every
 <seconds>`, which `commonmeasure service install relay` runs at login on
 macOS ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval));
-it is how a Claude Desktop session delivers with nobody running a command.
-`install claude-desktop` prints one line saying so and naming the command,
-and installs nothing: starting unattended egress is the operator's act. A host
+it is how hosts such as Codex and Claude Desktop deliver with nobody running
+a command. `install` prints the relay command for every host outside the
+session-end list: `service install relay` on macOS, `relay --every 300` on
+other platforms. Host registration installs no relay. After successful managed
+enrolment, `connect --managed` offers the macOS installation when no relay
+is installed for the home and no loop holds it. It requires an explicit yes
+at the terminal; missing terminals and captured output print the command
+without installing. A host
 that runs Claude Code's `SessionEnd` command from its hook files is
 refused or accepted by the rules below, as at the other four events.
 

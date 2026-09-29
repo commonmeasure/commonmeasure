@@ -8,7 +8,8 @@ section: get-started
 # Documentation
 
 Install and use Common Measure, read its source records, and integrate
-hosts and content with it. For Common Measure Hub, follow
+hosts and content with it. Common Measure Hub is open by invitation
+during the pilot ([waiting list](https://commonmeasure.ai/waitlist/?source=edge)). Once invited, follow
 [Start here](https://commonmeasure.ai/docs/hub/start-here/) from sign-in to
 your first delivery, or
 [connect an existing edge](https://commonmeasure.ai/docs/hub/connect-commonmeasure/).

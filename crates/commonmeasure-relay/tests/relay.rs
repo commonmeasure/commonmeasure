@@ -2318,8 +2318,7 @@ fn a_batch_accepted_before_the_relay_was_killed_is_sent_again_with_the_same_ids_
 
 /// Append the first bytes of a record with no line end: the final record a
 /// writer leaves when an append is cut short. The tail is written by the
-/// test: an append is one write followed by a sync, and `SIGKILL` between two
-/// of them leaves none.
+/// test, holding no lock, as a writer that died mid-append leaves it.
 fn cut_short_the_final_record(home: &Path, session: &str) {
     use std::io::Write as _;
 
@@ -2327,19 +2326,123 @@ fn cut_short_the_final_record(home: &Path, session: &str) {
         .append(true)
         .open(home.join(format!("sessions/{session}.ndjson")))
         .unwrap()
-        .write_all(br#"{"seq":1,"timestamp":"2026-08-02T10:00:01.000Z","event":"crossing_med"#)
+        .write_all(CUT_SHORT)
         .unwrap();
 }
 
-/// A writer killed inside an append leaves a final record cut short. The
-/// session evidence contract keeps such a log unavailable to a strict reader
-/// and repairs nothing, so a relay run skips that session, projects and
-/// delivers the other session of the home, and fails at the end naming the
-/// session and its file. Nothing of the damaged log is spooled or sent, by a
-/// run of the whole home or by one scoped to it. The receiver is a loopback
-/// server that accepts every batch.
+const CUT_SHORT: &[u8] =
+    br#"{"seq":1,"timestamp":"2026-08-02T10:00:01.000Z","event":"crossing_med"#;
+
+/// Append a line that does not parse and that no `evidence_gap` record
+/// marks as torn: damage no reader skips, as a writer of 0.4.8, which took
+/// no lock, left when its record ran into a torn one.
+fn damage_the_log(home: &Path, session: &str) {
+    use std::io::Write as _;
+
+    let mut line = CUT_SHORT.to_vec();
+    line.push(b'\n');
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(home.join(format!("sessions/{session}.ndjson")))
+        .unwrap()
+        .write_all(&line)
+        .unwrap();
+}
+
+/// EDG-27. A writer killed inside an append leaves a final record cut
+/// short, and a session nothing appends to again is still delivered. A
+/// forecast reads the log as it will read once the tear is marked and
+/// writes nothing; a run for delivery marks the tear with an `evidence_gap`
+/// record naming its length and delivers the session's crossing; the next
+/// run reads the marked log and finds nothing new. The receiver is a
+/// loopback server that accepts every batch.
 #[test]
-fn a_cut_short_final_record_is_skipped_by_name_and_the_other_session_is_delivered() {
+fn a_cut_short_final_record_is_marked_and_the_session_is_delivered() {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = accepting_receiver(bodies.clone());
+    let home = tempfile::tempdir().unwrap();
+    write_session(
+        home.path(),
+        "killed",
+        &[crossing_line(
+            "crossing_mediated",
+            "killed",
+            "https://host.example/killed",
+            false,
+        )],
+    );
+    cut_short_the_final_record(home.path(), "killed");
+    let log = home.path().join("sessions/killed.ndjson");
+    let torn = std::fs::read(&log).unwrap();
+    let options = commonmeasure_relay::RelayOptions {
+        receiver: Some(receiver.url()),
+        ..Default::default()
+    };
+
+    let forecast = commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            dry_run: true,
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("a forecast reads the log as it will read once marked");
+    assert_eq!((forecast.sessions_read, forecast.events_delivered), (1, 1));
+    assert_eq!(
+        std::fs::read(&log).unwrap(),
+        torn,
+        "a forecast writes nothing"
+    );
+    assert!(
+        bodies.lock().unwrap().is_empty(),
+        "a forecast sends nothing"
+    );
+
+    let report = commonmeasure_relay::relay(home.path(), &options).expect("the log is marked");
+    assert_eq!(
+        (
+            report.sessions_read,
+            report.sessions_projected,
+            report.events_delivered
+        ),
+        (1, 1, 1)
+    );
+    let marked = std::fs::read(&log).unwrap();
+    assert!(marked.starts_with(&torn), "marking changes no byte written");
+    assert_eq!(marked[torn.len()], b'\n', "the torn line is terminated");
+    let gap: Value = serde_json::from_slice(marked[torn.len() + 1..].trim_ascii_end()).unwrap();
+    assert_eq!(gap["event"], "evidence_gap");
+    assert_eq!(gap["payload"]["reason"], "write_failed");
+    assert_eq!(gap["payload"]["torn_line_bytes"], CUT_SHORT.len());
+    let urls: Vec<String> = bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap().clone())
+        .filter_map(|event| event["content_url"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(urls, ["https://host.example/killed"]);
+
+    let again = commonmeasure_relay::relay(home.path(), &options).unwrap();
+    assert_eq!((again.events_enqueued, again.events_delivered), (0, 0));
+    assert_eq!(
+        std::fs::read(&log).unwrap(),
+        marked,
+        "a marked log is left as it is"
+    );
+    receiver.stop();
+}
+
+/// A line that does not parse, with no `evidence_gap` record marking it as
+/// torn, keeps the log unavailable to every reader. A relay run skips that
+/// session, projects and delivers the other session of the home, and fails
+/// at the end naming the session, its file and the line. Nothing of the
+/// damaged log is spooled or sent, by a run of the whole home or by one
+/// scoped to it. The receiver is a loopback server that accepts every
+/// batch.
+#[test]
+fn a_damaged_line_is_skipped_by_name_and_the_other_session_is_delivered() {
     let bodies = Arc::new(Mutex::new(Vec::new()));
     let mut receiver = accepting_receiver(bodies.clone());
     let home = tempfile::tempdir().unwrap();
@@ -2355,7 +2458,7 @@ fn a_cut_short_final_record_is_skipped_by_name_and_the_other_session_is_delivere
             )],
         );
     }
-    cut_short_the_final_record(home.path(), "killed");
+    damage_the_log(home.path(), "killed");
 
     let options = |sessions: &[&str]| commonmeasure_relay::RelayOptions {
         receiver: Some(receiver.url()),
@@ -2368,6 +2471,7 @@ fn a_cut_short_final_record_is_skipped_by_name_and_the_other_session_is_delivere
         let text = error.to_string();
         assert!(text.contains("session killed was skipped"), "{text}");
         assert!(text.contains("killed.ndjson"), "{text}");
+        assert!(text.contains("line 2 does not parse"), "{text}");
         let skipped = error
             .downcast::<commonmeasure_relay::UnreadableSessions>()
             .expect("the run completed for the sessions that read");
@@ -2431,7 +2535,7 @@ fn a_cut_short_final_record_is_skipped_by_name_and_the_other_session_is_delivere
     assert_eq!(
         urls(&bodies.lock().unwrap()),
         ["https://host.example/whole"],
-        "the whole record before the cut-short one stays home too"
+        "the whole record before the damaged one stays home too"
     );
     assert_eq!(burned_ids(home.path()).len(), 1);
 
@@ -2493,7 +2597,7 @@ fn a_damaged_log_does_not_hold_back_another_sessions_duty_bearing_batches() {
             1,
         )],
     );
-    cut_short_the_final_record(home.path(), "killed");
+    damage_the_log(home.path(), "killed");
 
     let start = chrono::Utc::now();
     let error = commonmeasure_relay::relay_with_clock(home.path(), &Default::default(), &|| start)
@@ -2608,7 +2712,7 @@ fn delivered_urls(bodies: &Mutex<Vec<Value>>) -> Vec<String> {
         .collect()
 }
 
-/// A batch is spooled from a session and the session's log is cut short
+/// A batch is spooled from a session and the session's log is damaged
 /// afterwards, in a home with a directory selection. The recheck before
 /// delivery reads the origin log a second time, and consent cannot be
 /// established from a log that does not read: the batch stays queued with a
@@ -2653,7 +2757,7 @@ fn a_batch_whose_log_is_damaged_later_stays_queued_under_a_directory_selection()
     write_session(&home, "pending", &[crossing("pending")]);
     let due = queue_before_damage(&home, &options);
 
-    cut_short_the_final_record(&home, "pending");
+    damage_the_log(&home, "pending");
     write_session(&home, "later", &[crossing("later")]);
     accepting.store(true, Ordering::SeqCst);
     for tick in 0..2 {
@@ -2771,7 +2875,7 @@ fn a_batch_whose_log_is_damaged_later_is_delivered_without_a_directory_selection
     write_session(home.path(), "pending", &[crossing("pending")]);
     let due = queue_before_damage(home.path(), &options(&[]));
 
-    cut_short_the_final_record(home.path(), "pending");
+    damage_the_log(home.path(), "pending");
     accepting.store(true, Ordering::SeqCst);
     let error = commonmeasure_relay::relay_with_clock(home.path(), &options(&[]), &|| due)
         .expect_err("the damaged log fails the run");

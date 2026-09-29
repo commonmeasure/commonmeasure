@@ -6,6 +6,26 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.9 (29 September 2026)
+
+Upgrading: session logs are now written under an advisory lock. A host's MCP server started under 0.4.8 or earlier and still running after the update takes no lock; its writes stay whole as before, and restarting the host brings it under the lock.
+
+### Added
+
+- `commonmeasure relay --json` prints the run's session accounting, with each withheld session's directories and the rule that kept them on this machine, and each session skipped because its log did not read ([withheld sessions](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#withheld-sessions)).
+- `commonmeasure session` says whether the session's crossings are cleared to leave under the policy now and, for those that are not, names the directory and the rule; `session --json` prints the same with the session's torn lines ([reading it](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#reading-it)).
+
+### Changed
+
+- A withheld session says why. `relay` prints one line per rule under "withheld": no scope selects the directory, the selecting scope does not set `allow_telemetry_egress: true`, directory selection leaves it out, or the scope failed closed, with the sessions' count and directories. `doctor` prints the last run's lines and `doctor --json` carries each session as `sessions.withheld` ([withheld sessions](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#withheld-sessions)).
+- The reporting ruling's check that the relay would read a session's log reads only what was appended since the last ruling, one line at a time, so a long-lived session's fetches no longer slow and grow in memory with its log.
+
+### Fixed
+
+- A process killed while writing a session record no longer loses the session's evidence and reporting. The next write to the log, or the relay before it reads for delivery, terminates the cut-short line and records an `evidence_gap` naming its length, and every reader skips that line; any other line that does not parse still makes the log unreadable, and the error names the line. A write another process is still making is waited for, never cut ([reading a log](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#reading-a-log)).
+- Inbound HTTP header values accept a tab between visible characters, as RFC 9110 allows; leading and trailing whitespace is trimmed as before. A tab in a publisher's response header no longer prevents the edge from reading `robots.txt` and fetching the page. Outbound header guards still refuse tabs and other control bytes.
+- Host installation names the background relay step for every host without a session-end event, including Codex. After managed enrolment, macOS offers to install the relay at the terminal; unattended runs print the command. Other platforms name `relay --every 300`. `status` and `doctor` explain that these hosts refuse sources requiring usage reporting until an automatic relay runs.
+
 ## 0.4.8 (29 September 2026)
 
 Upgrading: without reporting consent, sources whose licence demands usage

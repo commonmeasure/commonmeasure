@@ -65,6 +65,8 @@ struct Report {
     /// Set when one host was named: its absence is then something to act
     /// on, where in the full report it is a fact about the machine.
     asked: Option<&'static str>,
+    /// The last relay run's withheld and skipped sessions, in detail.
+    sessions: serde_json::Value,
 }
 
 pub fn run(
@@ -112,9 +114,15 @@ fn gather(host: Option<&str>, resolve: Option<&str>) -> Result<Report, String> {
     }
 
     let mut relay = vec![hosted::service_finding(&home), relay_loop::finding(&home)];
-    relay.extend(commonmeasure_relay::egress_findings(
-        &commonmeasure_relay::egress_report(&home),
-    ));
+    let egress = commonmeasure_relay::egress_report(&home);
+    relay.extend(commonmeasure_relay::egress_findings(&egress));
+    // The per-session detail behind the relay's withheld and skipped
+    // findings, for `--json`: each session, its directories and the rule
+    // that kept its crossings here, or the log and line that did not read.
+    let sessions = serde_json::json!({
+        "withheld": egress["withheld_sessions"],
+        "unreadable": egress["skipped_sessions"],
+    });
     let now = chrono::Utc::now();
     relay.push(commonmeasure_relay::state::last_delivery(&home, now));
     relay.push(automatic_relay_finding(
@@ -168,6 +176,7 @@ fn gather(host: Option<&str>, resolve: Option<&str>) -> Result<Report, String> {
             .map(|surface| registration::doctor(surface, &paths))
             .collect(),
         asked: asked.map(HostSurface::id),
+        sessions,
     })
 }
 
@@ -297,6 +306,7 @@ impl Report {
                 "standing": self.host_standing(host),
                 "findings": host.findings,
             })).collect::<Vec<_>>(),
+            "sessions": self.sessions,
             "summary": summary,
         })
     }

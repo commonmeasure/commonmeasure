@@ -314,6 +314,13 @@ fn codex_registration_is_one_table_and_leaves_the_rest_byte_for_byte() {
         "{text}"
     );
     assert!(text.contains("mediated only"), "{text}");
+    let relay_command = if cfg!(target_os = "macos") {
+        "commonmeasure service install relay"
+    } else {
+        "commonmeasure relay --every 300"
+    };
+    assert!(text.contains(relay_command), "{text}");
+
     let written = std::fs::read_to_string(&config).unwrap();
     assert!(written.starts_with(original), "{written}");
     let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_commonmeasure")).unwrap();
@@ -588,14 +595,15 @@ fn claude_desktop_registration_is_one_key_and_leaves_the_rest_byte_for_byte() {
     // it; installing it is left to the operator.
     let relay: Vec<&str> = text
         .lines()
-        .filter(|line| line.contains("background relay"))
+        .filter(|line| line.contains("usage reporting"))
         .collect();
     assert_eq!(relay.len(), 1, "{text}");
-    assert!(
-        relay[0].contains("demands usage reporting")
-            && relay[0].contains("commonmeasure service install relay"),
-        "{text}"
-    );
+    let relay_command = if cfg!(target_os = "macos") {
+        "commonmeasure service install relay"
+    } else {
+        "commonmeasure relay --every 300"
+    };
+    assert!(relay[0].contains(relay_command), "{text}");
     assert!(
         !home
             .path()
@@ -1130,4 +1138,13 @@ fn chrome_registration_writes_the_native_messaging_manifest_byte_for_byte() {
     assert!(
         stdout(&run(home.path(), &["doctor", "chrome"])).contains("chrome       not registered")
     );
+}
+
+#[test]
+fn claude_code_install_needs_no_background_relay_hint() {
+    let home = tempfile::tempdir().unwrap();
+    let output = run(home.path(), &["install", "claude"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stdout(&output).contains("service install relay"));
+    assert!(!stdout(&output).contains("relay --every"));
 }

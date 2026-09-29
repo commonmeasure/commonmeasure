@@ -1944,15 +1944,37 @@ fn connect_with_managed_pins_the_hubs_signer_and_makes_a_first_policy_sync() {
     assert!(state.lock().unwrap().signer_keys.is_empty());
 
     let home = tempfile::tempdir().unwrap();
-    let output = commonmeasure(
-        home.path(),
-        &["connect", &hub_url, "--token", TOKEN, "--managed"],
-    );
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["connect", &hub_url, "--token", TOKEN, "--managed"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .env("HOME", home.path())
+        .env(
+            "COMMONMEASURE_SERVICE_LABEL",
+            "ai.commonmeasure.test.connect-relay",
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
         "enrolled while awaiting the first revision: {stdout}"
     );
+
+    let relay_command = if cfg!(target_os = "macos") {
+        "commonmeasure service install relay"
+    } else {
+        "commonmeasure relay --every 300"
+    };
+    assert!(stdout.contains(relay_command), "{stdout}");
+    assert!(
+        !stdout.contains("[y/N]"),
+        "non-interactive connect must not prompt: {stdout}"
+    );
+    assert!(!home.path().join("Library/LaunchAgents").exists());
+    assert!(!commonmeasure_harness::delivery::relay_loop_running(
+        home.path()
+    ));
 
     let deployment: Value =
         serde_json::from_slice(&std::fs::read(home.path().join("deployment.json")).unwrap())

@@ -391,6 +391,12 @@ commonmeasure service status relay
 commonmeasure service uninstall relay
 ```
 
+After a successful `connect --managed`, macOS offers to install the relay if
+none is installed for this Edge home and no loop is running. Installation
+requires an explicit yes at the terminal. Without a terminal, or with captured
+output, the command is printed for later; other platforms print
+`commonmeasure relay --every 300` for your service manager.
+
 `install relay` writes `~/Library/LaunchAgents/ai.commonmeasure.relay.plist`,
 which runs `commonmeasure relay --every 300` at login, logging to
 `logs/relay.log` in the Edge home, and waits until the loop holds the home.

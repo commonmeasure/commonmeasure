@@ -8,7 +8,7 @@
 //! policy they read, because the relay depends on this crate and not the
 //! other way round.
 
-use crate::policy::PolicyDocument;
+use crate::policy::{EgressWithheld, PolicyDocument};
 use serde_json::{Value, json};
 
 /// Whether an evidence record is a crossing this machine watched happen.
@@ -93,6 +93,16 @@ pub fn clearance(policy: &PolicyDocument, record: &Value) -> Option<Cleared> {
         })
         .flatten()
         .or_else(|| reported_under_consent(record).then_some(Cleared::ReportingConsent))
+}
+
+/// Why a crossing made in `cwd` may not leave under its scope, or `None`
+/// where the scope clears it ([`PolicyDocument::resolve`]). A crossing the
+/// reporting consent cleared is cleared whatever this says ([`clearance`]).
+pub fn withheld_in(policy: &PolicyDocument, cwd: Option<&str>) -> Option<EgressWithheld> {
+    match cwd {
+        None => Some(EgressWithheld::NoDirectory),
+        Some(cwd) => policy.resolve(Some(cwd)).egress_withheld().cloned(),
+    }
 }
 
 /// The reference of the operator terms that name institution identifiers

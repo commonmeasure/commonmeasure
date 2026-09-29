@@ -5180,6 +5180,76 @@ mod reporting_demand {
         }
     }
 
+    /// EDG-27: the ruling and the relay agree on a log that ends in a line
+    /// cut short, as a writer killed mid-append leaves it. The relay marks
+    /// such a line before it reads, so the ruling does not refuse on it.
+    ///
+    /// Under consent, in each paired scope (uncleared, explicitly false,
+    /// cleared), the session's log ends in a torn line with no newline and
+    /// nothing writing it. A fetch of a page whose licence demands reporting
+    /// is admitted with the demand met; the server's first append marks the
+    /// torn line with an `evidence_gap` record naming its length; and the
+    /// relay, run against the same receiver, delivers the page's retrieval
+    /// and grounding. (A line that does not parse with no such record after
+    /// it is refused and skipped: the test above.)
+    #[test]
+    fn a_demand_into_a_session_log_ending_in_a_torn_line_is_admitted_and_delivered() {
+        let (site, _) = publisher(REPORTING_LICENCE);
+        let demanded = format!("{}/page", public(&site));
+        let torn = "{\"seq\":1,\"event\":\"host_process\",\"payl";
+        for (scope, scopes) in PAIRED_SCOPES {
+            let (mut receiver, bodies) = recording_receiver();
+            let home = tempfile::tempdir().expect("tempdir");
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let paired = workspace.path().join("paired");
+            std::fs::create_dir_all(&paired).unwrap();
+            write_policy(home.path(), &access_context_policy(None, scopes));
+            std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": receiver.url()}).to_string(),
+            )
+            .unwrap();
+            agree(home.path());
+            let log = home.path().join("sessions/test-session.ndjson");
+            std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+            std::fs::write(&log, torn).unwrap();
+
+            let responses = converse_in(
+                home.path(),
+                Some(&paired),
+                &[call("context_fetch", json!({"url": demanded}))],
+            );
+            assert_eq!(
+                responses[0]["result"]["isError"], false,
+                "{scope}: {responses:?}"
+            );
+            let records = commonmeasure_harness::SessionLog::read(&log).expect("the log reads");
+            let gap = records
+                .iter()
+                .find(|record| record["event"] == "evidence_gap")
+                .expect("the torn line is marked");
+            assert_eq!(gap["payload"]["torn_line_bytes"], torn.len(), "{scope}");
+            let crossing = records
+                .iter()
+                .find(|record| record["event"] == "crossing_mediated")
+                .expect("the crossing is recorded");
+            let ruling = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(ruling["met"], true, "{scope}: {ruling}");
+
+            let relayed = relay_once(home.path());
+            receiver.stop();
+            assert_eq!(
+                posted_events(&bodies),
+                [
+                    ("content_retrieved".to_owned(), demanded.clone()),
+                    ("content_grounded".to_owned(), demanded.clone()),
+                ],
+                "{scope}: {}",
+                String::from_utf8_lossy(&relayed.stdout)
+            );
+        }
+    }
+
     /// EGR-175. A demand on a page whose crossing the relay would never
     /// project is unmet whatever the scope clears, and refused before the
     /// request: the loopback address itself, which `allow_private_hosts`
@@ -7343,13 +7413,17 @@ fn a_gzip_page_is_carried_with_the_retrieved_hash_over_the_coded_bytes() {
     assert!(crossing.get("content_hash").is_none(), "{crossing}");
 }
 
+/// A log holding a line that does not parse, with no `evidence_gap` record
+/// marking it as torn, still lets the server start, and observation
+/// validation stays unavailable. (A final line cut short is marked by the
+/// server's first append and reads: EDG-27.)
 #[test]
 fn damaged_session_still_starts_mcp_but_observation_validation_is_unavailable() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join("sessions")).unwrap();
     std::fs::write(
         home.path().join("sessions/test-session.ndjson"),
-        b"{\"event\":\"observations_started\"}\n{\"partial\":",
+        b"{\"event\":\"observations_started\"}\n{\"partial\":\n",
     )
     .unwrap();
     let replies = converse(
@@ -8531,4 +8605,70 @@ fn the_default_bound_is_exact_at_sixty_thousand_characters() {
     assert_eq!(recorded[0]["payload"]["delivered"]["chars"], 60_000);
     assert_eq!(recorded[1]["payload"]["delivered"]["chars"], 60_000);
     assert_eq!(recorded[1]["payload"]["delivered"]["total_chars"], 60_001);
+}
+
+/// Raw response bytes exercise the production reader: the outbound codec
+/// deliberately refuses the tab this publisher sends in its CSP value.
+#[test]
+fn a_tab_in_the_robots_response_header_allows_the_page_fetch() {
+    use std::io::BufReader;
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}/story", listener.local_addr().unwrap());
+    let (stop, stopped) = mpsc::channel::<()>();
+    let publisher = std::thread::spawn(move || {
+        let mut paths = Vec::new();
+        while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = commonmeasure_http::read_request(&mut BufReader::new(&stream)).unwrap();
+            let (status, headers, body) = match request.target.as_str() {
+                "/robots.txt" => (
+                    "200 OK",
+                    "Content-Security-Policy: \tdefault-src 'self';\tscript-src 'none'\t\r\n",
+                    "User-agent: *\nAllow: /\n",
+                ),
+                "/story" => (
+                    "200 OK",
+                    "Content-Type: text/html\r\n",
+                    "<p>Page after robots.</p>",
+                ),
+                _ => ("404 Not Found", "", "none"),
+            };
+            write!(stream, "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            paths.push(request.target);
+        }
+        paths
+    });
+    let home = tempfile::tempdir().unwrap();
+    write_policy(home.path(), r#"{"allow_private_hosts":true}"#);
+    let responses = converse(home.path(), &[call("context_fetch", json!({"url": url}))]);
+    drop(stop);
+    let paths = publisher.join().unwrap();
+    assert_eq!(responses[0]["result"]["isError"], false, "{}", responses[0]);
+    assert_eq!(payload(&responses[0])["content"], "Page after robots.");
+    assert_eq!(&paths[..2], ["/robots.txt", "/story"]);
+    let crossing = &crossings(home.path())[0]["payload"];
+    assert_eq!(crossing["declarations"]["robots"]["status"], 200);
+    assert_eq!(
+        crossing["declarations"]["robots"]["reading"]["crawlable"],
+        true
+    );
+    assert_eq!(
+        crossing["content_hash"],
+        sha256_digest(b"Page after robots.")
+    );
 }

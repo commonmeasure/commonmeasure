@@ -71,8 +71,11 @@ edge is managed) and `edge_identity`, written at open, before any crossing
 One file per session, opened for append. A session spans many short-lived hook
 processes, so `seq` resumes from what is already in the file. Under concurrent
 hooks two records can share a `seq`; a reader orders by position and treats
-`seq` as a hint. Every append is fsynced before it returns, and a write failure
-is materialised as an `evidence_gap` record by the next successful write **on
+`seq` as a hint. Every append holds the log's exclusive advisory lock
+(`flock(2)`) from reading the file's last byte to the end of its one fsynced
+write, so appends never interleave, and a record cut short by a writer that
+died is marked by the next append (§Reading a log). A write failure is
+materialised as an `evidence_gap` record by the next successful write **on
 the same log instance** ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md) §2).
 
 That scope matters for a session in a way it does not for a run. The owed gap
@@ -82,7 +85,63 @@ short-lived log per invocation, commonly one append, so a hook whose append
 fails leaves no gap record and no later process knows it happened.
 Session-log completeness is therefore per-process: the log records every
 window that a process which survived to write again could describe, and
-records nothing about a process that did not.
+records nothing about a process that did not, beyond the torn line such a
+process can leave (§Reading a log).
+
+### Reading a log
+
+Every reader of a session log applies one rule
+(`crates/commonmeasure-runtime/src/evidence/scan.rs`): the strict read that
+`commonmeasure session`, the console and the observation index use, the relay's
+read for delivery, and the reporting ruling's check that the relay would read
+the log. A ruling therefore cannot admit a crossing into a log the relay then
+skips.
+
+- A line that parses as JSON is a record. A blank line is skipped.
+- A line that does not parse is skipped only where the next line is an
+  `evidence_gap` record whose `payload.torn_line_bytes` equals that line's
+  length in bytes, without its newline. The gap record itself is a record.
+- Every other line that does not parse is a hard error for every reader,
+  naming the line: one in the middle of the log, one at the end with its
+  newline, one followed by a blank line, by another line that does not parse
+  or by a gap record of another length. The relay skips such a log whole
+  (§Instance registration) and the ruling refuses a reporting demand into it.
+  Nothing repairs it.
+- A final line without its newline is either another process's append in
+  progress or a record cut short by a writer that died. A reader tells them
+  apart by taking the lock: a writer holds it until its write has returned,
+  and the kernel drops a lock when the process holding it exits, however it
+  exits. Under the lock the line is read again. A line an append was writing
+  is now whole. A line still without its newline was cut short, and:
+  - the next append, from any process, terminates it with a newline and
+    writes the `evidence_gap` record that marks it before its own record
+    (`reason: "write_failed"`, `from` the file's last modification, which was
+    the torn write, `to` the repair, and `torn_line_bytes`);
+  - the relay, when it reads for delivery, marks it the same way first, so a
+    session whose last writer died mid-append is delivered whether or not
+    anything appends to it again;
+  - a forecast relay run (`--dry-run`), the reporting ruling and
+    `commonmeasure session` read the log as it will read once marked and
+    write nothing: the line is reported as a tear not yet marked, and a line
+    that parses (a whole record missing only its newline) is kept;
+  - the strict read (`SessionLog::read`) fails, naming the line.
+- A reader or writer waits up to five seconds for the lock. A process that
+  holds it longer (stopped under a debugger, say) makes the append fail,
+  which the log records as an owed gap, and a read fail naming the lock.
+- A marked tear is shown by `commonmeasure session` (`torn` lines, and
+  `tears` in `--json`). The console, which indexes every line it can and
+  names the rest, counts the torn line among the session's unreadable lines
+  and its gap record among its evidence gaps. What a torn line that does
+  not parse was recording is lost; the gap record says so and when.
+
+The lock is advisory and is taken by every writer of this release and later.
+A writer of 0.4.8 or earlier takes none. An append of this release that meets
+such a writer's record in progress relies on the kernel keeping one `write`
+to a file opened `O_APPEND` whole, as those releases did: its newline and gap
+record land after that record, which leaves a blank line and a gap record
+whose length matches no torn line, and no record is lost. A repair that is
+itself cut short (the disk filling during it) leaves two lines in a row that
+do not parse, and the log stays unreadable.
 
 ## Events
 
@@ -112,7 +171,7 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `client_identified` | the MCP client's `initialize` request; the MCP server writes it before the first record a tool call or host observation leaves | how the program on the other end of the stdio pipe named itself: `clientInfo.name` and `clientInfo.version`, with the protocol version it asked for and the one the server answered with (§Client identity) |
 | `instance_refused` | nothing; the MCP server writes it | a mediated fetch or search was stopped before anything crossed because the session's registered instance could not be shown to hold authority: `refused` where the authority is known to have ended, `unavailable` where a required check could not be made (§Instance registration); never a crossing |
 | `allowance_gap` | nothing; the MCP server writes it | the allowance ledger did not record a settlement or release for a mediated search: the reservation id, the observed charge where a receipt reported one, and the reason; the reservation stays held until the expiry sweep releases it |
-| `evidence_gap` | nothing; the log writes it | a window this log could not record |
+| `evidence_gap` | nothing; the log writes it | a window this log could not record; with `torn_line_bytes`, the line before it, which a write cut short (§Reading a log) |
 
 A host-policy refusal happens before any bytes move. A processor refusal,
 which the injection screen produces under `strict`, happens after the fetch
@@ -441,11 +500,13 @@ Opening a log discovers opt-in from complete, parseable lines, tolerating partia
 or damaged lines so hooks can continue appending and the MCP server can start.
 It parses only a line whose bytes hold the event name `observations_started`,
 which the writer never escapes, so opening a session that never opted in parses
-nothing. It preserves existing bytes; it does not repair a damaged log.
+nothing. Opening writes nothing; the first append marks a torn final line
+(§Reading a log).
 
-Observation validation reads the durable file strictly and returns unavailable
-on a malformed record or an incomplete last line. A concurrent incomplete
-append may therefore make an observation unavailable. Each request reads the lines appended since the previous
+Observation validation reads the durable file by the strict rule of §Reading a
+log and returns unavailable on a line that does not parse and is not a marked
+tear, or on a final line cut short that no append has marked yet. It waits for
+an append in progress. Each request reads the lines appended since the previous
 one and checks the request against a validation index of the earlier ones: the
 handles, generation, output and action identifiers, hashes and byte offsets the
 checks need, and no URL or text. The index is derived from the log and is not
@@ -1594,11 +1655,16 @@ same process or another, changes what the relay does with the crossing ruled
 on. Terms added to `policy.json` for the page's host after an admission still
 hold that crossing at the relay, which reads the policy at projection, and
 the relay's report counts it. A session log that does not read leaves the
-demand unmet, naming the log, because the relay skips such a log whole and
-nothing of the crossing would leave; a log not yet written is not a fault.
-Only the log's readability is read, not its other crossings. A log damaged
-after the ruling is skipped by the relay like any other, and the crossing
-goes unreported. Automatic delivery
+demand unmet, naming the log and the line, because the relay skips such a log
+whole and nothing of the crossing would leave; a log not yet written is not a
+fault. The ruling reads the log as the relay will (§Reading a log): a final
+line cut short does not leave the demand unmet, because the relay marks it
+before it reads and this crossing's own record marks it first. The ruling
+holds one line in memory at a time and remembers the file and how far it has
+read, so each ruling reads only what was appended since the last; a log
+replaced or cut shorter is read again from its start. Only the log's
+readability is read, not its other crossings. A log damaged after the ruling
+is skipped by the relay like any other, and the crossing goes unreported. Automatic delivery
 means the events leave without anyone typing a command — the session-end relay
 ([telemetry projection §Relay at session
 end](telemetry-projection.md#relay-at-session-end)), or the hosted service's
@@ -2220,11 +2286,13 @@ instance, and the hub reads a duty
 edge has no command that finds the instances whose process has gone, and
 chooses no closure outcome on the operator's behalf.
 
-A final record cut short by a kill inside an append is not repaired. The log
-stays unavailable to a strict reader: `commonmeasure inspect` and
-`commonmeasure session` fail naming the file. A relay run that reads the log
-skips that session: nothing of the log is projected, spooled or sent, the
-whole records before the cut-short one included. The run goes on for every
+A final record cut short by a kill inside an append is marked by the next
+append, or by the relay before it reads for delivery, and the log then reads
+(§Reading a log). A line that does not parse and that no gap record marks is
+not repaired. The log stays unavailable to a strict reader:
+`commonmeasure session` fails naming the file and the line. A relay run that
+reads the log skips that session: nothing of the log is projected, spooled or
+sent, the whole records before the damaged one included. The run goes on for every
 other session it reads and delivers every due batch in the spool. A batch
 spooled earlier from the damaged session is delivered with them in a home
 without a directory selection. Where a directory selection applies to the
@@ -2852,8 +2920,29 @@ quoted the URL whole, and the console withholds a reason that can hold one
 ```sh
 commonmeasure session            # the most recent session
 commonmeasure session <id>       # a named one
+commonmeasure session <id> --json
 commonmeasure serve              # the session view of the console, on loopback
 ```
+
+`session` reads the log as a forecast relay run does (§Reading a log) and
+writes nothing. Its `reporting` line says whether the session's witnessed
+crossings are cleared to leave under the policy on disk now: none witnessed,
+all cleared, some, or none (withheld). For the crossings not cleared it names,
+per directory they ran in, the rule that keeps them here, in the words and
+`cause` values of [telemetry projection §Withheld sessions](telemetry-projection.md#withheld-sessions),
+and it counts cleared crossings that operator terms hold for
+`access_context`. It names each torn line, marked or not. A log that does not
+read fails the command, naming the log and the line, with the words "the relay
+skips it". The standing is taken from this log alone, before any joined log is
+added, because the relay delivers each log on its own.
+
+`--json` prints `session`, `path`, `records` (the joined logs' included),
+`tears` (each `path`, `line`, `bytes`, `marked`) and `reporting`: `standing`
+(`no_witnessed_crossings`, `cleared`, `partly_cleared`, `withheld`, or
+`unknown` with `unavailable` where the policy does not load), `policy`,
+`witnessed`, `cleared`, `held_for_access_context` and `withheld`, the
+directories as the relay records them. A log that does not read prints
+`session`, `path` and `unreadable` and exits non-zero.
 
 ## Conformance
 

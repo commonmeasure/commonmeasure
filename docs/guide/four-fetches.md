@@ -48,8 +48,8 @@ A few terms recur, and each is defined in one line in the
   at a crossing and writes a record of its own each time it runs.
 - The **edge** is the part of Common Measure that runs on the operator's
   machine. A **hub** is the organisation service an edge can enrol with;
-  Common Measure runs one for organisations that want it
-  ([Start here](https://commonmeasure.ai/docs/hub/start-here/)). The edge in this account is not enrolled,
+  Common Measure runs one, open by invitation during the pilot
+  ([waiting list](https://commonmeasure.ai/waitlist/?source=edge), [Start here](https://commonmeasure.ai/docs/hub/start-here/)). The edge in this account is not enrolled,
   which matters for one of the fetches.
 
 ## The setting

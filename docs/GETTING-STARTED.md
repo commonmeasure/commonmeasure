@@ -267,14 +267,28 @@ too, under the policy in force when it runs.
 
 ### Relay without a session end
 
-Hosts without a session-end event need a
+Codex and other hosts without a session-end event need a
 [background relay](INSTALL.md#relay-without-a-session-end) for sources whose
 licences require automatic usage reporting. A configured receiver and your
 [reporting consent](INSTALL.md#reporting-consent) are still required.
 
+After configuring a receiver, run on macOS:
+
+```sh
+commonmeasure service install relay
+```
+
+On other platforms, run `commonmeasure relay --every 300` under your service
+manager. `connect --managed` offers to install the relay on macOS when it is
+missing; without a terminal it prints the command. Check `commonmeasure status`
+or `commonmeasure doctor codex` for whether the relay is running. Without it,
+Codex refuses sources whose licences demand usage reporting.
+
 ### Joining Common Measure Hub
 
-Follow [Start here](https://commonmeasure.ai/docs/hub/start-here/) for a new
+During the pilot, Common Measure Hub is open by invitation: ask your
+organisation's owner for one, or join the [waiting list](https://commonmeasure.ai/waitlist/?source=edge)
+for a new organisation. Follow [Start here](https://commonmeasure.ai/docs/hub/start-here/) for a new
 organisation, or [Connect a Common Measure edge](https://commonmeasure.ai/docs/hub/connect-commonmeasure/)
 for an existing one. [Edge enrolment](OPERATING.md#joining-common-measure-hub)
 explains the local keys, managed policy and disconnection.

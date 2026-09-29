@@ -277,7 +277,7 @@ fn tick(home: &Path) {
         "commonmeasure: relay run at {}",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     );
-    if let Err(error) = crate::relay(None, None, Vec::new(), Vec::new(), false, None) {
+    if let Err(error) = crate::relay(None, None, Vec::new(), Vec::new(), false, None, false) {
         eprintln!("commonmeasure: relay: {error}");
     }
 }
@@ -365,9 +365,16 @@ pub(crate) fn finding_for(home: &Path, agent: Option<crate::service::RelayAgent>
             format!("whether one is running cannot be read ({reason})"),
         ),
     };
+    let consequence = if standing != Standing::Ok
+        && !commonmeasure_harness::delivery::service_running(home)
+    {
+        "; hosts without a session-end event, including Codex, refuse sources whose licences demand usage reporting until a relay runs"
+    } else {
+        ""
+    };
     Finding {
         standing,
-        text: format!("background relay: {state}"),
+        text: format!("background relay: {state}{consequence}"),
     }
 }
 

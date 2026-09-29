@@ -309,9 +309,7 @@ fn decorated_lengths_and_chunk_sizes_are_errors() {
     }
 }
 
-/// A field this parser accepts is one it will also send on. A name that is not
-/// a token, or a value carrying control bytes, is a field a compliant peer
-/// would refuse — so it must not be minted here.
+/// Malformed names and control bytes other than HTAB remain refused.
 #[test]
 fn malformed_header_fields_are_errors_on_read() {
     for raw in [
@@ -321,6 +319,45 @@ fn malformed_header_fields_are_errors_on_read() {
     ] {
         assert!(response(raw).is_err(), "{raw:?} must not parse");
     }
+}
+
+#[test]
+fn inbound_tabs_are_preserved_inside_values_and_trimmed_at_the_edges() {
+    for value in ["one\ttwo", "\tone\ttwo\t", " \tone\ttwo\t "] {
+        let raw = format!("HTTP/1.1 200 OK\r\nX-A: {value}\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(
+            response(raw.as_bytes()).unwrap().headers.get("x-a"),
+            Some("one\ttwo")
+        );
+    }
+    let raw = b"HTTP/1.1 200 OK\r\nX-A: \t \t\r\nContent-Length: 0\r\n\r\n";
+    assert_eq!(response(raw).unwrap().headers.get("x-a"), Some(""));
+}
+
+#[test]
+fn inbound_control_bytes_other_than_tab_are_refused() {
+    for byte in (0..0x20)
+        .chain(std::iter::once(0x7f))
+        .filter(|b| *b != b'\t')
+    {
+        let mut raw = b"HTTP/1.1 200 OK\r\nX-A: one".to_vec();
+        raw.push(byte);
+        raw.extend_from_slice(b"two\r\nContent-Length: 0\r\n\r\n");
+        assert!(response(&raw).is_err(), "control byte {byte:#04x}");
+    }
+}
+
+#[test]
+fn outbound_tabs_are_still_refused_before_writing() {
+    let mut request = Request::get("/");
+    request.headers.set("X-A", "one\ttwo");
+    let mut wire = Vec::new();
+    assert!(write_request(&mut wire, &request).is_err());
+    assert!(wire.is_empty());
+    let mut response = Response::text(200, "body");
+    response.headers.set("X-A", "one\ttwo");
+    assert!(write_response(&mut wire, &response).is_err());
+    assert!(wire.is_empty());
 }
 
 /// The probe that reached a credentialed origin: an API key read from operator

@@ -55,8 +55,8 @@ pub use hook::{HookInput, HostSurface, capture};
 pub use identity::{EdgeKey, Identity, PresentedIdentity};
 pub use import::known_hosts;
 pub use session::{
-    Crossing, CrossingMode, SessionLog, SessionSummary, boundary_policy, home_dir, safe_session,
-    summarise,
+    Crossing, CrossingMode, DeliveryCheck, SessionLog, SessionSummary, Tear, TornTail,
+    boundary_policy, home_dir, safe_session, summarise,
 };
 
 #[cfg(all(test, unix))]

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_runtime::EvidenceLog;
+pub use commonmeasure_runtime::evidence::{LogPosition, Tear, TornTail};
 use commonmeasure_types::Money;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1000,14 +1001,21 @@ impl SessionLog {
 
     /// Whether this session's log already holds a record of `event`. Read
     /// before the log is opened for writing, so a server can tell whether a
-    /// hook refreshed the policy for this session before it started.
+    /// hook refreshed the policy for this session before it started. A log
+    /// that does not read strictly holds nothing. Read one line at a time,
+    /// because every server start asks and a long session's log is large.
     pub fn holds_event(home: &Path, session_id: &str, event: &str) -> bool {
         let Ok(path) = session_path(home, session_id) else {
             return false;
         };
-        Self::read(&path)
-            .map(|records| records.iter().any(|record| record["event"] == event))
-            .unwrap_or(false)
+        let mut held = false;
+        let scanned = commonmeasure_runtime::evidence::scan::<Value>(
+            &path,
+            LogPosition::default(),
+            TornTail::Refuse,
+            |record, _| held |= record["event"] == event,
+        );
+        held && scanned.is_ok_and(|scanned| scanned.fault.is_none())
     }
 
     /// One synchronisation of managed policy run for this session: at
@@ -1271,8 +1279,20 @@ impl SessionLog {
         self.append("context_snapshot", payload)
     }
 
+    /// Every record of a session's log, strictly: a torn line is skipped
+    /// only where the `evidence_gap` record that marks it follows it
+    /// (`docs/contracts/session-evidence.md` §Reading a log).
     pub fn read(path: &Path) -> std::io::Result<Vec<Value>> {
         EvidenceLog::read(path)
+    }
+
+    /// Every record of a session's log and the torn lines skipped, with a
+    /// final line cut short handled as `tail` says. The relay reads for
+    /// delivery with [`TornTail::Repair`] and for a forecast with
+    /// [`TornTail::Forecast`], and the reporting ruling checks with
+    /// [`DeliveryCheck`], which reads as the forecast does.
+    pub fn read_with(path: &Path, tail: TornTail) -> std::io::Result<(Vec<Value>, Vec<Tear>)> {
+        EvidenceLog::read_with(path, tail)
     }
 
     /// Every session with a log, most recently modified first.
@@ -1294,9 +1314,125 @@ impl SessionLog {
     }
 }
 
+/// Whether the relay would read one session's log for delivery, kept up to
+/// date by reading only what was appended since the last check.
+///
+/// The relay reads a log whole, marking a torn final line first
+/// ([`TornTail::Repair`]), and skips a log that does not read. A check
+/// reads the same lines through the same scan, one line in memory at a
+/// time, as the relay would read them once the tear is marked
+/// ([`TornTail::Forecast`]), and remembers the file and how far it read:
+/// an evidence log is only ever appended to, so what read once reads
+/// again. A log replaced or cut shorter is read from its start.
+#[derive(Debug, Default)]
+pub struct DeliveryCheck {
+    settled: Option<(u64, u64, LogPosition)>,
+}
+
+impl DeliveryCheck {
+    /// `Ok` where the relay would read the log at `path`, or where there is
+    /// no log yet; otherwise the fault, naming the line.
+    pub fn check(&mut self, path: &Path) -> std::io::Result<()> {
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.settled = None;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        let identity = file_identity(&metadata);
+        let from = match (self.settled, identity) {
+            (Some((device, inode, position)), Some((now_device, now_inode)))
+                if device == now_device
+                    && inode == now_inode
+                    && metadata.len() >= position.offset =>
+            {
+                position
+            }
+            _ => LogPosition::default(),
+        };
+        let scanned = EvidenceLog::validate(path, from, TornTail::Forecast)?;
+        self.settled = identity.map(|(device, inode)| (device, inode, scanned.end));
+        scanned.fault.map_or(Ok(()), Err)
+    }
+}
+
+/// The device and inode that tell one file from another at the same path.
+#[cfg(unix)]
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+/// No stable file identity is read on this platform, so each check reads
+/// the log from its start.
+#[cfg(not(unix))]
+fn file_identity(_: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EDG-94: a check reads only what was appended since the last, and
+    /// agrees with the relay's read at each step; a log replaced at its path
+    /// is read again from its start.
+    #[test]
+    fn a_delivery_check_reads_only_what_was_appended_since_the_last() {
+        use std::io::Write as _;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("sessions/s.ndjson");
+        let mut check = DeliveryCheck::default();
+        check.check(&path).expect("no log yet is fine");
+        let mut log = EvidenceLog::open_append(&path).unwrap();
+        log.append("first", json!({"text": "a"})).unwrap();
+        check.check(&path).unwrap();
+
+        // Damage a line already checked, in place and at the same length:
+        // the next check does not read it again, and says what the relay
+        // would have said when it was checked.
+        let original = std::fs::read(&path).unwrap();
+        let mut damaged = original.clone();
+        let at = damaged.iter().position(|byte| *byte == b'{').unwrap();
+        damaged[at] = b'x';
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&damaged)
+            .unwrap();
+        log.append("second", json!({})).unwrap();
+        check.check(&path).expect("only the appended line is read");
+
+        // A torn final line is what the relay marks before it reads.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"torn")
+            .unwrap();
+        check.check(&path).unwrap();
+
+        // Replaced whole: read from the start, so the damage is found.
+        let replacement = home.path().join("replacement");
+        std::fs::write(&replacement, &damaged).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let error = check
+            .check(&path)
+            .expect_err("the replacement is read whole");
+        assert!(
+            error.to_string().contains("line 1 does not parse"),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            SessionLog::read_with(&path, TornTail::Forecast)
+                .unwrap_err()
+                .to_string()
+        );
+    }
 
     #[test]
     fn host_observations_join_handles_and_generations_without_upgrading_grounding() {

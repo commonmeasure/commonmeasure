@@ -1910,6 +1910,10 @@ fn the_claude_code_reader_refuses_the_copilot_and_vs_code_snake_case_shapes() {
     );
 }
 
+/// A hook appends after a record cut short by a writer that died mid-append:
+/// it terminates the torn line and writes the `evidence_gap` record naming
+/// its length before its own record, and the log then reads (EDG-27). Two
+/// hooks racing on one session both record, whole.
 #[test]
 fn hooks_append_after_a_truncated_record_and_concurrent_hooks_both_record() {
     let home = tempfile::tempdir().unwrap();
@@ -1930,10 +1934,23 @@ fn hooks_append_after_a_truncated_record_and_concurrent_hooks_both_record() {
         payload("damaged", "https://example.com/a"),
     );
     assert!(output.status.success());
-    let bytes = std::fs::read(path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.starts_with(prefix));
-    let appended: Value = serde_json::from_slice(&bytes[prefix.len()..]).unwrap();
-    assert_eq!(appended["event"], "crossing_observed");
+    assert_eq!(bytes[prefix.len()], b'\n', "the torn line is terminated");
+    let appended: Vec<Value> = bytes[prefix.len() + 1..]
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect();
+    assert_eq!(appended.len(), 2);
+    assert_eq!(appended[0]["event"], "evidence_gap");
+    assert_eq!(
+        appended[0]["payload"]["torn_line_bytes"],
+        "{\"partial\":".len()
+    );
+    assert_eq!(appended[1]["event"], "crossing_observed");
+    let read = commonmeasure_harness::SessionLog::read(&path).expect("the log reads");
+    assert_eq!(read.len(), 3, "existing, the gap and the crossing");
 
     let barrier = std::sync::Barrier::new(2);
     std::thread::scope(|scope| {

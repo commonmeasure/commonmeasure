@@ -442,6 +442,79 @@ impl Default for PolicyFile {
     }
 }
 
+/// Why the scope a directory resolves to does not clear telemetry egress:
+/// the rule that keeps a crossing made there on this machine.
+///
+/// `relay`, `doctor` and `session` name it for a withheld session. Each
+/// variant is one branch of [`PolicyDocument::resolve`], so the reason
+/// given is the rule that decided; the serialised `cause` is stable for
+/// scripts reading `--json`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum EgressWithheld {
+    /// The crossing recorded no working directory, so no scope selects it.
+    NoDirectory,
+    /// No scope's `match` selects the directory.
+    NoScope,
+    /// The scope that selects the directory does not set
+    /// `allow_telemetry_egress: true`, whether it sets it to false or
+    /// leaves it out.
+    ScopeNotCleared { scope: String },
+    /// Directory selection is in force and no selected directory holds
+    /// this one.
+    DirectoryNotSelected,
+    /// The selected directory that holds this one was selected local-only.
+    DirectoryLocalOnly { root: String },
+    /// On a managed edge, the hub's reporting approvals do not include the
+    /// selected directory that holds this one.
+    DirectoryNotApproved { root: String },
+    /// Resolving the scope failed closed, for the reason given.
+    FailedClosed { reason: String },
+}
+
+impl EgressWithheld {
+    /// The rule in words, for a crossing made in `directory`, with the
+    /// policy file named as `policy`.
+    pub fn describe(&self, directory: Option<&str>, policy: &str) -> String {
+        let directory = directory.unwrap_or("its directory");
+        match self {
+            Self::NoDirectory => {
+                "the crossings recorded no working directory, so no scope selects them".to_owned()
+            }
+            Self::NoScope => format!("no scope in {policy} selects {directory}"),
+            Self::ScopeNotCleared { scope } => format!(
+                "the scope \"{scope}\" in {policy} selects {directory} and does not set \
+                 allow_telemetry_egress: true"
+            ),
+            Self::DirectoryNotSelected => {
+                format!("directory selection is on and no selected directory holds {directory}")
+            }
+            Self::DirectoryLocalOnly { root } => {
+                format!("{directory} is in {root}, which was selected local-only")
+            }
+            Self::DirectoryNotApproved { root } => format!(
+                "{directory} is in {root}, which the hub's reporting approvals do not include"
+            ),
+            Self::FailedClosed { reason } => {
+                format!("the scope for {directory} failed closed: {reason}")
+            }
+        }
+    }
+
+    /// The serialised `cause`, for grouping.
+    pub fn cause(&self) -> &'static str {
+        match self {
+            Self::NoDirectory => "no_directory",
+            Self::NoScope => "no_scope",
+            Self::ScopeNotCleared { .. } => "scope_not_cleared",
+            Self::DirectoryNotSelected => "directory_not_selected",
+            Self::DirectoryLocalOnly { .. } => "directory_local_only",
+            Self::DirectoryNotApproved { .. } => "directory_not_approved",
+            Self::FailedClosed { .. } => "failed_closed",
+        }
+    }
+}
+
 pub struct SessionPolicy {
     /// The effective policy, after any matched scope's overlay was applied.
     file: PolicyFile,
@@ -464,6 +537,10 @@ pub struct SessionPolicy {
     /// Whether the private-address floor is held whatever the file says
     /// ([`Self::hold_private_floor`]).
     private_floor_held: bool,
+    /// Why telemetry egress is not cleared here, set by
+    /// [`PolicyDocument::resolve`]; `None` exactly where
+    /// [`Self::allows_telemetry_egress`] is true.
+    egress_withheld: Option<EgressWithheld>,
 }
 
 /// `<home>/policy.json` as read, parsed and validated once.
@@ -1088,19 +1165,42 @@ impl PolicyDocument {
                 _ => {}
             }
         }
+        let scope_withheld = || match &resolved.scope {
+            None => EgressWithheld::NoScope,
+            Some(scope) => EgressWithheld::ScopeNotCleared {
+                scope: scope.clone(),
+            },
+        };
+        let mut withheld = (!resolved.allows_telemetry_egress()).then(&scope_withheld);
         if let Some(registry) = &self.selection.registry {
             let project = actual.and_then(|cwd| registry.matching(cwd));
             // Every false winning scope vetoes a grant, including an omitted bool.
             let veto = resolved.scope.is_some() && !resolved.allow_telemetry_egress;
             let permitted = project.is_some_and(|p| !veto && self.selection.permitted(p));
+            withheld = match project {
+                _ if veto => Some(scope_withheld()),
+                _ if permitted => None,
+                None => Some(EgressWithheld::DirectoryNotSelected),
+                Some(project) if !project.reporting => Some(EgressWithheld::DirectoryLocalOnly {
+                    root: project.root.display().to_string(),
+                }),
+                Some(project) => Some(EgressWithheld::DirectoryNotApproved {
+                    root: project.root.display().to_string(),
+                }),
+            };
             resolved.allow_telemetry_egress = permitted;
             if permitted && resolved.governing_engagement.is_none() {
                 resolved.governing_engagement = project.map(|p| p.name.clone());
             }
         }
-        if resolved.fail_closed.is_some() {
+        if let Some(reason) = &resolved.fail_closed {
             resolved.allow_telemetry_egress = false;
+            withheld = Some(EgressWithheld::FailedClosed {
+                reason: reason.clone(),
+            });
         }
+        debug_assert_eq!(withheld.is_none(), resolved.allows_telemetry_egress());
+        resolved.egress_withheld = withheld;
         resolved
     }
 
@@ -1226,6 +1326,7 @@ impl PolicyDocument {
             source: self.source.clone(),
             loaded: self.loaded,
             private_floor_held: false,
+            egress_withheld: None,
         }
     }
 }
@@ -1277,6 +1378,15 @@ impl SessionPolicy {
     /// Unmatched, unnamed and undeclared scopes all return false.
     pub fn allows_telemetry_egress(&self) -> bool {
         self.governing_engagement.is_some() && self.allow_telemetry_egress
+    }
+
+    /// Why telemetry egress is not cleared for the directory this policy
+    /// was resolved against, or `None` where it is. Set only by
+    /// [`PolicyDocument::resolve`]; a policy built another way says
+    /// nothing, and a caller treats `None` beside a false
+    /// [`Self::allows_telemetry_egress`] as a reason it cannot give.
+    pub fn egress_withheld(&self) -> Option<&EgressWithheld> {
+        self.egress_withheld.as_ref()
     }
 
     pub fn mode(&self) -> PolicyMode {
@@ -1693,6 +1803,75 @@ impl PolicyDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EDG-42: the rule a withheld crossing is named by is the branch of
+    /// `resolve` that decided, and there is one exactly where egress is not
+    /// cleared.
+    #[test]
+    fn the_rule_that_withholds_egress_is_the_branch_that_decided() {
+        let scopes = r#"{"scopes":[
+            {"match":"cleared","engagement":"e","allow_telemetry_egress":true},
+            {"match":"explicit","engagement":"e","allow_telemetry_egress":false},
+            {"match":"omitted","engagement":"e"}]}"#;
+        for (cwd, expected) in [
+            ("/work/cleared", None),
+            (
+                "/work/explicit",
+                Some(EgressWithheld::ScopeNotCleared {
+                    scope: "explicit".into(),
+                }),
+            ),
+            (
+                "/work/omitted",
+                Some(EgressWithheld::ScopeNotCleared {
+                    scope: "omitted".into(),
+                }),
+            ),
+            ("/work/elsewhere", Some(EgressWithheld::NoScope)),
+        ] {
+            let policy = policy_in(scopes, Some(cwd));
+            assert_eq!(policy.egress_withheld(), expected.as_ref(), "{cwd}");
+            assert_eq!(
+                policy.allows_telemetry_egress(),
+                expected.is_none(),
+                "{cwd}"
+            );
+        }
+
+        // A principal binding the process does not match fails closed.
+        let policy = policy_for(
+            r#"{"principals":[{"principal":"alice","os_user":1001}],
+                "scopes":[{"match":"cleared","engagement":"e","allow_telemetry_egress":true}]}"#,
+            Some("/work/cleared"),
+            Some(1002),
+        );
+        assert!(
+            matches!(
+                policy.egress_withheld(),
+                Some(EgressWithheld::FailedClosed { reason }) if reason.contains("no principal binding")
+            ),
+            "{:?}",
+            policy.egress_withheld()
+        );
+
+        // With directory selection on and nothing selected, a scope's own
+        // clearance does not decide.
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("policy.json"), scopes).unwrap();
+        std::fs::write(home.path().join("directory-selection.json"), b"{}").unwrap();
+        let document = PolicyDocument::read(home.path()).unwrap();
+        assert_eq!(
+            document.resolve(Some("/work/cleared")).egress_withheld(),
+            Some(&EgressWithheld::DirectoryNotSelected)
+        );
+        assert_eq!(
+            document.resolve(Some("/work/explicit")).egress_withheld(),
+            Some(&EgressWithheld::ScopeNotCleared {
+                scope: "explicit".into()
+            }),
+            "a scope that sets it false vetoes whatever is selected"
+        );
+    }
 
     fn policy_in(json: &str, cwd: Option<&str>) -> SessionPolicy {
         let directory = tempfile::tempdir().expect("tempdir");

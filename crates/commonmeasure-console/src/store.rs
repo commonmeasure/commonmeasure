@@ -125,9 +125,11 @@ impl Store {
                     break;
                 }
                 let Some(bytes) = buffer.strip_suffix(b"\n") else {
-                    // A last line with no newline is a write still in flight.
-                    // Stopping short of it holds the watermark below the line
-                    // so the next pass reads it whole; indexing the fragment
+                    // A last line with no newline is a write still in flight,
+                    // or a record cut short that the next append or relay run
+                    // terminates and marks. Stopping short of it holds the
+                    // watermark below the line so the next pass reads it
+                    // whole or terminated; indexing the fragment
                     // would strand the truncation in the index forever, since
                     // the watermark is durable and nothing revisits it.
                     break;

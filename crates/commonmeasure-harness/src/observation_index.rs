@@ -442,9 +442,14 @@ impl ValidationIndex {
 
     /// Index what the log gained since the last call and return how many
     /// lines that was. An index that does not describe this log is rebuilt
-    /// from the log's first byte. An error is a log that cannot be read as
-    /// evidence: missing, unreadable, holding a malformed line, or ending in
-    /// an incomplete one. The lines before the fault stay indexed.
+    /// from the log's first byte. The log is read as every strict reader
+    /// reads it (`commonmeasure_runtime::evidence::scan`): a torn line marked
+    /// by the `evidence_gap` record after it is skipped, and a final line
+    /// another writer is still writing is waited for. An error is a log that
+    /// cannot be read as evidence: missing, unreadable, holding a line that
+    /// does not parse and is not a marked tear, or ending in a line cut
+    /// short that nothing has marked yet. The lines before the fault stay
+    /// indexed.
     pub(super) fn catch_up(&mut self) -> io::Result<u64> {
         let mut log = match File::open(&self.log) {
             Ok(log) => log,
@@ -457,31 +462,20 @@ impl ValidationIndex {
             self.reset();
         }
         let from = self.offset;
-        log.seek(SeekFrom::Start(from))?;
-        let mut reader = BufReader::new(&mut log);
-        let (mut lines, mut new, mut line) = (0, Vec::new(), Vec::new());
-        let outcome = loop {
-            line.clear();
-            let read = match reader.read_until(b'\n', &mut line) {
-                Ok(0) => break Ok(()),
-                Ok(read) => read,
-                Err(error) => break Err(error),
-            };
-            if !line.ends_with(b"\n") {
-                break Err(io::Error::other(
-                    "the session log ends in an incomplete record",
-                ));
-            }
-            if !line.iter().all(u8::is_ascii_whitespace) {
-                match serde_json::from_slice::<Value>(&line) {
-                    Ok(record) => self.facts.observe(&record, self.offset, &mut new),
-                    Err(error) => break Err(io::Error::other(error)),
-                }
-            }
-            self.offset += read as u64;
-            lines += 1;
-        };
-        drop(reader);
+        let mut new = Vec::new();
+        let facts = &mut self.facts;
+        let scanned = commonmeasure_runtime::evidence::scan::<Value>(
+            &self.log,
+            commonmeasure_runtime::evidence::LogPosition {
+                offset: from,
+                line: 0,
+            },
+            commonmeasure_runtime::evidence::TornTail::Refuse,
+            |record, at| facts.observe(&record, at, &mut new),
+        )?;
+        self.offset = scanned.end.offset;
+        let lines = scanned.end.line;
+        let outcome = scanned.fault.map_or(Ok(()), Err);
         if self.offset > from || self.rewrite {
             self.tail = tail_digest(&mut log, self.offset)?;
             let facts = if self.rewrite { self.facts.all() } else { new };
@@ -830,7 +824,9 @@ mod tests {
 
     /// A last line that is complete JSON with no newline may still be half
     /// of a longer record. It is unavailable, here and after a restart, and
-    /// indexed once when its newline lands.
+    /// indexed once when its newline lands. (Written without the append
+    /// lock, as no writer of the product writes, so the index finds no
+    /// writer at work and says the line was cut short.)
     #[test]
     fn a_complete_record_with_no_newline_is_unavailable_until_the_newline_lands() {
         let home = tempfile::tempdir().unwrap();
@@ -846,7 +842,10 @@ mod tests {
         let mut restarted = ValidationIndex::load(home.path(), "s", &log);
         for index in [&mut index, &mut restarted] {
             let error = index.catch_up().unwrap_err();
-            assert!(error.to_string().contains("incomplete record"), "{error}");
+            assert!(
+                error.to_string().contains("ends without its newline"),
+                "{error}"
+            );
             assert!(index.entered("a", "g") && !index.entered("b", "g"));
         }
         raw(b"\n");

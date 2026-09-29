@@ -325,10 +325,18 @@ mod tests {
         .unwrap()
     }
 
+    /// Opening a log reads its opt-in past damage and writes nothing, and
+    /// observation stays strict. The next append marks a final line cut
+    /// short, as a writer that died mid-append leaves one, with an
+    /// `evidence_gap` record, and the log then reads (EDG-27). A line that
+    /// does not parse in the middle of the log stays unreadable.
     #[test]
     fn opening_tolerates_partial_and_damaged_lines_but_observations_remain_strict() {
         use std::io::Write;
-        for tail in ["{\"partial\":", "{broken}\n{\"event\":\"other\"}\n"] {
+        for (tail, reads_after) in [
+            ("{\"partial\":", true),
+            ("{broken}\n{\"event\":\"other\"}\n", false),
+        ] {
             let home = tempfile::tempdir().unwrap();
             let mut log = SessionLog::open(home.path(), "s").unwrap();
             log.record_host_observation(json!({"event":"observations_started"}), "pi", None)
@@ -341,6 +349,11 @@ mod tests {
                 .unwrap();
             let before = std::fs::read(log.path()).unwrap();
             let mut reopened = SessionLog::open(home.path(), "s").unwrap();
+            assert_eq!(
+                std::fs::read(log.path()).unwrap(),
+                before,
+                "opening writes nothing"
+            );
             assert!(reopened.host_observations);
             assert!(
                 reopened
@@ -358,14 +371,34 @@ mod tests {
             let after = std::fs::read(log.path()).unwrap();
             assert!(
                 after.starts_with(&before),
-                "opening must not repair a concurrent writer's bytes"
+                "an append changes no byte already written"
             );
-            let appended: Value = serde_json::from_slice(&after[before.len()..]).unwrap();
-            assert_eq!(appended["event"], "crossing_observed");
-            assert!(
-                SessionLog::read(log.path()).is_err(),
-                "damaged evidence stays unavailable"
-            );
+            let appended: Vec<Value> = after[before.len()..]
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap())
+                .collect();
+            let events: Vec<&str> = appended
+                .iter()
+                .map(|record| record["event"].as_str().unwrap())
+                .collect();
+            if reads_after {
+                assert_eq!(after[before.len()], b'\n', "the torn line is terminated");
+                assert_eq!(events, ["evidence_gap", "crossing_observed"]);
+                assert_eq!(
+                    appended[0]["payload"]["torn_line_bytes"],
+                    tail.len(),
+                    "the gap names the torn line's length"
+                );
+                let records = SessionLog::read(log.path()).expect("a marked tear reads");
+                assert_eq!(records.last().unwrap()["event"], "crossing_observed");
+            } else {
+                assert_eq!(events, ["crossing_observed"]);
+                assert!(
+                    SessionLog::read(log.path()).is_err(),
+                    "damaged evidence stays unavailable"
+                );
+            }
         }
     }
 

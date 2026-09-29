@@ -242,16 +242,31 @@ fn read_line_bounded(reader: &mut impl BufRead, budget: &mut usize) -> Result<St
     String::from_utf8(line).context("header line is not utf-8")
 }
 
-/// A field name is a token and a field value carries no control bytes
-/// (RFC 9110 §5.1, §5.5). Checked on the way out because header values arrive
-/// from operator configuration — an API key holding a CRLF would otherwise
-/// write extra header lines into a request to a credentialed origin — and on
-/// the way in so this parser cannot mint a field a compliant peer would refuse.
+/// Outbound values retain the strict configuration guard: no control bytes,
+/// including tabs, can reach a credentialed origin through a header value.
 fn check_field(name: &str, value: &str) -> Result<()> {
+    check_field_name(name)?;
+    if let Some(byte) = value.bytes().find(|b| *b < 0x20 || *b == 0x7f) {
+        bail!("header {name} has control byte {byte:#04x} in its value");
+    }
+    Ok(())
+}
+
+fn check_field_name(name: &str) -> Result<()> {
     if name.is_empty() || !name.bytes().all(is_token_byte) {
         bail!("header name {name:?} is not a token");
     }
-    if let Some(byte) = value.bytes().find(|b| *b < 0x20 || *b == 0x7f) {
+    Ok(())
+}
+
+/// RFC 9110 §5.5 permits HTAB inside an inbound value. Other control bytes
+/// remain invalid; optional whitespace is stripped by the reader.
+fn check_inbound_field(name: &str, value: &str) -> Result<()> {
+    check_field_name(name)?;
+    if let Some(byte) = value
+        .bytes()
+        .find(|b| (*b < 0x20 && *b != b'\t') || *b == 0x7f)
+    {
         bail!("header {name} has control byte {byte:#04x} in its value");
     }
     Ok(())
@@ -274,7 +289,7 @@ fn read_headers(reader: &mut impl BufRead, budget: &mut usize) -> Result<Headers
         // Only optional whitespace around the value is the sender's to add; a
         // space before the colon makes the line ambiguous, not trimmable.
         let value = value.trim_matches([' ', '\t']);
-        check_field(name, value)?;
+        check_inbound_field(name, value)?;
         headers.append(name, value);
     }
 }

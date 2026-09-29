@@ -18,6 +18,7 @@ mod instance;
 mod mcp_session;
 mod processes;
 mod relay_loop;
+mod relay_setup;
 mod report;
 mod service;
 mod update;
@@ -263,10 +264,17 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Print what a harness session recorded.
+    /// Print what a harness session recorded, whether its crossings are
+    /// cleared to leave under the policy now and, for those that are not,
+    /// the directory they ran in and the rule that keeps them here, and any
+    /// torn line its log holds.
     Session {
         /// Session id, or the most recent session when omitted.
         session: Option<String>,
+        /// Print the session's reporting standing and torn lines as a JSON
+        /// document rather than the report.
+        #[arg(long)]
+        json: bool,
     },
     /// Print this edge's fleet-status document: the identity of the policy
     /// in force for this directory and principal, the declared policy's
@@ -345,9 +353,15 @@ enum Command {
         #[arg(
             long,
             value_name = "SECONDS",
-            conflicts_with_all = ["dry_run", "policy", "receiver", "api_key", "run", "session"]
+            conflicts_with_all = ["dry_run", "policy", "receiver", "api_key", "run", "session", "json"]
         )]
         every: Option<u64>,
+        /// Print the run's session accounting as a JSON document: the
+        /// counts, each withheld session with the directories its crossings
+        /// ran in and the rule that kept them here, and each session skipped
+        /// because its log did not read.
+        #[arg(long)]
+        json: bool,
     },
     /// Enrol this edge with a Common Measure Hub in one command. Exchanges
     /// the owner's short-lived token for an org-scoped ingest key, mints
@@ -581,7 +595,7 @@ fn main() -> ExitCode {
             json,
         } => doctor::run(host.as_deref(), resolve.as_deref(), json, palette),
         Command::Import { since, dry_run } => import(since.as_deref(), dry_run),
-        Command::Session { session } => show_session(session.as_deref()),
+        Command::Session { session, json } => show_session(session.as_deref(), json),
         Command::Status { json } => show_status(json, palette),
         Command::Policy { action } => match action {
             PolicyAction::Identity => show_policy_identity(),
@@ -598,9 +612,11 @@ fn main() -> ExitCode {
             run,
             session,
             every,
+            json,
         } => match action {
             Some(RelayAction::Requeue { batch }) => (|| {
                 if every.is_some()
+                    || json
                     || dry_run
                     || policy.is_some()
                     || receiver.is_some()
@@ -622,7 +638,7 @@ fn main() -> ExitCode {
                 Some(every) => home_dir()
                     .map_err(|error| error.to_string())
                     .and_then(|home| relay_loop::run(&home, every)),
-                None => relay(receiver, api_key, run, session, dry_run, policy),
+                None => relay(receiver, api_key, run, session, dry_run, policy, json),
             },
         },
         Command::Connect {
@@ -1378,26 +1394,10 @@ fn install_host(host: &str, binary: Option<&Path>) -> Result<(), String> {
     let paths = registration::HostPaths::from_environment()?;
     let binary = registration::resolve_binary(binary)?;
     let mut lines = registration::install(surface, &binary, &paths)?;
-    // Claude Desktop sends no session-end event, so without a background
-    // relay a source whose licence demands usage reporting is refused there.
-    // Starting one is left to the operator: it sends to the receiver in
-    // relay.json with nobody running a command.
-    if surface == HostSurface::ClaudeDesktop {
-        let running =
-            home_dir().is_ok_and(|home| commonmeasure_harness::delivery::relay_loop_running(&home));
-        lines.push(if running {
-            "claude-desktop: a background relay holds this home, so a source whose licence \
-             demands usage reporting can be admitted in its sessions where the policy scope \
-             clears telemetry egress"
-                .to_owned()
-        } else {
-            format!(
-                "claude-desktop: a source whose licence demands usage reporting is refused in its \
-                 sessions until a background relay runs; install it with `commonmeasure service \
-                 install relay` (macOS) or run `commonmeasure relay --every {}`",
-                relay_loop::DEFAULT_EVERY_SECS
-            )
-        });
+    let running =
+        home_dir().is_ok_and(|home| commonmeasure_harness::delivery::relay_loop_running(&home));
+    if let Some(hint) = relay_setup::host_hint(surface.id(), running, cfg!(target_os = "macos")) {
+        lines.push(hint);
     }
     write_stdout(&format!("{}\n", lines.join("\n")))
 }
@@ -1605,6 +1605,7 @@ fn relay(
     sessions: Vec<String>,
     dry_run: bool,
     policy: Option<PathBuf>,
+    json: bool,
 ) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     // The clearances the relay reads come from the policy on disk, so a
@@ -1666,20 +1667,68 @@ fn relay(
             // gets its report as usual and the command still fails naming
             // the sessions it skipped.
             if let Some(skipped) = error.downcast_ref::<commonmeasure_relay::UnreadableSessions>() {
-                write_stdout(&relay_report_text(&skipped.report))?;
-                if dry_run {
-                    write_stdout(&dry_run_basis_text(&home, draft.as_deref()))?;
+                if json {
+                    write_stdout(&relay_report_json(&skipped.report, &skipped.sessions))?;
+                } else {
+                    write_stdout(&relay_report_text(&skipped.report))?;
+                    if dry_run {
+                        write_stdout(&dry_run_basis_text(&home, draft.as_deref()))?;
+                    }
                 }
                 return Err(skipped.to_string());
             }
             return Err(format!("{error:#}"));
         }
     };
+    if json {
+        return write_stdout(&relay_report_json(&report, &[]));
+    }
     write_stdout(&relay_report_text(&report))?;
     if dry_run {
         write_stdout(&dry_run_basis_text(&home, draft.as_deref()))?;
     }
     Ok(())
+}
+
+/// `relay --json`: the session accounting of one run, newline ended. The
+/// counts are those the text report prints; `withheld_sessions` and
+/// `unreadable_sessions` carry the per-session detail the text summarises.
+fn relay_report_json(
+    report: &commonmeasure_relay::RelayReport,
+    unreadable: &[commonmeasure_relay::UnreadableSession],
+) -> String {
+    let document = serde_json::json!({
+        "dry_run": report.dry_run,
+        "receiver": report.receiver,
+        "policy": report.policy_source,
+        "sessions_read": report.sessions_read,
+        "sessions_projected": report.sessions_projected,
+        "sessions_withheld": report.sessions_withheld,
+        "withheld_sessions": report.withheld_sessions,
+        "withheld_summary": commonmeasure_relay::state::withheld_lines(
+            &report.withheld_sessions,
+            &report.policy_source,
+        ),
+        "sessions_withheld_access_context": report.sessions_withheld_access_context,
+        "crossings_withheld_access_context": report.crossings_withheld_access_context,
+        "sessions_unreadable": unreadable.len(),
+        "unreadable_sessions": unreadable
+            .iter()
+            .map(|session| serde_json::json!({
+                "session": session.session,
+                "path": session.path.display().to_string(),
+                "cause": format!("{:#}", session.cause),
+                "batches_held": session.batches_held,
+            }))
+            .collect::<Vec<_>>(),
+        "runs_projected": report.runs_projected,
+        "events_enqueued": report.events_enqueued,
+        "events_delivered": report.events_delivered,
+        "batches_delivered": report.batches_delivered,
+        "batches_queued": report.batches_queued,
+        "batches_dead": report.batches_dead,
+    });
+    format!("{document:#}\n")
 }
 
 /// What a forecast was taken against, printed under it.
@@ -1799,6 +1848,12 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
             "  {} withheld: no crossing cleared to leave\n",
             report.sessions_withheld
         ));
+        for line in commonmeasure_relay::state::withheld_lines(
+            &report.withheld_sessions,
+            &report.policy_source,
+        ) {
+            out.push_str(&format!("    {line}\n"));
+        }
     }
     if report.crossings_withheld_access_context > 0 {
         out.push_str(&format!(
@@ -1994,6 +2049,7 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
     write_stdout(&out)?;
     match managed_failure {
         Some(failure) => Err(failure),
+        None if managed => relay_setup::offer(&home),
         None => Ok(()),
     }
 }
@@ -2127,7 +2183,8 @@ fn crossing_outcome(payload: &serde_json::Value) -> &'static str {
     }
 }
 
-fn show_session(session: Option<&str>) -> Result<(), String> {
+fn show_session(session: Option<&str>, json: bool) -> Result<(), String> {
+    use commonmeasure_harness::TornTail;
     let home = home_dir().map_err(|error| error.to_string())?;
     let path = match session {
         Some(id) => home.join("sessions").join(format!("{id}.ndjson")),
@@ -2137,8 +2194,38 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
             .next()
             .ok_or("no session has recorded anything yet")?,
     };
-    let mut records =
-        SessionLog::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let id = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Read as the relay will read it once a torn final line is marked, and
+    // write nothing: a log that fails this read is one the relay skips.
+    let (mut records, tears) = match SessionLog::read_with(&path, TornTail::Forecast) {
+        Ok(read) => read,
+        Err(error) => {
+            if json {
+                write_stdout(&format!(
+                    "{:#}\n",
+                    serde_json::json!({
+                        "session": id,
+                        "path": path.display().to_string(),
+                        "unreadable": error.to_string(),
+                    })
+                ))?;
+            }
+            return Err(format!(
+                "{} does not read, so the relay skips it and nothing of it is reported: {error}",
+                path.display()
+            ));
+        }
+    };
+    let mut torn: Vec<(PathBuf, commonmeasure_harness::Tear)> =
+        tears.into_iter().map(|tear| (path.clone(), tear)).collect();
+    // Where this log's crossings stand under the policy now, read before
+    // any joined log is added: the relay delivers each log on its own.
+    let standing = commonmeasure_harness::policy::PolicyDocument::read(&home)
+        .map(|policy| commonmeasure_relay::session_standing(&policy, &records));
+    let policy_file = home.join("policy.json").display().to_string();
     // A hook and the MCP server of one host session write two logs on the
     // hosts that pass the server no session identifier. The logs whose
     // `host_process` records name the same process are read together, so
@@ -2148,9 +2235,35 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
     let join = commonmeasure_harness::host_process::joined_logs(&home, &path)
         .map_err(|error| error.to_string())?;
     for other in &join.others {
-        records.extend(
-            SessionLog::read(other).map_err(|error| format!("{}: {error}", other.display()))?,
-        );
+        let (joined, tears) = SessionLog::read_with(other, TornTail::Forecast)
+            .map_err(|error| format!("{}: {error}", other.display()))?;
+        records.extend(joined);
+        torn.extend(tears.into_iter().map(|tear| (other.clone(), tear)));
+    }
+    if json {
+        let document = serde_json::json!({
+            "session": id,
+            "path": path.display().to_string(),
+            "records": records.len(),
+            "tears": torn.iter().map(|(log, tear)| serde_json::json!({
+                "path": log.display().to_string(),
+                "line": tear.line,
+                "bytes": tear.bytes,
+                "marked": tear.marked,
+            })).collect::<Vec<_>>(),
+            "reporting": match &standing {
+                Ok(standing) => serde_json::json!({
+                    "standing": standing_word(standing),
+                    "policy": policy_file,
+                    "witnessed": standing.witnessed,
+                    "cleared": standing.cleared,
+                    "held_for_access_context": standing.held_for_access_context,
+                    "withheld": standing.withheld,
+                }),
+                Err(error) => serde_json::json!({"standing": "unknown", "unavailable": error}),
+            },
+        });
+        return write_stdout(&format!("{document:#}\n"));
     }
     if !join.others.is_empty() {
         // Timestamp order between the logs, position order within one: the
@@ -2228,6 +2341,40 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
         }
     );
     let _ = writeln!(out, "{}", summary.host_observed.display());
+    match &standing {
+        Ok(standing) => {
+            let _ = writeln!(out, "reporting  {}", standing_text(standing));
+            for directory in &standing.withheld {
+                let _ = writeln!(
+                    out,
+                    "  {} crossing{} kept here: {}",
+                    directory.crossings,
+                    if directory.crossings == 1 { "" } else { "s" },
+                    directory
+                        .rule
+                        .describe(directory.directory.as_deref(), &policy_file)
+                );
+            }
+        }
+        Err(error) => {
+            let _ = writeln!(out, "reporting  unknown: {error}");
+        }
+    }
+    for (log, tear) in &torn {
+        let _ = writeln!(
+            out,
+            "torn       {} line {}, {} bytes, cut short by a write that did not finish; {}",
+            log.display(),
+            tear.line,
+            tear.bytes,
+            if tear.marked {
+                "the evidence_gap record after it marks it and readers skip it"
+            } else {
+                "it ends the log without its newline, and the next append or relay run \
+                 marks it"
+            }
+        );
+    }
     // The MCP client's own name and version, where a server in this session
     // recorded one at initialize, beside the host the registration named.
     for record in records
@@ -2402,6 +2549,39 @@ fn show_session(session: Option<&str>) -> Result<(), String> {
         );
     }
     write_stdout(&out)
+}
+
+/// The `reporting.standing` word of `session --json`.
+fn standing_word(standing: &commonmeasure_relay::SessionStanding) -> &'static str {
+    match (standing.witnessed, standing.cleared) {
+        (0, _) => "no_witnessed_crossings",
+        (_, 0) => "withheld",
+        (witnessed, cleared) if cleared < witnessed => "partly_cleared",
+        _ => "cleared",
+    }
+}
+
+/// The `reporting` line of `session`.
+fn standing_text(standing: &commonmeasure_relay::SessionStanding) -> String {
+    let held = match standing.held_for_access_context {
+        0 => String::new(),
+        held => format!(
+            "; operator terms requiring access_context hold {held} of them, which the \
+             event-batch delivery format cannot carry"
+        ),
+    };
+    match standing_word(standing) {
+        "no_witnessed_crossings" => "no witnessed crossing, so nothing to report".to_owned(),
+        "withheld" => format!(
+            "withheld: none of {} witnessed crossing{} is cleared to leave",
+            standing.witnessed,
+            if standing.witnessed == 1 { "" } else { "s" }
+        ),
+        _ => format!(
+            "{} of {} witnessed crossings cleared to leave{held}",
+            standing.cleared, standing.witnessed
+        ),
+    }
 }
 
 /// What one crossing's request presented, in a phrase: the enrolled key that

@@ -6,11 +6,17 @@
 //! gap record by the next successful write, so a reader can always tell
 //! "nothing happened" from "this log could not say what happened".
 //!
-//! There is no unclean-shutdown recovery and no outbound spool here: a batch
-//! run has neither an unclean-shutdown window nor anything to spool. The
-//! store carries the durability and gap discipline only.
+//! A record cut short by a process that died mid-append is the one damage
+//! the log repairs: the next append terminates it and records the gap, and
+//! readers skip it ([`scan`]). Anything else that does not parse stays a
+//! hard error for every reader. There is no outbound spool here: a batch
+//! run has nothing to spool.
 
-use std::fs::{self, File, OpenOptions};
+mod scan;
+
+pub use scan::{LogPosition, Scanned, TORN_LINE_BYTES, Tear, TornTail, Validated, scan};
+
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
@@ -57,11 +63,12 @@ impl EvidenceLog {
     /// the same session's log. The sequence resumes from what is already there
     /// so numbering stays monotonic across those processes.
     ///
-    /// Two hooks can fire close together, and each append is a single fsynced
-    /// `write_all` to a file opened `O_APPEND`, which the kernel does not
-    /// interleave for writes of this size. Sequence numbers can therefore
-    /// collide under concurrency where positions cannot; a reader orders by
-    /// position and treats `seq` as a hint.
+    /// Two hooks can fire close together. Each append holds the log's
+    /// exclusive append lock for its one fsynced `write_all`
+    /// ([`Self::append`]), so appends never interleave. Sequence numbers can
+    /// collide under concurrency where positions cannot, because a process
+    /// counts the lines once, here; a reader orders by position and treats
+    /// `seq` as a hint.
     ///
     /// A path that exists but is not a regular file (a directory, a FIFO) is
     /// refused before it is opened, and the first read error ends the count:
@@ -92,6 +99,15 @@ impl EvidenceLog {
     /// Append one record durably, materialising any owed gap first so the log
     /// records its own blindness in order.
     ///
+    /// The append holds the log's exclusive advisory lock from reading its
+    /// tail to the end of the fsync. A last line without its newline, found
+    /// under the lock, was left by a process that has stopped writing it,
+    /// so it is terminated and an `evidence_gap` record naming its length is
+    /// written before this record ([`scan`] says how readers use it). A
+    /// line another process is still writing is never touched: that process
+    /// holds the lock until its write returns, and the kernel drops the lock
+    /// of a process that exits.
+    ///
     /// A failure is returned to the caller *and* remembered: the run may decide
     /// to continue under its policy mode, but the next successful append will
     /// carry the gap whether or not the caller looked at this error.
@@ -102,23 +118,43 @@ impl EvidenceLog {
             self.note_write_failure(&format!("{event} was not attempted: {error}"));
             return Err(error);
         }
-        let sequence = self.sequence + 1;
-        let record = json!({
-            "seq": sequence,
-            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-            "event": event,
-            "payload": payload,
-        });
-        match append_line(&self.path, &record) {
-            Ok(()) => {
-                self.sequence = sequence;
-                Ok(sequence)
-            }
-            Err(error) => {
-                self.note_write_failure(&format!("append of {event} failed: {error}"));
-                Err(error)
-            }
+        self.append_locked(event, payload).inspect_err(|error| {
+            self.note_write_failure(&format!("append of {event} failed: {error}"));
+        })
+    }
+
+    /// Append one record under the append lock, marking a torn tail first.
+    fn append_locked(&mut self, event: &str, payload: Value) -> std::io::Result<u64> {
+        let created = !self.path.exists();
+        let mut file = scan::open_for_append(&self.path, true)?;
+        scan::lock_within(&file, scan::Lock::Exclusive, &self.path)?;
+        let mut sequence = self.sequence;
+        let mut bytes = Vec::new();
+        if let Some(torn) = scan::torn_tail(&mut file)? {
+            sequence += 1;
+            bytes.push(b'\n');
+            push_line(&mut bytes, &torn_gap_record(sequence, torn, &file))?;
         }
+        sequence += 1;
+        push_line(
+            &mut bytes,
+            &json!({
+                "seq": sequence,
+                "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                "event": event,
+                "payload": payload,
+            }),
+        )?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        // `sync_all` makes the bytes durable, but a file whose directory
+        // entry is lost to a crash was never recorded in any sense a reader
+        // can use, so the append that creates the file syncs that too.
+        if created {
+            sync_parent(&self.path)?;
+        }
+        self.sequence = sequence;
+        Ok(sequence)
     }
 
     /// Record that something the run knows happened could not be written.
@@ -150,47 +186,118 @@ impl EvidenceLog {
         let Some(gap) = self.pending_gap.take() else {
             return Ok(());
         };
-        let sequence = self.sequence + 1;
-        let record = json!({
-            "seq": sequence,
-            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-            "event": "evidence_gap",
-            "payload": {
-                "reason": GapReason::WriteFailed,
-                "from": gap.from.to_rfc3339_opts(SecondsFormat::Millis, true),
-                "to": gap.to.to_rfc3339_opts(SecondsFormat::Millis, true),
-                "detail": gap.detail,
-            },
+        let payload = json!({
+            "reason": GapReason::WriteFailed,
+            "from": gap.from.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "to": gap.to.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "detail": gap.detail,
         });
         // If the gap record itself cannot be written the gap stays pending.
         // Nothing is lost and nothing is silently dropped.
-        if let Err(error) = append_line(&self.path, &record) {
+        if let Err(error) = self.append_locked("evidence_gap", payload) {
             self.pending_gap = Some(gap);
             return Err(error);
         }
-        self.sequence = sequence;
         Ok(())
     }
 
+    /// Every record of the log at `path`, in order.
+    ///
+    /// A torn line marked by the `evidence_gap` record after it is skipped;
+    /// any other line that does not parse, and a final line without its
+    /// newline that no process is writing, fail the read naming the line
+    /// ([`scan`]). A final line another process is still writing is waited
+    /// for. Nothing is written.
     pub fn read(path: &Path) -> std::io::Result<Vec<Value>> {
-        let file = File::open(path)?;
+        Self::read_with(path, TornTail::Refuse).map(|(records, _)| records)
+    }
+
+    /// Every record of the log at `path` and the torn lines it skipped, the
+    /// final line handled as `tail` says.
+    pub fn read_with(path: &Path, tail: TornTail) -> std::io::Result<(Vec<Value>, Vec<Tear>)> {
         let mut records = Vec::new();
-        for line in BufReader::new(file).lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            records.push(serde_json::from_str(&line).map_err(std::io::Error::other)?);
+        let scanned = scan(path, LogPosition::default(), tail, |record, _| {
+            records.push(record)
+        })?;
+        match scanned.fault {
+            Some(fault) => Err(fault),
+            None => Ok((records, scanned.tears)),
         }
-        Ok(records)
+    }
+
+    /// Check that the log at `path` reads from `from` on as [`Self::read_with`]
+    /// would read it, holding one line at a time: a check repeated as the log
+    /// grows passes the returned [`Scanned::end`] back as `from`.
+    pub fn validate(path: &Path, from: LogPosition, tail: TornTail) -> std::io::Result<Scanned> {
+        scan::<Validated>(path, from, tail, |_, _| {})
     }
 }
 
-/// Append one line and make it durable before returning.
+/// Terminate the final line of the log at `path` and write the
+/// `evidence_gap` record that marks it, if it ends without its newline and
+/// no process is writing it, as the next append would. Returns the tear
+/// marked, if one was. A log that does not exist has nothing to repair.
 ///
-/// When this append is the one that creates the file, the directory entry is
-/// synced too: `sync_all` makes the bytes durable, but a file whose directory
-/// entry is lost to a crash was never recorded in any sense a reader can use.
+/// The relay repairs before it reads a session for delivery, because a
+/// session whose last writer died mid-append may never be appended to again.
+pub fn repair_torn_tail(path: &Path) -> std::io::Result<Option<Tear>> {
+    let mut file = match scan::open_for_append(path, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    scan::lock_within(&file, scan::Lock::Exclusive, path)?;
+    let Some(torn) = scan::torn_tail(&mut file)? else {
+        return Ok(None);
+    };
+    // The torn line is the last counted.
+    let lines = count_lines(File::open(path)?)?;
+    let mut bytes = vec![b'\n'];
+    push_line(&mut bytes, &torn_gap_record(lines + 1, torn, &file))?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(Some(Tear {
+        line: lines,
+        bytes: torn,
+        marked: true,
+    }))
+}
+
+/// The `evidence_gap` record that marks the line before it, `bytes` long,
+/// as torn. The window runs from the file's last modification, which was
+/// the torn write, since nothing has been appended after it, to now.
+fn torn_gap_record(sequence: u64, bytes: u64, file: &File) -> Value {
+    let now = Utc::now();
+    let from = file
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .map(DateTime::<Utc>::from)
+        .unwrap_or(now);
+    json!({
+        "seq": sequence,
+        "timestamp": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        "event": "evidence_gap",
+        "payload": {
+            "reason": GapReason::WriteFailed,
+            "from": from.to_rfc3339_opts(SecondsFormat::Millis, true),
+            "to": now.to_rfc3339_opts(SecondsFormat::Millis, true),
+            TORN_LINE_BYTES: bytes,
+            "detail": format!(
+                "the line before this record ended without its newline after {bytes} bytes and \
+                 no process was still writing it, so a write was cut short; the line is \
+                 terminated here, and readers skip it unless it parses"
+            ),
+        },
+    })
+}
+
+/// `record` as one NDJSON line, appended to `bytes`.
+fn push_line(bytes: &mut Vec<u8>, record: &Value) -> std::io::Result<()> {
+    serde_json::to_writer(&mut *bytes, record).map_err(std::io::Error::other)?;
+    bytes.push(b'\n');
+    Ok(())
+}
+
 /// Count lines as `BufRead::lines` would, a final line without its newline
 /// included, but on bytes, so a record that is not UTF-8 still counts, and
 /// stopping at the first read error.
@@ -205,19 +312,6 @@ fn count_lines(source: impl std::io::Read) -> std::io::Result<u64> {
         }
         count += 1;
     }
-}
-
-fn append_line(path: &Path, record: &Value) -> std::io::Result<()> {
-    let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    let created = !path.exists();
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(&line)?;
-    file.sync_all()?;
-    if created {
-        sync_parent(path)?;
-    }
-    Ok(())
 }
 
 /// Make a new directory entry durable by syncing the directory that holds it.

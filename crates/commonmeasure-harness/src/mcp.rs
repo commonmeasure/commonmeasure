@@ -263,6 +263,10 @@ pub struct McpServer {
     /// `/etc/hosts` change.
     resolve: Resolve,
     evidence_error: Option<String>,
+    /// How far this session's log is known to read as the relay reads it,
+    /// so each reporting ruling reads only what was appended since
+    /// ([`Self::unreadable_session_log`]).
+    delivery_check: std::sync::Mutex<crate::DeliveryCheck>,
 }
 
 /// How a hop's name becomes the addresses it is sent to, or why it did not.
@@ -370,6 +374,7 @@ impl McpServer {
             hub_authorities,
             resolve: Box::new(system_resolve),
             evidence_error: None,
+            delivery_check: std::sync::Mutex::default(),
         }
     }
 
@@ -2552,19 +2557,26 @@ impl McpServer {
 
     /// Why the relay would skip this session's log whole, or `None`.
     ///
-    /// The relay reads a session's log with [`SessionLog::read`] and sends
-    /// nothing from a log that does not read (a torn line left by a short
-    /// write, for example), so a crossing admitted into it with its demand
-    /// met would never be reported. A log not yet written is fine: this
-    /// crossing starts it. Only the log's readability is read here; what the
-    /// session's other crossings are does not decide the demand
+    /// The relay sends nothing from a log that does not read: a line that
+    /// does not parse and is not a torn line marked by the `evidence_gap`
+    /// record after it, for example. A crossing admitted into such a log
+    /// with its demand met would never be reported. A final line cut short
+    /// does not decide it, since the relay marks one before it reads, and
+    /// this crossing's own record marks it first. A log not yet written is
+    /// fine: this crossing starts it. The check reads as the relay reads
+    /// ([`crate::DeliveryCheck`]), and only what was appended since the last
+    /// ruling. Only the log's readability is read here; what the session's
+    /// other crossings are does not decide the demand
     /// ([`Self::access_context_hold`]). A log damaged after the ruling is
     /// beyond what any ruling can see.
     fn unreadable_session_log(&self) -> Option<String> {
         let log = self.session.path();
-        match SessionLog::read(log) {
-            Ok(_) => None,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        let mut check = self
+            .delivery_check
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match check.check(log) {
+            Ok(()) => None,
             Err(error) => Some(format!(
                 "this session's log {} does not read ({error}), and the relay sends nothing \
                  from a log it cannot read, so nothing would be reported",

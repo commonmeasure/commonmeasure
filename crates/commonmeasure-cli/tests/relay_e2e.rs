@@ -873,6 +873,7 @@ fn dry_run_matches_delivery_and_leaves_the_whole_home_unchanged() {
             "  2 under governing engagement personal\n",
             "projected 1 of 2 sessions and 0 runs; 2 events would be newly spooled\n",
             "  1 withheld: no crossing cleared to leave\n",
+            "    1 session: no scope in {} selects /work/private\n",
             "  1 refused crossings in the projected sessions, on the wire as a count per session with no URL and no reason\n",
             "hosts that would leave:\n",
             "  www.example.com\n",
@@ -880,6 +881,7 @@ fn dry_run_matches_delivery_and_leaves_the_whole_home_unchanged() {
             "a real run syncs managed policy and reporting approvals first, which can change what is cleared and what leaves\n"
         ),
         url,
+        home.path().join("policy.json").display(),
         home.path().join("policy.json").display()
     );
     assert_eq!(forecast, expected);
@@ -1562,10 +1564,21 @@ fn cadence_is_visible_in_status_doctor_console_and_explicit_requeue() {
     receiver.stop();
 }
 
-/// One session log whose final record was cut short beside a whole one. The
+/// Append a line that does not parse and that no `evidence_gap` record
+/// marks as torn: damage every reader refuses (EDG-27).
+fn damage_the_log(home: &Path, session: &str) {
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(home.join(format!("sessions/{session}.ndjson")))
+        .unwrap()
+        .write_all(b"{\"seq\":1,\"event\":\"crossing_obs\n")
+        .unwrap();
+}
+
+/// One session log with a line that does not parse beside a whole one. The
 /// binary prints the report of what it relayed for the whole session, exits
-/// non-zero, and names the skipped session and its file on stderr (NET-06).
-/// The cut-short tail is written by the test; the receiver is a loopback
+/// non-zero, and names the skipped session, its file and the line on stderr
+/// (NET-06). The damage is written by the test; the receiver is a loopback
 /// server that accepts every batch.
 #[test]
 fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
@@ -1575,12 +1588,7 @@ fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
     clear_personal_egress(home.path());
     record_crossing(home.path(), "whole", "https://www.example.com/whole");
     record_crossing(home.path(), "killed", "https://www.example.com/killed");
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(home.path().join("sessions/killed.ndjson"))
-        .unwrap()
-        .write_all(br#"{"seq":1,"event":"crossing_obs"#)
-        .unwrap();
+    damage_the_log(home.path(), "killed");
 
     let output = relay(home.path(), &["--receiver", &receiver.url()]);
     receiver.stop();
@@ -1593,6 +1601,7 @@ fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
     );
     assert!(stderr.contains("session killed was skipped"), "{stderr}");
     assert!(stderr.contains("killed.ndjson"), "{stderr}");
+    assert!(stderr.contains("does not parse"), "{stderr}");
     let sent: Vec<String> = bodies
         .lock()
         .unwrap()
@@ -1604,6 +1613,230 @@ fn a_damaged_session_log_is_named_after_the_report_of_what_was_relayed() {
     assert!(
         sent.iter().all(|url| url.ends_with("/whole")),
         "nothing of the damaged log left: {sent:?}"
+    );
+}
+
+fn run(home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(args)
+        .env("COMMONMEASURE_HOME", home)
+        .output()
+        .expect("the binary should run")
+}
+
+/// EDG-42: a withheld session says why. Sessions recorded through the real
+/// hook in three directories under one policy: `/work/personal`, whose scope
+/// clears egress; `/work/client-a`, whose scope sets
+/// `allow_telemetry_egress: false`; and `/work/elsewhere`, which no scope
+/// selects. A fourth log holds a line that does not parse. `relay`,
+/// `session` and `doctor`, in text and with `--json`, name each withheld
+/// session's directory and the rule that kept it here, and name the
+/// damaged log and its line as skipped, not withheld. The receiver is a
+/// loopback server that accepts every batch.
+#[test]
+fn a_withheld_session_names_its_directory_and_the_rule_that_kept_it_here() {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let mut receiver = capture_relay(bodies.clone());
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"scopes":[
+            {"match":"/work/personal","engagement":"personal","allow_telemetry_egress":true},
+            {"match":"/work/client-a","engagement":"client","allow_telemetry_egress":false}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("relay.json"),
+        json!({"receiver": receiver.url()}).to_string(),
+    )
+    .unwrap();
+    let policy = home.path().join("policy.json").display().to_string();
+    record_crossing_in(
+        home.path(),
+        "s-cleared",
+        "/work/personal",
+        "https://www.example.com/a",
+    );
+    record_crossing_in(
+        home.path(),
+        "s-client",
+        "/work/client-a",
+        "https://www.example.com/b",
+    );
+    record_crossing_in(
+        home.path(),
+        "s-client",
+        "/work/client-a",
+        "https://www.example.com/c",
+    );
+    record_crossing_in(
+        home.path(),
+        "s-home",
+        "/work/elsewhere",
+        "https://www.example.com/d",
+    );
+    record_crossing_in(
+        home.path(),
+        "s-damaged",
+        "/work/personal",
+        "https://www.example.com/e",
+    );
+    damage_the_log(home.path(), "s-damaged");
+    let no_scope = format!("no scope in {policy} selects /work/elsewhere");
+    let not_cleared = format!(
+        "the scope \"/work/client-a\" in {policy} selects /work/client-a and does not set \
+         allow_telemetry_egress: true"
+    );
+
+    // relay, text: a line per rule with its count, and the damaged log
+    // named with its line, apart from the withheld.
+    let output = relay(home.path(), &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        !output.status.success(),
+        "the damaged log fails the run: {stdout}"
+    );
+    assert!(
+        stdout.contains("  2 withheld: no crossing cleared to leave\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("    1 session: {no_scope}\n")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("    1 session: {not_cleared}\n")),
+        "{stdout}"
+    );
+    assert!(stderr.contains("session s-damaged was skipped"), "{stderr}");
+    assert!(stderr.contains("line 2 does not parse"), "{stderr}");
+    assert!(
+        !stdout.contains("s-damaged"),
+        "not counted as withheld: {stdout}"
+    );
+
+    // relay --json: the same, per session.
+    let output = relay(home.path(), &["--dry-run", "--json"]);
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(document["sessions_withheld"], 2, "{document:#}");
+    let withheld = |id: &str| {
+        document["withheld_sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} withheld: {document:#}"))
+    };
+    let client = withheld("s-client");
+    assert_eq!(client["directories"][0]["directory"], "/work/client-a");
+    assert_eq!(client["directories"][0]["cause"], "scope_not_cleared");
+    assert_eq!(client["directories"][0]["scope"], "/work/client-a");
+    assert_eq!(client["directories"][0]["crossings"], 2);
+    assert_eq!(client["directories"][0]["reason"], not_cleared);
+    let elsewhere = withheld("s-home");
+    assert_eq!(elsewhere["directories"][0]["cause"], "no_scope");
+    assert_eq!(elsewhere["directories"][0]["reason"], no_scope);
+    assert_eq!(document["sessions_unreadable"], 1);
+    assert_eq!(document["unreadable_sessions"][0]["session"], "s-damaged");
+    assert!(
+        document["unreadable_sessions"][0]["cause"]
+            .as_str()
+            .unwrap()
+            .contains("line 2 does not parse"),
+        "{document:#}"
+    );
+
+    // session, text and --json.
+    let session = run(home.path(), &["session", "s-home"]);
+    let text = String::from_utf8_lossy(&session.stdout).to_string();
+    assert!(session.status.success(), "{text}");
+    assert!(
+        text.contains("reporting  withheld: none of 1 witnessed crossing is cleared to leave"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("  1 crossing kept here: {no_scope}")),
+        "{text}"
+    );
+    let session = run(home.path(), &["session", "s-client", "--json"]);
+    let document: Value = serde_json::from_slice(&session.stdout).unwrap();
+    assert_eq!(
+        document["reporting"]["standing"], "withheld",
+        "{document:#}"
+    );
+    assert_eq!(
+        document["reporting"]["withheld"][0]["cause"],
+        "scope_not_cleared"
+    );
+    assert_eq!(
+        document["reporting"]["withheld"][0]["directory"],
+        "/work/client-a"
+    );
+    let session = run(home.path(), &["session", "s-cleared", "--json"]);
+    let document: Value = serde_json::from_slice(&session.stdout).unwrap();
+    assert_eq!(document["reporting"]["standing"], "cleared", "{document:#}");
+    let damaged = run(home.path(), &["session", "s-damaged"]);
+    let said = String::from_utf8_lossy(&damaged.stderr).to_string();
+    assert!(!damaged.status.success());
+    assert!(
+        said.contains("does not read, so the relay skips it") && said.contains("line 2"),
+        "{said}"
+    );
+    let damaged = run(home.path(), &["session", "s-damaged", "--json"]);
+    let document: Value = serde_json::from_slice(&damaged.stdout).unwrap();
+    assert!(
+        document["unreadable"]
+            .as_str()
+            .unwrap()
+            .contains("line 2 does not parse"),
+        "{document:#}"
+    );
+
+    // doctor, text and --json, from what the last run recorded.
+    let doctor = run(home.path(), &["doctor"]);
+    let text = String::from_utf8_lossy(&doctor.stdout).to_string();
+    assert!(
+        text.contains(&format!("withheld 1 session: {no_scope}")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("withheld 1 session: {not_cleared}")),
+        "{text}"
+    );
+    assert!(
+        text.contains("The relay skipped session s-damaged"),
+        "{text}"
+    );
+    let doctor = run(home.path(), &["doctor", "--json"]);
+    let document: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let withheld: Vec<&str> = document["sessions"]["withheld"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["session"].as_str().unwrap())
+        .collect();
+    assert_eq!(withheld, ["s-client", "s-home"], "{document:#}");
+    assert_eq!(
+        document["sessions"]["withheld"][1]["directories"][0]["cause"],
+        "no_scope"
+    );
+    assert_eq!(
+        document["sessions"]["unreadable"][0]["session"],
+        "s-damaged"
+    );
+    receiver.stop();
+    let sent: Vec<String> = bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap().clone())
+        .filter_map(|event| event["content_url"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        sent.iter().all(|url| url.ends_with("/a")),
+        "only the cleared session left: {sent:?}"
     );
 }
 
@@ -1729,6 +1962,22 @@ fn the_background_relay_runs_once_per_home_stops_on_sigterm_and_is_reported_in_e
     assert!(
         line_of(&printed, "background relay: ").starts_with("background relay: not running; "),
         "{printed}"
+    );
+    let consequence = line_of(&printed, "background relay: ");
+    assert!(
+        consequence.contains("Codex") && consequence.contains("usage reporting"),
+        "{printed}"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .arg("status")
+        .env("COMMONMEASURE_HOME", home.path())
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&output.stdout);
+    let consequence = line_of(&status, "background relay ");
+    assert!(
+        consequence.contains("Codex") && consequence.contains("usage reporting"),
+        "{status}"
     );
     let automatic = line_of(&printed, "automatic relay: ");
     assert!(

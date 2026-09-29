@@ -140,6 +140,14 @@ pub struct RelayReport {
     /// leave. An absence to state rather than a row to omit: an operator whose
     /// work stayed home should read that it did.
     pub sessions_withheld: usize,
+    /// The sessions counted in `sessions_withheld`, each with the
+    /// directories its crossings ran in and the rule that kept them here
+    /// ([`state::withheld_lines`] summarises them).
+    pub withheld_sessions: Vec<state::WithheldSession>,
+    /// The policy file this run took its clearances from, as the withheld
+    /// sessions' rules name it: the home's `policy.json`, or a forecast's
+    /// draft.
+    pub policy_source: String,
     /// Crossings cleared to leave whose host falls under operator terms
     /// that require the institution's identifiers on the session
     /// (`access_context`, standard section 5.1.3). The event-batch envelope
@@ -600,7 +608,7 @@ pub fn relay_with_clock(
             .collect::<Result<_>>()?
     };
     let mut sessions_projected = 0usize;
-    let mut sessions_withheld = 0usize;
+    let mut withheld_sessions = Vec::new();
     let mut sessions_withheld_access_context = 0usize;
     let mut crossings_withheld_access_context = 0usize;
     let mut refused_reported = 0u64;
@@ -610,13 +618,22 @@ pub fn relay_with_clock(
     // wait on it: a reporting duty that depends on them would otherwise stay
     // outstanding for as long as one log is damaged (NET-06).
     let mut unreadable_sessions = Vec::new();
+    // A run for delivery marks a final line cut short by a writer that died
+    // mid-append, as an append would, so that a session nothing appends to
+    // again is still delivered. A forecast writes nothing and reads the log
+    // as it will read once marked; the reporting ruling reads it the same way.
+    let torn_tail = if options.dry_run {
+        commonmeasure_harness::TornTail::Forecast
+    } else {
+        commonmeasure_harness::TornTail::Repair
+    };
     for path in &session_logs {
         let session_id = path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .context("session log without a readable name")?;
-        let records = match commonmeasure_harness::SessionLog::read(path) {
-            Ok(records) => records,
+        let records = match commonmeasure_harness::SessionLog::read_with(path, torn_tail) {
+            Ok((records, _)) => records,
             Err(cause) => {
                 unreadable_sessions.push(UnreadableSession {
                     session: session_id.to_owned(),
@@ -637,7 +654,12 @@ pub fn relay_with_clock(
             // a crossing is not withheld, it is empty. A cleared refusal alone
             // sends nothing either: its count travels only on a batch.
             if records.iter().any(project::is_witnessed) {
-                sessions_withheld += 1;
+                withheld_sessions.push(state::WithheldSession {
+                    session: session_id.to_owned(),
+                    path: path.display().to_string(),
+                    directories: withheld_directories(&policy_document, &records, &cleared),
+                    withheld_at: now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                });
             }
             continue;
         }
@@ -840,7 +862,7 @@ pub fn relay_with_clock(
             .is_some();
         if selection_active || entry.directory_selection {
             if let Recheck::OriginUnreadable(unreadable) =
-                recheck_directory_batch(home, &mut entry)?
+                recheck_directory_batch(home, &mut entry, torn_tail)?
             {
                 // The second strict read of the run. The batch cannot be
                 // sent without it, and one damaged log must not stop the
@@ -937,6 +959,7 @@ pub fn relay_with_clock(
         let examined: Option<Vec<&str>> = (!options.sessions.is_empty())
             .then(|| options.sessions.iter().map(String::as_str).collect());
         state.record_skipped_sessions(examined.as_deref(), &unreadable_sessions, now())?;
+        state.record_withheld_sessions(examined.as_deref(), &withheld_sessions)?;
     }
     if let Some(cause) = first_failure {
         return Err(anyhow::Error::new(DeliveryFailure {
@@ -976,7 +999,9 @@ pub fn relay_with_clock(
         receiver,
         sessions_read,
         sessions_projected,
-        sessions_withheld,
+        sessions_withheld: withheld_sessions.len(),
+        withheld_sessions,
+        policy_source: policy_document.resolve(None).source().display().to_string(),
         sessions_withheld_access_context,
         crossings_withheld_access_context,
         runs_projected,
@@ -1061,6 +1086,79 @@ fn egress_clearances(
         .collect()
 }
 
+/// The witnessed crossings of `records` not `cleared` to leave, by the
+/// directory they ran in, in the order first met, each directory resolved
+/// once against the policy to the rule that keeps its crossings here.
+fn withheld_directories(
+    policy: &commonmeasure_harness::policy::PolicyDocument,
+    records: &[serde_json::Value],
+    cleared: &HashMap<usize, Clearance>,
+) -> Vec<state::WithheldDirectory> {
+    let mut directories: Vec<(Option<&str>, u64)> = Vec::new();
+    for (at, record) in records.iter().enumerate() {
+        if !project::is_witnessed(record) || cleared.contains_key(&at) {
+            continue;
+        }
+        let directory = record["payload"]["cwd"].as_str();
+        match directories
+            .iter_mut()
+            .find(|(known, _)| *known == directory)
+        {
+            Some((_, crossings)) => *crossings += 1,
+            None => directories.push((directory, 1)),
+        }
+    }
+    let source = policy.resolve(None).source().display().to_string();
+    directories
+        .into_iter()
+        .filter_map(|(directory, crossings)| {
+            let rule = commonmeasure_harness::egress::withheld_in(policy, directory)?;
+            Some(state::WithheldDirectory {
+                directory: directory.map(str::to_owned),
+                crossings,
+                reason: rule.describe(directory, &source),
+                rule,
+            })
+        })
+        .collect()
+}
+
+/// Where one session's witnessed crossings stand for delivery under a
+/// policy, as the relay would decide it now.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionStanding {
+    pub witnessed: u64,
+    /// Cleared to leave, by a scope or by the reporting consent on the
+    /// crossing's record.
+    pub cleared: u64,
+    /// Of the cleared crossings, those operator terms hold because they
+    /// require `access_context` ([`RelayReport::crossings_withheld_access_context`]).
+    pub held_for_access_context: u64,
+    /// The crossings not cleared, by directory, with the rule that keeps
+    /// them here. A session with witnessed crossings and none cleared is
+    /// one the relay withholds.
+    pub withheld: Vec<state::WithheldDirectory>,
+}
+
+/// [`SessionStanding`] for one session's records under `policy`, by the
+/// relay's own predicates.
+pub fn session_standing(
+    policy: &commonmeasure_harness::policy::PolicyDocument,
+    records: &[serde_json::Value],
+) -> SessionStanding {
+    let cleared = egress_clearances(policy, records);
+    let witnessed_cleared = cleared
+        .keys()
+        .filter(|&&at| project::is_witnessed(&records[at]))
+        .count();
+    SessionStanding {
+        witnessed: records.iter().filter(|r| project::is_witnessed(r)).count() as u64,
+        cleared: witnessed_cleared as u64,
+        held_for_access_context: held_for_access_context(policy, records, &cleared).len() as u64,
+        withheld: withheld_directories(policy, records, &cleared),
+    }
+}
+
 /// Drop the refused count from a session none of whose work a scope cleared.
 /// The count is taken over refusals under scopes cleared for egress, and the
 /// reporting consent clears single crossings, never a refusal; a session that
@@ -1142,7 +1240,11 @@ enum Recheck {
 
 /// Re-project a queued session against current permission, preserving stable event
 /// ids. Missing source evidence cannot authorise a previously queued disclosure.
-fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<Recheck> {
+fn recheck_directory_batch(
+    home: &Path,
+    entry: &mut SpoolEntry,
+    torn_tail: commonmeasure_harness::TornTail,
+) -> Result<Recheck> {
     if commonmeasure_harness::directory::Registry::read(home)
         .map_err(anyhow::Error::msg)?
         .is_none()
@@ -1173,8 +1275,8 @@ fn recheck_directory_batch(home: &Path, entry: &mut SpoolEntry) -> Result<Rechec
         .file_stem()
         .and_then(|s| s.to_str())
         .context("invalid session source")?;
-    let records = match commonmeasure_harness::SessionLog::read(&original) {
-        Ok(records) => records,
+    let records = match commonmeasure_harness::SessionLog::read_with(&original, torn_tail) {
+        Ok((records, _)) => records,
         Err(cause) => {
             return Ok(Recheck::OriginUnreadable(UnreadableSession {
                 session: id.to_owned(),

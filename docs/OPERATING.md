@@ -297,12 +297,13 @@ dry run: nothing was sent; no state was changed
 would deliver 0 events in 0 batches to http://127.0.0.1:9/events (new at the receiver: unknown)
 projected 0 of 1 sessions and 0 runs; 0 events would be newly spooled
   1 withheld: no crossing cleared to leave
+    1 session: no scope in /home/op/.commonmeasure/policy.json selects /home/op/four-fetches
 hosts that would leave: none
 forecast policy: /home/op/.commonmeasure/policy.json, as it stands on disk
 a real run syncs managed policy and directory grants first, which can change what is cleared and what leaves
 ```
 
-The four-fetches session is withheld because its policy clears no scope. `--policy <file>` forecasts a draft policy through the same loader.
+The four-fetches session is withheld because no scope selects the directory it ran in. `commonmeasure session <id>` names the rule for one session, and `relay --json` for each. `--policy <file>` forecasts a draft policy through the same loader.
 
 Each run delivers only the batches that are due. `commonmeasure status` and
 `commonmeasure doctor` show queued and dead batches, and
@@ -326,7 +327,10 @@ prints the last delivery and how automatic relaying is set up.
 
 An organisation's machines can enrol with Common Measure Hub, so that one
 owner publishes a policy every machine applies and sees the cleared
-evidence each one delivers. Setting that up is in the Hub guides:
+evidence each one delivers. During the pilot the Hub is open by
+invitation: an organisation's owner invites its members, and a new
+organisation joins the [waiting list](https://commonmeasure.ai/waitlist/?source=edge).
+Setting that up is in the Hub guides:
 [Start here](https://commonmeasure.ai/docs/hub/start-here/) takes a new
 organisation from sign-in to its first delivery, and
 [Connect a Common Measure edge](https://commonmeasure.ai/docs/hub/connect-commonmeasure/)

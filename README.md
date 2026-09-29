@@ -99,7 +99,9 @@ records to a receiver and enrolling a project.
   is missing or a measurement is unknown.
 - [docs/CONSOLE.md](docs/CONSOLE.md): the operator console.
 - [Common Measure Hub guides](https://commonmeasure.ai/docs/hub/start-here/):
-  joining an organisation's hub, and what leaves a machine that does.
+  joining an organisation's hub, and what leaves a machine that does. The
+  Hub is open by invitation during the pilot
+  ([waiting list](https://commonmeasure.ai/waitlist/?source=edge)).
 - [plugin/README.md](plugin/README.md): the Claude Code plugin and each
   host's registration.
 - [CHANGELOG.md](CHANGELOG.md): what each release changed.

@@ -48,6 +48,15 @@ only through a later append on that same instance. A run is one process and one
 log, so the limit costs nothing there; a session is not one process, and
 [`docs/contracts/session-evidence.md`](contracts/session-evidence.md) §Where states what the limit costs there.
 
+A process killed inside an append owes a gap it can never write, and leaves a
+line without its newline. Every append holds the log's advisory lock, so a
+later append that finds such a line under the lock knows no process is
+writing it: it terminates the line and writes the `evidence_gap` record that
+marks it, naming its length, before its own record. Readers skip a line that
+does not parse only where that record follows it; any other damage stays an
+error for every reader ([session evidence §Reading a
+log](contracts/session-evidence.md#reading-a-log)).
+
 A run does not abort because its log could not take a line: the work still
 happened. It must not finish claiming a complete record.
 
@@ -63,6 +72,10 @@ finished log cannot carry the hash of a document that does not exist yet.
   `a_failed_terminal_append_is_reported_as_an_incomplete_record`,
   `a_closed_log_reports_its_own_size_and_digest`
   (`crates/commonmeasure-runtime/tests/evidence_integrity.rs`)
+- `a_write_that_lands_after_a_torn_record_marks_it_and_the_log_reads`,
+  `a_live_writers_record_in_progress_is_waited_for_and_left_whole`,
+  `a_record_left_by_a_killed_writer_is_marked_by_the_next_append`
+  (`crates/commonmeasure-runtime/tests/torn_lines.rs`)
 - `the_summary_attests_to_a_finished_evidence_log`
   (`crates/commonmeasure-runtime/tests/end_to_end.rs`)
 

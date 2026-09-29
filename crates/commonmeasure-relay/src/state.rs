@@ -17,6 +17,10 @@
 //! - `skipped-sessions.json` — the sessions the relay last skipped because
 //!   their logs did not read, so the egress account names them after a run
 //!   that delivered everything else. Absent when none is skipped.
+//! - `withheld-sessions.json` — the sessions the relay last withheld because
+//!   no crossing of theirs was cleared to leave, each with the directories
+//!   its crossings ran in and the rule that kept them here, so `doctor` can
+//!   say why. Absent when none is withheld.
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
@@ -73,12 +77,97 @@ pub struct SkippedSession {
     pub skipped_at: String,
 }
 
+/// A session the relay withheld: it witnessed crossings, and not one was
+/// cleared to leave.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithheldSession {
+    pub session: String,
+    pub path: String,
+    /// Each directory the session's witnessed crossings ran in, in the order
+    /// first met, with the rule that kept them here.
+    pub directories: Vec<WithheldDirectory>,
+    /// When the run that withheld it ran.
+    pub withheld_at: String,
+}
+
+/// The witnessed crossings of a withheld session made in one directory, and
+/// why their scope kept them on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithheldDirectory {
+    /// The crossings' recorded working directory; `None` where they
+    /// recorded none.
+    pub directory: Option<String>,
+    pub crossings: u64,
+    #[serde(flatten)]
+    pub rule: commonmeasure_harness::policy::EgressWithheld,
+    /// The rule in words, naming the policy file as the run read it.
+    pub reason: String,
+}
+
+/// One summary line per rule that withheld sessions: how many sessions it
+/// withheld and the directories they ran in, three at most by name. A
+/// session whose crossings ran in two directories under two rules counts
+/// under both. `relay`, `doctor` and the console state it in these words.
+pub fn withheld_lines(sessions: &[WithheldSession], policy: &str) -> Vec<String> {
+    let mut rules: Vec<(
+        &commonmeasure_harness::policy::EgressWithheld,
+        Vec<&str>,
+        Vec<&str>,
+    )> = Vec::new();
+    for session in sessions {
+        for directory in &session.directories {
+            let at = match rules
+                .iter()
+                .position(|(rule, _, _)| *rule == &directory.rule)
+            {
+                Some(at) => at,
+                None => {
+                    rules.push((&directory.rule, Vec::new(), Vec::new()));
+                    rules.len() - 1
+                }
+            };
+            let (_, ids, directories) = &mut rules[at];
+            if !ids.contains(&session.session.as_str()) {
+                ids.push(&session.session);
+            }
+            if let Some(name) = directory.directory.as_deref()
+                && !directories.contains(&name)
+            {
+                directories.push(name);
+            }
+        }
+    }
+    rules
+        .into_iter()
+        .map(|(rule, ids, directories)| {
+            let named = match directories.as_slice() {
+                [] => None,
+                [one] => Some((*one).to_owned()),
+                [first, second] => Some(format!("{first} or {second}")),
+                [first, second, third] => Some(format!("{first}, {second} or {third}")),
+                [first, second, third, rest @ ..] => Some(format!(
+                    "{first}, {second}, {third} or {} other director{}",
+                    rest.len(),
+                    if rest.len() == 1 { "y" } else { "ies" }
+                )),
+            };
+            format!(
+                "{} session{}: {}",
+                ids.len(),
+                if ids.len() == 1 { "" } else { "s" },
+                rule.describe(named.as_deref(), policy)
+            )
+        })
+        .collect()
+}
+
 pub struct RelayState {
     delivered_path: PathBuf,
     receipts_path: PathBuf,
     refused_path: PathBuf,
     agents_path: PathBuf,
     skipped_path: PathBuf,
+    withheld_path: PathBuf,
 }
 
 impl RelayState {
@@ -97,6 +186,7 @@ impl RelayState {
             refused_path: dir.join("refused-delivered.json"),
             agents_path: dir.join("session-agents.json"),
             skipped_path: dir.join("skipped-sessions.json"),
+            withheld_path: dir.join("withheld-sessions.json"),
         }
     }
 
@@ -194,35 +284,43 @@ impl RelayState {
         skipped: &[crate::UnreadableSession],
         now: chrono::DateTime<Utc>,
     ) -> Result<()> {
-        let mut sessions = match examined {
-            Some(examined) => {
-                let mut kept = self.skipped_sessions()?;
-                kept.retain(|known| {
-                    !examined.contains(&known.session.as_str())
-                        && !skipped.iter().any(|new| new.session == known.session)
-                });
-                kept
-            }
-            None => Vec::new(),
-        };
-        sessions.extend(skipped.iter().map(|session| SkippedSession {
-            session: session.session.clone(),
-            path: session.path.display().to_string(),
-            cause: format!("{:#}", session.cause),
-            batches_held: session.batches_held,
-            skipped_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
-        }));
-        if sessions.is_empty() {
-            return match std::fs::remove_file(&self.skipped_path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    Err(error).context("remove skipped-sessions.json")
-                }
-                _ => Ok(()),
-            };
+        let skipped: Vec<SkippedSession> = skipped
+            .iter()
+            .map(|session| SkippedSession {
+                session: session.session.clone(),
+                path: session.path.display().to_string(),
+                cause: format!("{:#}", session.cause),
+                batches_held: session.batches_held,
+                skipped_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+            })
+            .collect();
+        record_sessions(&self.skipped_path, examined, skipped, |session| {
+            &session.session
+        })
+    }
+
+    /// The sessions the relay last withheld; empty when the file is absent.
+    pub fn withheld_sessions(&self) -> Result<Vec<WithheldSession>> {
+        match std::fs::read(&self.withheld_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("parse withheld-sessions.json"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error).context("read withheld-sessions.json"),
         }
-        sessions.sort_by(|a, b| a.session.cmp(&b.session));
-        let encoded = serde_json::to_vec_pretty(&sessions).context("serialise skipped sessions")?;
-        replace_private(&self.skipped_path, &encoded).context("write skipped-sessions.json")
+    }
+
+    /// Record what one run withheld, replacing entries as
+    /// [`Self::record_skipped_sessions`] does.
+    pub fn record_withheld_sessions(
+        &self,
+        examined: Option<&[&str]>,
+        withheld: &[WithheldSession],
+    ) -> Result<()> {
+        record_sessions(
+            &self.withheld_path,
+            examined,
+            withheld.to_vec(),
+            |session| &session.session,
+        )
     }
 
     pub fn receipts(&self) -> Receipts {
@@ -367,6 +465,52 @@ fn age_text(seconds: i64) -> String {
     }
 }
 
+/// Replace the per-session list at `path` with `new`. A run of the whole
+/// home (`examined` is `None`) replaces it whole; a run scoped to some
+/// sessions replaces only their entries and those of the sessions in
+/// `new`. An empty list removes the file.
+fn record_sessions<T: Serialize + serde::de::DeserializeOwned>(
+    path: &Path,
+    examined: Option<&[&str]>,
+    new: Vec<T>,
+    session: impl Fn(&T) -> &str,
+) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut sessions = match examined {
+        Some(examined) => {
+            let mut kept: Vec<T> = match std::fs::read(path) {
+                Ok(bytes) => {
+                    serde_json::from_slice(&bytes).with_context(|| format!("parse {name}"))?
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error).with_context(|| format!("read {name}")),
+            };
+            kept.retain(|known| {
+                !examined.contains(&session(known))
+                    && !new.iter().any(|fresh| session(fresh) == session(known))
+            });
+            kept
+        }
+        None => Vec::new(),
+    };
+    sessions.extend(new);
+    if sessions.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(error).with_context(|| format!("remove {name}"))
+            }
+            _ => Ok(()),
+        };
+    }
+    sessions.sort_by(|a, b| session(a).cmp(session(b)));
+    let encoded =
+        serde_json::to_vec_pretty(&sessions).with_context(|| format!("serialise {name}"))?;
+    replace_private(path, &encoded).with_context(|| format!("write {name}"))
+}
+
 /// The egress block for the console's `/api/status`: the configured receiver
 /// and delivered counts, truthfully, from the durable state alone. This is a
 /// report, not a health check: it must answer even when the configuration is
@@ -389,6 +533,27 @@ pub fn egress_report(home: &Path) -> Value {
         .or_else(|| queue.as_ref().err().map(|e| format!("{e:#}")))
         .or_else(|| skipped_result.as_ref().err().map(|e| format!("{e:#}")));
     let skipped = skipped_result.ok();
+    // Why the last run withheld sessions. A file that does not read leaves
+    // the field null rather than failing the report, and says so.
+    let (withheld, withheld_error) = match state.withheld_sessions() {
+        Ok(sessions) => (Some(sessions), None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+    let withheld_text: Vec<String> = withheld
+        .as_deref()
+        .filter(|sessions| !sessions.is_empty())
+        .map(|sessions| {
+            let at = sessions
+                .iter()
+                .map(|session| session.withheld_at.as_str())
+                .max()
+                .unwrap_or_default();
+            withheld_lines(sessions, &home.join("policy.json").display().to_string())
+                .into_iter()
+                .map(|line| format!("the relay run at {at} withheld {line}"))
+                .collect()
+        })
+        .unwrap_or_default();
     let last_error = queue
         .as_ref()
         .ok()
@@ -474,6 +639,10 @@ pub fn egress_report(home: &Path) -> Value {
         "last_error": last_error,
         // Null when the file did not read; `unavailable` says why.
         "skipped_sessions": skipped,
+        // Null when the file did not read; `withheld_error` says why.
+        "withheld_sessions": withheld,
+        "withheld_text": withheld_text,
+        "withheld_error": withheld_error,
         "unavailable": state_error.or(config_error.clone()),
         "receiver_error": config_error,
         "receiver": receiver,
@@ -704,6 +873,18 @@ pub fn egress_findings(report: &Value) -> Vec<Finding> {
         if let Ok(session) = serde_json::from_value::<SkippedSession>(session.clone()) {
             findings.push(Finding::attention(skipped_session_text(&session)));
         }
+    }
+    // Withholding is the policy working as written, so a note; it is the
+    // usual answer to "why was nothing reported", so it is stated.
+    for line in report["withheld_text"].as_array().into_iter().flatten() {
+        if let Some(line) = line.as_str() {
+            findings.push(Finding::note(line));
+        }
+    }
+    if let Some(error) = report["withheld_error"].as_str() {
+        findings.push(Finding::unknown(format!(
+            "why the last relay run withheld sessions is unknown: {error}"
+        )));
     }
     if let Some(error) = report["close_error"].as_str() {
         findings.push(Finding::attention(format!(
