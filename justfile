@@ -221,6 +221,11 @@ install:
 plugin:
     sh plugin/build.sh
 
+# Validate the Claude Code plugin and run its router tests (needs the claude CLI, 2.1.287 or later)
+plugin-test:
+    claude plugin validate plugin
+    claude plugin test plugin
+
 # Verify this offline vendored release against generated console and guide CSS.
 tokens:
     node design-tokens/generate.mjs --check

@@ -1,11 +1,14 @@
 {
+  "modules": [
+    "./register.js"
+  ],
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch hook session-start"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch\" hook session-start"
           }
         ]
       }
@@ -16,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch hook post-tool-use"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch\" hook post-tool-use"
           }
         ]
       }
@@ -26,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch hook user-prompt-submit"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch\" hook user-prompt-submit"
           }
         ]
       }
@@ -36,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch hook stop"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch\" hook stop"
           }
         ]
       }
@@ -46,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch hook session-end"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/commonmeasure-launch\" hook session-end"
           }
         ]
       }

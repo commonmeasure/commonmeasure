@@ -33,6 +33,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test -p <crate>          # the crates a change affects
 cargo test --workspace --locked
 node --test browser/test/      # browser extension, node 22 or later
+claude plugin validate plugin && claude plugin test plugin   # the Claude Code mod, Claude Code 2.1.287 or later
 ```
 
 `just` lists the same commands as recipes; `just gates` runs formatting,
