@@ -2060,7 +2060,7 @@ The plugin's `SessionStart` hook emits the standing mediation nudge
 ```json
 {
   "session_id": "…", "host": "claude-code",
-  "timestamp": "…", "nudge": "mediation-nudge/3", "source": "startup",
+  "timestamp": "…", "nudge": "mediation-nudge/4", "source": "startup",
   "basis": "emitted on the SessionStart hook's stdout for the host to add to the session's context; injection is the host's act and is not witnessed"
 }
 ```

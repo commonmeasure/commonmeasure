@@ -42,3 +42,9 @@ __pycache__/
 
 # Local Cloudflare deployment cache.
 .wrangler/
+
+# `claude plugin test` writes the mods type declarations for the installed
+# Claude Code version beside the plugin, and a tsconfig that extends them.
+# Both are generated for that version and are not source.
+plugin/tsconfig.json
+plugin/.claude-plugin/types/

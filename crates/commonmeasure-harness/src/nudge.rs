@@ -10,14 +10,18 @@
 //!
 //! It is a nudge, not enforcement, and nothing here may claim otherwise:
 //! no built-in tool is blocked, the agent is free to ignore the request, and
-//! observed capture keeps recording built-in use either way. What this
+//! observed capture keeps recording built-in use either way. On a Claude
+//! Code that loads the plugin's router (`plugin/hooks/register.js`) the
+//! built-in web tools are answered through the mediated tools whether or not
+//! the agent obeys; the hook cannot tell whether that happened, so the text
+//! names the condition instead of claiming it. What this
 //! runtime witnesses is emission; injection into context is the host's act,
 //! which is why [`BASIS`] says exactly that on every issuance record.
 
 /// Versioned like an evaluator identity: a `nudge_issued` record naming
-/// `mediation-nudge/3` states exactly which wording was in force in that
+/// `mediation-nudge/4` states exactly which wording was in force in that
 /// session. Change [`TEXT`], bump this.
-pub const IDENTITY: &str = "mediation-nudge/3";
+pub const IDENTITY: &str = "mediation-nudge/4";
 
 /// What every session is asked. One short paragraph, deliberately: the cost
 /// of a standing instruction is paid into every session's context, so the
@@ -45,9 +49,10 @@ mediated tool reports unavailable (for example an unconfigured search provider),
 tools remain the fallback; if policy refuses a crossing, respect the refusal rather than \
 retrying it with a built-in tool; if a site refuses the request itself, report what the tool \
 said and no more, because falling back to a built-in tool there fetches as something other than \
-the declared fetcher and is recorded as your decision. Built-in tools keep working and are \
-recorded after the fact. This is a nudge, not enforcement: nothing blocks the built-in \
-tools.\n";
+the declared fetcher and is recorded as your decision. On Claude Code 2.1.287 or later the \
+plugin routes WebFetch and WebSearch through these tools itself; elsewhere the built-in tools \
+keep working and are recorded after the fact. This is a nudge, not enforcement: nothing blocks \
+the built-in tools.\n";
 
 /// The claim an issuance record can honestly make.
 pub const BASIS: &str = "emitted on the SessionStart hook's stdout for the host to add to the \
@@ -89,11 +94,13 @@ mod tests {
 
     /// The text enters every session's context, so growth is a per-session
     /// cost. This bound is the reviewable budget: it holds the three
-    /// conditions and their reasons, and raising it is a decision, not drift.
+    /// conditions and their reasons plus the one sentence on the router, and
+    /// raising it is a decision, not drift (950 bytes held nudge/3; nudge/4
+    /// added the router sentence).
     #[test]
     fn the_nudge_stays_one_short_paragraph() {
         assert!(
-            TEXT.len() <= 950,
+            TEXT.len() <= 1050,
             "{} bytes is no longer a nudge",
             TEXT.len()
         );

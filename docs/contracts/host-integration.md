@@ -33,6 +33,7 @@ A host reaches the runtime in one of two ways, and they are not equal
 | **Observed** | `commonmeasure hook <event> --host <name>`, payload on stdin | after the host's tool call has completed | record what the agent read; it cannot refuse |
 | **Mediated** | `commonmeasure mcp --host <name> [--session <id>]`, JSON-RPC over stdio | before the content moves | apply policy, refuse, record |
 | **Mediated, hosted** | `commonmeasure hosted service` (or `hosted serve --origin <origin>`), Streamable HTTP at `<origin>/mcp/<host>` | before the content moves, for a host that reaches MCP servers only from its vendor's cloud | the same, for the principal a bearer token names |
+| **Mediated, routed** | the plugin's router, `plugin/hooks/register.js`, a Claude Code mod that answers the host's own `WebFetch` and `WebSearch` through the mediated tools | before the content moves, when the host runs the module (Claude Code 2.1.287 or later) and the server is connected | the same as mediated: the native tool does not run, and the edge records the crossing |
 
 The observed path is a set of lifecycle hooks. It needs no credentials and
 no policy file, and it never breaks the agent: unreadable input yields no
@@ -50,6 +51,23 @@ the hooks write under the host's identifier and the server under one it
 mints, and the two are joined by the host process that started both
 ([`docs/contracts/session-evidence.md`](session-evidence.md) §Host process).
 Every record carries which path wrote it (§Crossing).
+
+The routed path is the mediated path called by the host's plugin rather
+than by the agent (`plugin/README.md` §Routed). A host that lets a plugin
+run code before a tool call, see the call's arguments and answer it in the
+tool's place can offer it; Claude Code's mods do, and no other host
+integrated here does today. Where the server is not connected the router
+stands aside and the observed path records the native call after the fact;
+where it is connected and cannot carry a call, the call is refused with the
+gap named, never fetched natively. A `WebSearch` with no configured search
+provider stays native and observed. The routed answer is the edge's text
+summarised by the host's own model against the prompt the call carried, so
+the record's hashes are of what the edge delivered to the plugin, as for a
+direct `context_fetch`. The router's call to the edge runs under the
+session's permission rules for the mediated tool: an interactive session
+asks once, a headless one needs the tool in `--allowedTools` or
+`permissions.allow`, and an ungranted call is refused with the host's
+reason, never fetched natively.
 
 ### The parts of a fetch
 
@@ -586,7 +604,7 @@ Claude Code, Codex and Pi provide today.
 | Event | Any host must supply | Claude Code | Codex | Pi |
 |---|---|---|---|---|
 | `crossing_observed` | a hook after each tool call, with `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_response` as JSON on stdin; `agent_type`/`agent_id` when the call ran in a subagent; the host's turn identifier where it has one | `PostToolUse` hook, matcher `WebFetch\|WebSearch\|mcp__.*`, written by `install claude` or declared in `plugin/hooks/hooks.json` | none registered: Codex's hooks documentation (`https://learn.chatgpt.com/docs/hooks`) states that hosted tools such as its web search do not use the local tool path and fire no hook, and its shell reaches the web as command text, so a matcher could witness only third-party MCP results; Codex hooks do carry `tool_response` for MCP tools, so a third-party fetch server could be observed, and none is registered | none: Pi has no web tool of its own to observe |
-| `crossing_mediated`, `crossing_refused`, `processor_invoked` | run the MCP server and route the agent's fetch and search through its tools; the server takes `cwd` from the directory it was started in | the user-scope entry `install claude` writes, or `.mcp.json` in the plugin | the `[mcp_servers.commonmeasure]` table `install codex` writes | the extension `install pi` writes, which spawns the server with Pi's session id in the session's working directory |
+| `crossing_mediated`, `crossing_refused`, `processor_invoked` | run the MCP server and route the agent's fetch and search through its tools; the server takes `cwd` from the directory it was started in | the user-scope entry `install claude` writes, or `.mcp.json` in the plugin; on Claude Code 2.1.287 or later the plugin's router also answers the host's `WebFetch` and `WebSearch` through them (§1, Mediated, routed) | the `[mcp_servers.commonmeasure]` table `install codex` writes | the extension `install pi` writes, which spawns the server with Pi's session id in the session's working directory |
 | `turn_started` | a hook at prompt submission with `session_id`, `cwd`, `transcript_path` and the host's turn identifier (`prompt_id` or `turn_id`) where it has one | `UserPromptSubmit` hook, `prompt_id` | not registered | not supplied |
 | `prompt_sources` | the same hook with the `prompt` text; without it, every mediated crossing's `named_by` is `unknown` | `UserPromptSubmit` hook, `prompt` | not registered | not supplied |
 | `turn_completed` | a hook at the end of a turn with the same fields | `Stop` hook, `prompt_id` | not registered | not supplied |
@@ -919,6 +937,7 @@ defines and are never collapsed.
 |---|---|---|
 | Claude Code, observed (hooks) | `fixture-tested` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the host's payload shapes |
 | Claude Code, mediated (MCP over stdio) | `live-verified` (bounded configuration) | Claude Code 2.1.273 on macOS 26.4 admitted the public Common Measure page and refused `example.com` in an interactive session under hosted policy and a signed reporting approval. The host tool response hash matches the source record; the selected session reached the correct Hub organisation and a separate unselected host session stayed local. The trial ran against the hosted Hub; its configuration, limits and redacted records are not published. Loopback refusal and privacy-floor tests remain in `mediated_e2e.rs`. |
+| Claude Code, routed (the mod) | `live-verified` for the refusal branch (bounded configuration); delivery `fixture-tested` | Claude Code 2.1.288, `claude -p` in a container whose egress proxy breaks TLS to the open web, 3 October 2026: the module loaded from `--plugin-dir`, answered the model's `WebFetch` of `https://example.com/` through `context_fetch` on the server named `plugin_commonmeasure_commonmeasure`, the edge recorded `crossing_refused` with `mode: mediated` (an unreachable `robots.txt` is a complete disallow) under its own `local-*` session beside the hooks' records, and the model read the refusal and did not retry; without `--allowedTools` the same run was refused by the host's permission rules and the module refused the `WebFetch` rather than fetching natively. No delivered page or routed `WebSearch` is recorded live. `plugin/tests/router.test.ts`, run by `claude plugin test plugin`, drives the module through Claude Code's own hooks test kit with the edge's result shapes stubbed: a `WebFetch` and a `WebSearch` answered through `context_fetch` and `context_search`, a refusal and an unavailable answer refusing the native call in the edge's words, a failed edge call refused rather than fetched natively, the native tool running where the server is absent or no search provider is configured, and the observed `PostToolUse` record suppressed for routed calls only |
 | Claude Code, reconstructed (import) | `fixture-tested` | `crates/commonmeasure-cli/tests/import_e2e.rs` |
 | Claude Code, registration (`install`, `uninstall`, `doctor`) | `live-verified` for installation and use; remaining operations `fixture-tested` | The same trial ran `install claude` into an isolated configuration directory and loaded the generated hooks/MCP files into Claude Code 2.1.273 using its explicit settings/config options, and the interactive session of the mediated Claude Code row ran through them. `install_e2e.rs` still covers removal and diagnosis. |
 | Codex CLI, registration and mediated | `fixture-tested` | `install_e2e.rs` pins the registration and tool approval setting. `recorded_sessions.rs` reads the earlier private `codex exec` capture and the public interactive extract in `crates/commonmeasure-cli/tests/recorded/codex-interactive/` from 29 September 2026: Codex CLI 0.157.1 admitted part of the Common Measure public page and refused Google’s `/search` path under its robots declaration, with matching host-output and source-record hashes. Local relay state shows the paired session delivered; the receiving Hub organisation has not been independently read back. This does not verify an operator denied-host rule or either GUI host. |

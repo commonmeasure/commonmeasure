@@ -176,6 +176,7 @@ jobs:
           [ "$reported" = "commonmeasure $VERSION" ] || { echo "installed binary reports $reported" >&2; exit 1; }
           curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1
           cd /opt/commonmeasure/commonmeasure-plugin
+          claude plugin validate ./
           claude plugin marketplace add ./
           claude plugin install commonmeasure@commonmeasure
           claude plugin list | tee plugins.txt
