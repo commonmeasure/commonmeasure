@@ -3,25 +3,34 @@ domain: shared
 audience: contributor
 ---
 
-# Common Measure design tokens
+# Common Measure design release
 
-The website repository owns `design-tokens/tokens.json`. Its versioned release
-contains the palette, typography, spacing, geometry, focus and motion roles for
-the website, Hub, Edge and embedded guides. This directory in Hub and Edge is a
-vendored release; change the website source first. No package service or runtime
-network request is involved. Node is needed to regenerate or verify CSS, not to
-build or run the Rust console.
+The website repository owns `design-tokens/tokens.json` and `chrome.css`. Its
+versioned release contains the palette, typography, spacing, geometry, focus
+and motion roles for the website, Hub, Edge and embedded guides, and the
+application chrome Hub and Edge render the same way. This directory in Hub and
+Edge is a vendored release; change the website source first. No package
+service or runtime network request is involved. Node is needed to regenerate
+or verify CSS, not to build or run the Rust console.
 
 From any consumer repository root:
 
 ```sh
 node design-tokens/generate.mjs
 node design-tokens/generate.mjs --check
+node design-tokens/generate.mjs --check --verbose   # every contrast pairing
 ```
 
 The generator owns the marked blocks in the consumer stylesheets. It rejects
 local overrides of shared colours and foundations. Output records the release
-version and SHA-256 of the exact source. Bump the version when changing tokens.
+version and the SHA-256 of each source file. Bump the version when changing
+tokens or chrome.
+
+The contrast gate runs first, on `tokens.json`, in both themes: primary text
+at 7:1 on every ground, secondary text, links and the state colours at 4.5:1
+including on their own tints, interactive borders and chart marks at 3:1. A
+palette that fails an obligation is never written into a stylesheet, so
+consumers carry no contrast checker of their own.
 
 From the website checkout, synchronise explicitly named local repositories:
 
@@ -52,5 +61,24 @@ repositories, and record the matching revisions.
   headings and page spacing.
 
 Status and chart palettes have their own roles. Colour never replaces labels.
-Application contrast gates cover text, controls, status fills and chart marks;
-run them after a palette edit. Reduced-motion preferences override transitions.
+Reduced-motion preferences override transitions.
+
+## Themes
+
+Every application stylesheet gets the same three blocks: `:root` and
+`[data-theme='light']` carry the light palette, `[data-theme='dark']` the dark
+one, and `:root[data-theme='system']` follows the operating system. A new
+visitor is light; Light, Dark and System are explicit saved choices in both
+applications.
+
+## Chrome
+
+`chrome.css` is inlaid into the Hub and Edge stylesheets inside
+`@layer components`, so each application's own unlayered rules win where the
+two differ. It holds the shell (`.app-shell`, `.shell-sidebar`, `.shell-nav`,
+the collapsed rail under `:root[data-sidebar='collapsed']`, the header and
+Menu disclosure at 52rem and below, `.rail-tooltip`), the appearance control
+(`.theme-choice`), badges, alerts, cards, data tables, buttons, fields and
+read groups (`.record-group`). Classes, not elements, carry the styles, so
+either application opts in per element. Hub's Svelte primitives and Edge's
+maud markup emit the same class names.

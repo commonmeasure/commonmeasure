@@ -222,7 +222,8 @@ resource bounds and the limits of unsigned declarations.
 maud-rendered app shell (`crates/commonmeasure-console/src/console/app.rs`) with seven
 sections, rendered server-side over an SQLite index derived from the session
 evidence logs, from the same JSON values the `/api/*` routes serve, with
-vendored htmx for fragment swaps, local appearance controls and the offline
+vendored htmx for fragment swaps, local appearance controls, the application
+chrome of the design release Hub renders too (`design-tokens/`) and the offline
 shared policy form (`console/policy-form/`). The logs are authoritative: the
 index can be rebuilt from them, and witnessed and reconstructed evidence stay
 separate in every aggregate. Attribution rules

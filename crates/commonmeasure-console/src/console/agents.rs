@@ -674,17 +674,22 @@ fn attention_card(attention: &Value) -> Markup {
     let items = attention.as_array().unwrap_or(&empty);
     html! {
         div class="card" {
-            h2 { "Attention" span class="muted-inline" { (items.len()) } }
-            p class="callout" {
-                "Running hosts · last " (ATTENTION_WINDOW_HOURS) " hours of session records · current delivery state. Older items remain in session details."
-            }
-            @if items.is_empty() {
-                p class="muted" { "Nothing recorded needs attention." }
-            } @else {
-                table class="rules" {
-                    thead { tr { th { "Issue" } th { "Evidence" } th { "Next action" } th { "Record" } } }
-                    tbody {
-                        @for item in items { (attention_row(item)) }
+            h2 class="card-title" { "Attention" span class="muted-inline" { (items.len()) } }
+            div class="card-body" {
+                p class="callout" {
+                    "Running hosts · last " (ATTENTION_WINDOW_HOURS) " hours of session records · current delivery state. Older items remain in session details."
+                }
+                @if items.is_empty() {
+                    p class="muted" { "Nothing recorded needs attention." }
+                } @else {
+                    div class="data-table" {
+                        table {
+                            thead { tr { th { "Issue" } th { "Evidence" } th { "Next action" } th { "Record" } } }
+                            tbody {
+                                @for item in items { (attention_row(item)) }
+                            }
+
+                        }
                     }
                 }
             }
@@ -711,12 +716,13 @@ fn coverage_card(coverage: &Value) -> Markup {
     let empty = Vec::new();
     let hosts = coverage.as_array().unwrap_or(&empty);
     html! {
-        div class="coverage-table table-scroll" tabindex="0" role="region" aria-label="Host path coverage" {
+        div class="coverage-table" {
             h2 { "Coverage by host" }
             @if hosts.is_empty() {
                 p class="muted" { "No host has recorded anything." }
             } @else {
-                table class="rules" {
+                div class="data-table data-table-wide" tabindex="0" role="region" aria-label="Host path coverage" {
+                table {
                     thead { tr {
                         th { "Host" }
                         @for path in PATHS { th { (path) } }
@@ -731,6 +737,7 @@ fn coverage_card(coverage: &Value) -> Markup {
                             }
                         }
                     }
+                }
                 }
                 p class="callout" {
                     "A mediated path covers the host's calls to Common Measure's tools only; the host's other tools are seen on the observed path or not at all."
@@ -816,10 +823,13 @@ fn detail(agents: &Value, id: &str) -> Markup {
         @if session["attention"].as_array().is_none_or(Vec::is_empty) {
             p class="muted" { "Nothing recorded needs attention." }
         } @else {
-            table class="rules" {
-                thead { tr { th { "Issue" } th { "Evidence" } th { "Next action" } th { "Record" } } }
-                tbody {
-                    @for item in session["attention"].as_array().into_iter().flatten() { (attention_row(item)) }
+            div class="data-table" {
+                table {
+                    thead { tr { th { "Issue" } th { "Evidence" } th { "Next action" } th { "Record" } } }
+                    tbody {
+                        @for item in session["attention"].as_array().into_iter().flatten() { (attention_row(item)) }
+                    }
+
                 }
             }
         }
@@ -860,8 +870,8 @@ fn detail(agents: &Value, id: &str) -> Markup {
             }
 
             h3 class="xh" { "Sources" }
-            div class="table-scroll" tabindex="0" role="region" aria-label="Session source logs" {
-            table class="rules" {
+            div class="data-table data-table-wide" tabindex="0" role="region" aria-label="Session source logs" {
+            table {
                 thead { tr { th { "Log" } th { "Path" } th { "Records" } th { "Mediated" } th { "Observed" } th { "Reconstructed" } th { "Refused" } } }
                 tbody {
                     @for log in session["logs"].as_array().into_iter().flatten() {
