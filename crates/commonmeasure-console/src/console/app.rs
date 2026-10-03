@@ -164,7 +164,10 @@ pub fn error_page(status: u16, detail: &str) -> String {
     .into_string()
 }
 
-/// The document shell: sidebar plus the active section's content.
+/// The document shell: the design release's chrome around the active
+/// section. Navigation is rendered twice, for the sidebar and for the Menu
+/// disclosure that replaces it at 52rem and below; appearance controls sit
+/// with each. Both work without the local script except for saving a choice.
 pub(super) fn shell(active: Option<Section>, main: Markup) -> Markup {
     html! {
         (DOCTYPE)
@@ -184,56 +187,85 @@ pub(super) fn shell(active: Option<Section>, main: Markup) -> Markup {
                 script src="/htmx.min.js" defer {}
             }
             body {
-                a class="skip" href="#main" { "Skip to content" }
-                div class="app" {
+                a class="skip-link" href="#main" { "Skip to content" }
+                div class="app-shell" {
                     (sidebar(active))
-                    main class="work" id="main" { (main) }
+                    div class="shell-work" {
+                        (mobile_header(active))
+                        main class="work" id="main" tabindex="-1" { (main) }
+                    }
                 }
             }
         }
     }
 }
 
+fn brand_mark() -> Markup {
+    html! {
+        span class="brand-mark" aria-hidden="true" {
+            img class="brand-light" src="/brand/edge-light.svg" alt="" width="100" height="48";
+            img class="brand-dark" src="/brand/edge.svg" alt="" width="100" height="48";
+        }
+    }
+}
+
 fn sidebar(active: Option<Section>) -> Markup {
     html! {
-        aside class="side" aria-label="Console" {
+        aside class="shell-sidebar" aria-label="Console" {
             div class="sidebar-brand-row" {
-                a class="brand" href="/app" aria-label="Common Measure Edge" {
-                    img class="brand-light" src="/brand/edge-light.svg" alt="" width="100" height="48";
-                    img class="brand-dark" src="/brand/edge.svg" alt="" width="100" height="48";
-                    div class="brand-label" {
-                        div class="wordmark" { "Common Measure" }
-                        div class="brand-sub" { "Edge" }
-                    }
+                a class="shell-brand" href="/app" aria-label="Common Measure Edge" {
+                    (brand_mark())
+                    span class="brand-label" { "Common Measure" span { "Edge" } }
                 }
                 button class="sidebar-toggle" type="button" data-sidebar-toggle hidden
                     aria-label="Collapse sidebar" title="Collapse sidebar" aria-expanded="true" aria-controls="edge-sidebar-content" {
                     svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" {
                         rect x="3" y="4" width="18" height="16" rx="2" {}
                         path d="M9 4v16" {}
-                        path class="collapse-arrow" d="m17 9-3 3 3 3" {}
+                        path d="m17 9-3 3 3 3" {}
                     }
                 }
             }
-            div id="edge-sidebar-content" class="sidebar-content" {
-                div class="desktop-nav" { (navigation(active)) }
-            }
-            details class="mobile-nav" {
-                summary {
-                    span { (active.map_or("Navigation", Section::label)) }
-                    span class="menu-label" { "Menu " span aria-hidden="true" { "▾" } }
-                }
-                (navigation(active))
-            }
+            div id="edge-sidebar-content" class="sidebar-content" { (navigation(active)) }
             div class="sidebar-settings" {
-                p class="settings-label" { "Appearance" }
-                button class="theme-toggle" type="button" data-theme-toggle hidden {
-                    svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" {
+                p class="sidebar-label" { "Appearance" }
+                (theme_choice())
+                button class="sidebar-control theme-flip" type="button" data-theme-toggle="icon" hidden aria-label="Switch to dark mode" {
+                    svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
                         path class="moon-icon" d="M20 15a8 8 0 0 1-11-11 8 8 0 1 0 11 11Z" {}
                         g class="sun-icon" { circle cx="12" cy="12" r="4" {} path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" {} }
                     }
-                    span class="theme-label" { "Dark mode" }
                 }
+            }
+        }
+    }
+}
+
+/// At 52rem and below the sidebar gives way to this header.
+fn mobile_header(active: Option<Section>) -> Markup {
+    html! {
+        header class="shell-mobile-header" {
+            div class="shell-mobile-bar" {
+                a class="shell-mobile-brand" href="/app" aria-label="Common Measure Edge" { (brand_mark()) span { "Edge" } }
+                div class="shell-mobile-controls" { (theme_choice()) }
+            }
+            details class="shell-mobile-menu" {
+                summary {
+                    span class="menu-current" { (active.map_or("Navigation", Section::label)) }
+                    span class="menu-label" { "Menu " span aria-hidden="true" { "▾" } }
+                }
+                div class="shell-mobile-nav" { (navigation(active)) }
+            }
+        }
+    }
+}
+
+/// Light, Dark or System; hidden until the local script can save a choice.
+fn theme_choice() -> Markup {
+    html! {
+        div class="theme-choice" role="group" aria-label="Theme" data-theme-choice hidden {
+            @for (value, label) in [("light", "Light"), ("dark", "Dark"), ("system", "System")] {
+                button type="button" data-theme-choice=(value) aria-pressed="false" { (label) }
             }
         }
     }
@@ -241,9 +273,9 @@ fn sidebar(active: Option<Section>) -> Markup {
 
 fn navigation(active: Option<Section>) -> Markup {
     html! {
-        nav class="nav" aria-label="Sections" {
+        nav class="shell-nav" aria-label="Sections" {
             @for section in Section::ALL {
-                a class=(nav_class(Some(section) == active)) href=(section.href())
+                a class="shell-nav-link" href=(section.href())
                     aria-label=(section.label()) data-tooltip=(section.label())
                     aria-current=[(Some(section) == active).then_some("page")] {
                     (navigation_icon(section))
@@ -265,15 +297,20 @@ fn navigation_icon(section: Section) -> Markup {
         Section::Budget => "M3 5h18v15H3zM3 9h18m-6 4h6v4h-6z",
     };
     html! {
-        svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
             path d=(path) {}
         }
     }
 }
 
-fn nav_class(active: bool) -> &'static str {
-    if active { "nav-item on" } else { "nav-item" }
+/// An outcome notice's class: the write's kind decides the tone.
+fn alert_class(kind: &str) -> String {
+    match kind {
+        "saved" => "alert alert-ok".into(),
+        "conflict" | "refused" => "alert alert-err".into(),
+        _ => "alert".into(),
+    }
 }
 
 /// A screen's top bar: its title and the line saying what it was read from.
@@ -317,54 +354,56 @@ fn reporting_consent(report: &Value) -> Markup {
     let refusals = report["refusals"].as_u64();
     html! {
         div class="card consent-state" {
-            h2 { "Reporting consent" }
-            p {
-                @match state {
-                    "withdrawn" => { "Withdrawn. " }
-                    "unreadable" => {
-                        "Unreadable: " (report["error"].as_str().unwrap_or("no error recorded"))
-                        ". An unreadable consent is not consent. "
-                    }
-                    _ => { "Not given. " }
-                }
-                "Sources whose licence demands usage reporting are refused."
-            }
-            @if !sources.is_empty() {
+            h2 class="card-title" { "Reporting consent" }
+            div class="card-body" {
                 p {
-                    strong { (sources.len()) }
-                    @if sources.len() == 1 { " source" } @else { " sources" }
-                    " refused because "
-                    @if sources.len() == 1 { "it needs" } @else { "they need" }
-                    " reporting"
-                    @if let Some(refusals) = refusals {
-                        ", " (refusals) @if refusals == 1 { " refusal" } @else { " refusals" }
+                    @match state {
+                        "withdrawn" => { "Withdrawn. " }
+                        "unreadable" => {
+                            "Unreadable: " (report["error"].as_str().unwrap_or("no error recorded"))
+                            ". An unreadable consent is not consent. "
+                        }
+                        _ => { "Not given. " }
                     }
-                    ":"
+                    "Sources whose licence demands usage reporting are refused."
                 }
-                div class="rows" {
-                    @for source in &sources {
-                        div class="row" {
-                            span class="host" { (source["source"].as_str().unwrap_or("unnamed")) }
-                            span class="eng" {
-                                "needs reporting · "
-                                span class="mono" {
-                                    (source["refusals"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
+                @if !sources.is_empty() {
+                    p {
+                        strong { (sources.len()) }
+                        @if sources.len() == 1 { " source" } @else { " sources" }
+                        " refused because "
+                        @if sources.len() == 1 { "it needs" } @else { "they need" }
+                        " reporting"
+                        @if let Some(refusals) = refusals {
+                            ", " (refusals) @if refusals == 1 { " refusal" } @else { " refusals" }
+                        }
+                        ":"
+                    }
+                    div class="rows" {
+                        @for source in &sources {
+                            div class="row" {
+                                span class="host" { (source["source"].as_str().unwrap_or("unnamed")) }
+                                span class="eng" {
+                                    "needs reporting · "
+                                    span class="mono" {
+                                        (source["refusals"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
+                                    }
+                                    @if source["refusals"] == 1 { " refusal" } @else { " refusals" }
                                 }
-                                @if source["refusals"] == 1 { " refusal" } @else { " refusals" }
                             }
                         }
                     }
                 }
-            }
-            @if let Some(n) = report["unreadable_sessions"].as_u64() {
-                p class="muted" { (n) " session logs did not read; the list may be short." }
-            }
-            @if let Some(error) = report["refused_sources_error"].as_str() {
-                p class="muted" { "Refused sources unknown: " (error) }
-            }
-            p {
-                "Agree in a terminal: "
-                code { (report["agree_command"].as_str().unwrap_or(commonmeasure_harness::consent::AGREE_COMMAND)) }
+                @if let Some(n) = report["unreadable_sessions"].as_u64() {
+                    p class="muted" { (n) " session logs did not read; the list may be short." }
+                }
+                @if let Some(error) = report["refused_sources_error"].as_str() {
+                    p class="muted" { "Refused sources unknown: " (error) }
+                }
+                p {
+                    "Agree in a terminal: "
+                    code { (report["agree_command"].as_str().unwrap_or(commonmeasure_harness::consent::AGREE_COMMAND)) }
+                }
             }
         }
     }
@@ -436,154 +475,160 @@ fn overview(status: &Value, content: &Value, read: ReadFrom<'_>) -> Markup {
             (reporting_consent(&status["reporting_consent"]))
             div class="cards grid-2" {
                 div class="card hub-state" {
-                    h2 { "Hub" }
-                    p class="muted" {
-                        @if egress["enrolment_error"].is_string() || egress["unavailable"].is_string() {
-                            "Delivery state unavailable"
-                        } @else if receiver.is_none() { "No receiver configured" }
-                        @else { "Receiver configured" }
-                    }
-                    details class="surface-details" open[delivery_attention] {
-                        summary { "Delivery and identity" }
-                        dl class="kv" {
-                            @for (field, label) in [("queued", "Queued batches"), ("dead", "Dead batches"), ("delivered_batches", "Delivered batches")] {
-                                div {
-                                    dt { (label) }
-                                    dd { (egress[field].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into())) }
+                    h2 class="card-title" { "Hub" }
+                    div class="card-body" {
+                        p class="muted" {
+                            @if egress["enrolment_error"].is_string() || egress["unavailable"].is_string() {
+                                "Delivery state unavailable"
+                            } @else if receiver.is_none() { "No receiver configured" }
+                            @else { "Receiver configured" }
+                        }
+                        details class="surface-details" open[delivery_attention] {
+                            summary { "Delivery and identity" }
+                            dl class="kv" {
+                                @for (field, label) in [("queued", "Queued batches"), ("dead", "Dead batches"), ("delivered_batches", "Delivered batches")] {
+                                    div {
+                                        dt { (label) }
+                                        dd { (egress[field].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into())) }
+                                    }
                                 }
-                            }
-                            div {
-                                dt { "Oldest queued" }
-                                dd { (egress["oldest_queued_age_seconds"].as_u64().map(|n| format!("{n}s")).unwrap_or_else(|| if egress["queued"] == 0 { "none".into() } else { "unknown".into() })) }
-                            }
-                            div {
-                                dt { "Next attempt" }
-                                dd { (next_delivery_attempt(&egress)) }
-                            }
-                            div {
-                                dt { "Policy hold" }
-                                dd {
-                                    (egress["held"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
-                                    " batches"
-                                    @if let Some(reason) = egress["hold_reason"].as_str() { ": " (reason) }
-                                }
-                            }
-                            div {
-                                dt { "Last error" }
-                                dd { (egress["last_error"].as_str().unwrap_or("none")) }
-                            }
-                            @if let Some(skipped) = egress["skipped_sessions"].as_array().filter(|list| !list.is_empty()) {
                                 div {
-                                    dt { "Skipped sessions" }
+                                    dt { "Oldest queued" }
+                                    dd { (egress["oldest_queued_age_seconds"].as_u64().map(|n| format!("{n}s")).unwrap_or_else(|| if egress["queued"] == 0 { "none".into() } else { "unknown".into() })) }
+                                }
+                                div {
+                                    dt { "Next attempt" }
+                                    dd { (next_delivery_attempt(&egress)) }
+                                }
+                                div {
+                                    dt { "Policy hold" }
                                     dd {
-                                        @for session in skipped {
-                                            div { (skipped_session(session)) }
-                                        }
+                                        (egress["held"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "unknown".into()))
+                                        " batches"
+                                        @if let Some(reason) = egress["hold_reason"].as_str() { ": " (reason) }
                                     }
                                 }
-                            }
-                            div {
-                                dt { "Receiver" }
-                                dd {
-                                    @match receiver {
-                                        Some(receiver) => { span class="mono" { (receiver) } }
-                                        None if egress["receiver_error"].is_string() => {
-                                            "Unknown: " (egress["receiver_error"].as_str().unwrap())
-                                            "; nothing is sent until the telemetry configuration reads."
-                                        }
-                                        None if egress["enrolment_error"].is_string() => {
-                                            "Unknown: the enrolment record could not be read."
-                                        }
-                                        None => { "none configured; nothing leaves this machine" }
-                                    }
+                                div {
+                                    dt { "Last error" }
+                                    dd { (egress["last_error"].as_str().unwrap_or("none")) }
                                 }
-                            }
-                            div {
-                                dt { "Edge key" }
-                                dd {
-                                    @match (key_id, key_standing) {
-                                        (Some(key_id), Some(standing)) => {
-                                            span class="mono" { (key_id) } ", "
-                                            @match refused_standing_words(standing) {
-                                                Some(words) => { (words) " (" span class="mono" { (standing) } ")." }
-                                                None => { (standing) "." }
+                                @if let Some(skipped) = egress["skipped_sessions"].as_array().filter(|list| !list.is_empty()) {
+                                    div {
+                                        dt { "Skipped sessions" }
+                                        dd {
+                                            @for session in skipped {
+                                                div { (skipped_session(session)) }
                                             }
                                         }
-                                        _ if egress["enrolment_error"].is_string() => {
-                                            "Unknown: the enrolment record could not be read."
+                                    }
+                                }
+                                div {
+                                    dt { "Receiver" }
+                                    dd {
+                                        @match receiver {
+                                            Some(receiver) => { span class="mono" { (receiver) } }
+                                            None if egress["receiver_error"].is_string() => {
+                                                "Unknown: " (egress["receiver_error"].as_str().unwrap())
+                                                "; nothing is sent until the telemetry configuration reads."
+                                            }
+                                            None if egress["enrolment_error"].is_string() => {
+                                                "Unknown: the enrolment record could not be read."
+                                            }
+                                            None => { "none configured; nothing leaves this machine" }
                                         }
-                                        _ => { "Not enrolled with a hub: no edge key." }
+                                    }
+                                }
+                                div {
+                                    dt { "Edge key" }
+                                    dd {
+                                        @match (key_id, key_standing) {
+                                            (Some(key_id), Some(standing)) => {
+                                                span class="mono" { (key_id) } ", "
+                                                @match refused_standing_words(standing) {
+                                                    Some(words) => { (words) " (" span class="mono" { (standing) } ")." }
+                                                    None => { (standing) "." }
+                                                }
+                                            }
+                                            _ if egress["enrolment_error"].is_string() => {
+                                                "Unknown: the enrolment record could not be read."
+                                            }
+                                            _ => { "Not enrolled with a hub: no edge key." }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        @if let Some(line) = commonmeasure_relay::enrolment_error_line(&egress) {
+                            p class="callout" { (line.trim_end()) "." }
+                        }
+                        @if let Some(reason) = egress["hub_refused"].as_str() {
+                            p class="callout" { "Hub URL refused: " (reason) "." }
+                        }
+                        @if let Some(error) = egress["unavailable"].as_str() {
+                            p class="callout" { "Delivery state unavailable: " (error) }
+                        }
+                        @if let Some(error) = egress["close_error"].as_str() {
+                            p class="callout" {
+                                "The last spool close did not fold the delivery journal: " (error)
+                                ". Delivery state is intact and the next relay run retries."
+                            }
+                        }
+                        @if let Some(error) = egress["close_error_unreadable"].as_str() {
+                            p class="callout" {
+                                span class="mono" { "relay/spool/outbound.close-error" }
+                                " did not read: " (error) ". Whether the last spool close folded the "
+                                "delivery journal is unknown. Delivery state is intact and the file "
+                                "can be removed."
+                            }
+                        }
+                        @if egress["queued"].as_u64().is_some_and(|n| n > 0) || egress["dead"].as_u64().is_some_and(|n| n > 0) {
+                            p class="muted" { "Queued and dead batches are undelivered." }
+                        }
+                        @if egress["dead"].as_u64().is_some_and(|n| n > 0) {
+                            p { "Start another delivery schedule with " code { "commonmeasure relay requeue" } "." }
+                        }
+                    }
+                }
+                div class="card" {
+                    h2 class="card-title" { "Recent crossings" a href="/app/record" { "Record" } }
+                    div class="card-body" {
+                        @if recent.is_empty() {
+                            p class="muted" { "No crossings recorded." }
+                        } @else {
+                            div class="rows" {
+                                @for row in &recent {
+                                    div class="row" {
+                                        (host_cell(row))
+                                        span class="eng" { (engagements_of(row)) }
                                     }
                                 }
                             }
                         }
                     }
-                    @if let Some(line) = commonmeasure_relay::enrolment_error_line(&egress) {
-                        p class="callout" { (line.trim_end()) "." }
-                    }
-                    @if let Some(reason) = egress["hub_refused"].as_str() {
-                        p class="callout" { "Hub URL refused: " (reason) "." }
-                    }
-                    @if let Some(error) = egress["unavailable"].as_str() {
-                        p class="callout" { "Delivery state unavailable: " (error) }
-                    }
-                    @if let Some(error) = egress["close_error"].as_str() {
-                        p class="callout" {
-                            "The last spool close did not fold the delivery journal: " (error)
-                            ". Delivery state is intact and the next relay run retries."
-                        }
-                    }
-                    @if let Some(error) = egress["close_error_unreadable"].as_str() {
-                        p class="callout" {
-                            span class="mono" { "relay/spool/outbound.close-error" }
-                            " did not read: " (error) ". Whether the last spool close folded the "
-                            "delivery journal is unknown. Delivery state is intact and the file "
-                            "can be removed."
-                        }
-                    }
-                    @if egress["queued"].as_u64().is_some_and(|n| n > 0) || egress["dead"].as_u64().is_some_and(|n| n > 0) {
-                        p class="muted" { "Queued and dead batches are undelivered." }
-                    }
-                    @if egress["dead"].as_u64().is_some_and(|n| n > 0) {
-                        p { "Start another delivery schedule with " code { "commonmeasure relay requeue" } "." }
-                    }
                 }
                 div class="card" {
-                    h2 { "Recent crossings" a href="/app/record" { "Record" } }
-                    @if recent.is_empty() {
-                        p class="muted" { "No crossings recorded." }
-                    } @else {
-                        div class="rows" {
-                            @for row in &recent {
-                                div class="row" {
-                                    (host_cell(row))
-                                    span class="eng" { (engagements_of(row)) }
-                                }
-                            }
-                        }
-                    }
-                }
-                div class="card" {
-                    h2 { "Crossings by engagement" }
-                    @if engagements.is_empty() {
-                        p class="muted" { "No crossings recorded." }
-                    } @else {
-                        div class="rows" {
-                            @for e in &engagements {
-                                div class="row" {
-                                    span class="host" { (str_of(e.get("engagement"), "unattributed")) }
-                                    span class="eng" {
-                                        span class="mono" {
-                                            (e.get("witnessed").and_then(Value::as_u64).unwrap_or(0)
-                                                + e.get("reconstructed").and_then(Value::as_u64).unwrap_or(0))
+                    h2 class="card-title" { "Crossings by engagement" }
+                    div class="card-body" {
+                        @if engagements.is_empty() {
+                            p class="muted" { "No crossings recorded." }
+                        } @else {
+                            div class="rows" {
+                                @for e in &engagements {
+                                    div class="row" {
+                                        span class="host" { (str_of(e.get("engagement"), "unattributed")) }
+                                        span class="eng" {
+                                            span class="mono" {
+                                                (e.get("witnessed").and_then(Value::as_u64).unwrap_or(0)
+                                                    + e.get("reconstructed").and_then(Value::as_u64).unwrap_or(0))
+                                            }
+                                            " crossings"
+                                            (host_observation_counts(&e["host_observed"]))
                                         }
-                                        " crossings"
-                                        (host_observation_counts(&e["host_observed"]))
                                     }
                                 }
                             }
+                            p class="callout" { "Attributed by the working directory each crossing ran in." }
                         }
-                        p class="callout" { "Attributed by the working directory each crossing ran in." }
                     }
                 }
             }
@@ -883,7 +928,7 @@ fn crossing_card(record: &Value, records: &[Value]) -> Markup {
             div class="crossing refused" {
                 div class="cx-line1" {
                     span class="url mono" { (url) }
-                    span class="cx-badges" { span class="badge b-refused" { "refused" } }
+                    span class="cx-badges" { span class="badge badge-err b-refused" { "refused" } }
                 }
                 div class="cx-line2" { span class="stop" { (reason) } }
                 (record_fields(payload))
@@ -899,8 +944,8 @@ fn crossing_card(record: &Value, records: &[Value]) -> Markup {
                         span class="url mono" { (url) }
                         span class="cx-badges" {
                             span class=(grade_badge_class(grade)) { (grade) }
-                            @if grounded { span class="badge b-grounded" { "grounded" } }
-                            @if challenge.is_some() { span class="badge b-refused" { "challenged" } }
+                            @if grounded { span class="badge badge-ok b-grounded" { "grounded" } }
+                            @if challenge.is_some() { span class="badge badge-err b-refused" { "challenged" } }
                         }
                     }
                     div class="cx-line2" {
@@ -1082,23 +1127,25 @@ pub fn budget_page(budget: &Value, read: ReadFrom<'_>) -> String {
             @for row in budget["engagements"].as_array().into_iter().flatten() {
                 @let reconstructed = row["reconstructed"].as_u64().is_some_and(|count| count > 0);
                 div class="card" {
-                    h3 { (str_of(row.get("engagement"), "")) }
-                    dl class="cx-fields" {
-                        @for (key, label) in [("witnessed", "Witnessed crossings"), ("reconstructed", "Reconstructed crossings"),
-                            ("refused", "Refused crossings"), ("estimated_tokens", "Estimated tokens, witnessed"),
-                            ("token_basis", "Token basis"), ("estimated_tokens_by_basis", "Estimates by basis"),
-                            ("total_withheld", "Why the total is withheld"), ("crossings_without_estimate", "Crossings without an estimate"),
-                            ("reconstructed_estimated_tokens", "Estimated tokens, reconstructed (not added to witnessed)"),
-                            ("reconstructed_token_basis", "Reconstructed token basis"),
-                            ("reconstructed_estimated_tokens_by_basis", "Reconstructed estimates by basis"),
-                            ("reconstructed_total_withheld", "Why the reconstructed total is withheld"),
-                            ("reconstructed_crossings_without_estimate", "Reconstructed crossings without an estimate"),
-                            ("declared_cap", "Declared acquisition cap (not a periodic allowance)")] {
-                            @if let Some(value) = row.get(key).filter(|_| reconstructed || !key.starts_with("reconstructed_")) {
-                                div { dt { (label) } dd { (evidence_value(value)) } }
+                    h3 class="card-title" { (str_of(row.get("engagement"), "")) }
+                    div class="card-body" {
+                        dl class="cx-fields" {
+                            @for (key, label) in [("witnessed", "Witnessed crossings"), ("reconstructed", "Reconstructed crossings"),
+                                ("refused", "Refused crossings"), ("estimated_tokens", "Estimated tokens, witnessed"),
+                                ("token_basis", "Token basis"), ("estimated_tokens_by_basis", "Estimates by basis"),
+                                ("total_withheld", "Why the total is withheld"), ("crossings_without_estimate", "Crossings without an estimate"),
+                                ("reconstructed_estimated_tokens", "Estimated tokens, reconstructed (not added to witnessed)"),
+                                ("reconstructed_token_basis", "Reconstructed token basis"),
+                                ("reconstructed_estimated_tokens_by_basis", "Reconstructed estimates by basis"),
+                                ("reconstructed_total_withheld", "Why the reconstructed total is withheld"),
+                                ("reconstructed_crossings_without_estimate", "Reconstructed crossings without an estimate"),
+                                ("declared_cap", "Declared acquisition cap (not a periodic allowance)")] {
+                                @if let Some(value) = row.get(key).filter(|_| reconstructed || !key.starts_with("reconstructed_")) {
+                                    div { dt { (label) } dd { (evidence_value(value)) } }
+                                }
                             }
+                            div { dt { "Acquisition charge" } dd { "Not recorded per engagement." } }
                         }
-                        div { dt { "Acquisition charge" } dd { "Not recorded per engagement." } }
                     }
                 }
             }
@@ -1144,14 +1191,16 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
                     p class="compare-note" { (reason) }
                 } @else {
                     form class="card compare-export" method="get" action="/api/compare/export" {
-                        h2 { "Results export" }
-                        p class="muted" { "HTML report, CSV tables and JSON manifest with provider outcomes, recorded costs, timing and settings." }
-                        input type="hidden" name="comparison" value=(id);
-                        div class="compare-export-actions" {
-                            label { input type="checkbox" name="include_query" value="true"; "Include query text" }
-                            button class="btn" type="submit" { "Export results" }
+                        h2 class="card-title" { "Results export" }
+                        div class="card-body" {
+                            p class="muted" { "HTML report, CSV tables and JSON manifest with provider outcomes, recorded costs, timing and settings." }
+                            input type="hidden" name="comparison" value=(id);
+                            div class="compare-export-actions" {
+                                label { input type="checkbox" name="include_query" value="true"; "Include query text" }
+                                button class="btn" type="submit" { "Export results" }
+                            }
+                            p class="compare-note" { "Source content and private source records are excluded. Review any included query before sharing; downloaded files can be forwarded." }
                         }
-                        p class="compare-note" { "Source content and private source records are excluded. Review any included query before sharing; downloaded files can be forwarded." }
                     }
                 }
                 details class="compare-details" {
@@ -1179,10 +1228,12 @@ pub fn compare_answer_page(result: &Value, providers: &[Value]) -> String {
         @if let Some(records) = result["evidence"].as_array() {
             section class="screen surface-screen" {
                 details class="card" {
-                    summary { "Source record" }
-                    @for record in records {
-                        h3 { (str_of(record.get("event"), "record")) }
-                        (evidence_value(&record["payload"]))
+                    summary class="card-title" { "Source record" }
+                    div class="card-body" {
+                        @for record in records {
+                            h3 { (str_of(record.get("event"), "record")) }
+                            (evidence_value(&record["payload"]))
+                        }
                     }
                 }
             }
@@ -1239,7 +1290,7 @@ fn policy_body(policy: &Value, rules: &Value, notice: Option<(&str, &str)>) -> M
     html! {
         section class="screen" id="policy-screen" {
             @if let Some((kind, text)) = notice {
-                div class=(format!("notice {kind}")) role="status" data-outcome=(kind) { (text) }
+                div class=(alert_class(kind)) role="status" data-outcome=(kind) { (text) }
             }
             div id="policy-read" {
                 @if let Some(error) = policy.get("error").and_then(Value::as_str) {
@@ -1251,7 +1302,7 @@ fn policy_body(policy: &Value, rules: &Value, notice: Option<(&str, &str)>) -> M
                         @if policy["managed"] != true { p role="alert" { (reason) } }
                     } @else {
                         button type="button" class="btn" data-policy-edit { "Edit policy" }
-                        div id="policy-open-error" class="notice refused" role="alert" tabindex="-1"
+                        div id="policy-open-error" class="alert alert-err" role="alert" tabindex="-1"
                             aria-labelledby="policy-open-error-label" hidden {
                             strong id="policy-open-error-label" { "Could not open policy editor" }
                             p data-policy-open-error-message {}
@@ -1271,20 +1322,20 @@ fn policy_body(policy: &Value, rules: &Value, notice: Option<(&str, &str)>) -> M
                         p class="muted" { "No directory scopes declared." }
                     }
                     @if !divergences.is_empty() {
-                        details class="policy-group" open {
-                            summary { (divergences.len()) " engagement " (if divergences.len() == 1 { "mismatch" } else { "mismatches" }) }
+                        details class="record-group" open {
+                            summary class="record-header" { (divergences.len()) " engagement " (if divergences.len() == 1 { "mismatch" } else { "mismatches" }) }
                             div class="table-wrap" { table id="divergences" {
                                 thead { tr { th { "Directory scope" } th { "Governing" } th { "Reported" } th { "Reporting" } } }
                                 tbody { @for d in &divergences { (divergence_row(d)) } }
                             } }
-                            p { "Align the policy engagement with the " a href="#local-attribution" { "local attribution rules" } ". Attribution changes reporting labels, not policy." }
+                            p class="record-body" { "Align the policy engagement with the " a href="#local-attribution" { "local attribution rules" } ". Attribution changes reporting labels, not policy." }
                         }
                     }
                     (historical_forecast(&modes))
                 }
-                details id="local-attribution" class="policy-group" {
-                    summary { "Local attribution" }
-                    (attribution_card(rules))
+                details id="local-attribution" class="record-group" {
+                    summary class="record-header" { "Local attribution" }
+                    div class="record-body" { (attribution_card(rules)) }
                 }
             }
             div id="policy-editor" {}
@@ -1295,35 +1346,37 @@ fn policy_body(policy: &Value, rules: &Value, notice: Option<(&str, &str)>) -> M
 /// Historical forecasts remain independent drafts over the recorded sources.
 fn historical_forecast(modes: &[Value]) -> Markup {
     html! {
-        details class="policy-group" {
-            summary { "Historical forecast" }
-            p { "Try one change against recorded sources. No source is fetched and nothing is saved." }
-            form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-mode" {
-                input type="hidden" name="action" value="mode";
-                div class="fields" {
-                    label class="field" { "Directory scope" (scope_select(modes)) }
-                    label class="field" { "Mode" select name="mode" { @for mode in ["observe", "prefer", "strict"] { option { (mode) } } } }
+        details class="record-group" {
+            summary class="record-header" { "Historical forecast" }
+            div class="record-body" {
+                p { "Try one change against recorded sources. No source is fetched and nothing is saved." }
+                form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-mode" {
+                    input type="hidden" name="action" value="mode";
+                    div class="fields" {
+                        label class="field" { "Directory scope" (scope_select(modes)) }
+                        label class="field" { "Mode" select name="mode" { @for mode in ["observe", "prefer", "strict"] { option { (mode) } } } }
+                    }
+                    button class="btn btn-outline" { "Forecast mode" }
                 }
-                button class="btn quiet" { "Forecast mode" }
-            }
-            div id="forecast-mode" role="status" {}
-            form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-rule" {
-                div class="fields" {
-                    label class="field" { "Directory scope" (scope_select(modes)) }
-                    label class="field" { "Host pattern" input name="host" required placeholder="*.example.com"; }
-                    label class="field" { "Action" select name="action" {
-                        option value="deny" { "Deny host" }
-                        option value="refuse" { "Refuse" }
-                        option value="allow" { "Allow" }
-                        option value="require_licence" { "Require licence" }
-                        option value="require_mediation" { "Require mediation" }
-                    } }
-                    label class="field" { "Licence (when required)" input name="licence"; }
+                div id="forecast-mode" role="status" {}
+                form method="get" action="/app/policy/forecast" hx-get="/app/policy/forecast" hx-target="#forecast-rule" {
+                    div class="fields" {
+                        label class="field" { "Directory scope" (scope_select(modes)) }
+                        label class="field" { "Host pattern" input name="host" required placeholder="*.example.com"; }
+                        label class="field" { "Action" select name="action" {
+                            option value="deny" { "Deny host" }
+                            option value="refuse" { "Refuse" }
+                            option value="allow" { "Allow" }
+                            option value="require_licence" { "Require licence" }
+                            option value="require_mediation" { "Require mediation" }
+                        } }
+                        label class="field" { "Licence (when required)" input name="licence"; }
+                    }
+                    p { "Access rules are tested after the existing rules, in order. The first match wins." }
+                    button class="btn btn-outline" { "Forecast rule" }
                 }
-                p { "Access rules are tested after the existing rules, in order. The first match wins." }
-                button class="btn quiet" { "Forecast rule" }
+                div id="forecast-rule" role="status" {}
             }
-            div id="forecast-rule" role="status" {}
         }
     }
 }
@@ -1333,7 +1386,7 @@ fn historical_forecast(modes: &[Value]) -> Markup {
 /// empty scope.
 fn scope_select(modes: &[Value]) -> Markup {
     html! {
-        select name="scope" {
+        select name="scope" class="select select-compact" {
             @for m in modes {
                 @match m.get("scope").and_then(Value::as_str) {
                     Some(scope) => option value=(scope) { (scope) },
@@ -1350,51 +1403,55 @@ fn scope_row(m: &Value) -> Markup {
         .and_then(Value::as_str)
         .unwrap_or("Default policy");
     html! {
-        details class="policy-group" {
-            summary {
-                span class="policy-path" { (named) span class="policy-disclose" { "Details" } }
-                span class="policy-fields" {
-                    span { span class="policy-label" { "Engagement" } (str_of(m.get("governing_engagement"), "None")) }
-                    span { span class="policy-label" { "Mode" } (str_of(m.get("mode"), "unknown"))
-                        @if m["declares_mode"] == false { span class="policy-badge" { "Inherited" } }
-                    }
-                    span { span class="policy-label" { "Reporting" }
-                        @match m.get("reporting_permitted").and_then(Value::as_bool) {
-                            Some(true) => "Permitted by policy",
-                            Some(false) => "Off",
-                            None => "Not declared",
-                        }
+        article class="record-group" {
+            header class="record-header" {
+                span class="policy-path" { (named) }
+            }
+            div class="record-fields" {
+                span { span class="policy-label" { "Engagement" } (str_of(m.get("governing_engagement"), "None")) }
+                span { span class="policy-label" { "Mode" } (str_of(m.get("mode"), "unknown"))
+                    @if m["declares_mode"] == false { span class="policy-badge" { "Inherited" } }
+                }
+                span { span class="policy-label" { "Reporting" }
+                    @match m.get("reporting_permitted").and_then(Value::as_bool) {
+                        Some(true) => "Permitted by policy",
+                        Some(false) => "Off",
+                        None => "Not declared",
                     }
                 }
             }
-            div class="policy-detail" {
-                dl {
-                    dt { "Directory match" } dd class="mono" { (named) }
-                    dt { "Rule origin" } dd { @if m["declares_constraints"] == false { "Inherited" } @else { "Own rules" } }
-                    dt { "Denied hosts" } dd class="mono" {
-                        @if let Some(hosts) = m["denied_hosts"].as_array() {
-                            @for host in hosts { div { (str_of(Some(host), "")) } }
+            details class="record-details" {
+                summary { "Details" }
+                div class="record-body policy-detail" {
+                    dl {
+                        dt { "Directory match" } dd class="mono" { (named) }
+                        dt { "Rule origin" } dd { @if m["declares_constraints"] == false { "Inherited" } @else { "Own rules" } }
+                        dt { "Denied hosts" } dd class="mono" {
+                            @if let Some(hosts) = m["denied_hosts"].as_array() {
+                                @for host in hosts { div { (str_of(Some(host), "")) } }
+                            }
                         }
-                    }
-                    dt { "Access rules, in order" } dd {
-                        @if let Some(rules) = m["access_rules"].as_array() {
-                            @for rule in rules {
-                                div class="mono" { (u(rule.get("position"))) ". " (str_of(rule.get("host"), "")) " → " (str_of(rule.get("action"), ""))
-                                    @if let Some(licence) = rule["licence"].as_str() { " " (licence) }
+                        dt { "Access rules, in order" } dd {
+                            @if let Some(rules) = m["access_rules"].as_array() {
+                                @for rule in rules {
+                                    div class="mono" { (u(rule.get("position"))) ". " (str_of(rule.get("host"), "")) " → " (str_of(rule.get("action"), ""))
+                                        @if let Some(licence) = rule["licence"].as_str() { " " (licence) }
+                                    }
                                 }
                             }
                         }
-                    }
-                    dt { "Policy identity for the console principal" } dd class="mono" {
-                        @match m.get("policy_identity") {
-                            Some(Value::String(digest)) => (digest),
-                            Some(Value::Object(shadow)) => { "Governed by " (str_of(shadow.get("shadowed_by"), "an earlier scope")) }
-                            _ => "Unknown",
+                        dt { "Policy identity for the console principal" } dd class="mono" {
+                            @match m.get("policy_identity") {
+                                Some(Value::String(digest)) => (digest),
+                                Some(Value::Object(shadow)) => { "Governed by " (str_of(shadow.get("shadowed_by"), "an earlier scope")) }
+                                _ => "Unknown",
+                            }
                         }
                     }
-                }
-                @if m["reporting_permitted"] == true {
-                    p { "Local consent and Hub approval may also be required. This is policy permission, not evidence of delivery." }
+                    @if m["reporting_permitted"] == true {
+                        p { "Local consent and Hub approval may also be required. This is policy permission, not evidence of delivery." }
+                    }
+
                 }
             }
         }
@@ -1433,38 +1490,40 @@ fn attribution_card(rules: &Value) -> Markup {
     let error = rules.get("error").and_then(Value::as_str);
     html! {
         div class="card" {
-            h2 { "Attribution rules" span class="muted-inline" { "which engagement recorded work is reported under" } }
-            @if let Some(error) = error {
-                p class="muted" { "The rule file did not load: " (error) " Saving replaces it." }
-            }
-            @match revision {
-                Some(revision) => {
-                    form class="rules-form" method="post" action="/app/attribution"
-                         hx-post="/app/attribution" hx-target="#policy-screen" hx-swap="outerHTML" {
-                        input type="hidden" name="revision" value=(revision);
-                        div class="rule-head" aria-hidden="true" { span { "Directory contains" } span { "Reported engagement" } }
-                        @for (index, rule) in listed.iter().enumerate() {
+            h2 class="card-title" { "Attribution rules" span class="muted-inline" { "which engagement recorded work is reported under" } }
+            div class="card-body" {
+                @if let Some(error) = error {
+                    p class="muted" { "The rule file did not load: " (error) " Saving replaces it." }
+                }
+                @match revision {
+                    Some(revision) => {
+                        form class="rules-form" method="post" action="/app/attribution"
+                             hx-post="/app/attribution" hx-target="#policy-screen" hx-swap="outerHTML" {
+                            input type="hidden" name="revision" value=(revision);
+                            div class="rule-head" aria-hidden="true" { span { "Directory contains" } span { "Reported engagement" } }
+                            @for (index, rule) in listed.iter().enumerate() {
+                                div class="rule-row" {
+                                    input type="text" name="match" class="input input-compact mono" value=(str_of(rule.get("match"), ""))
+                                        aria-label=(format!("Directory contains, rule {}", index + 1));
+                                    input type="text" name="engagement" class="input input-compact" value=(str_of(rule.get("engagement"), ""))
+                                        aria-label=(format!("Reported engagement, rule {}", index + 1));
+                                }
+                            }
                             div class="rule-row" {
-                                input type="text" name="match" class="mono" value=(str_of(rule.get("match"), ""))
-                                    aria-label=(format!("Directory contains, rule {}", index + 1));
-                                input type="text" name="engagement" value=(str_of(rule.get("engagement"), ""))
-                                    aria-label=(format!("Reported engagement, rule {}", index + 1));
+                                input type="text" name="match" class="input input-compact mono" placeholder="code/ozone"
+                                    aria-label="Directory contains, new rule";
+                                input type="text" name="engagement" class="input input-compact" placeholder="ozone"
+                                    aria-label="Reported engagement, new rule";
+                            }
+                            div class="rule-actions" {
+                                button type="submit" class="btn" { "Save rules" }
                             }
                         }
-                        div class="rule-row" {
-                            input type="text" name="match" class="mono" placeholder="code/ozone"
-                                aria-label="Directory contains, new rule";
-                            input type="text" name="engagement" placeholder="ozone"
-                                aria-label="Reported engagement, new rule";
-                        }
-                        div class="rule-actions" {
-                            button type="submit" class="btn" { "Save rules" }
-                        }
                     }
+                    None => p class="muted" { "The rule file could not be read, so it cannot be edited here." }
                 }
-                None => p class="muted" { "The rule file could not be read, so it cannot be edited here." }
+                p class="callout" { "Rules are read in order and the first whose text appears in a session's working directory names its reported engagement; work no rule names is reported as unattributed. Saving changes what recorded work is reported under; it changes no evidence and enforces nothing." }
             }
-            p class="callout" { "Rules are read in order and the first whose text appears in a session's working directory names its reported engagement; work no rule names is reported as unattributed. Saving changes what recorded work is reported under; it changes no evidence and enforces nothing." }
         }
     }
 }
@@ -1489,8 +1548,8 @@ pub fn forecast_fragment(forecast: &Value, draft: &Value) -> String {
                 "Reconstructed crossings carry no working directory and are judged under the top-level policy. "
                 (u(forecast.get("not_evaluated"))) " crossing records carry no URL and could not be judged."
             }
-            div class="table-wrap" {
-                table class="rules" {
+            div class="data-table" {
+                table {
                     thead { tr {
                         th { "Grade" } th { "Crossings" } th { "Newly refused" } th { "Newly a breach" } th { "Newly admitted" } th { "Unchanged" }
                     } }
@@ -1551,21 +1610,25 @@ fn sources(sources: &Value, notice: Option<(&str, &str)>) -> Markup {
         (topbar("Sources", html! { "Keys from " span class="mono" { (path) } " and the launching environment" }))
         section class="screen surface-screen" {
             @if let Some((kind, text)) = notice {
-                div class=(format!("notice {kind}")) role="status" data-outcome=(kind) { (text) }
+                div class=(alert_class(kind)) role="status" data-outcome=(kind) { (text) }
             }
             @if let Some(error) = sources["file"].get("error").and_then(Value::as_str) {
-                p class="notice refused" role="alert" { "The credentials file does not load, and sessions refuse to start with it: " (error) }
+                p class="alert alert-err" role="alert" { "The credentials file does not load, and sessions refuse to start with it: " (error) }
             }
             @if sources["custody"] == "organisation" {
-                p class="notice" { "Supplier keys on this edge are managed by your organisation's Hub." }
+                p class="alert" { "Supplier keys on this edge are managed by your organisation's Hub." }
             }
             @if let Some(reason) = sources.get("edit_error").and_then(Value::as_str) {
-                p class="notice refused" role="alert" { (reason) }
+                p class="alert alert-err" role="alert" { (reason) }
             }
             p class="muted src-reach" { "A saved key reaches sessions that start after the save. Running sessions, and Compare on this console, keep the keys they started with." }
             h2 { "Suppliers" }
             @if providers.is_empty() {
-                div class="card" { p class="muted" { "No suppliers listed." } }
+                div class="card" {
+                    div class="card-body" {
+     p class="muted" { "No suppliers listed." }
+                    }
+                }
             } @else {
                 @for provider in providers { (source_row(provider, editable)) }
                 details class="surface-details" {
@@ -1621,7 +1684,7 @@ fn source_row(provider: &Value, editable: bool) -> Markup {
                                 label for=(format!("key-{name}")) { (variable) }
                                 input id=(format!("key-{name}")) type="password" name="key" required
                                     autocomplete="off" spellcheck="false" autocapitalize="off";
-                                button type="submit" class="btn quiet" { "Save" }
+                                button type="submit" class="btn btn-outline" { "Save" }
                             }
                         }
                         @if in_file {
@@ -1630,7 +1693,7 @@ fn source_row(provider: &Value, editable: bool) -> Markup {
                                 form method="post" action="/app/sources/key" class="src-key-form" {
                                     input type="hidden" name="provider" value=(name);
                                     input type="hidden" name="action" value="remove";
-                                    button type="submit" class="btn quiet" { "Remove " (variable) " from the file" }
+                                    button type="submit" class="btn btn-outline" { "Remove " (variable) " from the file" }
                                 }
                             }
                         }
@@ -1638,7 +1701,7 @@ fn source_row(provider: &Value, editable: bool) -> Markup {
                 }
             }
             div class="src-status" {
-                span class="badge b-plain" {
+                span class="badge" {
                     @if origin == "unset" { "not configured" } @else { "configured" }
                 }
             }
@@ -1700,7 +1763,7 @@ fn compare(query: Option<&str>, results: &[Value], providers: &[Value]) -> Marku
             form method="post" action="/app/compare" {
                 div class="compare-query-field" {
                     label for="compare-query" { "Query" }
-                    input class="compare-q" type="text" name="query" id="compare-query" required maxlength="4096"
+                    input class="input compare-q" type="text" name="query" id="compare-query" required maxlength="4096"
                         value=(query.unwrap_or(""));
                 }
                 fieldset class="compare-providers" {
@@ -1758,7 +1821,7 @@ fn provider_result(result: &Value) -> Markup {
             div class="cmp-head" {
                 h2 class="cmp-name" { (provider_title(name)) }
                 @match error {
-                    Some(_) => span class="badge b-plain" { (str_of(result.get("status"), "unavailable")) },
+                    Some(_) => span class="badge" { (str_of(result.get("status"), "unavailable")) },
                     None => span class="cmp-count" {
                         (u(result.get("results_count")))
                         (if result["results_count"].as_u64() == Some(1) { " result" } else { " results" })
@@ -1922,9 +1985,9 @@ fn grade_of(record: &Value) -> &str {
 
 fn grade_badge_class(grade: &str) -> &'static str {
     match grade {
-        "mediated" => "badge b-mediated",
+        "mediated" => "badge badge-ok b-mediated",
         "reconstructed" => "badge b-recon",
-        _ => "badge b-observed",
+        _ => "badge badge-accent b-observed",
     }
 }
 
@@ -2219,7 +2282,6 @@ mod tests {
         assert!(page.contains(">230</div>"));
         // Refused total surfaced, and the active section marked in the nav.
         assert!(page.contains("refused by your policy"));
-        assert!(page.contains("nav-item on"));
         assert!(page.contains(r#"aria-current="page""#));
         // Delivered events are counted on the Overview, and the
         // hub card names the receiver and the enrolled key with its standing.
@@ -2279,7 +2341,9 @@ mod tests {
     #[test]
     fn the_shell_names_the_product_and_errors_render_inside_it() {
         let page = sources_page(&json!({}), None);
-        assert!(page.contains(r#"<div class="wordmark">Common Measure</div>"#));
+        assert!(
+            page.contains(r#"<span class="brand-label">Common Measure<span>Edge</span></span>"#)
+        );
         assert!(
             !page.contains("context"),
             "the retired name is gone: {page}"
@@ -2289,7 +2353,7 @@ mod tests {
         let error = error_page(404, "no such route");
         assert!(error.contains("<h1>404 Not found</h1>"), "{error}");
         assert!(error.contains("no such route"));
-        assert!(error.contains(r#"class="app""#));
+        assert!(error.contains(r#"class="app-shell""#));
     }
 
     #[test]
@@ -2302,7 +2366,7 @@ mod tests {
         assert!(empty.contains("may incur supplier charges"));
         assert!(empty.contains("name=\"provider\" value=\"exa\""));
         assert!(!empty.contains("checked"));
-        assert!(empty.contains("class=\"app\""));
+        assert!(empty.contains("class=\"app-shell\""));
         assert!(
             empty.contains(r#"<label for="compare-query">Query</label>"#),
             "the query input is labelled"
@@ -2883,7 +2947,9 @@ mod tests {
             "allowances": {}
         });
         let page = budget_page(&budget, READ);
-        let (imported, live) = page.split_once("<h3>live</h3>").expect("two cards");
+        let (imported, live) = page
+            .split_once(r#"<h3 class="card-title">live</h3>"#)
+            .expect("two cards");
         assert!(
             imported.contains(
                 "<dt>Estimated tokens, reconstructed (not added to witnessed)</dt><dd>30</dd>"

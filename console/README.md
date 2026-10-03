@@ -28,26 +28,27 @@ size    51076 bytes
 sha256  60231ae6ba9db3825eb15a261122d5f55921c4d53b66bf637dc18b4ee27c79f9
 ```
 
-`styles.css` carries the Hub's canonical application palette: white grounds,
-navy text, pale-grey panels and cobalt actions in light mode; ink grounds,
-pale-blue links and coral actions in dark mode. Data surfaces remain white
-in light mode. The inset sidebar switches the Edge mark between the
-website's approved colourways. Controls use 10px corners, small details 6px and panels 14px.
-Primary actions have a 44px minimum height; compact fields use 36px. Status colours retain labels and remain distinct from actions.
+`styles.css` opens with the generated block from the design release vendored
+in `design-tokens/`: the token declarations and, inside `@layer components`,
+the application chrome Hub and Edge share (the shell and its collapsed rail,
+the header and Menu disclosure at 52rem and below, the appearance control,
+badges, alerts, cards, data tables, buttons, fields and read groups). The
+rules after that block are Edge's own screens; being unlayered they win over
+the chrome where the console departs from it. `design-tokens/README.md` lists
+the classes and the sync with the website source; `node
+design-tokens/generate.mjs --check` (also `just tokens`, part of `just gates`)
+detects drift and runs the release's contrast gate.
+`crates/commonmeasure-console/tests/design_tokens.rs` checks offline that the
+embedded CSS is that release. Rust builds need no Node or network access.
 
-Hub and Edge share a 15rem vertical sidebar. At 52rem and below, a Menu
-control opens the same vertical links above the content. The active page has
-a filled row and a left marker. The collapse button reduces the sidebar to a
-4rem rail, keeping navigation icons and the active-page marker. Hover or focus
-an icon for its label. The console remembers the collapsed state locally.
-Appearance stays at the bottom
-left in both sizes, or after the links inside the mobile Menu. Long navigation
-scrolls above the footer. Navigation works without JavaScript; collapsing and
-saving preferences require the local script.
-
-The first visit uses light mode. The appearance button switches light and dark,
-remembered in local storage by `/theme.js`; if storage is unavailable, the choice
-lasts for that page. Console-served guides share this control and preference.
+Light mode is the default. Light, Dark and System are explicit choices under
+Appearance in the sidebar and in the small-screen header, remembered in local
+storage by `/theme.js`; if storage is unavailable, the choice lasts for that
+page. The collapse button reduces the sidebar to a 4rem rail that keeps the
+navigation icons and the active-page marker, with each icon's label on hover
+or focus; the console remembers the collapsed state the same way. Navigation
+works without JavaScript; saving a preference requires the local script.
+Console-served guides share the theme preference through one Dark mode button.
 Standalone guide exports stay script-free and light.
 
 The console serves Geist and Geist Mono from embedded WOFF2 files under
@@ -55,14 +56,6 @@ The console serves Geist and Geist Mono from embedded WOFF2 files under
 and the htmx and appearance scripts work offline. The content security policy permits images and fonts
 only from the same origin. The console-served guide uses the same local fonts;
 standalone exported guides retain system fallbacks.
-
-The website owns `design-tokens/tokens.json`. The vendored release in this
-repository contains the generator and values for the console and guides.
-`node design-tokens/generate.mjs --check` (also `just tokens`) detects drift;
-`just gates` includes it. See `design-tokens/README.md` for cross-repository sync.
-`crates/commonmeasure-console/tests/design_tokens.rs` checks contrast and the
-embedded palettes against that source offline. Rust builds need no Node or
-network access.
 
 ## The guide
 

@@ -6,6 +6,15 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.10 (unreleased)
+
+### Changed
+
+- The console's shell, navigation, appearance control, badges, alerts, cards, data tables, buttons, fields and policy read groups now come from the design release Common Measure Hub renders too, vendored in `design-tokens/`, so the two applications are one specification rather than two implementations of a description ([design release](https://github.com/commonmeasure/commonmeasure/blob/main/design-tokens/README.md)).
+- Appearance offers Light, Dark and System, the same three choices as the hub; a new visitor is light.
+- At 52rem and below the sidebar gives way to a header with a Menu disclosure, as in the hub.
+- The release's contrast gate runs once, on the token source, when the CSS is generated; the console no longer carries a contrast test of its own, only the check that its embedded CSS is the vendored release.
+
 ## 0.4.9 (29 September 2026)
 
 Upgrading: session logs are now written under an advisory lock. A host's MCP server started under 0.4.8 or earlier and still running after the update takes no lock; its writes stay whole as before, and restarting the host brings it under the lock.

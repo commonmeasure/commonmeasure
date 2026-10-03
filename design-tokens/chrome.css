@@ -1,0 +1,825 @@
+/* Application chrome shared by Hub and Edge: the shell, navigation, controls
+ * and read groups the two applications render the same way. Every colour,
+ * size and radius is a token from tokens.json; this file adds no value of its
+ * own. generate.mjs inlays it into each application stylesheet inside
+ * `@layer components`, so an application's own unlayered rules win where they
+ * must differ. */
+
+body {
+	margin: 0;
+	background: var(--canvas);
+	color: var(--fg);
+	font-family: var(--type-sans);
+	-webkit-font-smoothing: antialiased;
+}
+
+h1 {
+	letter-spacing: var(--heading-tracking);
+}
+
+h2,
+h3 {
+	letter-spacing: -0.015em;
+}
+
+::selection {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+:focus-visible {
+	outline: var(--focus-width) solid var(--accent);
+	outline-offset: var(--focus-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* Both approved colourways ship; the theme chooses which one shows. */
+.brand-mark {
+	display: inline-flex;
+	flex: none;
+}
+
+.brand-mark img {
+	width: auto;
+	height: 1.5rem;
+}
+
+.brand-light {
+	display: var(--brand-light-display);
+}
+
+.brand-dark {
+	display: var(--brand-dark-display);
+}
+
+/* The skip link is off screen until it has focus, then first on the page. */
+.skip-link {
+	position: absolute;
+	top: -4rem;
+	left: 1rem;
+	z-index: 50;
+	padding: 0.5rem 1rem;
+	border-radius: var(--radius-control);
+	background: var(--surface);
+	color: var(--accent);
+}
+
+.skip-link:focus-visible {
+	top: 0.5rem;
+}
+
+/* Shell: a 15rem sidebar beside the work area; a 4rem rail when collapsed;
+ * a header with a Menu disclosure at 52rem and below. */
+.app-shell {
+	display: grid;
+	flex: 1;
+	grid-template-columns: 15rem minmax(0, 1fr);
+	min-height: 100svh;
+}
+
+.shell-sidebar {
+	position: sticky;
+	top: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	align-self: start;
+	height: 100svh;
+	min-height: 0;
+	padding: 0.75rem;
+	border-right: 1px solid var(--edge);
+	background: var(--canvas);
+}
+
+.sidebar-brand-row {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 0.25rem;
+	min-height: 2.5rem;
+}
+
+.shell-brand {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 0.5rem;
+	min-width: 0;
+	color: var(--fg);
+	text-decoration: none;
+}
+
+.shell-brand .brand-mark img {
+	height: 1.25rem;
+}
+
+.brand-label {
+	font-size: var(--type-caption);
+	font-weight: 600;
+	line-height: 1.25;
+	white-space: nowrap;
+}
+
+.brand-label > span {
+	display: block;
+	color: var(--fg-muted);
+	font-weight: 400;
+}
+
+.sidebar-toggle {
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--fg-muted);
+	cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+	background: var(--surface);
+	color: var(--fg);
+}
+
+.sidebar-toggle[hidden] {
+	display: none;
+}
+
+.sidebar-content {
+	flex: 1;
+	min-height: 0;
+	margin: -2px;
+	padding: 2px;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+
+.sidebar-settings {
+	display: grid;
+	flex: none;
+	gap: 0.25rem;
+	margin-top: auto;
+	padding-top: 0.5rem;
+	border-top: 1px solid var(--edge);
+}
+
+.sidebar-label {
+	margin: 0 0 0.25rem;
+	padding: 0 0.625rem;
+	color: var(--fg-muted);
+	font-size: var(--type-caption);
+	font-weight: 500;
+}
+
+.shell-work {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.shell-nav-group {
+	margin-top: 0.75rem;
+}
+
+.shell-nav-group:first-child {
+	margin-top: 0;
+}
+
+.shell-nav-heading {
+	margin: 0;
+	padding: 0 0.625rem 0.375rem;
+	color: var(--fg-muted);
+	font-size: var(--type-caption);
+	font-weight: 500;
+}
+
+summary.shell-nav-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	min-height: 2.25rem;
+	cursor: pointer;
+	list-style: none;
+}
+
+summary.shell-nav-heading::-webkit-details-marker {
+	display: none;
+}
+
+summary.shell-nav-heading:hover {
+	color: var(--fg);
+}
+
+.shell-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+}
+
+/* Destinations and the sidebar's other controls share one row geometry. */
+.shell-nav-link,
+.sidebar-control {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+	min-height: 2.25rem;
+	padding: 0.375rem 0.625rem;
+	border: 0;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--fg);
+	font: inherit;
+	font-size: var(--type-body-compact);
+	text-align: left;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.shell-nav-link:hover,
+.sidebar-control:hover {
+	background: var(--surface);
+}
+
+.shell-nav-link:focus-visible {
+	outline-offset: -2px;
+}
+
+.shell-nav-link[aria-current='page'] {
+	background: var(--surface);
+	color: var(--accent);
+	font-weight: 600;
+	box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.shell-nav-link svg,
+.sidebar-control svg {
+	flex: none;
+}
+
+.nav-label {
+	white-space: nowrap;
+}
+
+/* The collapsed rail names its icons through this tooltip. */
+.rail-tooltip {
+	position: fixed;
+	left: 4.5rem;
+	z-index: 60;
+	max-width: min(24rem, calc(100vw - 5rem));
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-control);
+	background: var(--elevated);
+	color: var(--fg);
+	font-size: var(--type-caption);
+	box-shadow: var(--overlay);
+	pointer-events: none;
+}
+
+.rail-tooltip[hidden] {
+	display: none;
+}
+
+@media (min-width: 52.001rem) {
+	:root[data-sidebar='collapsed'] .app-shell {
+		grid-template-columns: 4rem minmax(0, 1fr);
+	}
+
+	:root[data-sidebar='collapsed'] .shell-brand,
+	:root[data-sidebar='collapsed'] .nav-label,
+	:root[data-sidebar='collapsed'] .shell-nav-heading,
+	:root[data-sidebar='collapsed'] .sidebar-label {
+		display: none;
+	}
+
+	:root[data-sidebar='collapsed'] .sidebar-brand-row {
+		justify-content: center;
+	}
+
+	:root[data-sidebar='collapsed'] .sidebar-toggle {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	:root[data-sidebar='collapsed'] :is(.shell-nav-link, .sidebar-control) {
+		justify-content: center;
+		width: 2.5rem;
+		height: 2.5rem;
+		padding: 0;
+	}
+
+	:root[data-sidebar='collapsed'] .shell-nav-group {
+		margin-top: 0.5rem;
+		padding-top: 0.5rem;
+		border-top: 1px solid var(--edge);
+	}
+
+	:root[data-sidebar='collapsed'] .sidebar-settings {
+		padding-inline: 0;
+	}
+
+	/* The three-way choice does not fit the rail; one control flips the
+	 * effective theme there instead. */
+	:root[data-sidebar='collapsed'] .sidebar-settings > .theme-choice {
+		display: none;
+	}
+
+	:root[data-sidebar='collapsed'] .sidebar-settings > .theme-flip {
+		display: flex;
+	}
+}
+
+.theme-flip {
+	display: none;
+}
+
+.shell-mobile-header {
+	display: none;
+}
+
+@media (max-width: 52rem) {
+	.app-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.shell-sidebar {
+		display: none;
+	}
+
+	.shell-mobile-header {
+		display: block;
+		border-bottom: 1px solid var(--edge);
+		background: var(--canvas);
+	}
+
+	.shell-mobile-bar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		min-height: 4rem;
+		padding: 0.75rem 1rem;
+	}
+
+	.shell-mobile-brand {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		color: var(--fg);
+		font-size: var(--type-body-compact);
+		font-weight: 600;
+		text-decoration: none;
+	}
+
+	.shell-mobile-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+		margin-left: auto;
+	}
+
+	.shell-mobile-menu {
+		padding: 0 1rem;
+		border-top: 1px solid var(--edge);
+	}
+
+	.shell-mobile-menu > summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		min-height: 3rem;
+		cursor: pointer;
+		list-style: none;
+		font-size: var(--type-body-compact);
+	}
+
+	.shell-mobile-menu > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.shell-mobile-menu > summary:hover {
+		color: var(--accent);
+	}
+
+	.shell-mobile-menu .menu-current {
+		font-weight: 500;
+	}
+
+	.shell-mobile-menu .menu-label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--fg-muted);
+	}
+
+	.shell-mobile-menu .menu-label > span {
+		font-size: 10px;
+	}
+
+	.shell-mobile-menu[open] .menu-label > span {
+		rotate: 180deg;
+	}
+
+	.shell-mobile-nav {
+		padding-bottom: 0.75rem;
+	}
+
+	.shell-nav-link {
+		min-height: 2.75rem;
+	}
+
+	.shell-nav-link[aria-current='page'] {
+		background: var(--inset);
+	}
+
+	.rail-tooltip {
+		display: none;
+	}
+}
+
+/* Appearance: Light, Dark or System, the pressed option is the saved one. */
+.theme-choice {
+	display: inline-flex;
+	padding: 0.125rem;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-control);
+}
+
+.theme-choice button {
+	padding: 0.25rem 0.625rem;
+	border: 0;
+	border-radius: var(--radius-detail);
+	background: transparent;
+	color: var(--fg-muted);
+	font: inherit;
+	font-size: var(--type-caption);
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.theme-choice button:hover {
+	color: var(--fg);
+}
+
+.theme-choice button[aria-pressed='true'] {
+	background: var(--inset);
+	color: var(--fg);
+}
+
+/* Status badges: a tinted label. Colour never carries the meaning alone. */
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	padding: 0.125rem 0.5rem;
+	border-radius: var(--radius-detail);
+	background: var(--inset);
+	color: var(--fg-muted);
+	font-size: var(--type-label);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.badge-accent {
+	background: color-mix(in oklch, var(--accent) 14%, var(--surface));
+	color: var(--accent-strong);
+}
+
+.badge-ok {
+	background: var(--ok-soft);
+	color: var(--ok);
+}
+
+.badge-warn {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+
+.badge-err {
+	background: var(--err-soft);
+	color: var(--err);
+}
+
+/* Alerts: an outcome or a condition the person should read. */
+.alert {
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-control);
+	background: var(--inset);
+	color: var(--fg-muted);
+	font-size: var(--type-body-compact);
+}
+
+.alert-title {
+	margin: 0 0 0.25rem;
+	color: var(--fg);
+	font-weight: 600;
+}
+
+.alert-ok {
+	border-color: color-mix(in oklch, var(--ok) 30%, transparent);
+	background: var(--ok-soft);
+}
+
+.alert-ok .alert-title {
+	color: var(--ok);
+}
+
+.alert-warn {
+	border-color: color-mix(in oklch, var(--warn) 30%, transparent);
+	background: var(--warn-soft);
+}
+
+.alert-warn .alert-title {
+	color: var(--warn);
+}
+
+.alert-err {
+	border-color: color-mix(in oklch, var(--err) 30%, transparent);
+	background: var(--err-soft);
+}
+
+.alert-err .alert-title {
+	color: var(--err);
+}
+
+/* Cards group controls; data cards hold tables and charts. */
+.card {
+	min-width: 0;
+	overflow: hidden;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-panel);
+	background: var(--surface);
+}
+
+.card-data {
+	background: var(--data);
+}
+
+.card-title {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin: 0;
+	padding: 1rem 1.25rem;
+	border-bottom: 1px solid var(--edge);
+	font-size: var(--type-body-compact);
+	font-weight: 600;
+}
+
+.card-body {
+	padding: 1.25rem;
+}
+
+.card-footer {
+	padding: 1rem 1.25rem;
+	border-top: 1px solid var(--edge);
+	color: var(--fg-muted);
+	font-size: var(--type-body-compact);
+}
+
+/* Tables scroll inside a focusable region so wide columns stay reachable. */
+.data-table {
+	max-width: 100%;
+	min-width: 0;
+	overflow-x: auto;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-panel);
+	background: var(--data);
+}
+
+.data-table table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: var(--type-body-compact);
+}
+
+.data-table th {
+	padding: 0.5rem 1rem;
+	border-bottom: 1px solid var(--edge);
+	background: var(--inset);
+	color: var(--fg-muted);
+	font-weight: var(--weight-secondary);
+	text-align: left;
+}
+
+.data-table td {
+	padding: 0.5rem 1rem;
+	border-bottom: 1px solid var(--edge);
+	vertical-align: top;
+}
+
+.data-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.data-table tbody tr:hover {
+	background: var(--inset);
+}
+
+.data-table .num {
+	font-family: var(--type-mono);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+/* Buttons: primary is the one action a screen leads with. */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	min-height: var(--control-height);
+	padding: 0.625rem var(--space-5);
+	border: 1px solid var(--action);
+	border-radius: var(--radius-control);
+	background: var(--action);
+	color: var(--on-action);
+	font: inherit;
+	font-size: var(--type-control);
+	font-weight: var(--weight-control);
+	text-decoration: none;
+	cursor: pointer;
+	transition:
+		background-color var(--motion-fast) var(--motion-ease),
+		border-color var(--motion-fast) var(--motion-ease),
+		color var(--motion-fast) var(--motion-ease);
+}
+
+.btn:hover {
+	border-color: var(--action-hover);
+	background: var(--action-hover);
+}
+
+.btn:disabled {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+.btn-outline {
+	border-color: var(--edge-strong);
+	background: transparent;
+	color: var(--accent-strong);
+}
+
+.btn-outline:hover {
+	border-color: var(--edge-strong);
+	background: var(--surface);
+}
+
+.btn-ghost {
+	border-color: transparent;
+	background: transparent;
+	color: var(--fg);
+}
+
+.btn-ghost:hover {
+	border-color: transparent;
+	background: var(--inset);
+}
+
+.btn-danger {
+	border-color: var(--err);
+	background: var(--err);
+	color: var(--on-accent);
+}
+
+.btn-danger:hover {
+	border-color: var(--err);
+	background: color-mix(in srgb, var(--err) 85%, transparent);
+}
+
+.btn-compact {
+	min-height: var(--control-height-compact);
+	gap: 0.375rem;
+	padding: 0.375rem 0.75rem;
+	font-size: var(--type-body-compact);
+}
+
+/* Fields: data surfaces with an interactive border. */
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+}
+
+.field-label {
+	font-size: var(--type-body-compact);
+	font-weight: 500;
+}
+
+.field-hint {
+	margin: 0;
+	color: var(--fg-muted);
+	font-size: var(--type-body-compact);
+}
+
+.field-error {
+	margin: 0;
+	color: var(--err);
+	font-size: var(--type-body-compact);
+}
+
+.input,
+.select {
+	min-height: var(--control-height);
+	padding: 0 0.75rem;
+	border: 1px solid var(--edge-strong);
+	border-radius: var(--radius-control);
+	background: var(--data);
+	color: var(--fg);
+	font: inherit;
+	font-size: var(--type-body-compact);
+}
+
+.input::placeholder {
+	color: var(--fg-subtle);
+}
+
+.input:disabled,
+.select:disabled {
+	opacity: 0.5;
+}
+
+.input[aria-invalid='true'] {
+	border-color: var(--err);
+}
+
+.input-compact,
+.select-compact {
+	min-height: var(--control-height-compact);
+	padding-inline: 0.625rem;
+}
+
+/* Read groups: a tinted header, labelled fields and native disclosures. */
+.record-group {
+	min-width: 0;
+	border: 1px solid var(--edge);
+	border-radius: var(--radius-panel);
+	overflow-wrap: anywhere;
+}
+
+.record-header {
+	padding: 1rem;
+	border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+	background: var(--surface);
+}
+
+details.record-group:not([open]) > .record-header {
+	border-radius: inherit;
+}
+
+summary.record-header {
+	cursor: pointer;
+	list-style: none;
+}
+
+summary.record-header::-webkit-details-marker {
+	display: none;
+}
+
+.record-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+	gap: 1rem;
+	margin: 0;
+	padding: 1rem;
+	font-size: var(--type-body-compact);
+}
+
+.record-fields > div {
+	min-width: 0;
+}
+
+.record-fields dt {
+	color: var(--fg-muted);
+}
+
+.record-fields dd {
+	margin: 0.25rem 0 0;
+}
+
+.record-details {
+	border-top: 1px solid var(--edge);
+}
+
+.record-details > summary {
+	padding: 0.75rem 1rem;
+	cursor: pointer;
+	font-size: var(--type-body-compact);
+}

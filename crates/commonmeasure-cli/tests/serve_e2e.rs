@@ -135,7 +135,7 @@ fn the_console_serves_its_six_sections_and_the_record_from_one_binary() {
 
     // `/` lands on the Overview; every section is reachable through the shell.
     let overview = console.text("/");
-    assert!(overview.contains("class=\"app\""));
+    assert!(overview.contains("class=\"app-shell\""));
     assert!(overview.contains("Overview"));
     assert!(overview.contains("crossings recorded"));
 
