@@ -242,24 +242,22 @@ fn a_corrupt_gzip_body_is_refused() {
 /// Only gzip is decoded. Brotli, zstd and deflate are refused, as is more than
 /// one coding in one field or across two, and a request body under any coding:
 /// a body this parser did not decode would be hashed and recorded as the
-/// content it only claims to be.
+/// content it only claims to be. A response names the coding the request did
+/// not ask for.
 #[test]
 fn every_other_content_coding_is_still_refused() {
     let coded = gzip(b"stacked");
-    for coding in [
-        "br",
-        "zstd",
-        "deflate",
-        "compress",
-        "gzip, gzip",
-        "gzip, br",
+    for (coding, named) in [
+        ("br", "content coding br was not requested"),
+        ("zstd", "content coding zstd was not requested"),
+        ("deflate", "content coding deflate was not requested"),
+        ("compress", "content coding compress was not requested"),
+        ("gzip, br", "content coding br was not requested"),
+        ("gzip, gzip", "applies gzip more than once"),
     ] {
         let error = response(&coded_response(coding, &coded))
             .expect_err("a coding this parser does not decode must not pass");
-        assert!(
-            format!("{error:#}").contains("unsupported content encoding"),
-            "{coding}: {error:#}"
-        );
+        assert!(format!("{error:#}").contains(named), "{coding}: {error:#}");
     }
     let mut two_fields =
         b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n".to_vec();
@@ -316,6 +314,89 @@ fn malformed_header_fields_are_errors_on_read() {
         &b"HTTP/1.1 200 OK\r\n: v\r\n\r\n"[..],
         &b"HTTP/1.1 200 OK\r\nX-A : v\r\n\r\n"[..],
         &b"HTTP/1.1 200 OK\r\nX-A: v\0w\r\n\r\n"[..],
+    ] {
+        assert!(response(raw).is_err(), "{raw:?} must not parse");
+    }
+}
+
+/// The shapes HTAB in values must not open up (RFC 9112 §5.1, §5.2, §2.2):
+/// a folded continuation line, whitespace or HTAB before the colon or inside
+/// a name, and a bare CR, which some parsers take as a line end. Each is
+/// refused, on a response and on a request, obs-text or not.
+#[test]
+fn folded_lines_tabs_in_names_and_bare_cr_are_refused() {
+    for field in [
+        &b"X-A: one\r\n two\r\n"[..],
+        &b"X-A: one\r\n\ttwo\r\n"[..],
+        &b"X-A: one\r\n \xe9\r\n"[..],
+        &b"X-A\t: v\r\n"[..],
+        &b"X\tA: v\r\n"[..],
+        &b"\tX-A: v\r\n"[..],
+        &b"X-A: one\rtwo\r\n"[..],
+        &b"X-A: one\rX-B: two\r\n"[..],
+        &b"X-A: \xe9\r\xe9\r\n"[..],
+    ] {
+        let mut raw = b"HTTP/1.1 200 OK\r\n".to_vec();
+        raw.extend_from_slice(field);
+        raw.extend_from_slice(b"Content-Length: 0\r\n\r\n");
+        assert!(response(&raw).is_err(), "{raw:?} must not parse");
+        let mut raw = b"GET / HTTP/1.1\r\n".to_vec();
+        raw.extend_from_slice(field);
+        raw.extend_from_slice(b"\r\n");
+        assert!(request(&raw).is_err(), "{raw:?} must not parse");
+    }
+}
+
+/// RFC 9110 §5.5 allows obs-text in a value: a Latin-1 `Content-Disposition`
+/// is read, not a failed message. The bytes are kept as received, text reads
+/// get a lossless rendering, and an exact-text read is refused by name.
+#[test]
+fn obs_text_in_a_value_is_kept_as_bytes_and_never_mis_decoded() {
+    let raw = b"HTTP/1.1 200 Tr\xe8s bien\r\n\
+                Content-Disposition: attachment; filename=\"caf\xe9\\menu.txt\"\r\n\
+                X-Plain: caf\xc3\xa9\r\n\
+                Content-Length: 2\r\n\r\nok";
+    let read = response(raw).expect("obs-text is not a message failure");
+    assert_eq!(read.body, b"ok");
+    assert_eq!(read.reason, "Tr\\xE8s bien");
+    assert_eq!(
+        read.headers.get_bytes("content-disposition"),
+        Some(&b"attachment; filename=\"caf\xe9\\menu.txt\""[..])
+    );
+    assert_eq!(
+        read.headers.get("content-disposition"),
+        Some(r#"attachment; filename="caf\xE9\\menu.txt""#)
+    );
+    let refused = read
+        .headers
+        .text("Content-Disposition")
+        .expect_err("not UTF-8, so not exact text");
+    assert!(
+        refused
+            .to_string()
+            .contains("Content-Disposition header holds bytes that are not UTF-8"),
+        "{refused}"
+    );
+    // UTF-8 beyond ASCII was accepted before and still reads as itself.
+    assert_eq!(read.headers.text("x-plain"), Ok(Some("café")));
+    assert_eq!(read.headers.text("absent"), Ok(None));
+
+    let mut raw = b"GET / HTTP/1.1\r\nX-Name: M\xfcller\r\n\r\n".to_vec();
+    let read = request(&raw).expect("obs-text on a request is read too");
+    assert_eq!(read.headers.get("x-name"), Some(r"M\xFCller"));
+    // The request line itself stays ASCII.
+    raw = b"GET /\xe9 HTTP/1.1\r\n\r\n".to_vec();
+    assert!(request(&raw).is_err());
+}
+
+/// A framing header holding obs-text cannot frame the message, and says so
+/// through the same checks as any other malformed value.
+#[test]
+fn obs_text_in_a_framing_header_is_refused() {
+    for raw in [
+        &b"HTTP/1.1 200 OK\r\nContent-Length: 2\xe9\r\n\r\nok"[..],
+        &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\xe9\r\n\r\n0\r\n\r\n"[..],
+        &b"HTTP/1.1 200 OK\r\nContent-Encoding: gz\xe9p\r\nContent-Length: 2\r\n\r\nok"[..],
     ] {
         assert!(response(raw).is_err(), "{raw:?} must not parse");
     }

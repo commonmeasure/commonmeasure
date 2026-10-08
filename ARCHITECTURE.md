@@ -127,13 +127,15 @@ invoke_skill(candidate, input, constraints) -> result envelope
 
 A provider may implement only a subset, and an adapter declares only what it
 implements, never what its vendor documents. `crates/commonmeasure-supply` holds
-sixteen provider adapters (`docs/contracts/provider.md`): `search` for
+seventeen provider adapters (`docs/contracts/provider.md`): `search` for
 the twelve open-web providers, six of which also declare `fetch` (a named
 URL, dispatched only when a job declares a `fetch_target`); `query` for the
 operator's own internal corpus; `search` and `quote` for Redpine, a licensed
 supplier bought by quote then confirm; `search` and `fetch` for Ozone
-Live, retrieval over a licensed publisher corpus; and `search` alone for
-Dataville, returning one Wikipedia or arXiv record per request. The skill
+Live, retrieval over a licensed publisher corpus; `search` and `fetch` for
+People Inc, returning full article markdown with unknown rights and charges
+(`docs/integrate/peopleinc.md`); and `search` alone for Dataville, returning
+one Wikipedia or arXiv record per request. The skill
 adapter, `invoke` for catalogued local skills, is separate from the provider
 list. No other capability is declared. The runtime validates a plan against the declared
 capabilities before execution, so a plan cannot discover during execution
@@ -329,8 +331,8 @@ Local acquisition needs no continuously running Common Measure service:
   launched by image digest (`demo/gateway/tensorzero/`). On macOS,
   `commonmeasure service install console` keeps the console running as a
   LaunchAgent that starts this binary by absolute path with the installing
-  shell's Edge home; acquisition does not use it (`docs/GETTING-STARTED.md`
-  §5).
+  shell's Edge home; acquisition does not use it (`docs/INSTALL.md`,
+  Keep the console running).
 - A host that sends no session-end event delivers without a person only
   while a background relay runs: `commonmeasure relay --every <seconds>`,
   which holds `relay-loop.lock` in the home and relays it on an interval,
@@ -459,7 +461,7 @@ Releases are not signed. `install.sh` and `update` check a binary against
 the `SHA256SUMS` published on the same origin, which shows that the bytes
 match that list, not who published it. A release build of `update` always
 uses the public release origin and prints it before changing anything
-(`docs/GETTING-STARTED.md` §1, Updating).
+(`docs/INSTALL.md`, Updating).
 
 ### Hosted integration
 

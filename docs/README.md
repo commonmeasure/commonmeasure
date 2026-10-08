@@ -32,6 +32,8 @@ Use:
 
 Integrate:
 
+- [People Inc content](integrate/peopleinc.md): configure article search and
+  named-URL retrieval, with billing and verification limits.
 - [`docs/integrate/host.md`](integrate/host.md): connect an agent host to an
   edge through the MCP tools, over stdio or Streamable HTTP, and the hooks.
 - [`docs/integrate/reports.md`](integrate/reports.md): receive usage reports

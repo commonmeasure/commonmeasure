@@ -3,6 +3,9 @@
 
 use super::*;
 
+use commonmeasure_runtime::agent_text;
+use commonmeasure_runtime::agent_text::{AgentText, Given};
+
 const RETRY_AFTER_CAP: u64 = 3_600;
 const EXPONENTIAL_CAP: u64 = 900;
 
@@ -103,6 +106,11 @@ pub struct BackoffEvent {
     pub budget_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// `reason` as the agent reads it where the event refused the crossing:
+    /// the host by position, the times and status as they are, and a store
+    /// fault by its class and remedy. Not recorded: `reason` is the record's.
+    #[serde(skip)]
+    pub agent_reason: Option<AgentText>,
 }
 
 impl CrawlDelayStore {
@@ -369,6 +377,47 @@ impl Pacing {
     fn backoff_error(&self, url: &str, fault: Fault) -> String {
         let host = crate::grounding::host_of(url);
         let host = if host.is_empty() { url } else { &host };
+        // What the agent is told: the fault's class and the operator's
+        // remedy, with the host by position and the file it is named for
+        // left to the record, since the file's name spells the host.
+        let agent_reason = match &fault {
+            Fault::Record(_) | Fault::Directory(_) if !self.pace.names_the_edge() => {
+                AgentText::fixed(
+                    "the back-off record for the host could not be read or kept. The back-off \
+                     record for each host is kept on the edge that serves this session; its \
+                     operator can make that store writable or clear it",
+                )
+            }
+            Fault::Record(_) => agent_text![
+                "the back-off record for the host could not be read. Repair access to or \
+                 remove that host's back-off file under ",
+                Given::path(self.store.dir()),
+                ", which the record names, and try again."
+            ],
+            Fault::Directory(_) => agent_text![
+                "the back-off record for the host could not be kept. Make the back-off \
+                 directory, ",
+                Given::path(self.store.dir()),
+                ", writable, and try again."
+            ],
+            Fault::Busy(_) => agent_text![
+                "the back-off record for the host could not be locked: another process on \
+                 this edge holds its lock and did not let go within ",
+                crate::declaration::LOCK_DEADLINE.as_secs(),
+                "s. Try again once it has finished"
+            ],
+            Fault::LockFile(_) if self.pace.names_the_edge() => agent_text![
+                "the back-off record for the host could not be locked, because its lock file \
+                 cannot be opened; ",
+                crate::declaration::LOCK_FILE_REMEDY,
+                ", and try again"
+            ],
+            Fault::LockFile(_) => AgentText::fixed(
+                "the back-off record for the host could not be locked, because its lock file \
+                 cannot be opened. The back-off record for each host is kept on the edge that \
+                 serves this session; its operator can repair that lock file",
+            ),
+        };
         // A hosted tenant can act on neither the store nor its directory, so
         // it is given the operator's remedy, as a crawl-delay fault gives it.
         let reason = match fault {
@@ -409,6 +458,7 @@ impl Pacing {
             wait_ms: None,
             budget_ms: None,
             reason: Some(reason.clone()),
+            agent_reason: Some(agent_reason),
         });
         reason
     }
@@ -465,6 +515,16 @@ impl Pacing {
             .rev()
             .find(|event| matches!(event.outcome.as_str(), "refused" | "unavailable"))
             .and_then(|event| event.reason.clone())
+    }
+
+    /// [`Self::backoff_refusal`] as the agent reads it.
+    pub fn backoff_refusal_agent(&self) -> Option<AgentText> {
+        self.backoff_events
+            .borrow()
+            .iter()
+            .rev()
+            .find(|event| matches!(event.outcome.as_str(), "refused" | "unavailable"))
+            .and_then(|event| event.agent_reason.clone())
     }
 
     fn evidence(&self, backoff: &Backoff) -> serde_json::Value {
@@ -556,35 +616,83 @@ impl Pacing {
             } else {
                 wait > budget
             };
-            let reason = refused.then(|| {
+            // The record's sentence names the host; the agent's names it by
+            // position, with the same times and status.
+            let told = refused.then(|| {
                 if self.pace == Pace::Hosted {
-                    match backoff.http_date.filter(|date| *date == backoff.until && !reserved) {
-                        Some(until) => format!("{host} is in back-off until {}", until.to_rfc3339()),
-                        None => format!("{host} is in back-off"),
+                    match backoff
+                        .http_date
+                        .filter(|date| *date == backoff.until && !reserved)
+                    {
+                        Some(until) => (
+                            format!("{host} is in back-off until {}", until.to_rfc3339()),
+                            agent_text!["the host is in back-off until ", until],
+                        ),
+                        None => (
+                            format!("{host} is in back-off"),
+                            AgentText::fixed("the host is in back-off"),
+                        ),
                     }
                 } else if let Some(held) = reservation {
                     // `until` is the reservation's deadline here. The back-off
                     // and its status are named only while that period lasts:
                     // a reservation taken after it ended cites no failure.
-                    let period = if held.failure_until > now {
-                        format!(
-                            ", and {host} is in back-off until {} after HTTP {}",
-                            held.failure_until.to_rfc3339(),
-                            backoff.status
+                    let (period, period_agent) = if held.failure_until > now {
+                        (
+                            format!(
+                                ", and {host} is in back-off until {} after HTTP {}",
+                                held.failure_until.to_rfc3339(),
+                                backoff.status
+                            ),
+                            agent_text![
+                                ", and the host is in back-off until ",
+                                held.failure_until,
+                                " after HTTP ",
+                                backoff.status
+                            ],
                         )
                     } else {
-                        String::new()
+                        (String::new(), AgentText::empty())
                     };
-                    format!(
-                        "another request to {host} is under way and holds the host's turn until \
-                         {}{period}; this fetch may spend no more time waiting",
-                        backoff.until.to_rfc3339()
+                    (
+                        format!(
+                            "another request to {host} is under way and holds the host's turn \
+                             until {}{period}; this fetch may spend no more time waiting",
+                            backoff.until.to_rfc3339()
+                        ),
+                        agent_text![
+                            "another request to the host is under way and holds the host's turn \
+                             until ",
+                            backoff.until,
+                            period_agent,
+                            "; this fetch may spend no more time waiting"
+                        ],
                     )
                 } else {
-                    format!("{host} is in back-off until {} after HTTP {}; the wait exceeds the {}s this fetch may still spend waiting",
-                        backoff.until.to_rfc3339(), backoff.status, seconds(millis(budget)))
+                    (
+                        format!(
+                            "{host} is in back-off until {} after HTTP {}; the wait exceeds the \
+                             {}s this fetch may still spend waiting",
+                            backoff.until.to_rfc3339(),
+                            backoff.status,
+                            seconds(millis(budget))
+                        ),
+                        agent_text![
+                            "the host is in back-off until ",
+                            backoff.until,
+                            " after HTTP ",
+                            backoff.status,
+                            "; the wait exceeds the ",
+                            budget,
+                            "s this fetch may still spend waiting"
+                        ],
+                    )
                 }
             });
+            let (reason, agent_reason) = match told {
+                Some((reason, agent_reason)) => (Some(reason), Some(agent_reason)),
+                None => (None, None),
+            };
             let sleep = if reserved {
                 wait.min(budget).min(Duration::from_millis(50))
             } else {
@@ -611,6 +719,7 @@ impl Pacing {
                         .then(|| millis(if refused { wait } else { sleep })),
                     budget_ms: Some(millis(budget)),
                     reason: reason.clone(),
+                    agent_reason,
                 });
             }
             drop(events);
@@ -659,6 +768,7 @@ impl Pacing {
                 wait_ms: None,
                 budget_ms: None,
                 reason: None,
+                agent_reason: None,
             });
         }
         Ok(())

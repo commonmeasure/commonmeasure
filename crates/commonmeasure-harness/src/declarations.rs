@@ -14,8 +14,10 @@
 //! bytes in, so a probe obeys the same host policy and privacy floor as a
 //! crossing.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use commonmeasure_runtime::agent_text::AgentText;
 use commonmeasure_types::Money;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -791,9 +793,12 @@ impl RobotsFile {
                         category,
                         preference,
                         detail: match rule_path {
-                            Some(rule_path) => {
-                                format!("group {name}: Content-Usage: {rule_path} {label}")
-                            }
+                            // The rule's path is the source's text; a
+                            // statement's detail reaches the agent.
+                            Some(rule_path) => format!(
+                                "group {name}: Content-Usage: {} {label}",
+                                crate::source_text::quoted_path(rule_path)
+                            ),
                             None => format!("group {name}: Content-Usage: {label}"),
                         },
                     });
@@ -935,22 +940,54 @@ pub struct RslContent {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RslLicence {
     /// `<permits type="usage">` tokens, or absent. When present, only the
-    /// listed uses are allowed under this licence (RSL section 3.5).
+    /// listed uses are allowed under this licence (RSL section 3.5). The
+    /// list is the union across the licence's usage `<permits>` elements:
+    /// §3.5 allows one, and a document that writes more states each as a
+    /// term of the licence, so none is dropped and their order does not
+    /// change what they mean (§3.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permits_usage: Option<Vec<String>>,
+    /// `<prohibits type="usage">` tokens, or absent: the union across the
+    /// licence's usage `<prohibits>` elements, as for `permits_usage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prohibits_usage: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payment: Option<RslPayment>,
+    /// Every `<payment>` element, in document order. The grammar allows one;
+    /// a document that writes more states each as a term of the licence, so
+    /// none is dropped ([`Self::payment`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payments: Vec<RslPayment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reporting: Vec<RslReporting>,
+    /// True where a `<permits>` or `<prohibits>` of type `user` or `geo`
+    /// restricts the licence to a class of user or a region. The edge
+    /// cannot show it is in the class, so the licence authorises nothing
+    /// ([`ai_input_grant`]). For this edge it permits none of the usages it
+    /// names, and, where it is silent on usage and asks for payment, no AI
+    /// input ([`licence_terms`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restricted: bool,
+}
+
+impl RslLicence {
+    /// The licence's payment term as ruled: the first `<payment>` that
+    /// needs settlement, else the first. A licence whose `<payment>`
+    /// elements disagree asks for payment if any one does, since reading
+    /// the free one would take a priced term as met.
+    pub fn payment(&self) -> Option<&RslPayment> {
+        self.payments
+            .iter()
+            .find(|payment| payment.needs_settlement())
+            .or(self.payments.first())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RslPayment {
+    /// The `type` attribute as written. RSL 1.0 §3.7 says it MUST be one of
     /// `purchase`, `subscription`, `training`, `crawl`, `use`,
-    /// `contribution`, `attribution` or `free`; absent means free
-    /// (RSL section 3.7).
+    /// `contribution`, `attribution` or `free`, and states no default for
+    /// a `<payment>` that names none ([`Self::needs_settlement`] says how
+    /// each is read).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// `<amount currency="…">decimal</amount>`, kept as written.
@@ -960,6 +997,9 @@ pub struct RslPayment {
     pub standard: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<String>,
+    /// `<accepts>`, the payment methods the source takes, as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepts: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -969,13 +1009,35 @@ pub struct RslAmount {
 }
 
 impl RslPayment {
-    /// Whether this payment type asks for money. `attribution` and `free`
-    /// ask for none; an absent type is free by the specification.
-    pub fn is_monetary(&self) -> bool {
-        matches!(
-            self.kind.as_deref(),
-            Some("purchase" | "subscription" | "training" | "crawl" | "use" | "contribution")
-        )
+    /// Whether this payment term asks for something only a settlement rail
+    /// could give, so an edge without one cannot meet it. The one rule every
+    /// ruling on a payment term uses: the payment refusal, the price the
+    /// allowance gate reserves and the choice among a content entry's
+    /// offers ([`governing_offer`]).
+    ///
+    /// A term is met without a rail only where it is known to be free:
+    /// type `free` or `attribution`, or no type and nothing else stated (no
+    /// `<amount>`, `<standard>`, `<custom>` or `<accepts>`), which says no
+    /// more than an
+    /// omitted `<payment>`, which RSL 1.0 §3.7 reads as free. Every other
+    /// term needs settlement: the six monetary types, a type the
+    /// specification does not define (one a later revision adds included),
+    /// a case variant of a defined one (§3.7 gives the values as written,
+    /// and XML attribute values are case-sensitive), and a term with no
+    /// type that states an amount, points at terms or lists the payment
+    /// methods it accepts, since §3.7 gives no default type and the edge
+    /// does not read a stated price, licence or means of payment as free.
+    pub fn needs_settlement(&self) -> bool {
+        match self.kind.as_deref() {
+            Some("free" | "attribution") => false,
+            Some(_) => true,
+            None => {
+                self.amount.is_some()
+                    || self.standard.is_some()
+                    || self.custom.is_some()
+                    || self.accepts.is_some()
+            }
+        }
     }
 
     /// The quoted price, where the amount is a decimal this runtime can
@@ -996,6 +1058,36 @@ pub struct RslReporting {
     /// The element body parsed as JSON, where it carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<Value>,
+}
+
+/// Why an RSL document is not well-formed XML, and where. The reason reaches
+/// the agent in a refusal, so it names the fault by kind and byte position:
+/// quick-xml's messages for tags and declarations quote names the document
+/// chose, and the document is the source's text.
+fn xml_fault(error: &quick_xml::Error, at: u64) -> String {
+    use quick_xml::Error;
+    use quick_xml::errors::IllFormedError;
+    let what = match error {
+        // Syntax faults are stated in quick-xml's own words, none quoted.
+        Error::Syntax(syntax) => syntax.to_string(),
+        Error::IllFormed(IllFormedError::MissingEndTag(_)) => "a start tag is not closed".into(),
+        Error::IllFormed(IllFormedError::UnmatchedEndTag(_)) => {
+            "an end tag matches no open tag".into()
+        }
+        Error::IllFormed(IllFormedError::MismatchedEndTag { .. }) => {
+            "an end tag does not match its start tag".into()
+        }
+        Error::IllFormed(IllFormedError::MissingDeclVersion(_)) => {
+            "the XML declaration does not begin with its version".into()
+        }
+        Error::IllFormed(_) => "the document is not well-formed".into(),
+        Error::InvalidAttr(_) => "an attribute is not well-formed".into(),
+        Error::Encoding(_) => "the document is not in a readable encoding".into(),
+        Error::Escape(_) => "a character or entity reference is not valid".into(),
+        Error::Namespace(_) => "a namespace is not valid".into(),
+        Error::Io(_) => "the document could not be read".into(),
+    };
+    format!("not well-formed XML at byte {at}: {what}")
 }
 
 /// Parse an RSL document. Elements outside the vocabulary this reader knows
@@ -1036,7 +1128,7 @@ pub fn parse_rsl(xml: &str) -> Result<RslDocument, String> {
     loop {
         let event = reader
             .read_event()
-            .map_err(|error| format!("not well-formed XML: {error}"))?;
+            .map_err(|error| xml_fault(&error, reader.error_position()))?;
         match event {
             Event::Start(start) => {
                 let name = String::from_utf8_lossy(start.local_name().as_ref()).into_owned();
@@ -1061,7 +1153,7 @@ pub fn parse_rsl(xml: &str) -> Result<RslDocument, String> {
                             ..RslPayment::default()
                         });
                     }
-                    "amount" | "standard" | "custom" if payment.is_some() => {
+                    "amount" | "standard" | "custom" | "accepts" if payment.is_some() => {
                         text.clear();
                         collecting = Some((name.clone(), attribute(&start, "currency")));
                     }
@@ -1078,9 +1170,12 @@ pub fn parse_rsl(xml: &str) -> Result<RslDocument, String> {
                 }
             }
             Event::Text(bytes) => {
-                let value = bytes
-                    .decode()
-                    .map_err(|error| format!("text is not decodable: {error}"))?;
+                let value = bytes.decode().map_err(|_| {
+                    format!(
+                        "text is not decodable, at byte {}",
+                        reader.buffer_position()
+                    )
+                })?;
                 if collecting.is_some() {
                     text.push_str(&value);
                 } else if reporting.is_some() {
@@ -1123,19 +1218,19 @@ pub fn parse_rsl(xml: &str) -> Result<RslDocument, String> {
                             });
                         }
                     }
-                    "standard" | "custom" => {
+                    "standard" | "custom" | "accepts" => {
                         if let (Some(_), Some(payment)) = (collecting.take(), payment.as_mut()) {
                             let value = Some(text.trim().to_owned());
-                            if name == "standard" {
-                                payment.standard = value;
-                            } else {
-                                payment.custom = value;
+                            match name.as_str() {
+                                "standard" => payment.standard = value,
+                                "custom" => payment.custom = value,
+                                _ => payment.accepts = value,
                             }
                         }
                     }
                     "payment" => {
                         if let (Some(done), Some(licence)) = (payment.take(), licence.as_mut()) {
-                            licence.payment = Some(done);
+                            licence.payments.push(done);
                         }
                     }
                     "reporting" => {
@@ -1163,31 +1258,39 @@ pub fn parse_rsl(xml: &str) -> Result<RslDocument, String> {
 }
 
 fn finish_usage(licence: &mut Option<RslLicence>, element: &str, kind: Option<String>, text: &str) {
-    // Only the usage vocabulary is read here; user and geo terms are
-    // recorded by nobody yet and must not be mistaken for usage tokens.
+    let Some(licence) = licence.as_mut() else {
+        return;
+    };
+    // User and geo terms are not usage tokens. The edge cannot show which
+    // class of user it acts for or where, so such a term marks the licence
+    // as one it cannot take.
+    if matches!(kind.as_deref(), Some("user" | "geo")) {
+        licence.restricted = true;
+        return;
+    }
     if kind.as_deref() != Some("usage") {
         return;
     }
-    let tokens: Vec<String> = text.split_whitespace().map(str::to_owned).collect();
-    if let Some(licence) = licence.as_mut() {
-        if element == "permits" {
-            licence.permits_usage = Some(tokens);
-        } else {
-            licence.prohibits_usage = Some(tokens);
-        }
-    }
+    let usage = if element == "permits" {
+        &mut licence.permits_usage
+    } else {
+        &mut licence.prohibits_usage
+    };
+    usage
+        .get_or_insert_with(Vec::new)
+        .extend(text.split_whitespace().map(str::to_owned));
 }
 
 impl RslDocument {
-    /// The `<content>` entry governing one page: the most specific matching
-    /// `url` (RSL sections 3.1.1 and 4.9). A path pattern is matched against
-    /// the page's path under RFC 9309 rules ([`matches_pattern`]); an
-    /// absolute URL is matched as a prefix of the page URL, both in
+    /// The `<content>` entry governing one page (RSL sections 3.1.1 and
+    /// 4.9). A path pattern is matched against the page's path under RFC
+    /// 9309 rules ([`matches_pattern`]); an absolute URL is matched as a
+    /// prefix of the page URL, both in
     /// [`commonmeasure_types::matching_url`]'s form; an empty `url` names the
-    /// scope the discovery mechanism established and matches with the least
-    /// specificity. Host case, trailing dots, default ports, credentials,
-    /// percent-encoded unreserved characters, lower-case hex, a literal `*`
-    /// or `$` and fragments do not take a page out of its entry.
+    /// scope the discovery mechanism established. Host case, trailing dots,
+    /// default ports, credentials, percent-encoded unreserved characters,
+    /// lower-case hex, a literal `*` or `$` and fragments do not take a page
+    /// out of its entry.
     ///
     /// The page is read as parsed and as every path decoding `%2F` and
     /// `%5C` as `/` and `%3B` as `;`, merging slashes, resolving dot
@@ -1204,29 +1307,58 @@ impl RslDocument {
     /// page with more readings than the cap is ruled on as parsed only here;
     /// the robots ruling refuses it before any licence is read.
     ///
-    /// Specificity is the length of the path the entry constrains, as RFC
-    /// 9309 ranks rules: a path pattern's length and an absolute scope's path
-    /// and query, each in the matching form, since the host has already
-    /// matched. Ranking
-    /// by the written length would let a broad scope spelled long, or any
-    /// absolute scope, outrank a narrower entry and its prohibition. An
-    /// absolute scope that does not parse ranks 0, with the empty `url`, as
-    /// the least specific: it matches the page as written, so `http://` would
-    /// otherwise outrank a valid narrower scope.
+    /// Of the entries that match, the narrowest govern, as RSL 1.0 §3.1.1
+    /// gives the more specific declaration precedence: each matching entry
+    /// whose scope strictly contains another matching entry's scope is set
+    /// aside, and the entries left govern together. So `/ab` governs alone
+    /// over `/a*b` for `/abc`, `/p` over `/*` for `/page` and `/p*` over
+    /// `/*p` for `/p`. The same scope written twice, in two spellings or
+    /// with and without a trailing `*` (`/n` and `/%6E`, `/` and `/*`)
+    /// governs together, and so do scopes neither of which lies within the
+    /// other (`/xy` and `/x*z` for `/xyz`). The length of a pattern plays no
+    /// part. Whether one scope lies within another is decided by the
+    /// matcher ([`Scope::within`]).
     ///
-    /// At equal specificity an absolute scope governs over a relative entry.
-    /// Two absolute scopes of equal specificity name the same scope in
-    /// different spellings; the one matching the page as written governs,
-    /// then the one written longer. That is the order scopes had when they
-    /// were matched only as written and ranked by written length, so wherever
-    /// that matching reached either scope, the order of the two in the
-    /// document cannot change which governs. The last entry in the document
-    /// governs only between two absolute scopes of equal written length that
-    /// both match the page as written, which makes them the same string, or
-    /// that neither does; and between two relative entries, or two empty
-    /// `url`s, of equal length in the matching form, whatever their written
-    /// lengths.
-    pub fn content_for(&self, page_url: &str) -> Option<&RslContent> {
+    /// An absolute scope the page is under takes part by its path and
+    /// query, since the host has already matched: its scope is the literal
+    /// prefix its request target names in the matching form. So
+    /// `https://host/` and `/` are one scope and govern together, and
+    /// `https://host/a` lies within `/*`. Of two absolute scopes of the same
+    /// path in different spellings, the one matching the page as written is
+    /// set aside for neither; one that does not, beside one that does, is
+    /// set aside, then the shorter written beside the longer. That is the
+    /// order such scopes had when they were matched only as written, so the
+    /// order of the two in the document cannot change which governs. An
+    /// empty `url` and an absolute scope that does not parse govern only
+    /// where no other entry matches: the scope that does not parse, which
+    /// matches the page as written, over the empty `url`, the longer
+    /// written over the shorter, and two of one kind and written length
+    /// together.
+    ///
+    /// Entries that govern together are read as one entry. RSL 1.0 §3.1
+    /// says the order of elements must not affect their interpretation, so
+    /// neither governs alone: the combined entry holds their licences in
+    /// document order, numbered from 1 across them, and the first licence
+    /// server any of them names, and its `url` is the first's. Its licences
+    /// are then ruled as [`governing_offer`] and [`licence_terms`] rule one
+    /// entry's licences, so a prohibition of AI input in any of them refuses
+    /// the page.
+    ///
+    /// The containment tests are bounded by the work they do
+    /// ([`SELECTION_BUDGET`]), counted before any test is made over every
+    /// entry that matches the reading, absolute scopes included. Past the
+    /// budget nothing is selected and the result is
+    /// [`SelectionUnread::OverBudget`]; where entries match and none is left
+    /// governing, it is [`SelectionUnread::NoneGoverns`]. Either leaves the
+    /// licence unread for the page, and no weaker selection is made in its
+    /// place. The readings before it are tried as usual; the one that is
+    /// unread ends the search.
+    pub fn content_for(
+        &self,
+        page_url: &str,
+    ) -> Result<Option<Cow<'_, RslContent>>, SelectionUnread> {
+        #[cfg(test)]
+        SELECTIONS.with(|selections| selections.set(selections.get() + 1));
         let target = request_target(page_url);
         let targets = commonmeasure_types::matching_target_readings(&target)
             .unwrap_or_else(|_| vec![commonmeasure_types::matching_target(&target)]);
@@ -1235,60 +1367,294 @@ impl RslDocument {
             commonmeasure_types::matching_url_readings(&page)
                 .unwrap_or_else(|_| vec![commonmeasure_types::matching_url(&page)])
         });
-        targets.iter().enumerate().find_map(|(index, target)| {
-            let page = pages
-                .as_ref()
-                .and_then(|pages| pages.get(index))
-                .map(String::as_str);
-            self.content_for_reading(target, page, page_url)
-        })
+        targets
+            .iter()
+            .enumerate()
+            .find_map(|(index, target)| {
+                let page = pages
+                    .as_ref()
+                    .and_then(|pages| pages.get(index))
+                    .map(String::as_str);
+                self.content_for_reading(target, page, page_url).transpose()
+            })
+            .transpose()
     }
 
-    /// The entry one reading of the page selects: `target` and `page` are
-    /// its request target and URL in the matching form.
+    /// The entry one reading of the page selects, the entries that govern
+    /// together combined: `target` and `page` are its request target and
+    /// URL in the matching form.
     fn content_for_reading(
         &self,
         target: &str,
         page: Option<&str>,
         page_url: &str,
-    ) -> Option<&RslContent> {
-        self.contents
-            .iter()
-            .filter_map(|content| {
-                let pattern = content.url.as_str();
-                let absolute = !pattern.is_empty() && !pattern.starts_with('/');
-                let matched = if pattern.is_empty() {
-                    Some(0)
-                } else if pattern.starts_with('/') {
-                    let form = commonmeasure_types::matching_pattern(pattern);
-                    matches_form(&form, target).then_some(form.len())
-                } else {
-                    within_absolute_scope(pattern, page, page_url)
-                };
-                // Written-form tie-breaks for absolute scopes. For a relative
-                // entry both are constant, so two relative entries that are
-                // one path in two spellings tie and the later one governs.
-                let as_written = absolute && page_url.starts_with(pattern);
-                let written = if absolute { pattern.len() } else { 0 };
-                matched.map(|length| ((length, absolute, as_written, written), content))
-            })
-            .max_by_key(|(rank, _)| *rank)
-            .map(|(_, content)| content)
+    ) -> Result<Option<Cow<'_, RslContent>>, SelectionUnread> {
+        // The matching entries in document order: those with a scope the
+        // containment tests read, and those with none, an empty `url` or an
+        // absolute scope that does not parse, with their order among them.
+        let mut scoped: Vec<ScopedEntry<'_>> = Vec::new();
+        let mut unscoped: Vec<(&RslContent, (bool, usize))> = Vec::new();
+        for content in &self.contents {
+            let pattern = content.url.as_str();
+            if pattern.is_empty() {
+                unscoped.push((content, (false, 0)));
+            } else if pattern.starts_with('/') {
+                let form = commonmeasure_types::matching_pattern(pattern);
+                if matches_form(&form, target) {
+                    scoped.push((content, form, None));
+                }
+            } else {
+                match absolute_scope(pattern, page, page_url) {
+                    Some(Some(form)) => {
+                        let order = (page_url.starts_with(pattern), pattern.len());
+                        scoped.push((content, form, Some(order)));
+                    }
+                    Some(None) => unscoped.push((content, (true, pattern.len()))),
+                    None => {}
+                }
+            }
+        }
+        let selected: Vec<&RslContent> = if scoped.is_empty() {
+            let Some(first) = unscoped.iter().map(|(_, order)| *order).max() else {
+                return Ok(None);
+            };
+            unscoped
+                .iter()
+                .filter(|(_, order)| *order == first)
+                .map(|(content, _)| *content)
+                .collect()
+        } else {
+            let governing = governing_forms(&scoped)?;
+            // Of the absolute scopes of one form, those first in
+            // written-form order govern.
+            let mut first_absolute: BTreeMap<&str, (bool, usize)> = BTreeMap::new();
+            for (_, form, order) in &scoped {
+                if let Some(order) = order {
+                    let first = first_absolute.entry(form.as_str()).or_insert(*order);
+                    *first = (*first).max(*order);
+                }
+            }
+            scoped
+                .iter()
+                .filter(|(_, form, order)| {
+                    governing.contains(form.as_str())
+                        && order
+                            .is_none_or(|order| first_absolute.get(form.as_str()) == Some(&order))
+                })
+                .map(|(content, ..)| *content)
+                .collect()
+        };
+        let Some((first, rest)) = selected.split_first() else {
+            return Err(SelectionUnread::NoneGoverns);
+        };
+        if rest.is_empty() {
+            return Ok(Some(Cow::Borrowed(*first)));
+        }
+        let mut combined = (*first).clone();
+        for content in rest {
+            combined.server = combined.server.take().or_else(|| content.server.clone());
+            combined.licences.extend(content.licences.iter().cloned());
+        }
+        Ok(Some(Cow::Owned(combined)))
     }
 }
 
-/// The specificity of an absolute `<content>` scope the page is under, or
-/// `None` when it is not. `page` is one reading of the page in the matching
-/// form. A trailing dot, a change of host case, an explicit default port,
-/// credentials, a percent-encoded unreserved character or a fragment in
-/// either URL names the same resource, so none of them may take a page out
-/// of its licence and the licence's prohibitions and reporting demands out
-/// of the ruling. The scope's own slashes are compared as written. A parsed
-/// scope ranks by its request target in the matching form, the path and
-/// query it constrains; a scope that does not parse is compared as written
-/// and ranks 0, since its written length says nothing about the path it
-/// constrains.
-fn within_absolute_scope(pattern: &str, page: Option<&str>, page_url: &str) -> Option<usize> {
+/// A matching entry with a scope the containment tests read: the entry, its
+/// scope's form, and an absolute scope's written-form order (whether it
+/// matches the page as written, and its written length).
+type ScopedEntry<'a> = (&'a RslContent, String, Option<(bool, usize)>);
+
+/// The forms of the matching scopes that govern: those that strictly
+/// contain no other matching scope. Every form is tested against every
+/// other once, after the work that takes has been counted against
+/// [`SELECTION_BUDGET`].
+fn governing_forms<'a>(
+    scoped: &'a [ScopedEntry<'_>],
+) -> Result<std::collections::BTreeSet<&'a str>, SelectionUnread> {
+    let mut forms: Vec<&str> = scoped.iter().map(|(_, form, _)| form.as_str()).collect();
+    forms.sort_unstable();
+    forms.dedup();
+    let scopes: Vec<Scope> = forms.into_iter().map(Scope::new).collect();
+    if selection_work(scoped, &scopes) > SELECTION_BUDGET {
+        return Err(SelectionUnread::OverBudget);
+    }
+    let count = scopes.len();
+    // `within[inner * count + outer]`: whether scope `inner` lies within
+    // scope `outer`.
+    let mut within = vec![true; count * count];
+    for (inner, scope) in scopes.iter().enumerate() {
+        for (outer, other) in scopes.iter().enumerate() {
+            if inner != outer {
+                within[inner * count + outer] = scope.within(other);
+            }
+        }
+    }
+    let strictly_within = |inner: usize, outer: usize| {
+        within[inner * count + outer] && !within[outer * count + inner]
+    };
+    let governing: std::collections::BTreeSet<&str> = (0..count)
+        .filter(|&outer| !(0..count).any(|inner| strictly_within(inner, outer)))
+        .map(|index| scopes[index].form)
+        .collect();
+    if governing.is_empty() {
+        return Err(SelectionUnread::NoneGoverns);
+    }
+    Ok(governing)
+}
+
+/// The work selection does among `scoped`, the matching entries, whose
+/// distinct forms are `scopes`: each entry's form read once, and for each
+/// ordered pair of distinct scopes the octets one containment test compares
+/// (the inner scope's general target and the outer scope's form) plus
+/// [`TEST_WORK`]. Counted in full before any test is made, so the answer
+/// does not depend on where a test stops early.
+fn selection_work(scoped: &[ScopedEntry<'_>], scopes: &[Scope]) -> u64 {
+    let octets = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
+    let read: u64 = scoped
+        .iter()
+        .map(|(_, form, _)| octets(form.len()))
+        .fold(0, u64::saturating_add);
+    let others = octets(scopes.len().saturating_sub(1));
+    let compared: u64 = scopes
+        .iter()
+        .map(|scope| octets(scope.general.len() + scope.form.len()))
+        .fold(0, u64::saturating_add);
+    let tests = octets(scopes.len()).saturating_mul(others);
+    read.saturating_add(others.saturating_mul(compared))
+        .saturating_add(tests.saturating_mul(TEST_WORK))
+}
+
+/// The most work one selection of a `<content>` entry may do, in the unit
+/// [`selection_work`] counts. The publisher writes the document, and within
+/// the licence body cap the containment tests among its matching entries
+/// could otherwise hold a crossing for seconds on every redirect hop to a
+/// host that names it. Past the budget the licence is unread, which refuses
+/// in every policy mode; selecting more weakly instead, as every matching
+/// entry read as one or the first or last alone, could deliver a page the
+/// full selection refuses. Entries that do not match the page do no work
+/// here, so a long licence of which a page matches a few entries is read.
+pub const SELECTION_BUDGET: u64 = 64_000_000;
+
+/// What one containment test costs beyond the octets it compares, in the
+/// same unit: splitting the outer form and setting up the match.
+const TEST_WORK: u64 = 64;
+
+/// Why a licence whose document parsed is unread for a page: selecting its
+/// `<content>` entry did not finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionUnread {
+    /// The containment tests among the entries matching the page would do
+    /// more work than [`SELECTION_BUDGET`].
+    OverBudget,
+    /// Entries match the page and every one strictly contains another, so
+    /// none governs. A strict containment order always leaves one; this is
+    /// the answer where the test could not be shown to give one.
+    NoneGoverns,
+}
+
+impl SelectionUnread {
+    /// Why the licence is unread, as the record and the agent read it. It
+    /// holds this edge's own words and nothing from the document.
+    pub fn reason(self) -> AgentText {
+        match self {
+            Self::OverBudget => AgentText::fixed(
+                "choosing among the <content> entries that match this page takes more work than \
+                 this edge does for one page",
+            ),
+            Self::NoneGoverns => AgentText::fixed(
+                "<content> entries match this page and none of them could be ruled the narrowest",
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for SelectionUnread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason().as_str())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`RslDocument::content_for`] ran on this thread, which
+    /// tests read to count the selections a crossing makes.
+    pub(crate) static SELECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The one character a stand-in target puts where a pattern's `*` or open
+/// end matches anything. [`commonmeasure_types::matching_pattern`] never
+/// emits it: every literal octet of a form is unreserved, reserved but not
+/// `*` or `$`, or a `%XX` encoding, and [`commonmeasure_types::matching_target`]
+/// encodes a space as `%20`. So no literal part of a form can match it, and
+/// only a `*`, or the open end of an unanchored form, can take it in.
+const ANY_RUN: char = ' ';
+
+/// A scope a containment test reads: its matching form, and the most
+/// general target the form matches, made once so that each test is one
+/// match. A relative entry's form is its pattern's; an absolute scope's is
+/// its request target's, a literal prefix.
+struct Scope<'a> {
+    form: &'a str,
+    general: String,
+}
+
+impl<'a> Scope<'a> {
+    /// The general target is the form with each `*` read as [`ANY_RUN`], a
+    /// final `$` removed, and one more [`ANY_RUN`] at the end when there is
+    /// no final `$`. A literal `%2A` or `%24` is three literal octets and
+    /// stays as it is.
+    fn new(form: &'a str) -> Self {
+        let (literal, anchored) = match form.strip_suffix('$') {
+            Some(literal) => (literal, true),
+            None => (form, false),
+        };
+        let mut general = literal.replace('*', &ANY_RUN.to_string());
+        if !anchored {
+            general.push(ANY_RUN);
+        }
+        Self { form, general }
+    }
+
+    /// Whether every target this scope matches, `outer` matches: whether
+    /// `outer` matches this scope's general target, as [`matches_form`]
+    /// matches a page. Selection sets an entry aside only on this test.
+    ///
+    /// Sound: `outer`'s literal parts cannot match [`ANY_RUN`], so where
+    /// `outer` matches the general target they fall within this scope's
+    /// literal parts and `outer`'s wildcards take in this scope's; any
+    /// target this scope matches is then matched by `outer` the same way.
+    /// Complete where `outer` lacks some character a target can carry
+    /// literally: the general target with [`ANY_RUN`] read as that
+    /// character is a target this scope matches and `outer` does not. For
+    /// an `outer` that holds every such character, some 80 octets or more,
+    /// completeness is not proven: a containment missed there would read as
+    /// one two entries of which one lies within the other, or set aside one
+    /// of two entries of the same scope, and where it left no entry
+    /// governing the licence would be unread
+    /// ([`SelectionUnread::NoneGoverns`]).
+    fn within(&self, outer: &Scope) -> bool {
+        matches_form(outer.form, &self.general)
+    }
+
+    /// Whether the two scopes match exactly the same targets.
+    #[cfg(test)]
+    fn same_scope(&self, other: &Scope) -> bool {
+        self.within(other) && other.within(self)
+    }
+}
+
+/// Where the page is under an absolute `<content>` scope: `Some` with the
+/// form of the path and query the scope constrains, in the matching form,
+/// for a scope that parses, and `Some(None)` for one that does not, which is
+/// compared as written; `None` where the page is not under it. `page` is one
+/// reading of the page in the matching form. A trailing dot, a change of
+/// host case, an explicit default port, credentials, a percent-encoded
+/// unreserved character or a fragment in either URL names the same
+/// resource, so none of them may take a page out of its licence and the
+/// licence's prohibitions and reporting demands out of the ruling. The
+/// scope's own slashes are compared as written. A scope that does not
+/// parse names no path, so it takes no part in the containment tests.
+fn absolute_scope(pattern: &str, page: Option<&str>, page_url: &str) -> Option<Option<String>> {
     match url::Url::parse(pattern) {
         Ok(scope) => {
             let scope = commonmeasure_types::matching_url(&scope);
@@ -1296,9 +1662,13 @@ fn within_absolute_scope(pattern: &str, page: Option<&str>, page_url: &str) -> O
                 Some(page) => page.starts_with(&scope),
                 None => page_url.starts_with(pattern),
             };
-            within.then(|| commonmeasure_types::matching_target(&request_target(&scope)).len())
+            within.then(|| {
+                Some(commonmeasure_types::matching_target(&request_target(
+                    &scope,
+                )))
+            })
         }
-        Err(_) => page_url.starts_with(pattern).then_some(0),
+        Err(_) => page_url.starts_with(pattern).then_some(None),
     }
 }
 
@@ -1309,10 +1679,30 @@ fn within_absolute_scope(pattern: &str, page: Option<&str>, page_url: &str) -> O
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LicenceTerms {
     pub statements: Vec<Statement>,
-    /// The payment terms of the licence under which AI input is permitted,
-    /// where one is.
+    /// The payment term of the offer AI input is taken under
+    /// ([`governing_offer`]), where there is one and it states a payment:
+    /// [`RslLicence::payment`], the first of its `<payment>` elements that
+    /// needs settlement, else the first. Where no licence authorises AI
+    /// input, the payment term of the first restricted licence
+    /// ([`RslLicence::restricted`]) whose payment needs settlement, which
+    /// is recorded and not ruled: that licence gives a Disallow instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payment: Option<RslPayment>,
+    /// Every `<payment>` element of the licence `payment` is read from, in
+    /// document order, where it has more than one; `payment` is the one
+    /// ruled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payments: Vec<RslPayment>,
+    /// Which `<license>` of the content entry that offer is, counted from 1
+    /// in document order. Absent where no licence in the entry authorises AI
+    /// input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<usize>,
+    /// The licences of the entry, counted from 1, restricted to a class of
+    /// user or a region ([`RslLicence::restricted`]), which authorise
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restricted: Vec<usize>,
     /// The reporting demands that bind an AI-input crossing
     /// ([`reporting_demands`]), whatever the licences say of AI input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1321,13 +1711,170 @@ pub struct LicenceTerms {
     pub server: Option<String>,
 }
 
+/// How a licence authorises AI input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiInputGrant {
+    /// Its `<permits type="usage">` covers AI input, and it does not
+    /// prohibit AI input ([`prohibits_ai_input`]).
+    ByName,
+    /// It has no usage `<permits>`, and no licence of the content entry
+    /// names AI input in a usage `<permits>` or `<prohibits>` (`ai-input`,
+    /// `ai-all` or `all`). RSL 1.0 §3.5 restricts usage only where a
+    /// `<permits>` of that type exists, so such a licence covers every
+    /// usage on its own payment and reporting terms (§3.4 and the grammar
+    /// make every child of `<license>` optional). It is the least specific
+    /// statement about AI input a document can make, and §3.1.1 gives the
+    /// more specific declaration precedence and reads licences
+    /// conservatively, so a sibling that names AI input decides instead.
+    Silent,
+}
+
+/// Whether a licence names AI input in a usage `<permits>` or
+/// `<prohibits>`, by any token that covers it.
+fn names_ai_input(licence: &RslLicence) -> bool {
+    [&licence.permits_usage, &licence.prohibits_usage]
+        .into_iter()
+        .flatten()
+        .any(|tokens| token_specificity(tokens, Category::AiInput).is_some())
+}
+
+/// Whether `licence` prohibits AI input: a usage `<prohibits>` covers it
+/// and the licence's own usage `<permits>` does not name it more
+/// specifically. Within one licence RSL 1.0 §3.1.1 gives the more specific
+/// term precedence, so `permits ai-input` beside `prohibits all` (which
+/// restates that unlisted uses are not licensed) does not prohibit, while
+/// `prohibits ai-input` or `prohibits ai-all` beside `permits ai-input`
+/// does. A licence restricted to a class of user or a region that
+/// prohibits AI input prohibits it here too: the edge cannot show it is
+/// outside the class or the region.
+///
+/// One such licence in the entry that governs a page refuses AI input
+/// whatever any other licence of the entry permits, by name or by silence,
+/// free or priced, and in either document order (owner decision, 3 October
+/// 2026; §3.1.1, "the prohibition MUST take precedence"). [`governing_offer`]
+/// then takes no offer and [`licence_terms`] states a Disallow naming it.
+fn prohibits_ai_input(licence: &RslLicence) -> bool {
+    let category = Category::AiInput;
+    let Some(prohibit) = licence
+        .prohibits_usage
+        .as_deref()
+        .and_then(|tokens| token_specificity(tokens, category))
+    else {
+        return false;
+    };
+    licence
+        .permits_usage
+        .as_deref()
+        .and_then(|tokens| token_specificity(tokens, category))
+        .is_none_or(|permit| prohibit >= permit)
+}
+
+/// How `licence` authorises AI input, if it does, read on its own: whether
+/// another licence of the entry prohibits AI input is [`governing_offer`]'s
+/// to rule. `silent_counts` is false where any licence of its content entry
+/// names AI input ([`names_ai_input`]). A licence restricted to a class of
+/// user or a region authorises nothing: the edge cannot show it meets the
+/// restriction. A by-name permit stands where the licence does not itself
+/// prohibit AI input ([`prohibits_ai_input`]), so a specific permit stands
+/// over a blanket `prohibits all` in the same licence.
+fn ai_input_grant(licence: &RslLicence, silent_counts: bool) -> Option<AiInputGrant> {
+    if licence.restricted {
+        return None;
+    }
+    match licence.permits_usage.as_deref() {
+        Some(tokens) => token_specificity(tokens, Category::AiInput)
+            .filter(|_| !prohibits_ai_input(licence))
+            .map(|_| AiInputGrant::ByName),
+        // A licence whose own `<prohibits>` covers AI input names it, so
+        // `silent_counts` is false for it too.
+        None => silent_counts.then_some(AiInputGrant::Silent),
+    }
+}
+
+/// The licence of a content entry an AI-input crossing is taken under, with
+/// its index in the entry: the one notion of the governing licence that the
+/// payment term, the AI-input statement and the reporting demands all read.
+///
+/// Where any licence of the entry prohibits AI input
+/// ([`prohibits_ai_input`]), there is no offer: a prohibition takes
+/// precedence over a permit in another licence of the entry, or in another
+/// `<content>` entry read with it ([`RslDocument::content_for`]), whatever
+/// that permit's payment and whatever the document order.
+///
+/// Otherwise each `<license>` is an offer (RSL 1.0 §3.4: distinct term
+/// sets), and the order they are written in does not change what they mean
+/// (§3.1.1). The edge may take any offer whose terms it can meet, so among
+/// the licences that authorise AI input ([`ai_input_grant`]), one whose
+/// payment term needs no settlement ([`RslPayment::needs_settlement`], over
+/// every `<payment>` it has) comes first, then document order. Where every
+/// offer needs settlement, the first is the one named in the refusal. A
+/// licence silent on usage is an offer only where no licence of the entry
+/// names AI input, so it never competes with one that permits AI input by
+/// name. The choice does not read reporting demands: of two free offers
+/// that differ only in a demand this edge cannot meet on its route, the
+/// first in document order is taken, so the order decides whether the page
+/// is delivered (recorded in session evidence §Source declarations).
+fn governing_offer(content: &RslContent) -> Option<(usize, &RslLicence, AiInputGrant)> {
+    if content.licences.iter().any(prohibits_ai_input) {
+        return None;
+    }
+    let silent_counts = !content.licences.iter().any(names_ai_input);
+    content
+        .licences
+        .iter()
+        .enumerate()
+        .filter_map(|(index, licence)| {
+            ai_input_grant(licence, silent_counts).map(|grant| (index, licence, grant))
+        })
+        .min_by_key(|(index, licence, _)| {
+            let unmet = licence.payments.iter().any(RslPayment::needs_settlement);
+            (unmet, *index)
+        })
+}
+
 pub fn licence_terms(content: &RslContent, licence_url: &str) -> LicenceTerms {
     let mut terms = LicenceTerms {
         server: content.server.clone(),
+        restricted: content
+            .licences
+            .iter()
+            .enumerate()
+            .filter(|(_, licence)| licence.restricted)
+            .map(|(index, _)| index + 1)
+            .collect(),
         ..LicenceTerms::default()
     };
+    let offer = governing_offer(content);
     for category in Category::ALL {
-        let mut allowed_by: Option<&RslLicence> = None;
+        if category == Category::AiInput
+            && let Some((index, licence, grant)) = offer
+        {
+            terms.statements.push(Statement {
+                source: StatementSource::RslLicence,
+                category,
+                preference: Preference::Allow,
+                detail: match grant {
+                    AiInputGrant::ByName => {
+                        format!("{licence_url}: permits usage {}", category.label())
+                    }
+                    AiInputGrant::Silent => format!(
+                        "{licence_url}: licence {} lists no usage it permits, so covers usage {}",
+                        index + 1,
+                        category.label()
+                    ),
+                },
+            });
+            terms.payment = licence.payment().cloned();
+            if licence.payments.len() > 1 {
+                terms.payments = licence.payments.clone();
+            }
+            terms.offer = Some(index + 1);
+            continue;
+        }
+        // Every other category, and AI input where no offer authorises it:
+        // a licence silent on usage restricts nothing, so it adds no
+        // statement here.
+        let mut allowed = false;
         let mut disallowed_by: Vec<usize> = Vec::new();
         for (index, licence) in content.licences.iter().enumerate() {
             // RSL 3.1.1: a more specific declaration takes precedence over a
@@ -1347,25 +1894,82 @@ pub fn licence_terms(content: &RslContent, licence_url: &str) -> LicenceTerms {
                 .and_then(|tokens| token_specificity(tokens, category));
             match (permitted, prohibited) {
                 (Some(permit), Some(prohibit)) if prohibit >= permit => disallowed_by.push(index),
-                (Some(_), _) => {
-                    allowed_by.get_or_insert(licence);
-                }
+                // A restricted licence permits the category only to a class
+                // the edge cannot claim, so for this edge it permits none.
+                (Some(_), _) if licence.restricted => disallowed_by.push(index),
+                (Some(_), _) => allowed = true,
                 (None, Some(_)) => disallowed_by.push(index),
                 // Permits are listed and this category is not among them.
                 (None, None) if licence.permits_usage.is_some() => disallowed_by.push(index),
+                // A restricted licence silent on usage that asks for payment
+                // covers AI input only on that payment and only for its
+                // class. Inside the class the price binds and this edge
+                // cannot pay; outside it nothing grants the page. Neither
+                // admits AI input, so for this edge it permits none.
+                (None, None)
+                    if category == Category::AiInput
+                        && licence.restricted
+                        && licence.payments.iter().any(RslPayment::needs_settlement) =>
+                {
+                    disallowed_by.push(index)
+                }
                 (None, None) => {}
             }
         }
-        if let Some(licence) = allowed_by {
+        // A prohibition of AI input in any licence of the entry takes
+        // precedence over another licence's permit ([`prohibits_ai_input`]).
+        let prohibiting: Vec<usize> = if category == Category::AiInput {
+            content
+                .licences
+                .iter()
+                .enumerate()
+                .filter(|(_, licence)| prohibits_ai_input(licence))
+                .map(|(index, _)| index)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if allowed && !prohibiting.is_empty() {
+            let numbered = |indices: Vec<usize>| {
+                indices
+                    .iter()
+                    .map(|index| (index + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let permitting: Vec<usize> = content
+                .licences
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !disallowed_by.contains(index))
+                .filter(|(_, licence)| {
+                    licence
+                        .permits_usage
+                        .as_deref()
+                        .and_then(|tokens| token_specificity(tokens, category))
+                        .is_some()
+                })
+                .map(|(index, _)| index)
+                .collect();
+            terms.statements.push(Statement {
+                source: StatementSource::RslLicence,
+                category,
+                preference: Preference::Disallow,
+                detail: format!(
+                    "{licence_url}: licence {} prohibits usage {}, which takes precedence over \
+                     the permit of licence {}",
+                    numbered(prohibiting),
+                    category.label(),
+                    numbered(permitting)
+                ),
+            });
+        } else if allowed {
             terms.statements.push(Statement {
                 source: StatementSource::RslLicence,
                 category,
                 preference: Preference::Allow,
                 detail: format!("{licence_url}: permits usage {}", category.label()),
             });
-            if category == Category::AiInput {
-                terms.payment = licence.payment.clone();
-            }
         } else if !disallowed_by.is_empty() {
             terms.statements.push(Statement {
                 source: StatementSource::RslLicence,
@@ -1383,7 +1987,20 @@ pub fn licence_terms(content: &RslContent, licence_url: &str) -> LicenceTerms {
             });
         }
     }
-    terms.reporting = reporting_demands(content);
+    // With no offer, a restricted licence that asks for payment is refused
+    // on the Disallow above. Its price stays on the record, so the record
+    // says what the source asked for and not only that it refused.
+    if offer.is_none()
+        && let Some(licence) = content.licences.iter().find(|licence| {
+            licence.restricted && licence.payments.iter().any(RslPayment::needs_settlement)
+        })
+    {
+        terms.payment = licence.payment().cloned();
+        if licence.payments.len() > 1 {
+            terms.payments = licence.payments.clone();
+        }
+    }
+    terms.reporting = reporting_demands(content, offer.map(|(_, licence, _)| licence));
     terms
 }
 
@@ -1391,42 +2008,15 @@ pub fn licence_terms(content: &RslContent, licence_url: &str) -> LicenceTerms {
 /// content entry governs (RSL section 3.12: a client satisfies every
 /// applicable demand, or treats the activity as not licensed).
 ///
-/// A demand applies to activity the enclosing licence authorises. A licence
-/// authorises AI input where its `<permits type="usage">` covers it, or where
-/// it has no usage `<permits>` at all, since section 3.5 restricts usage only
-/// where a `<permits>` of that type exists; in both cases no usage
-/// `<prohibits>` may cover it. The demands of the licence the crossing is
-/// taken under apply: one that permits AI input by name before one silent
-/// on usage, matching the licence whose payment term is read. Where no
-/// licence authorises AI input and the crossing goes on anyway, outside
-/// `strict`, every demand in the entry applies: the page is still the
-/// owner's, and taking it outside the licence does not excuse the fetcher
-/// from the report the owner asks for (owner decision, 22 September 2026).
-fn reporting_demands(content: &RslContent) -> Vec<RslReporting> {
-    let category = Category::AiInput;
-    let authorises = |licence: &&RslLicence, by_name: bool| {
-        let prohibited = licence
-            .prohibits_usage
-            .as_deref()
-            .and_then(|tokens| token_specificity(tokens, category));
-        match licence.permits_usage.as_deref() {
-            Some(tokens) if by_name => token_specificity(tokens, category)
-                .is_some_and(|permit| prohibited.is_none_or(|prohibit| prohibit < permit)),
-            None if !by_name => prohibited.is_none(),
-            _ => false,
-        }
-    };
-    let governing = content
-        .licences
-        .iter()
-        .find(|licence| authorises(licence, true))
-        .or_else(|| {
-            content
-                .licences
-                .iter()
-                .find(|licence| authorises(licence, false))
-        });
-    match governing {
+/// A demand applies to activity the enclosing licence authorises, so the
+/// demands of the offer the crossing is taken under apply: the same licence
+/// whose payment term is read, chosen once by [`governing_offer`]. Where no
+/// licence authorises AI input, every demand in the entry applies, whatever
+/// else refuses the crossing: the page is still the owner's, and taking it
+/// outside the licence does not excuse the fetcher from the report the owner
+/// asks for (owner decision, 22 September 2026).
+fn reporting_demands(content: &RslContent, offer: Option<&RslLicence>) -> Vec<RslReporting> {
+    match offer {
         Some(licence) => licence.reporting.clone(),
         None => content
             .licences
@@ -1464,58 +2054,547 @@ pub fn request_target(url: &str) -> String {
     }
 }
 
-/// The `Link` header's `rel="license"` target of type `application/rsl+xml`,
-/// resolved against the page URL (RSL section 4.5). The first such link.
-pub fn rsl_link(link_header: &str, page_url: &str) -> Option<String> {
-    for member in split_link_members(link_header) {
-        let (target, params) = member.split_once('>')?;
-        let target = target.trim().strip_prefix('<')?;
-        let mut rel = false;
-        let mut rsl = false;
-        for param in params.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-            let Some((key, value)) = param.split_once('=') else {
-                continue;
-            };
-            let value = value.trim().trim_matches('"');
-            match key.trim().to_ascii_lowercase().as_str() {
-                "rel" => {
-                    rel = value
-                        .split_whitespace()
-                        .any(|r| r.eq_ignore_ascii_case("license"))
-                }
-                "type" => rsl = value.eq_ignore_ascii_case("application/rsl+xml"),
-                _ => {}
-            }
-        }
-        if rel && rsl {
-            let base = url::Url::parse(page_url).ok()?;
-            return base.join(target).ok().map(|joined| joined.to_string());
-        }
-    }
-    None
+/// What a response's `Link` fields say about an RSL licence (RSL section 4.5).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct LinkLicences {
+    /// The first `rel="license"` link typed `application/rsl+xml`, resolved
+    /// against the page URL.
+    pub named: Option<String>,
+    /// Members that name, or may name, an RSL licence and could not be read.
+    /// Each is an unread licence: its terms are unknown, not absent.
+    pub unread: Vec<UnreadLink>,
 }
 
-/// Split a `Link` header on the commas between members, leaving commas
-/// inside `<…>` and quoted strings alone.
-fn split_link_members(header: &str) -> Vec<&str> {
-    let mut members = Vec::new();
-    let mut depth_angle = false;
-    let mut quoted = false;
-    let mut start = 0;
-    for (index, byte) in header.bytes().enumerate() {
-        match byte {
-            b'<' if !quoted => depth_angle = true,
-            b'>' if !quoted => depth_angle = false,
-            b'"' => quoted = !quoted,
-            b',' if !depth_angle && !quoted => {
-                members.push(header[start..index].trim());
-                start = index + 1;
-            }
-            _ => {}
+/// A `Link` member that names, or may name, an RSL licence and could not be
+/// read.
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnreadLink {
+    /// The member's target as written, or the whole member where it could
+    /// not be parsed, since a target read before the fault may not be the
+    /// licence's; rendered where it is not UTF-8
+    /// ([`commonmeasure_http::render_value`]). For a second RSL licence,
+    /// which was read, the URL it resolves to.
+    pub written: String,
+    /// True where `written` is a rendering, so ASCII text that reads `\xE9`
+    /// and the byte 0xE9 are told apart.
+    pub rendered: bool,
+    /// Why it could not be read.
+    pub why: String,
+}
+
+/// Read every `Link` field of a response for RSL licences, from its bytes.
+///
+/// A link's target and its `rel` and `type` parameters are ASCII by grammar
+/// (RFC 8288 section 3), and those are all this reads; a byte that is not
+/// UTF-8 elsewhere, in a `title` or an extension, is not read and stops
+/// nothing. A member that names a licence but whose target, `rel` or `type`
+/// cannot be read, and a member that cannot be parsed and mentions
+/// `license` at all, are unread licences rather than no licence: a licence
+/// the source may have named is never taken as absent because this edge
+/// could not read it. A member that cannot be parsed ends at the next comma
+/// outside a quoted string or `<…>`, so it takes no other member with it
+/// except where a quote or `<` is left open.
+///
+/// `rel*` and `type*` are read as `rel` and `type` once their RFC 8187
+/// encoding is decoded. Where a member's `rel` and `rel*`, or its `type`
+/// and `type*`, disagree about whether it names an RSL licence, the member
+/// is an unread licence: RFC 8288 Appendix B.2 step 16 gives the starred
+/// value precedence, a parser that does not apply it reads the plain one,
+/// and the edge cannot know which reading the publisher meant. The first readable RSL
+/// licence is `named`; a second distinct one is unread, since this edge
+/// reads one licence per page and a page is never admitted under one
+/// licence while another it names goes unread. Two members naming the same
+/// URL name one licence.
+pub fn rsl_links<'a>(fields: impl IntoIterator<Item = &'a [u8]>, page_url: &str) -> LinkLicences {
+    let mut found = LinkLicences::default();
+    for field in fields {
+        for member in link_members(field) {
+            let why = match (read_member(&member, page_url), &found.named) {
+                (MemberReading::NoLicence, _) => continue,
+                (MemberReading::Named(url), None) => {
+                    found.named = Some(url);
+                    continue;
+                }
+                (MemberReading::Named(url), Some(first)) if *first == url => continue,
+                // A second licence has a URL that was read; it is recorded
+                // by that URL.
+                (MemberReading::Named(url), Some(_)) => {
+                    found.unread.push(UnreadLink {
+                        written: url,
+                        rendered: false,
+                        why: "the response names another RSL licence before this one, and this \
+                              edge reads one licence per page, so this licence's terms are \
+                              unknown"
+                            .to_owned(),
+                    });
+                    continue;
+                }
+                (MemberReading::Unread(why), _) => why,
+            };
+            let written = match member.malformed {
+                Some(_) => member.raw,
+                None => member.target.unwrap_or(member.raw),
+            };
+            let (written, rendered) = commonmeasure_http::render_value(written);
+            found.unread.push(UnreadLink {
+                written: written.into_owned(),
+                rendered,
+                why,
+            });
         }
     }
-    members.push(header[start..].trim());
-    members.into_iter().filter(|m| !m.is_empty()).collect()
+    found
+}
+
+/// One comma-separated member of a `Link` field.
+struct LinkMember<'a> {
+    /// The member's bytes, from its first byte to the end of its last
+    /// parameter.
+    raw: &'a [u8],
+    /// Between `<` and `>`, where the member has them.
+    target: Option<&'a [u8]>,
+    /// The first `rel` and `type` parameters' values, unquoted; later ones
+    /// are ignored (RFC 8288 section 3.3).
+    rel: Option<Param>,
+    media_type: Option<Param>,
+    /// The first `rel*` and `type*` values, decoded (RFC 8187), kept apart
+    /// from `rel` and `type` so that a member on which they disagree is
+    /// known (RFC 8288 Appendix B.2 step 16).
+    rel_star: Option<Param>,
+    media_type_star: Option<Param>,
+    /// True where a parameter's name is not a token, and so could be a
+    /// `rel` or `type` this edge cannot recognise.
+    odd_name: bool,
+    /// Why the member could not be parsed, where it could not.
+    malformed: Option<&'static str>,
+}
+
+/// A `rel` or `type` value.
+enum Param {
+    Read(Vec<u8>),
+    /// A `rel*` or `type*` whose RFC 8187 encoding does not decode, kept as
+    /// the bytes its valid percent-escapes decode to, so that what it
+    /// mentions can still be tested.
+    Undecoded(Vec<u8>),
+}
+
+impl Param {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Param::Read(bytes) | Param::Undecoded(bytes) => bytes,
+        }
+    }
+}
+
+impl LinkMember<'_> {
+    /// Whether the member mentions `license` anywhere: in its bytes with
+    /// quoted-pair escapes removed, so an escaped `lic\ense` in a member
+    /// that cannot be parsed counts, or in a `rel` or `type` as decoded.
+    fn mentions_license(&self) -> bool {
+        const LICENSE: &[u8] = b"license";
+        let unescaped: Vec<u8> = self.raw.iter().copied().filter(|&b| b != b'\\').collect();
+        contains_ignoring_case(&unescaped, LICENSE)
+            || [
+                &self.rel,
+                &self.media_type,
+                &self.rel_star,
+                &self.media_type_star,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|param| contains_ignoring_case(param.bytes(), LICENSE))
+    }
+}
+
+enum MemberReading {
+    NoLicence,
+    Named(String),
+    Unread(String),
+}
+
+fn read_member(member: &LinkMember<'_>, page_url: &str) -> MemberReading {
+    if let Some(why) = member.malformed {
+        return if member.mentions_license() {
+            MemberReading::Unread(format!(
+                "a Link member that mentions `license` could not be parsed: {why}"
+            ))
+        } else {
+            MemberReading::NoLicence
+        };
+    }
+    // A name that is not a token is ignored, as a parameter this edge does
+    // not use is, unless the `rel` or `type` it may be is then missing
+    // from a member that mentions a licence.
+    if member.odd_name
+        && ((member.rel.is_none() && member.rel_star.is_none())
+            || (member.media_type.is_none() && member.media_type_star.is_none()))
+        && member.mentions_license()
+    {
+        return MemberReading::Unread(
+            "a Link member that mentions `license` has a parameter name that is not a token, \
+             and it may be the member's rel or type"
+                .to_owned(),
+        );
+    }
+    // The member as read with each of `rel` and `rel*`, and each of `type`
+    // and `type*`, that it has. RFC 8288 Appendix B.2 step 16 has a
+    // starred parameter replace the plain one, while a parser that does not
+    // apply it reads the plain one, so where the readings disagree about
+    // whether the member names an RSL licence neither can be taken, and the
+    // licence the member may name is unread (EDG-115).
+    let mut readings = Vec::new();
+    for rel in either(&member.rel, &member.rel_star) {
+        for media_type in either(&member.media_type, &member.media_type_star) {
+            readings.push(read_as(member, rel, media_type, page_url));
+        }
+    }
+    let names = |reading: &MemberReading| !matches!(reading, MemberReading::NoLicence);
+    if readings.iter().all(names) || !readings.iter().any(names) {
+        // Agreed: the first reading, `rel` and `type` as written plain,
+        // gives the reason where it is unread.
+        return readings.swap_remove(0);
+    }
+    MemberReading::Unread(
+        "the Link member's rel and rel*, or its type and type*, disagree about whether it \
+         names an RSL licence (RFC 8288 Appendix B.2 step 16 gives the starred one precedence, \
+         and a parser that does not apply it reads the plain one), so whether it names one is \
+         not known"
+            .to_owned(),
+    )
+}
+
+/// The values a member's plain and starred forms of one parameter give
+/// it: both where it has both, else the one it has.
+fn either<'a>(plain: &'a Option<Param>, star: &'a Option<Param>) -> Vec<Option<&'a Param>> {
+    match (plain, star) {
+        (Some(plain), Some(star)) => vec![Some(plain), Some(star)],
+        (plain, star) => vec![plain.as_ref().or(star.as_ref())],
+    }
+}
+
+/// What `member` names read with `rel` as its rel and `media_type` as its
+/// type.
+fn read_as(
+    member: &LinkMember<'_>,
+    rel: Option<&Param>,
+    media_type: Option<&Param>,
+    page_url: &str,
+) -> MemberReading {
+    const LICENSE: &[u8] = b"license";
+    let rel_unread = match rel {
+        None => return MemberReading::NoLicence,
+        Some(Param::Undecoded(_)) if member.mentions_license() => {
+            return MemberReading::Unread(
+                "a Link member that mentions `license` has a rel* whose RFC 8187 encoding \
+                 does not decode, so whether it names a licence is not known"
+                    .to_owned(),
+            );
+        }
+        Some(Param::Undecoded(_)) => return MemberReading::NoLicence,
+        Some(Param::Read(rel)) => match std::str::from_utf8(rel) {
+            Ok(rel)
+                if rel
+                    .split_whitespace()
+                    .any(|r| r.eq_ignore_ascii_case("license")) =>
+            {
+                false
+            }
+            Ok(_) => return MemberReading::NoLicence,
+            Err(_) if contains_ignoring_case(rel, LICENSE) => true,
+            Err(_) => return MemberReading::NoLicence,
+        },
+    };
+    // A licence link of another type is not an RSL licence, and one with no
+    // type is not either; this edge reads RSL only.
+    let media_type = match media_type {
+        None => None,
+        Some(Param::Read(media)) => Some(std::str::from_utf8(media)),
+        Some(Param::Undecoded(_)) => {
+            return MemberReading::Unread(
+                "the Link member names a licence and its type* does not decode (RFC 8187), so \
+                 whether it is an RSL licence is not known"
+                    .to_owned(),
+            );
+        }
+    };
+    match media_type {
+        None => return MemberReading::NoLicence,
+        Some(Ok(media)) => {
+            let essence = media.split(';').next().unwrap_or_default().trim();
+            if !essence.eq_ignore_ascii_case("application/rsl+xml") {
+                return MemberReading::NoLicence;
+            }
+        }
+        Some(Err(_)) => {
+            return MemberReading::Unread(
+                "the Link member names a licence and its type holds bytes that are not UTF-8, \
+                 so whether it is an RSL licence is not known"
+                    .to_owned(),
+            );
+        }
+    }
+    if rel_unread {
+        return MemberReading::Unread(
+            "the Link member's rel mentions `license` and holds bytes that are not UTF-8, so \
+             whether it names a licence is not known"
+                .to_owned(),
+        );
+    }
+    let Some(target) = member.target.map(std::str::from_utf8) else {
+        return MemberReading::Unread(
+            "the Link member names an RSL licence and has no target".to_owned(),
+        );
+    };
+    let Ok(target) = target else {
+        return MemberReading::Unread(
+            "the Link member names an RSL licence and its target holds bytes that are not \
+             UTF-8, so no URL is read from it"
+                .to_owned(),
+        );
+    };
+    match url::Url::parse(page_url).and_then(|base| base.join(target.trim())) {
+        Ok(joined) => MemberReading::Named(joined.to_string()),
+        Err(error) => MemberReading::Unread(format!(
+            "the Link member names an RSL licence and its target is not a URL: {error}"
+        )),
+    }
+}
+
+fn contains_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn is_ows(byte: u8) -> bool {
+    byte == b' ' || byte == b'\t'
+}
+
+/// Split one `Link` field into its members (RFC 8288 section 3):
+/// `<target>` then `;`-separated parameters, each a token name with an
+/// optional token or quoted-string value. A name runs to the next `=`, `;`,
+/// `,` or whitespace and an unquoted value to the next `;` or `,`, as a
+/// lenient reader of real headers takes them.
+fn link_members(field: &[u8]) -> Vec<LinkMember<'_>> {
+    let mut members = Vec::new();
+    let mut at = 0;
+    loop {
+        while at < field.len() && (is_ows(field[at]) || field[at] == b',') {
+            at += 1;
+        }
+        if at == field.len() {
+            return members;
+        }
+        let start = at;
+        let mut member = LinkMember {
+            raw: &[],
+            target: None,
+            rel: None,
+            media_type: None,
+            rel_star: None,
+            media_type_star: None,
+            odd_name: false,
+            malformed: None,
+        };
+        if let Err(why) = parse_member(field, &mut at, &mut member) {
+            member.malformed = Some(why);
+            at = next_member(field, start);
+        }
+        let mut end = at;
+        while end > start && is_ows(field[end - 1]) {
+            end -= 1;
+        }
+        member.raw = &field[start..end];
+        members.push(member);
+    }
+}
+
+fn parse_member<'a>(
+    field: &'a [u8],
+    at: &mut usize,
+    member: &mut LinkMember<'a>,
+) -> Result<(), &'static str> {
+    let skip_ows = |at: &mut usize| {
+        while *at < field.len() && is_ows(field[*at]) {
+            *at += 1;
+        }
+    };
+    if field[*at] != b'<' {
+        return Err("it does not begin with a target in <…>");
+    }
+    let close = field[*at..]
+        .iter()
+        .position(|&byte| byte == b'>')
+        .ok_or("its target has no closing >")?;
+    member.target = Some(&field[*at + 1..*at + close]);
+    *at += close + 1;
+    loop {
+        skip_ows(at);
+        match field.get(*at) {
+            None | Some(b',') => return Ok(()),
+            Some(b';') => *at += 1,
+            Some(_) => return Err("a parameter follows without a ;"),
+        }
+        skip_ows(at);
+        let name_start = *at;
+        while *at < field.len() && !matches!(field[*at], b'=' | b';' | b',' | b' ' | b'\t') {
+            *at += 1;
+        }
+        let name = &field[name_start..*at];
+        if name.is_empty() {
+            match field.get(*at) {
+                None | Some(b',' | b';') => continue,
+                Some(_) => return Err("a parameter has no name"),
+            }
+        }
+        member.odd_name |= !name.iter().all(|&byte| is_tchar(byte));
+        skip_ows(at);
+        let value = if field.get(*at) == Some(&b'=') {
+            *at += 1;
+            skip_ows(at);
+            if field.get(*at) == Some(&b'"') {
+                *at += 1;
+                let mut value = Vec::new();
+                loop {
+                    match field.get(*at) {
+                        None => return Err("a quoted value is not closed"),
+                        Some(b'"') => {
+                            *at += 1;
+                            break;
+                        }
+                        Some(b'\\') => {
+                            let escaped =
+                                field.get(*at + 1).ok_or("a quoted value is not closed")?;
+                            value.push(*escaped);
+                            *at += 2;
+                        }
+                        Some(&byte) => {
+                            value.push(byte);
+                            *at += 1;
+                        }
+                    }
+                }
+                value
+            } else {
+                let value_start = *at;
+                while *at < field.len() && !matches!(field[*at], b';' | b',') {
+                    *at += 1;
+                }
+                field[value_start..*at].trim_ascii_end().to_vec()
+            }
+        } else {
+            Vec::new()
+        };
+        // A name ending in `*` has an RFC 8187 encoded value (RFC 8288
+        // section 3 and Appendix B.3 step 7.5). `rel*` and `type*` are kept
+        // apart from `rel` and `type` (`read_member`).
+        let (stem, starred) = match name.strip_suffix(b"*") {
+            Some(stem) => (stem, true),
+            None => (name, false),
+        };
+        let slot = if stem.eq_ignore_ascii_case(b"rel") {
+            Some(if starred {
+                &mut member.rel_star
+            } else {
+                &mut member.rel
+            })
+        } else if stem.eq_ignore_ascii_case(b"type") {
+            Some(if starred {
+                &mut member.media_type_star
+            } else {
+                &mut member.media_type
+            })
+        } else {
+            None
+        };
+        if let Some(slot) = slot {
+            slot.get_or_insert_with(|| {
+                if starred {
+                    decode_ext_value(&value)
+                } else {
+                    Param::Read(value)
+                }
+            });
+        }
+    }
+}
+
+/// Decode an RFC 8187 `ext-value`, `charset'[language]'value-chars`, in the
+/// charsets it requires (UTF-8) and allows (ISO-8859-1). A value in another
+/// charset, with a malformed escape, or with a byte that is not a visible
+/// ASCII character is not decoded.
+fn decode_ext_value(value: &[u8]) -> Param {
+    let mut parts = value.splitn(3, |&byte| byte == b'\'');
+    let (Some(charset), Some(_language), Some(encoded)) =
+        (parts.next(), parts.next(), parts.next())
+    else {
+        return Param::Undecoded(percent_decoded(value).0);
+    };
+    let (bytes, whole) = percent_decoded(encoded);
+    if !whole || !encoded.iter().all(u8::is_ascii_graphic) {
+        return Param::Undecoded(bytes);
+    }
+    if charset.eq_ignore_ascii_case(b"UTF-8") && std::str::from_utf8(&bytes).is_ok() {
+        Param::Read(bytes)
+    } else if charset.eq_ignore_ascii_case(b"ISO-8859-1") {
+        Param::Read(
+            bytes
+                .iter()
+                .map(|&byte| char::from(byte))
+                .collect::<String>()
+                .into_bytes(),
+        )
+    } else {
+        Param::Undecoded(bytes)
+    }
+}
+
+/// `value` with each `%` and two hex digits decoded, and whether every `%`
+/// began one; a `%` that does not is kept as written.
+fn percent_decoded(value: &[u8]) -> (Vec<u8>, bool) {
+    let hex = |at: usize| {
+        value
+            .get(at)
+            .and_then(|&byte| char::from(byte).to_digit(16))
+    };
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut whole = true;
+    let mut at = 0;
+    while at < value.len() {
+        match (value[at], hex(at + 1), hex(at + 2)) {
+            (b'%', Some(high), Some(low)) => {
+                bytes.push((high * 16 + low) as u8);
+                at += 3;
+            }
+            (byte, _, _) => {
+                whole &= byte != b'%';
+                bytes.push(byte);
+                at += 1;
+            }
+        }
+    }
+    (bytes, whole)
+}
+
+/// Where the member after the one starting at `start` begins: the next comma
+/// outside a quoted string and outside `<…>`, or the end of the field where a
+/// quote or `<` is left open.
+fn next_member(field: &[u8], start: usize) -> usize {
+    let mut quoted = false;
+    let mut angle = false;
+    let mut at = start;
+    while at < field.len() {
+        match field[at] {
+            b'\\' if quoted => at += 1,
+            b'"' if !angle => quoted = !quoted,
+            b'<' if !quoted => angle = true,
+            b'>' if !quoted => angle = false,
+            b',' if !quoted && !angle => return at,
+            _ => {}
+        }
+        at += 1;
+    }
+    field.len()
 }
 
 /// A `Cache-Control` max-age in seconds, where the header names one.
@@ -2040,26 +3119,31 @@ Content-Usage: train-ai=y
     }
 
     /// Two relative `<content>` entries naming one path in two spellings
-    /// tie; the later one governs in either order, as between two identical
-    /// entries.
+    /// tie and are read as one entry in either order: the first's `url`,
+    /// and the licences of both in document order.
     #[test]
-    fn two_spellings_of_one_relative_scope_tie_and_the_later_governs() {
-        let entry = |url: &str| format!(r#"<content url="{url}"><license/></content>"#);
+    fn two_spellings_of_one_relative_scope_tie_and_are_read_as_one_entry() {
+        let entry = |url: &str, rule: &str| {
+            format!(
+                r#"<content url="{url}"><license><{rule} type="usage">ai-input</{rule}></license></content>"#
+            )
+        };
         for (first, second) in [("/news/", "/%6Eews/"), ("/%6Eews/", "/news/")] {
             let document = parse_rsl(&format!(
                 r#"<rsl xmlns="https://rslstandard.org/rsl">{}{}</rsl>"#,
-                entry(first),
-                entry(second)
+                entry(first, "permits"),
+                entry(second, "prohibits")
             ))
             .expect("parses");
             for page in ["https://example.com/news/1", "https://example.com/%6Eews/1"] {
-                assert_eq!(
-                    document
-                        .content_for(page)
-                        .map(|content| content.url.as_str()),
-                    Some(second),
-                    "{first} then {second}: {page}"
-                );
+                let content = document
+                    .content_for(page)
+                    .expect("within the bound")
+                    .expect("the entry");
+                assert_eq!(content.url, first, "{first} then {second}: {page}");
+                assert_eq!(content.licences.len(), 2, "{first} then {second}: {page}");
+                assert!(content.licences[0].permits_usage.is_some());
+                assert!(content.licences[1].prohibits_usage.is_some());
             }
         }
     }
@@ -2145,8 +3229,9 @@ Content-Usage: train-ai=y
         let document = parse_rsl(xml).expect("parses");
         let page = document
             .content_for("https://example.com/a")
+            .expect("within the bound")
             .expect("the entry");
-        licence_terms(page, "https://example.com/license.xml")
+        licence_terms(&page, "https://example.com/license.xml")
             .reporting
             .into_iter()
             .map(|demand| demand.profile)
@@ -2201,9 +3286,10 @@ Content-Usage: train-ai=y
 
         let page = document
             .content_for("https://example.com/news/1")
+            .expect("within the bound")
             .expect("the site-wide entry");
         assert_eq!(page.url, "/");
-        let terms = licence_terms(page, "https://example.com/license.xml");
+        let terms = licence_terms(&page, "https://example.com/license.xml");
         let effective = combine(&terms.statements);
         assert_eq!(effective[&Category::AiInput], Effective::Allow);
         assert_eq!(effective[&Category::Search], Effective::Allow);
@@ -2214,7 +3300,7 @@ Content-Usage: train-ai=y
         );
         let payment = terms.payment.expect("the ai-input licence's payment");
         assert_eq!(payment.kind.as_deref(), Some("use"));
-        assert!(payment.is_monetary());
+        assert!(payment.needs_settlement());
         assert_eq!(payment.price(), Some(Money::new("USD", 15_000)));
         assert_eq!(terms.reporting.len(), 1);
         assert_eq!(terms.reporting[0].profile, TELEMETRY_PROFILE);
@@ -2228,9 +3314,10 @@ Content-Usage: train-ai=y
 
         let archive = document
             .content_for("https://example.com/archive/2020/x")
+            .expect("within the bound")
             .expect("the more specific entry");
         assert_eq!(archive.url, "/archive/*");
-        let terms = licence_terms(archive, "https://example.com/license.xml");
+        let terms = licence_terms(&archive, "https://example.com/license.xml");
         assert_eq!(
             combine(&terms.statements)[&Category::AiInput],
             Effective::Disallow
@@ -2270,8 +3357,9 @@ Content-Usage: train-ai=y
                 assert_eq!(
                     document
                         .content_for(page)
-                        .map(|content| content.url.as_str()),
-                    Some(scope),
+                        .expect("within the bound")
+                        .map(|content| content.url.clone()),
+                    Some(scope.to_owned()),
                     "{scope} governs {page}"
                 );
             }
@@ -2283,16 +3371,25 @@ Content-Usage: train-ai=y
                 "https://publisher.example/sport/1",
             ] {
                 assert!(
-                    document.content_for(elsewhere).is_none(),
+                    document
+                        .content_for(elsewhere)
+                        .expect("within the bound")
+                        .is_none(),
                     "{scope} does not govern {elsewhere}"
                 );
             }
         }
         let document = scoped("http://publisher.example:80/");
-        assert!(document.content_for("http://publisher.example/x").is_some());
+        assert!(
+            document
+                .content_for("http://publisher.example/x")
+                .expect("within the bound")
+                .is_some()
+        );
         assert!(
             document
                 .content_for("https://publisher.example/x")
+                .expect("within the bound")
                 .is_none()
         );
     }
@@ -2313,14 +3410,15 @@ Content-Usage: train-ai=y
         ))
         .expect("parses")
         .content_for(page)
+        .expect("within the bound")
         .map(|content| content.url.clone())
     }
 
-    /// Entries rank by the path they constrain, whatever the spelling of the
-    /// host in front of it: a narrower scope governs under a broad one
-    /// written longer (`https://PUBLISHER.example.:443/` is 31 characters,
-    /// `https://publisher.example/n/` 28), and a relative entry governs under
-    /// an absolute scope that constrains a shorter path.
+    /// Entries are compared by the path they constrain, whatever the
+    /// spelling of the host in front of it: a narrower scope governs under a
+    /// broad one written longer (`https://PUBLISHER.example.:443/` is 31
+    /// characters, `https://publisher.example/n/` 28), and a relative entry
+    /// governs under an absolute scope whose path it lies within.
     #[test]
     fn the_entry_constraining_the_longer_path_governs_whatever_its_spelling() {
         let broad = ("https://PUBLISHER.example.:443/", "permits");
@@ -2354,12 +3452,32 @@ Content-Usage: train-ai=y
         );
     }
 
-    /// An absolute scope and a relative entry constraining the same path rank
-    /// equally by length. The absolute scope governs in either document
-    /// order, so which of opposite rules applies does not depend on the order
-    /// (RSL 3.1.1).
+    /// An absolute scope and a relative entry of the same path are one
+    /// scope: they are read as one entry in either document order, with the
+    /// licences of both and the first entry's `url`, so neither's rule is
+    /// dropped (RSL 3.1.1). An absolute scope within a relative pattern
+    /// governs alone, and so does a relative entry within an absolute scope.
     #[test]
-    fn an_absolute_scope_governs_a_relative_entry_on_the_same_path_in_either_order() {
+    fn an_absolute_scope_and_a_relative_entry_on_the_same_path_are_read_as_one_in_either_order() {
+        let selected = |entries: [(&str, &str); 2], page: &str| {
+            let contents: String = entries
+                .iter()
+                .map(|(url, rule)| {
+                    format!(
+                        r#"<content url="{url}"><license><{rule} type="usage">ai-input</{rule}></license></content>"#
+                    )
+                })
+                .collect();
+            let document = parse_rsl(&format!(
+                r#"<rsl xmlns="https://rslstandard.org/rsl">{contents}</rsl>"#
+            ))
+            .expect("parses");
+            let content = document
+                .content_for(page)
+                .expect("within the bound")
+                .expect("an entry");
+            (content.url.clone(), content.licences.len())
+        };
         for (absolute, relative) in [
             (
                 ("https://publisher.example/n/", "prohibits"),
@@ -2373,11 +3491,45 @@ Content-Usage: train-ai=y
                 ("https://publisher.example/", "prohibits"),
                 ("/", "permits"),
             ),
+            (
+                ("https://publisher.example/", "prohibits"),
+                ("/*", "permits"),
+            ),
+            (
+                ("https://publisher.example/n", "permits"),
+                ("/n*", "prohibits"),
+            ),
         ] {
             for entries in [[absolute, relative], [relative, absolute]] {
                 assert_eq!(
-                    governing(&entries, "https://publisher.example/n/1").as_deref(),
-                    Some(absolute.0),
+                    selected(entries, "https://publisher.example/n/1"),
+                    (entries[0].0.to_owned(), 2),
+                    "{entries:?}"
+                );
+            }
+        }
+        for (governs, aside) in [
+            (
+                ("https://publisher.example/n/", "permits"),
+                ("/*", "prohibits"),
+            ),
+            (
+                ("https://publisher.example/n/", "permits"),
+                ("/n", "prohibits"),
+            ),
+            (
+                ("/n/1", "permits"),
+                ("https://publisher.example/", "prohibits"),
+            ),
+            (
+                ("/*1", "permits"),
+                ("https://publisher.example/", "prohibits"),
+            ),
+        ] {
+            for entries in [[governs, aside], [aside, governs]] {
+                assert_eq!(
+                    selected(entries, "https://publisher.example/n/1"),
+                    (governs.0.to_owned(), 1),
                     "{entries:?}"
                 );
             }
@@ -2421,30 +3573,616 @@ Content-Usage: train-ai=y
         }
     }
 
-    /// Where the ranking leaves two entries equal, the later governs: two
-    /// relative entries of one length, and two absolute scopes of one written
-    /// length that neither matches the page as written. Only the order with
-    /// the prohibition last is pinned. Refusal there is also the outcome a
-    /// conforming evaluation of tied entries gives, so this holds when one
-    /// replaces document order.
+    /// Where the ranking leaves two entries equal (one relative scope in two
+    /// spellings, and two absolute scopes of one written length that
+    /// neither matches the page as written), they are read as one entry, so
+    /// a permit and a prohibition of AI input are ruled in either document
+    /// order as the same two licences written in one `<content>`, and a
+    /// prohibition in one beside a licence silent on usage in the other is
+    /// a Disallow.
     #[test]
-    fn a_prohibition_written_after_an_equally_ranked_permit_governs() {
+    fn equally_ranked_entries_are_ruled_as_one_entry_in_either_order() {
+        let licence =
+            |rule: &str| format!(r#"<license><{rule} type="usage">ai-input</{rule}></license>"#);
+        let ruling = |xml: String| {
+            let document = parse_rsl(&xml).expect("parses");
+            let content = document
+                .content_for("https://publisher.example/n/1")
+                .expect("within the bound")
+                .expect("an entry");
+            let terms = licence_terms(&content, "https://publisher.example/license.xml");
+            (combine(&terms.statements)[&Category::AiInput], terms.offer)
+        };
         for (permit, prohibition) in [
-            ("/n", "/*"),
+            ("/n", "/%6E"),
             (
                 "HTTPS://PUBLISHER.EXAMPLE./n/",
                 "https://publisher.example./n/",
             ),
         ] {
-            assert_eq!(
-                governing(
-                    &[(permit, "permits"), (prohibition, "prohibits")],
-                    "https://publisher.example/n/1"
+            for (first, second) in [(permit, prohibition), (prohibition, permit)] {
+                let xml = format!(
+                    r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="{first}">{}</content><content url="{second}"><license><payment type="free"/></license></content></rsl>"#,
+                    licence("prohibits"),
+                );
+                assert_eq!(
+                    ruling(xml),
+                    (Effective::Disallow, None),
+                    "{first} prohibits, then {second} silent"
+                );
+                let xml = format!(
+                    r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="{first}"><license><payment type="free"/></license></content><content url="{second}">{}</content></rsl>"#,
+                    licence("prohibits"),
+                );
+                assert_eq!(
+                    ruling(xml),
+                    (Effective::Disallow, None),
+                    "{first} silent, then {second} prohibits"
+                );
+            }
+            let written = |first: (&str, &str), second: (&str, &str)| {
+                format!(
+                    r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="{}">{}</content><content url="{}">{}</content></rsl>"#,
+                    first.0,
+                    licence(first.1),
+                    second.0,
+                    licence(second.1)
                 )
-                .as_deref(),
-                Some(prohibition)
+            };
+            let (permits, prohibits) = ((permit, "permits"), (prohibition, "prohibits"));
+            let one_entry = |first: &str, second: &str| {
+                format!(
+                    r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/">{}{}</content></rsl>"#,
+                    licence(first),
+                    licence(second)
+                )
+            };
+            assert_eq!(
+                ruling(written(permits, prohibits)),
+                ruling(one_entry("permits", "prohibits")),
+                "{permit} then {prohibition}"
+            );
+            assert_eq!(
+                ruling(written(prohibits, permits)),
+                ruling(one_entry("prohibits", "permits")),
+                "{prohibition} then {permit}"
+            );
+            assert_eq!(
+                ruling(written(permits, prohibits)).0,
+                ruling(written(prohibits, permits)).0,
+                "{permit} and {prohibition}: the order does not change the ruling"
             );
         }
+    }
+
+    /// Every pattern over `a`, `b`, `/` and `*` of up to four characters
+    /// after the leading `/`, with and without a final `$`: 682 patterns,
+    /// each its own matching form.
+    fn generated_patterns() -> Vec<String> {
+        let mut open = vec![String::from("/")];
+        let mut grown = open.clone();
+        for _ in 0..4 {
+            grown = grown
+                .iter()
+                .flat_map(|stem| ['a', 'b', '/', '*'].map(|next| format!("{stem}{next}")))
+                .collect();
+            open.extend(grown.iter().cloned());
+        }
+        let anchored: Vec<String> = open.iter().map(|pattern| format!("{pattern}$")).collect();
+        open.extend(anchored);
+        for pattern in &open {
+            assert_eq!(&commonmeasure_types::matching_pattern(pattern), pattern);
+        }
+        open
+    }
+
+    /// Every target over `a`, `b`, `/` and `z` of up to five characters
+    /// after the leading `/`: 1,365 targets. No pattern holds `z`, so it
+    /// stands for an octet a pattern's literals cannot match, and five
+    /// characters hold the most general target of every generated pattern.
+    fn generated_targets() -> Vec<String> {
+        let mut targets = vec![String::from("/")];
+        let mut grown = targets.clone();
+        for _ in 0..5 {
+            grown = grown
+                .iter()
+                .flat_map(|stem| ['a', 'b', '/', 'z'].map(|next| format!("{stem}{next}")))
+                .collect();
+            targets.extend(grown.iter().cloned());
+        }
+        targets
+    }
+
+    /// Each generated pattern with the set of generated targets it matches.
+    fn matched_sets() -> Vec<(String, Vec<bool>)> {
+        let targets = generated_targets();
+        generated_patterns()
+            .into_iter()
+            .map(|pattern| {
+                let matched = targets
+                    .iter()
+                    .map(|target| matches_form(&pattern, target))
+                    .collect();
+                (pattern, matched)
+            })
+            .collect()
+    }
+
+    fn subset(inner: &[bool], outer: &[bool]) -> bool {
+        inner
+            .iter()
+            .zip(outer)
+            .all(|(&inner, &outer)| !inner || outer)
+    }
+
+    /// The containment test agrees with brute force: for every ordered pair
+    /// of generated patterns (465,124 pairs), A lies within B exactly when
+    /// B matches every generated target A matches.
+    #[test]
+    fn containment_is_what_brute_force_finds() {
+        let sets = matched_sets();
+        let mut within = 0;
+        for (inner, inner_set) in &sets {
+            for (outer, outer_set) in &sets {
+                let expected = subset(inner_set, outer_set);
+                assert_eq!(
+                    Scope::new(inner).within(&Scope::new(outer)),
+                    expected,
+                    "{inner} within {outer}"
+                );
+                within += usize::from(expected);
+            }
+        }
+        assert_eq!(sets.len(), 682);
+        assert!(within > sets.len(), "{within}");
+    }
+
+    /// The entries that govern a page under two relative entries, for every
+    /// pair of generated patterns and every target of up to four characters
+    /// after the leading `/` that both match, in both document orders. An
+    /// entry is set aside exactly when the other lies strictly within it,
+    /// whatever their lengths, and both govern otherwise. Containment is
+    /// read from the brute-force sets, not from [`Scope`].
+    #[test]
+    fn selection_sets_an_entry_aside_only_when_the_other_lies_strictly_within_it() {
+        let sets = matched_sets();
+        let short_targets: Vec<(usize, String)> = generated_targets()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, target)| target.len() <= 5)
+            .collect();
+        let entry = |url: &str| RslContent {
+            url: url.to_owned(),
+            server: None,
+            licences: vec![RslLicence::default()],
+        };
+        let mut checked = 0;
+        for (one, one_set) in &sets {
+            for (other, other_set) in &sets {
+                let within = subset(one_set, other_set);
+                let contains = subset(other_set, one_set);
+                // Which of (one, other) govern.
+                let governs = (!contains || within, !within || contains);
+                let document = RslDocument {
+                    contents: vec![entry(one), entry(other)],
+                };
+                let expected = match governs {
+                    (true, true) => (one.as_str(), 2),
+                    (true, false) => (one.as_str(), 1),
+                    (false, true) => (other.as_str(), 1),
+                    (false, false) => panic!("{one} and {other}: nothing governs"),
+                };
+                for (index, target) in &short_targets {
+                    if !(one_set[*index] && other_set[*index]) {
+                        continue;
+                    }
+                    let content = document
+                        .content_for_reading(target, None, "")
+                        .expect("within the bound")
+                        .expect("an entry");
+                    assert_eq!(
+                        (content.url.as_str(), content.licences.len()),
+                        expected,
+                        "{one} then {other} for {target}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 1_000_000, "{checked}");
+    }
+
+    /// Three relative entries over `a`, `b` and `*` (up to two characters
+    /// after the leading `/`, with and without a final `$`), in every
+    /// order, for every target of up to three characters after the `/`
+    /// that all three match: the entries that govern are exactly those that
+    /// no other strictly lies within, by brute force, combined in document
+    /// order.
+    #[test]
+    fn selection_among_three_entries_keeps_exactly_the_narrowest() {
+        let mut patterns = vec![String::from("/")];
+        let mut grown = patterns.clone();
+        for _ in 0..2 {
+            grown = grown
+                .iter()
+                .flat_map(|stem| ['a', 'b', '*'].map(|next| format!("{stem}{next}")))
+                .collect();
+            patterns.extend(grown.iter().cloned());
+        }
+        let anchored: Vec<String> = patterns.iter().map(|p| format!("{p}$")).collect();
+        patterns.extend(anchored);
+        let targets: Vec<String> = generated_targets()
+            .into_iter()
+            .filter(|target| target.len() <= 4)
+            .collect();
+        let sets: Vec<Vec<bool>> = patterns
+            .iter()
+            .map(|pattern| {
+                targets
+                    .iter()
+                    .map(|target| matches_form(pattern, target))
+                    .collect()
+            })
+            .collect();
+        let strictly = |inner: usize, outer: usize| {
+            subset(&sets[inner], &sets[outer]) && !subset(&sets[outer], &sets[inner])
+        };
+        let mut checked = 0;
+        let count = patterns.len();
+        for one in 0..count {
+            for two in 0..count {
+                for three in 0..count {
+                    let order = [one, two, three];
+                    let document = RslDocument {
+                        contents: order
+                            .iter()
+                            .enumerate()
+                            .map(|(position, &index)| RslContent {
+                                url: patterns[index].clone(),
+                                server: None,
+                                licences: vec![RslLicence {
+                                    reporting: vec![RslReporting {
+                                        kind: position.to_string(),
+                                        profile: String::new(),
+                                        endpoint: None,
+                                        config: None,
+                                    }],
+                                    ..RslLicence::default()
+                                }],
+                            })
+                            .collect(),
+                    };
+                    let expected: Vec<String> = (0..3)
+                        .filter(|&position| {
+                            !order.iter().any(|&other| strictly(other, order[position]))
+                        })
+                        .map(|position| position.to_string())
+                        .collect();
+                    for (index, target) in targets.iter().enumerate() {
+                        if !order.iter().all(|&entry| sets[entry][index]) {
+                            continue;
+                        }
+                        let content = document
+                            .content_for_reading(target, None, "")
+                            .expect("within the bound")
+                            .expect("an entry");
+                        let positions: Vec<String> = content
+                            .licences
+                            .iter()
+                            .map(|licence| licence.reporting[0].kind.clone())
+                            .collect();
+                        assert_eq!(
+                            positions,
+                            expected,
+                            "{:?} for {target}",
+                            order.map(|index| &patterns[index])
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 10_000, "{checked}");
+    }
+
+    /// A trailing `*`, or `*$`, is the same scope as the pattern without
+    /// it; a final `$` after a literal is not. A literal `%2A` or `%24` is
+    /// three literal octets: `/x%2A` lies within `/x*`, not the reverse.
+    #[test]
+    fn a_trailing_wildcard_is_the_same_scope() {
+        for (one, other) in [
+            ("/*", "/"),
+            ("/**", "/"),
+            ("/*$", "/"),
+            ("/**$", "/"),
+            ("/news*", "/news"),
+            ("/news*$", "/news"),
+            ("/a*b*", "/a*b"),
+            ("/a*b*$", "/a*b"),
+            ("/x%2A*", "/x%2A"),
+        ] {
+            let (one, other) = (
+                commonmeasure_types::matching_pattern(one),
+                commonmeasure_types::matching_pattern(other),
+            );
+            assert!(
+                Scope::new(&one).same_scope(&Scope::new(&other)),
+                "{one} and {other}"
+            );
+        }
+        for (inner, outer) in [
+            ("/p$", "/p"),
+            ("/a*b$", "/a*b"),
+            ("/x%2A", "/x*"),
+            ("/x%24", "/x"),
+            ("/x$", "/x%24"),
+        ] {
+            let (inner_form, outer_form) = (
+                commonmeasure_types::matching_pattern(inner),
+                commonmeasure_types::matching_pattern(outer),
+            );
+            let (inner_scope, outer_scope) = (Scope::new(&inner_form), Scope::new(&outer_form));
+            assert_eq!(
+                (
+                    inner_scope.within(&outer_scope),
+                    outer_scope.within(&inner_scope)
+                ),
+                (inner != "/x$", false),
+                "{inner} and {outer}"
+            );
+        }
+        assert!(!commonmeasure_types::matching_pattern("/ *$ x").contains(ANY_RUN));
+    }
+
+    /// The pairs the rule is stated by, in both document orders: the entry
+    /// governing, or both when they are read as one, whatever their lengths.
+    #[test]
+    fn named_pairs_govern_by_containment() {
+        let selected = |entries: [&str; 2], page: &str| {
+            let contents: String = entries
+                .iter()
+                .map(|url| {
+                    format!(r#"<content url="{url}"><license><payment type="free"/></license></content>"#)
+                })
+                .collect();
+            let document = parse_rsl(&format!(
+                r#"<rsl xmlns="https://rslstandard.org/rsl">{contents}</rsl>"#
+            ))
+            .expect("parses");
+            let content = document
+                .content_for(&format!("https://publisher.example{page}"))
+                .expect("within the bound")
+                .expect("an entry");
+            (content.url.clone(), content.licences.len())
+        };
+        // (governs alone, set aside, page)
+        for (governs, aside, page) in [
+            // Equal length, the first within the second.
+            ("/p", "/*", "/page"),
+            ("/news/", "/news*", "/news/1"),
+            ("/a/", "/*/", "/a/1"),
+            ("/news/", "/n*ws/", "/news/1"),
+            ("/p*", "/*p", "/p"),
+            ("/news*", "/*news", "/news/1"),
+            ("/abc$", "/ab*c", "/abc"),
+            ("/x%2A", "/*%2A", "/x%2A"),
+            ("/a*/x", "/a*/*", "/ab/x"),
+            // Unequal length, the first within the second.
+            ("/p$", "/p", "/p"),
+            ("/pa", "/*", "/page"),
+            ("/news/", "/news", "/news/1"),
+            ("/ab", "/a*b", "/abc"),
+            ("/news/", "/new*s/", "/news/1"),
+            ("/p", "/*p", "/p"),
+            ("/blog/a.pdf$", "/*.pdf$", "/blog/a.pdf"),
+            ("/abc", "/a*", "/abc"),
+        ] {
+            for entries in [[governs, aside], [aside, governs]] {
+                assert_eq!(
+                    selected(entries, page),
+                    (governs.to_owned(), 1),
+                    "{entries:?} for {page}"
+                );
+            }
+        }
+        for (one, other, page) in [
+            // The same scope.
+            ("/", "/*", "/page"),
+            ("/p", "/p*", "/page"),
+            ("/p", "/p*$", "/page"),
+            ("/news/", "/news/**", "/news/1"),
+            ("/n", "/%6E", "/n/1"),
+            ("/news/", "/%6Eews/", "/news/1"),
+            ("/p", "/p", "/page"),
+            // Neither within the other, of equal length or not.
+            ("/a*/x", "/*b*x", "/ab/x"),
+            ("/a*", "/*b", "/ab"),
+            ("/a*/x", "/*b/x", "/ab/x"),
+            ("/xy", "/x*z", "/xyz"),
+            ("/ab", "/*c", "/abc"),
+            ("/blog/", "/*.pdf$", "/blog/a.pdf"),
+        ] {
+            for entries in [[one, other], [other, one]] {
+                assert_eq!(
+                    selected(entries, page),
+                    (entries[0].to_owned(), 2),
+                    "{entries:?} for {page}"
+                );
+            }
+        }
+    }
+
+    /// Every entry of a governing scope is read with it in document order,
+    /// whatever its length; an entry a governing entry lies strictly within
+    /// is set aside.
+    #[test]
+    fn every_entry_of_a_governing_scope_is_read_with_it() {
+        let document = RslDocument {
+            contents: ["/", "/p*", "/*", "/p", "/p*$", "/*p"]
+                .map(|url| RslContent {
+                    url: url.to_owned(),
+                    server: None,
+                    licences: vec![RslLicence::default()],
+                })
+                .to_vec(),
+        };
+        let content = document
+            .content_for("https://publisher.example/page")
+            .expect("within the bound")
+            .expect("an entry");
+        // `/p*$`, `/p*` and `/p` are one scope; `/`, `/*` and `/*p` each
+        // contain it.
+        assert_eq!((content.url.as_str(), content.licences.len()), ("/p*", 3));
+        let content = document
+            .content_for("https://publisher.example/xp")
+            .expect("within the bound")
+            .expect("an entry");
+        // For `/xp`, `/*p` lies within `/` and `/*`.
+        assert_eq!((content.url.as_str(), content.licences.len()), ("/*p", 1));
+    }
+
+    /// `count` relative entries `{prefix}*{w}*`, each `w` a distinct window
+    /// of `len` characters of one pseudo-random page, so every entry
+    /// matches `{prefix}{page}` and no two lie one within the other; and
+    /// that page.
+    fn incomparable(count: usize, len: usize, prefix: &str) -> (Vec<String>, String) {
+        let mut seed = 7_u64;
+        let page: String = (0..count + len)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                char::from(b'a' + u8::try_from((seed >> 33) % 26).expect("a letter"))
+            })
+            .collect();
+        let urls = (0..count)
+            .map(|at| format!("{prefix}*{}*", &page[at..at + len]))
+            .collect();
+        (urls, format!("{prefix}{page}"))
+    }
+
+    /// The work selection counts among the entries of `urls` that match
+    /// `page`, as [`governing_forms`] counts it.
+    fn work_for(urls: &[String], page: &str) -> u64 {
+        let document = RslDocument {
+            contents: urls
+                .iter()
+                .map(|url| RslContent {
+                    url: url.clone(),
+                    server: None,
+                    licences: Vec::new(),
+                })
+                .collect(),
+        };
+        let target = commonmeasure_types::matching_target(page);
+        let scoped: Vec<ScopedEntry<'_>> = document
+            .contents
+            .iter()
+            .filter_map(|content| {
+                let form = commonmeasure_types::matching_pattern(&content.url);
+                matches_form(&form, &target).then_some((content, form, None))
+            })
+            .collect();
+        let mut forms: Vec<&str> = scoped.iter().map(|(_, form, _)| form.as_str()).collect();
+        forms.sort_unstable();
+        forms.dedup();
+        let scopes: Vec<Scope> = forms.into_iter().map(Scope::new).collect();
+        selection_work(&scoped, &scopes)
+    }
+
+    /// The budget counts the work among the entries that match one reading
+    /// of the page, absolute scopes included; entries that do not match do
+    /// none. 256 matching entries with forms of 64 octets, none within
+    /// another, are read. Past the budget the licence is unread, whatever
+    /// the entries say, and a reading past it ends the search; one before it
+    /// that selects keeps its entry.
+    #[test]
+    fn the_budget_counts_the_work_among_the_entries_matching_one_reading() {
+        let document = |urls: Vec<String>| RslDocument {
+            contents: urls
+                .into_iter()
+                .map(|url| RslContent {
+                    url,
+                    server: None,
+                    licences: vec![RslLicence::default()],
+                })
+                .collect(),
+        };
+        let selected = |urls: Vec<String>, page: &str| {
+            document(urls)
+                .content_for(&format!("https://publisher.example{page}"))
+                .map(|content| content.map(|content| (content.url.clone(), content.licences.len())))
+        };
+        let strings = |urls: &[&str]| urls.iter().map(|url| (*url).to_owned()).collect::<Vec<_>>();
+        // 10,000 entries that do not match and 3 that do: `/pa*` and `/*e`
+        // overlap, and both lie within `/p`.
+        let mut urls: Vec<String> = (0..10_000).map(|n| format!("/x{n}")).collect();
+        urls.extend(strings(&["/p", "/pa*", "/*e"]));
+        assert_eq!(selected(urls, "/page"), Ok(Some(("/pa*".to_owned(), 2))));
+        // The floor: 256 entries of 64-octet forms, none within another.
+        let (urls, page) = incomparable(256, 61, "/");
+        assert_eq!(commonmeasure_types::matching_pattern(&urls[0]).len(), 64);
+        assert!(work_for(&urls, &page) <= SELECTION_BUDGET);
+        assert_eq!(
+            selected(urls.clone(), &page),
+            Ok(Some((urls[0].clone(), 256)))
+        );
+        // The fewest such entries of 2,000-octet forms whose work is past
+        // the budget, and one fewer.
+        let (all, page) = incomparable(512, 1_996, "/");
+        let past = (2..=all.len())
+            .find(|&count| work_for(&all[..count], &page) > SELECTION_BUDGET)
+            .expect("512 entries of 2,000 octets are past the budget");
+        assert_eq!(
+            selected(all[..past].to_vec(), &page),
+            Err(SelectionUnread::OverBudget)
+        );
+        assert_eq!(
+            selected(all[..past - 1].to_vec(), &page)
+                .map(|content| content.map(|(_, licences)| licences)),
+            Ok(Some(past - 1))
+        );
+        // One entry written again and again is one form: its copies are
+        // read, not compared, and are read as one entry.
+        let page = format!("/{}", "7".repeat(300));
+        assert_eq!(
+            selected(vec!["/7".to_owned(); 1_000], &page),
+            Ok(Some(("/7".to_owned(), 1_000)))
+        );
+        // Absolute scopes count: nested paths of the page, each within the
+        // one before, as absolute scopes, past the budget and one short of
+        // it, where the longest governs alone.
+        let long = "a".repeat(40_000);
+        let paths: Vec<String> = (1..=200)
+            .map(|n| format!("/{}", &long[..n * 200]))
+            .collect();
+        let page = format!("/{long}");
+        let over = (2..=paths.len())
+            .find(|&count| work_for(&paths[..count], &page) > SELECTION_BUDGET)
+            .expect("200 nested paths are past the budget");
+        let absolute: Vec<String> = paths[..over]
+            .iter()
+            .map(|path| format!("https://publisher.example{path}"))
+            .collect();
+        assert_eq!(
+            selected(absolute.clone(), &page),
+            Err(SelectionUnread::OverBudget)
+        );
+        assert_eq!(
+            selected(absolute[..over - 1].to_vec(), &page),
+            Ok(Some((absolute[over - 2].clone(), 1)))
+        );
+        // `/a%2Fb…` as parsed matches none of `/a/b*w*`; its later reading
+        // `/a/b…` matches them all, past the budget, which ends the search.
+        let (mut urls, page) = incomparable(past, 1_996, "/a/b");
+        let page = page.replacen("/a/b", "/a%2Fb", 1);
+        assert_eq!(
+            selected(urls.clone(), &page),
+            Err(SelectionUnread::OverBudget)
+        );
+        // An entry the page as parsed matches governs before that reading.
+        urls.push("/a%2F".to_owned());
+        assert_eq!(selected(urls, &page), Ok(Some(("/a%2F".to_owned(), 1))));
     }
 
     /// An absolute scope that does not parse is matched as written, so
@@ -2485,7 +4223,8 @@ Content-Usage: train-ai=y
     }
 
     /// The query is part of the path an absolute scope constrains, as it is
-    /// of the request target a relative entry is matched against.
+    /// of the request target a relative entry is matched against, so
+    /// `/news?x=1` lies within `/news?x`.
     #[test]
     fn an_absolute_scope_ranks_by_its_query_as_well_as_its_path() {
         let queried = ("https://publisher.example/news?x=1", "prohibits");
@@ -2524,8 +4263,9 @@ Content-Usage: train-ai=y
         .expect("parses");
         let page = document
             .content_for("https://example.com/x")
+            .expect("within the bound")
             .expect("entry");
-        let terms = licence_terms(page, "https://example.com/license.xml");
+        let terms = licence_terms(&page, "https://example.com/license.xml");
         let effective = combine(&terms.statements);
         assert_eq!(effective[&Category::AiInput], Effective::Allow);
         assert_eq!(effective[&Category::TrainAi], Effective::Allow);
@@ -2534,7 +4274,7 @@ Content-Usage: train-ai=y
             .payment
             .expect("the subscription travels with the permit");
         assert_eq!(payment.kind.as_deref(), Some("subscription"));
-        assert!(payment.is_monetary());
+        assert!(payment.needs_settlement());
 
         for prohibits in ["ai-input", "ai-all"] {
             let document = parse_rsl(&format!(
@@ -2546,8 +4286,9 @@ Content-Usage: train-ai=y
             .expect("parses");
             let page = document
                 .content_for("https://example.com/x")
+                .expect("within the bound")
                 .expect("entry");
-            let terms = licence_terms(page, "https://example.com/license.xml");
+            let terms = licence_terms(&page, "https://example.com/license.xml");
             assert_eq!(
                 combine(&terms.statements)[&Category::AiInput],
                 Effective::Disallow,
@@ -2556,37 +4297,383 @@ Content-Usage: train-ai=y
         }
     }
 
+    /// A licence that prohibits AI input refuses the entry it is in,
+    /// whatever another licence of the entry permits, in either order: no
+    /// offer is taken, and the Disallow names the prohibiting licence. A
+    /// specific permit over a blanket `prohibits all` in one licence is no
+    /// prohibition, and a restricted licence that prohibits AI input is one.
+    #[test]
+    fn a_prohibition_in_any_licence_of_the_entry_refuses_whatever_another_permits() {
+        const PROHIBITS: &str =
+            r#"<license><prohibits type="usage">ai-input</prohibits></license>"#;
+        const FREE: &str =
+            r#"<license><permits type="usage">ai-input</permits><payment type="free"/></license>"#;
+        const PRICED: &str = r#"<license><permits type="usage">ai-input</permits><payment type="use"><amount currency="USD">1</amount></payment></license>"#;
+        const SILENT: &str = r#"<license><payment type="free"/></license>"#;
+        const SPECIFIC: &str = r#"<license><permits type="usage">ai-input</permits><prohibits type="usage">all</prohibits><payment type="free"/></license>"#;
+        const RESTRICTED: &str = r#"<license><permits type="user">education</permits><prohibits type="usage">ai-input</prohibits></license>"#;
+        let ruling = |licences: &str| {
+            let document = parse_rsl(&format!(
+                r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/">{licences}</content></rsl>"#
+            ))
+            .expect("parses");
+            let content = document
+                .content_for("https://example.com/x")
+                .expect("within the bound")
+                .expect("an entry");
+            let terms = licence_terms(&content, "L");
+            let detail = terms
+                .statements
+                .iter()
+                .find(|statement| statement.category == Category::AiInput)
+                .map(|statement| statement.detail.clone());
+            (
+                combine(&terms.statements)[&Category::AiInput],
+                terms.offer,
+                detail,
+            )
+        };
+        for (other, by_name) in [
+            (FREE, true),
+            (PRICED, true),
+            (SILENT, false),
+            (SPECIFIC, true),
+        ] {
+            for (licences, prohibiting, permitting) in [
+                (format!("{PROHIBITS}{other}"), 1, 2),
+                (format!("{other}{PROHIBITS}"), 2, 1),
+                (format!("{RESTRICTED}{other}"), 1, 2),
+            ] {
+                let detail = if by_name {
+                    format!(
+                        "L: licence {prohibiting} prohibits usage ai-input, which takes \
+                         precedence over the permit of licence {permitting}"
+                    )
+                } else {
+                    format!("L: no licence permits usage ai-input (licence {prohibiting})")
+                };
+                assert_eq!(
+                    ruling(&licences),
+                    (Effective::Disallow, None, Some(detail)),
+                    "{licences}"
+                );
+            }
+        }
+        assert_eq!(ruling(SPECIFIC).0, Effective::Allow);
+        assert_eq!(ruling(SPECIFIC).1, Some(1));
+        assert_eq!(ruling(&format!("{SPECIFIC}{FREE}")).1, Some(1));
+    }
+
     #[test]
     fn an_rsl_document_without_content_is_an_error_and_malformed_xml_is_too() {
         assert!(parse_rsl("<rsl xmlns=\"https://rslstandard.org/rsl\"></rsl>").is_err());
         assert!(parse_rsl("<rsl><content url=\"/\">").is_err());
     }
 
+    fn rsl_link(field: &[u8], page_url: &str) -> LinkLicences {
+        rsl_links([field], page_url)
+    }
+
+    fn named(url: &str) -> LinkLicences {
+        LinkLicences {
+            named: Some(url.to_owned()),
+            unread: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_link_header_names_the_rsl_licence_only_when_typed_as_one() {
         assert_eq!(
             rsl_link(
-                "<https://example.com/license.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
+                b"<https://example.com/license.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
                 "https://example.com/a"
-            )
-            .as_deref(),
-            Some("https://example.com/license.xml")
+            ),
+            named("https://example.com/license.xml")
         );
         assert_eq!(
             rsl_link(
-                "</style.css>; rel=preload, </license.xml>; rel=license; type=\"application/rsl+xml\"",
+                b"</style.css>; rel=preload, </license.xml>; rel=license; type=\"application/rsl+xml\"",
                 "https://example.com/a/b"
-            )
-            .as_deref(),
+            ),
+            named("https://example.com/license.xml")
+        );
+        assert_eq!(
+            rsl_link(
+                b"<https://creativecommons.org/licenses/by/4.0/>; rel=\"license\"",
+                "https://example.com/a"
+            ),
+            LinkLicences::default(),
+            "a licence link without the RSL type is not an RSL licence"
+        );
+        assert_eq!(
+            rsl_link(
+                b"</l.xml>; REL=\"author license\"; Type=\"Application/RSL+XML; v=1\"",
+                "https://example.com/a"
+            ),
+            named("https://example.com/l.xml"),
+            "rel is a list, and names and the media type are read without case"
+        );
+    }
+
+    /// EDG-102 review P0: bytes that are not UTF-8 in a parameter this edge
+    /// does not read, or in a member naming no licence, stop nothing.
+    #[test]
+    fn opaque_bytes_outside_the_licence_target_rel_and_type_are_not_read() {
+        let page = "https://example.com/a";
+        for field in [
+            &b"</license.xml>; rel=\"license\"; type=\"application/rsl+xml\"; title=\"caf\xe9\""[..],
+            b"</license.xml>; title=caf\xe9; rel=license; type=\"application/rsl+xml\"",
+            b"</license.xml>; rel=license; type=\"application/rsl+xml\"; x\xe9",
+            b"</caf\xe9>; rel=author, </license.xml>; rel=license; type=\"application/rsl+xml\"",
+            b"</caf\xe9>; rel=\"caf\xe9\", </license.xml>; rel=license; type=\"application/rsl+xml\"",
+        ] {
+            assert_eq!(
+                rsl_link(field, page),
+                named("https://example.com/license.xml"),
+                "{}",
+                String::from_utf8_lossy(field)
+            );
+        }
+    }
+
+    /// A member that names a licence, or may, and cannot be read is an
+    /// unread licence, recorded by its target or, where it has none that
+    /// could be delimited, by the whole member.
+    #[test]
+    fn a_licence_member_that_cannot_be_read_is_unread() {
+        let page = "https://example.com/a";
+        for (field, written, why) in [
+            (
+                &b"</licen\xe9e.xml>; rel=license; type=\"application/rsl+xml\""[..],
+                "/licen\\xE9e.xml",
+                "its target holds bytes that are not UTF-8",
+            ),
+            (
+                b"</l.xml>; rel=license; type=\"application/rsl+xml\xe9\"",
+                "/l.xml",
+                "its type holds bytes that are not UTF-8",
+            ),
+            (
+                b"</l.xml>; rel=\"license\xe9\"; type=\"application/rsl+xml\"",
+                "/l.xml",
+                "rel mentions `license` and holds bytes that are not UTF-8",
+            ),
+            (
+                b"</l.xml>; r\xe9l=license; type=\"application/rsl+xml\"",
+                "/l.xml",
+                "a parameter name that is not a token",
+            ),
+            (
+                b"<http://[bad>; rel=license; type=\"application/rsl+xml\"",
+                "http://[bad",
+                "its target is not a URL",
+            ),
+            (
+                b"</l.xml; rel=license; type=\"application/rsl+xml\"",
+                "</l.xml; rel=license; type=\"application/rsl+xml\"",
+                "could not be parsed: its target has no closing >",
+            ),
+            (
+                b"</a>; title=\"open, </l.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
+                "</a>; title=\"open, </l.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
+                "could not be parsed",
+            ),
+            (
+                b"l.xml; rel=license",
+                "l.xml; rel=license",
+                "could not be parsed: it does not begin with a target",
+            ),
+        ] {
+            let found = rsl_link(field, page);
+            assert_eq!(found.named, None, "{written}");
+            assert_eq!(found.unread.len(), 1, "{written}: {found:?}");
+            assert_eq!(found.unread[0].written, written);
+            assert!(found.unread[0].why.contains(why), "{found:?}");
+        }
+    }
+
+    /// A member that cannot be parsed and says nothing of a licence costs
+    /// only itself: the licence beside it is read, in the same field or
+    /// another, and an unread licence beside a readable one is kept too.
+    #[test]
+    fn a_member_that_cannot_be_parsed_takes_no_licence_with_it() {
+        let page = "https://example.com/a";
+        let licence = &b"</license.xml>; rel=\"license\"; type=\"application/rsl+xml\""[..];
+        for stray in [&b"stray"[..], b"<unclosed; rel=author", b"</x>junk"] {
+            let mut field = stray.to_vec();
+            if stray.starts_with(b"<unclosed") {
+                // A `<` left open runs to the end of the field, so the
+                // licence goes in a field of its own.
+                assert_eq!(
+                    rsl_links([&field[..], licence], page),
+                    named("https://example.com/license.xml")
+                );
+                continue;
+            }
+            field.extend_from_slice(b", ");
+            field.extend_from_slice(licence);
+            assert_eq!(
+                rsl_link(&field, page),
+                named("https://example.com/license.xml"),
+                "{}",
+                String::from_utf8_lossy(&field)
+            );
+        }
+        let both = rsl_links(
+            [
+                &b"</licen\xe9e.xml>; rel=license; type=\"application/rsl+xml\""[..],
+                licence,
+            ],
+            page,
+        );
+        assert_eq!(
+            both.named.as_deref(),
             Some("https://example.com/license.xml")
         );
-        assert!(
+        assert_eq!(both.unread.len(), 1, "{both:?}");
+    }
+
+    /// An IRI target in UTF-8 is read as it was before the field was read
+    /// from bytes, and a quoted rel keeps its escapes.
+    #[test]
+    fn a_utf8_target_and_an_escaped_quote_are_read() {
+        assert_eq!(
             rsl_link(
-                "<https://creativecommons.org/licenses/by/4.0/>; rel=\"license\"",
+                "</licénce.xml>; rel=\"lic\\ense\"; type=\"application/rsl+xml\"".as_bytes(),
                 "https://example.com/a"
-            )
-            .is_none(),
-            "a licence link without the RSL type is not an RSL licence"
+            ),
+            named("https://example.com/lic%C3%A9nce.xml")
+        );
+        assert_eq!(
+            rsl_link(
+                b"</t>; title=\"a \\\" , b\"; rel=license; type=\"application/rsl+xml\"",
+                "https://example.com/a"
+            ),
+            named("https://example.com/t")
+        );
+    }
+
+    /// EDG-115: `rel*` and `type*` are `rel` and `type` once decoded. A
+    /// member whose plain and starred values agree is read; one on which
+    /// they disagree about whether it names an RSL licence is unread,
+    /// whichever comes first.
+    #[test]
+    fn rel_star_and_type_star_are_decoded_as_rel_and_type() {
+        let page = "https://example.com/a";
+        for field in [
+            &b"</l.xml>; rel*=UTF-8''license; type=\"application/rsl+xml\""[..],
+            b"</l.xml>; Rel*=utf-8'en'lic%65nse; type=application/rsl+xml",
+            b"</l.xml>; rel*=\"UTF-8''author%20license\"; type=application/rsl+xml",
+            b"</l.xml>; rel*=ISO-8859-1''license; type=application/rsl+xml",
+            b"</l.xml>; rel=license; type*=UTF-8''application%2Frsl%2Bxml",
+            b"</l.xml>; rel=license; TYPE*=UTF-8''application/rsl+xml",
+            b"</l.xml>; rel=license; rel*=UTF-8''license; type=application/rsl+xml",
+            b"</l.xml>; rel=license; type=application/rsl+xml; type*=UTF-8''application%2Frsl%2Bxml",
+        ] {
+            assert_eq!(
+                rsl_link(field, page),
+                named("https://example.com/l.xml"),
+                "{}",
+                String::from_utf8_lossy(field)
+            );
+        }
+        for field in [
+            &b"</l.xml>; rel=author; rel*=UTF-8''license; type=application/rsl+xml"[..],
+            b"</l.xml>; rel*=UTF-8''license; rel=author; type=application/rsl+xml",
+            b"</l.xml>; rel=license; rel*=UTF-8''author; type=application/rsl+xml",
+            b"</l.xml>; rel=license; type=text/html; type*=UTF-8''application%2Frsl%2Bxml",
+            b"</l.xml>; rel=license; type*=UTF-8''text%2Fhtml; type=application/rsl+xml",
+        ] {
+            let read = rsl_link(field, page);
+            assert_eq!(read.named, None, "{}", String::from_utf8_lossy(field));
+            assert_eq!(read.unread.len(), 1, "{}", String::from_utf8_lossy(field));
+            assert!(
+                read.unread[0].why.contains("disagree"),
+                "{}: {read:?}",
+                String::from_utf8_lossy(field)
+            );
+        }
+        // Agreement that the member names no licence leaves it none.
+        assert_eq!(
+            rsl_link(
+                b"</l.xml>; rel=author; rel*=UTF-8''author; type=application/rsl+xml",
+                page
+            ),
+            LinkLicences::default()
+        );
+    }
+
+    /// EDG-115: a `rel*` or `type*` that does not decode in a member that
+    /// may name a licence, and an escaped `license` in a member that
+    /// cannot be parsed, are unread licences; a `rel*` that does not decode
+    /// in a member that never mentions `license` is not.
+    #[test]
+    fn a_licence_behind_an_undecodable_value_or_an_escape_is_unread() {
+        let page = "https://example.com/a";
+        for (field, why) in [
+            (
+                &b"</t.xml>; rel*=x-unknown''license; type=application/rsl+xml"[..],
+                "rel* whose RFC 8187 encoding does not decode",
+            ),
+            (
+                b"</t.xml>; rel*=UTF-8''lic%65nse%ZZ; type=application/rsl+xml",
+                "rel* whose RFC 8187 encoding does not decode",
+            ),
+            (
+                b"</t.xml>; rel*=license; type=application/rsl+xml",
+                "rel* whose RFC 8187 encoding does not decode",
+            ),
+            (
+                b"</t.xml>; rel=license; type*=UTF-8''application%2Frsl%ZZxml",
+                "type* does not decode",
+            ),
+            (
+                b"</t.xml>; rel=\"lic\\ense\"; type=\"application/rsl+xml\"; x=\"open",
+                "could not be parsed",
+            ),
+            (b"</t.xml>; rel=\"li\\cense\" junk", "could not be parsed"),
+        ] {
+            let found = rsl_link(field, page);
+            assert_eq!(found.named, None, "{}", String::from_utf8_lossy(field));
+            assert_eq!(found.unread.len(), 1, "{found:?}");
+            assert!(found.unread[0].why.contains(why), "{found:?}");
+        }
+        assert_eq!(
+            rsl_link(b"</t.xml>; rel*=x-unknown''author; type=text/html", page),
+            LinkLicences::default()
+        );
+    }
+
+    /// EDG-115: the first readable RSL licence is named and a second
+    /// distinct one is unread, in one field or two; the same licence named
+    /// twice, in any spelling that resolves to one URL, is one licence.
+    #[test]
+    fn a_second_distinct_rsl_licence_is_unread() {
+        let page = "https://example.com/a/b";
+        let first = &b"</free.xml>; rel=license; type=application/rsl+xml"[..];
+        let second = &b"</paid.xml>; rel=license; type=application/rsl+xml"[..];
+        for found in [
+            rsl_links([first, second], page),
+            rsl_link(&[first, b", ", second].concat(), page),
+        ] {
+            assert_eq!(found.named.as_deref(), Some("https://example.com/free.xml"));
+            assert_eq!(found.unread.len(), 1, "{found:?}");
+            assert_eq!(found.unread[0].written, "https://example.com/paid.xml");
+            assert!(
+                found.unread[0].why.contains("another RSL licence"),
+                "{found:?}"
+            );
+        }
+        assert_eq!(
+            rsl_links(
+                [
+                    first,
+                    b"<https://example.com/free.xml>; rel=\"license\"; type=\"application/rsl+xml\"",
+                    b"<../free.xml>; rel*=UTF-8''license; type=application/rsl+xml",
+                ],
+                page
+            ),
+            named("https://example.com/free.xml")
         );
     }
 

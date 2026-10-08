@@ -62,6 +62,30 @@ fn the_committed_schema_is_the_one_the_binary_derives() {
     );
 }
 
+/// The operator's recorded agreement binds its reporting duty in every mode
+/// (owner decision, 30 September 2026) through the `terms` entry operators
+/// already write: the entry's shape is unchanged, and a field it does not
+/// name is still refused.
+#[test]
+fn an_operator_terms_entry_keeps_its_shape() {
+    let terms = &schema()["$defs"]["TermsDeclaration"];
+    let properties: Vec<&String> = terms["properties"]
+        .as_object()
+        .expect("properties")
+        .keys()
+        .collect();
+    assert_eq!(
+        properties,
+        ["host", "reference", "requires_reporting", "access_context"]
+    );
+    assert_eq!(terms["additionalProperties"], false);
+    assert_eq!(terms["required"], json!(["host", "reference"]));
+    assert_eq!(
+        terms["properties"]["requires_reporting"],
+        json!({"type": "boolean", "default": false})
+    );
+}
+
 #[test]
 fn every_validation_vector_is_ruled_by_the_binary_as_the_contract_states() {
     let vectors = vectors();

@@ -342,6 +342,7 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
                 estimated_tokens: tokens,
                 delivered: None,
                 content_type: None,
+                content_type_rendered: false,
                 delivered_file: None,
                 grounded,
                 licence: LicenceState::Unknown,
@@ -361,6 +362,8 @@ pub fn from_claude_transcript(path: &Path) -> Result<Vec<Crossing>, std::io::Err
                 identity: None,
                 challenge: None,
                 allowance: None,
+                told: None,
+                told_position: None,
             };
 
         match grounding::ToolKind::classify(&call.tool) {

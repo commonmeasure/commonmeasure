@@ -99,6 +99,23 @@ pub const CLAUDE_HOOKS: [(&str, &str, Option<&str>); 5] = [
     ("SessionEnd", "session-end", None),
 ];
 
+/// The mediated tools `install claude` pre-approves in `permissions.allow`
+/// of the user settings it writes, so a session does not ask before each
+/// fetch or search: these two and no other, and no wildcard (owner decision,
+/// 5 October 2026). `context_enrol` changes what may leave the machine, so
+/// it keeps asking, as `context_status` does.
+pub const CLAUDE_PRE_APPROVED: [&str; 2] = [
+    "mcp__commonmeasure__context_fetch",
+    "mcp__commonmeasure__context_search",
+];
+
+/// The file beside the Claude Code settings in which `install claude`
+/// records which of [`CLAUDE_PRE_APPROVED`] it added. A permission entry is
+/// a bare string, so nothing in the settings file says who wrote it; the
+/// record is what lets `uninstall claude` remove what was added and keep an
+/// entry the operator had written before.
+const CLAUDE_PERMISSIONS_RECORD: &str = "commonmeasure-permissions.json";
+
 /// Where each host keeps its registration, resolved from the environment
 /// once so every command in one invocation reads and writes the same files.
 #[derive(Debug, Clone)]
@@ -544,6 +561,61 @@ pub fn install(
         | HostSurface::GoogleAiOverview
         | HostSurface::BingCopilotSearch) => Err(browser_surface_is_not_a_registration(surface)),
     }
+}
+
+/// The hosts `install` registers, in the order the first run takes them.
+/// The browser answer surfaces are recorded under their own names and
+/// registered through Chrome.
+pub const HOSTS: [HostSurface; 8] = [
+    HostSurface::ClaudeCode,
+    HostSurface::Codex,
+    HostSurface::Pi,
+    HostSurface::ClaudeDesktop,
+    HostSurface::Cursor,
+    HostSurface::CopilotCli,
+    HostSurface::VsCode,
+    HostSurface::Chrome,
+];
+
+/// Where `surface` is set up on this machine, as its own configuration
+/// directory under the paths `install` writes to: the first such directory
+/// that exists, or `None` when none does. The first run registers a host
+/// only where this finds it, so it writes nothing for a host the operator
+/// does not have. Each is a directory the host itself creates when it first
+/// runs (Claude Code's also holds its state file when `$CLAUDE_CONFIG_DIR`
+/// is unset, so that file counts as well); for Chrome, any Chromium-family
+/// browser `install chrome` writes for. A browser answer surface is
+/// registered through Chrome and is never found on its own.
+pub fn detected(surface: HostSurface, paths: &HostPaths) -> Option<PathBuf> {
+    let parent = |file: &Path| file.parent().map(Path::to_path_buf);
+    let candidates: Vec<PathBuf> = match surface {
+        HostSurface::ClaudeCode => parent(&paths.claude_settings)
+            .into_iter()
+            .chain([paths.claude_state.clone()])
+            .collect(),
+        HostSurface::Codex => parent(&paths.codex_config).into_iter().collect(),
+        // `extensions/commonmeasure/index.ts` under the agent directory.
+        HostSurface::Pi => paths
+            .pi_extension
+            .ancestors()
+            .nth(3)
+            .map(Path::to_path_buf)
+            .into_iter()
+            .collect(),
+        HostSurface::ClaudeDesktop => parent(&paths.claude_desktop_config).into_iter().collect(),
+        HostSurface::Cursor => parent(&paths.cursor_mcp).into_iter().collect(),
+        HostSurface::CopilotCli => parent(&paths.copilot_mcp).into_iter().collect(),
+        HostSurface::VsCode => parent(&paths.vscode_mcp).into_iter().collect(),
+        HostSurface::Chrome => paths
+            .native_messaging
+            .iter()
+            .map(|browser| browser.application.clone())
+            .collect(),
+        HostSurface::ChatgptWeb
+        | HostSurface::GoogleAiOverview
+        | HostSurface::BingCopilotSearch => Vec::new(),
+    };
+    candidates.into_iter().find(|path| path.exists())
 }
 
 /// A browser answer surface is recorded under its own name and registered
@@ -1295,6 +1367,9 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
         }
         entries.push(entry);
     }
+    let record_path = permissions_record(paths);
+    let recorded = read_permissions_record(&record_path)?;
+    let added = pre_approve(&mut settings, &recorded, &paths.claude_settings)?;
     // The state file (the MCP server) goes first and is restored if the
     // settings write (the hooks) then fails, so the two surfaces never
     // disagree: hooks with no server would record without mediating.
@@ -1317,7 +1392,30 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
         "args": ["mcp", "--host", "claude-code"],
     });
     write_json(&paths.claude_state, &state)?;
+    // The record before the settings, so no pre-approval is ever in the
+    // settings without the record that lets `uninstall` remove it.
+    let previous_record = read_previous(&record_path)?;
+    let record = (!added.is_empty() || previous_record.is_some()).then(|| {
+        write_json(
+            &record_path,
+            &json!({"settings": paths.claude_settings, "added": added}),
+        )
+    });
+    if let Some(Err(error)) = record {
+        return Err(restore_after_failure(
+            error,
+            &paths.claude_state,
+            previous_state,
+            "claude",
+        ));
+    }
     if let Err(error) = write_json(&paths.claude_settings, &settings) {
+        if record.is_some() {
+            let _ = match previous_record {
+                Some(bytes) => std::fs::write(&record_path, bytes),
+                None => std::fs::remove_file(&record_path),
+            };
+        }
         return Err(restore_after_failure(
             error,
             &paths.claude_state,
@@ -1339,8 +1437,78 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
              same binary",
             paths.claude_state.display()
         ),
+        format!(
+            "claude-code: {} pre-approved in permissions.allow in {}; context_enrol and \
+             context_status still ask",
+            CLAUDE_PRE_APPROVED.join(" and "),
+            paths.claude_settings.display()
+        ),
         "claude-code: a running session picks this up on its next start".to_owned(),
     ])
+}
+
+fn permissions_record(paths: &HostPaths) -> PathBuf {
+    paths
+        .claude_settings
+        .with_file_name(CLAUDE_PERMISSIONS_RECORD)
+}
+
+/// The pre-approvals an earlier `install claude` recorded adding. Only
+/// names in [`CLAUDE_PRE_APPROVED`] are taken from the file, so whatever it
+/// holds, `uninstall` can remove nothing else.
+fn read_permissions_record(path: &Path) -> Result<Vec<&'static str>, String> {
+    let record = read_json(path)?;
+    Ok(CLAUDE_PRE_APPROVED
+        .into_iter()
+        .filter(|name| {
+            record["added"]
+                .as_array()
+                .is_some_and(|added| added.contains(&json!(name)))
+        })
+        .collect())
+}
+
+/// Add each of [`CLAUDE_PRE_APPROVED`] that `settings` lacks to its
+/// `permissions.allow`, and return those this product holds as its own: the
+/// ones added now and the ones `recorded` says an earlier install added. An
+/// entry the operator wrote is left where it is and is not claimed.
+fn pre_approve(
+    settings: &mut Value,
+    recorded: &[&'static str],
+    file: &Path,
+) -> Result<Vec<&'static str>, String> {
+    let permissions = settings
+        .as_object_mut()
+        .expect("read_json returns an object")
+        .entry("permissions")
+        .or_insert_with(|| json!({}));
+    let Some(permissions) = permissions.as_object_mut() else {
+        return Err(format!(
+            "{} holds a \"permissions\" value that is not an object, so nothing is written to it",
+            file.display()
+        ));
+    };
+    let Some(allow) = permissions
+        .entry("allow")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+    else {
+        return Err(format!(
+            "{} holds a \"permissions.allow\" value that is not an array, so nothing is \
+             written to it",
+            file.display()
+        ));
+    };
+    let mut ours = Vec::new();
+    for name in CLAUDE_PRE_APPROVED {
+        if !allow.contains(&json!(name)) {
+            allow.push(json!(name));
+            ours.push(name);
+        } else if recorded.contains(&name) {
+            ours.push(name);
+        }
+    }
+    Ok(ours)
 }
 
 fn uninstall_claude(paths: &HostPaths) -> Result<Vec<String>, String> {
@@ -1358,8 +1526,37 @@ fn uninstall_claude(paths: &HostPaths) -> Result<Vec<String>, String> {
             settings.as_object_mut().expect("object").remove("hooks");
         }
     }
-    if removed > 0 {
+    let record_path = permissions_record(paths);
+    let added = read_permissions_record(&record_path)?;
+    let mut withdrawn = 0;
+    if let Some(permissions) = settings["permissions"].as_object_mut()
+        && let Some(allow) = permissions.get_mut("allow").and_then(Value::as_array_mut)
+    {
+        let before = allow.len();
+        allow.retain(|entry| !entry.as_str().is_some_and(|name| added.contains(&name)));
+        withdrawn = before - allow.len();
+        if withdrawn > 0 && allow.is_empty() {
+            permissions.remove("allow");
+        }
+        if withdrawn > 0 && permissions.is_empty() {
+            settings
+                .as_object_mut()
+                .expect("object")
+                .remove("permissions");
+        }
+    }
+    let kept: Vec<&str> = CLAUDE_PRE_APPROVED
+        .into_iter()
+        .filter(|name| {
+            settings["permissions"]["allow"]
+                .as_array()
+                .is_some_and(|allow| allow.contains(&json!(name)))
+        })
+        .collect();
+    if removed > 0 || withdrawn > 0 {
         write_json(&paths.claude_settings, &settings)?;
+    }
+    if removed > 0 {
         lines.push(format!(
             "claude-code: {removed} hook handler(s) removed from {}",
             paths.claude_settings.display()
@@ -1369,6 +1566,23 @@ fn uninstall_claude(paths: &HostPaths) -> Result<Vec<String>, String> {
             "claude-code: no hook of this product in {}",
             paths.claude_settings.display()
         ));
+    }
+    if withdrawn > 0 {
+        lines.push(format!(
+            "claude-code: {withdrawn} pre-approval(s) removed from permissions.allow in {}",
+            paths.claude_settings.display()
+        ));
+    }
+    if !kept.is_empty() {
+        lines.push(format!(
+            "claude-code: {} kept in permissions.allow, as it was there before install",
+            kept.join(" and ")
+        ));
+    }
+    if let Err(error) = std::fs::remove_file(&record_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(format!("cannot remove {}: {error}", record_path.display()));
     }
 
     let mut state = read_json(&paths.claude_state)?;
@@ -2097,6 +2311,59 @@ fn doctor_pi(paths: &HostPaths) -> HostReport {
     }
 }
 
+/// Which of [`CLAUDE_PRE_APPROVED`] the settings allow, and any other
+/// allowance of this server's tools, which `install` never writes: a
+/// wildcard or `context_enrol` there lets an agent enrol a directory for
+/// reporting without asking.
+fn permissions_finding(settings: &Value, file: &Path) -> Finding {
+    let allow: Vec<&str> = settings["permissions"]["allow"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let (granted, asking): (Vec<&str>, Vec<&str>) = CLAUDE_PRE_APPROVED
+        .into_iter()
+        .partition(|name| allow.contains(name));
+    let others: Vec<&str> = allow
+        .iter()
+        .copied()
+        .filter(|name| {
+            name.starts_with(&format!("mcp__{SERVER_NAME}")) && !CLAUDE_PRE_APPROVED.contains(name)
+        })
+        .collect();
+    let mut text = match (granted.is_empty(), asking.is_empty()) {
+        (_, true) => format!(
+            "permissions: {} pre-approved in {}",
+            granted.join(" and "),
+            file.display()
+        ),
+        (true, _) => format!(
+            "permissions: neither {} is pre-approved in {}, so each call asks",
+            CLAUDE_PRE_APPROVED.join(" nor "),
+            file.display()
+        ),
+        (false, false) => format!(
+            "permissions: {} pre-approved in {}; {} asks",
+            granted.join(" and "),
+            file.display(),
+            asking.join(" and ")
+        ),
+    };
+    if !others.is_empty() {
+        text.push_str(&format!(
+            "; also allowed there: {}, which install does not write",
+            others.join(", ")
+        ));
+        return Finding::attention(text);
+    }
+    if asking.is_empty() {
+        Finding::ok(text)
+    } else {
+        Finding::note(text)
+    }
+}
+
 fn doctor_claude(paths: &HostPaths) -> HostReport {
     let mut findings = Vec::new();
     let mut binaries: Vec<String> = Vec::new();
@@ -2175,6 +2442,9 @@ fn doctor_claude(paths: &HostPaths) -> HostReport {
         findings.push(binary_finding(binary));
     }
     let direct = !hooked.is_empty() || server.is_some();
+    if direct {
+        findings.push(permissions_finding(&settings, &paths.claude_settings));
+    }
     let (plugin, plugin_registers) = plugin_findings(paths, &settings, direct);
     findings.extend(plugin);
     HostReport {
@@ -2632,6 +2902,172 @@ mod tests {
         let state = read_json(&paths.claude_state).unwrap();
         assert!(state["mcpServers"].get(SERVER_NAME).is_none());
         assert_eq!(state["mcpServers"]["other"]["command"], "/usr/bin/other");
+    }
+
+    /// A host is found by the directory it creates for itself, under the
+    /// same paths `install` writes to, and by nothing else.
+    #[test]
+    fn a_host_is_detected_by_its_own_configuration_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        for surface in HOSTS.into_iter().chain([HostSurface::ChatgptWeb]) {
+            assert_eq!(detected(surface, &paths), None, "{surface:?}");
+        }
+        for made in [
+            ".codex",
+            ".pi/agent",
+            "Claude",
+            ".cursor",
+            ".copilot",
+            "Code/User",
+            "BraveSoftware/Brave-Browser",
+        ] {
+            std::fs::create_dir_all(directory.path().join(made)).unwrap();
+        }
+        // Claude Code's state file alone is Claude Code having run.
+        std::fs::write(&paths.claude_state, "{}").unwrap();
+        for surface in HOSTS {
+            assert!(detected(surface, &paths).is_some(), "{surface:?}");
+        }
+        assert_eq!(detected(HostSurface::ChatgptWeb, &paths), None);
+        assert_eq!(
+            detected(HostSurface::Pi, &paths),
+            Some(directory.path().join(".pi/agent"))
+        );
+    }
+
+    fn our_allowances(settings: &Value) -> Vec<String> {
+        settings["permissions"]["allow"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|name| name.starts_with("mcp__commonmeasure"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The settings `install claude` writes allow exactly the two mediated
+    /// tools the owner pre-approved and no other entry of this product's,
+    /// beside the operator's own; a second install adds nothing; uninstall
+    /// takes out the two and leaves the operator's.
+    #[test]
+    fn install_pre_approves_fetch_and_search_only_and_uninstall_removes_them() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        std::fs::create_dir_all(directory.path().join(".claude")).unwrap();
+        std::fs::write(
+            &paths.claude_settings,
+            r#"{"permissions": {"allow": ["Bash(git status)"], "deny": ["WebFetch"]}}"#,
+        )
+        .unwrap();
+        let binary = directory.path().join("commonmeasure");
+        std::fs::write(&binary, b"").unwrap();
+
+        let lines = install_claude(&binary, &paths).expect("installs");
+        assert!(
+            lines.iter().any(|line| line.contains(
+                "mcp__commonmeasure__context_fetch and mcp__commonmeasure__context_search \
+                 pre-approved in permissions.allow"
+            )),
+            "{lines:?}"
+        );
+        install_claude(&binary, &paths).expect("installs again");
+        let settings = read_json(&paths.claude_settings).unwrap();
+        assert_eq!(
+            our_allowances(&settings),
+            CLAUDE_PRE_APPROVED,
+            "exactly the two, once each"
+        );
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!([
+                "Bash(git status)",
+                "mcp__commonmeasure__context_fetch",
+                "mcp__commonmeasure__context_search"
+            ])
+        );
+        assert_eq!(settings["permissions"]["deny"], json!(["WebFetch"]));
+        let finding = permissions_finding(&settings, &paths.claude_settings);
+        assert_eq!(finding.standing, commonmeasure_types::Standing::Ok);
+        assert!(finding.text.contains("pre-approved"), "{}", finding.text);
+
+        uninstall_claude(&paths).expect("uninstalls");
+        let settings = read_json(&paths.claude_settings).unwrap();
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!(["Bash(git status)"])
+        );
+        assert!(!permissions_record(&paths).exists());
+    }
+
+    /// An allowance the operator wrote before install is theirs: install
+    /// does not claim it and uninstall leaves it, while the one install
+    /// added goes.
+    #[test]
+    fn uninstall_keeps_a_pre_approval_the_operator_already_had() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = paths_in(directory.path());
+        std::fs::create_dir_all(directory.path().join(".claude")).unwrap();
+        std::fs::write(
+            &paths.claude_settings,
+            r#"{"permissions": {"allow": ["mcp__commonmeasure__context_fetch"]}}"#,
+        )
+        .unwrap();
+        let binary = directory.path().join("commonmeasure");
+        std::fs::write(&binary, b"").unwrap();
+
+        install_claude(&binary, &paths).expect("installs");
+        install_claude(&binary, &paths).expect("installs again");
+        assert_eq!(
+            read_permissions_record(&permissions_record(&paths)).unwrap(),
+            ["mcp__commonmeasure__context_search"]
+        );
+        let lines = uninstall_claude(&paths).expect("uninstalls");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("mcp__commonmeasure__context_fetch kept")),
+            "{lines:?}"
+        );
+        let settings = read_json(&paths.claude_settings).unwrap();
+        assert_eq!(
+            settings["permissions"]["allow"],
+            json!(["mcp__commonmeasure__context_fetch"])
+        );
+    }
+
+    /// Doctor names a missing pre-approval, and an allowance of this
+    /// server's tools that install never writes.
+    #[test]
+    fn doctor_reports_the_two_pre_approvals_and_any_other_allowance() {
+        let file = Path::new("/settings.json");
+        let finding = permissions_finding(&json!({}), file);
+        assert_eq!(finding.standing, commonmeasure_types::Standing::Note);
+        assert!(finding.text.contains("each call asks"), "{}", finding.text);
+        let finding = permissions_finding(
+            &json!({"permissions": {"allow": [
+                "mcp__commonmeasure__context_fetch",
+                "mcp__commonmeasure__context_enrol"
+            ]}}),
+            file,
+        );
+        assert_eq!(finding.standing, commonmeasure_types::Standing::Attention);
+        assert!(
+            finding
+                .text
+                .contains("mcp__commonmeasure__context_search asks"),
+            "{}",
+            finding.text
+        );
+        assert!(
+            finding.text.contains(
+                "also allowed there: mcp__commonmeasure__context_enrol, which install does not \
+                 write"
+            ),
+            "{}",
+            finding.text
+        );
     }
 
     /// An enabled plugin means the plugin's own hooks fire; a second

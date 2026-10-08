@@ -24,9 +24,11 @@ else; Redpine, a licensed supplier bought by quote then confirm, declares
 `search` and `quote`; Ozone Live, retrieval over a licensed publisher corpus
 with no quote gate, declares `search` and `fetch` (its per-result `licensed`
 boolean names no licence, so it declares no `licensed`); Dataville declares
-`search` alone, returning one Wikipedia or arXiv record per request; and the
-local skill adapter declares `invoke` and nothing else. `licensed`, `report`
-and `corroborate` are vocabulary no adapter declares. A corpus query is not
+`search` alone, returning one Wikipedia or arXiv record per request; People Inc
+declares `search` and `fetch` for full article markdown, with unknown rights
+and charges; Valyu declares `search` and `fetch`, with observed USD totals when
+reported and unknown rights; and the local skill adapter declares `invoke` and nothing else.
+`licensed`, `report` and `corroborate` are vocabulary no adapter declares. A corpus query is not
 a web search, and running somebody's program is neither; no adapter declares
 another adapter's capability.
 
@@ -208,6 +210,46 @@ the published rate. An anonymous-tier response fails even on HTTP 200 because
 the configured key was not accepted. Wikipedia-only URL lookup does not fulfil
 the general `fetch` capability and is not wired.
 
+## People Inc content
+
+`peopleinc` uses `PEOPLEINC_API_KEY` in `X-API-Key`. Search sends a trimmed
+`question` of 1–2000 Unicode characters, `limit` clamped to 1–5 and
+`strategy: "balanced"` to `POST /v1/search`. The five-result ceiling is declared
+for coverage evidence. Documents retain supplier order and full
+`content.markdown`; no additional markdown call is made. Policy hosts come
+from `url`, never the supplier's `domain` label. Identifiers, supplier rank and
+article metadata remain in native evidence; `selection_summary` remains in
+the exact raw response. Declared dates name People Inc `metadata.pubdate`, or
+`metadata.update` when publication time is absent. Rights and cost remain
+unknown; a licensed-corpus description is not an agreement reference.
+
+A job's `fetch_target` dispatches `GET /v1/markdown` with the exact HTTPS target
+URL encoded by the standard query serializer. Invalid targets are refused
+rather than canonicalised. Trailing slashes are preserved because the guide's
+search examples include them despite the retrieval guidance asking for none.
+There is no provider selection in `context_fetch`.
+
+Each operation makes one request, with no automatic retries or cache.
+Failures retain Problem Details, validation errors, requestId and Retry-After;
+a caller-authorised retry must wait for Retry-After. A 404 redirectUrl or an
+HTTP Location is a candidate requiring confirmation, never a substitution;
+403 never triggers a fallback. No conditional header is sent, and an
+unsolicited 304 fails because no authorised cached body exists. Markdown 200
+responses are billable and search pricing is agreement-specific, with no
+published price declared by the adapter. See
+[People Inc configuration and limitations](../integrate/peopleinc.md).
+
+## Valyu content
+
+`valyu` searches all available source classes through `POST /v1/search` and
+extracts one named URL through `POST /v1/contents`. Search declares the standard
+20-result ceiling. Only search and fetch are implemented: synthesis, autonomous
+research, licence grants and reporting are not declared. Per-result USD `price`
+remains native metadata; the observed call charge reads
+`total_deduction_dollars` for search and `total_cost_dollars` for Contents.
+Missing totals remain unknown. See [Valyu configuration and limitations](../integrate/valyu.md)
+for request defaults, partial failures and verification boundaries.
+
 ## Writing an adapter
 
 An adapter is one Rust module in `crates/commonmeasure-supply/src/` implementing the
@@ -286,6 +328,8 @@ through the real transport and a loopback origin. No adapter is
 | You.com | `search` | `live-verified`, `replay-tested` | `replay_contract.rs` over `demo/jobs/recon-w3c-prov-search.json`; `crates/commonmeasure-supply/tests/you_spec.rs` covers the documented shapes |
 | Ozone Live | `search` | `live-verified` | a hosted edge searched with a key the hub released; `crates/commonmeasure-supply/tests/ozone_spec.rs` covers the documented shapes. The charge is unknown. |
 | Ozone Live | `fetch` | `fixture-tested` | `ozone_spec.rs` |
+| Valyu | `search`, `fetch` | `spec-verified`, `fixture-tested` | `crates/commonmeasure-supply/tests/valyu_spec.rs` exercises documented OpenAPI 2.3.0 shapes over production transport. `crates/commonmeasure-cli/tests/replay_contract.rs` checks retained private captures when supplied; replay and live states require retained evidence separately. See [Valyu](../integrate/valyu.md). |
+| People Inc | `search`, `fetch` | `fixture-tested`, `spec-verified` | `crates/commonmeasure-supply/tests/peopleinc_spec.rs` serves synthetic documented-shape responses through production transport; `crates/commonmeasure-runtime/tests/peopleinc_supply.rs` covers governed search and `fetch_target`. Primary guide retrieved 7 October 2026; source hash and limitations in [People Inc](../integrate/peopleinc.md). No paid call or captured live article is claimed. |
 | Redpine | `quote`, and `search` behind it | `live-verified` | `crates/commonmeasure-supply/tests/redpine_quote_replay.rs` serves the five recorded legs of a purchase covered by a trial: `initialize`, balance, inspect, `preview`, `confirm`. No charge in currency has been observed. |
 | `internal` | `query` | `fixture-tested` | `crates/commonmeasure-supply/tests/internal_corpus.rs` over `demo/corpus/` |
 | `skill:*` | `invoke` | `live-verified` | two third-party bundles were executed and the run sealed; `crates/commonmeasure-cli/tests/inspect_dossier.rs` reads it. `crates/commonmeasure-supply/tests/skill_invocation.rs` covers containment, limits and the record with probe bundles. |

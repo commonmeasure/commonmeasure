@@ -182,6 +182,81 @@ text before it reached the model. The tool error the agent sees says which:
 `refused before the crossing` for the first, `refused before the content
 entered the context` for the second.
 
+The claim that a refused crossing's text never entered context extends to
+the tool error itself: for a crossing that is refused, in any mode, or
+that fails before delivery, what the agent reads holds nothing the source
+or any hop of the crossing chose, so the source's words enter the model's
+context by no route. The record's `refusal`, `breach`, `failure` and
+`declarations` keep every such value whole, in their own sentences: the
+record and the agent get two strings where they differ ([text from the
+source in a result](host-integration.md#text-from-the-source-in-a-result)).
+
+A `context_fetch` refused before the crossing on the source's terms or on
+the operator's policy says whose rule it was, in a parenthesis after the
+reason: `the source's robots.txt` where its access rule refused the URL, or
+its `Crawl-delay` refused a redirect hop; `the source's terms` for any other
+term the source set (a licence it names, its payment or licence-server
+term, a content signal, a reporting demand); and `operator policy in
+<policy.json>` (`the operator's policy` on a hosted edge) for a host list,
+a required licence, the principal's authority, the allowance, and a private
+address that `allow_private_hosts` or a named internal prefix could admit.
+A source's term is never attributed to the operator's policy, in any mode:
+the mode governs the operator's policy alone, and the policy refuses nothing
+on a term the source set ([FAIL-POLICY](../FAIL-POLICY.md) §6).
+
+Other refusals carry no parenthesis. A sentence that says all there is
+names nobody: a back-off, which names the host's answer and the wait, the
+hub's origin, a redirect this edge does not follow, a private address under
+the floor a service-mode edge holds, which no policy setting lifts, and a
+store fault with its remedy. A page or licence turn the source's
+`Crawl-delay` refused at the URL the agent asked for names the delay in the
+sentence and ends with the record. A provider the policy refuses in `context_search`,
+the injection screen and a file the screens cannot read in `strict` name the
+rule in the sentence alone.
+
+### What the agent was told
+
+`told` is the tool error the agent read, whole, on every `crossing_refused`
+and on a `crossing_mediated` that returned the agent an error rather than a
+result: a fetch that failed, an answer that was not a page, a file this edge
+does not deliver. A refused search result's record carries the reason the
+agent read for that result in `told`, and the result's position in
+`told_position` (`{"position": 2, "of": 5}`, as the result's `refusals`
+entry gives them), and none of the supplier's text. Both are absent on a
+delivered page or file, where the result is what the agent read, and on
+records written before the fields existed.
+
+Neither is projected to Content Telemetry ([projection
+contract](telemetry-projection.md)): the relay builds events from named
+fields and reads neither, because on an own edge `told` names the
+operator's own files, so it stays in the operator record. Test:
+`what_the_agent_was_told_is_not_projected`
+(`crates/commonmeasure-relay/src/project.rs`).
+
+The text is this edge's own by construction
+(`commonmeasure_runtime::agent_text`): built from fixed text, operator
+policy values, the agent's own request URL, positions and record
+references, with no way in for a value the source or a hop chose. Recording
+it whole therefore discloses nothing, and lets a reader check from the
+record alone, without the transcript, that no value the source set reached
+the agent: none of `url` (beyond the URL the agent itself asked for),
+`host_name`, `challenge`, `content_type` or any string under `declarations`
+(the robots.txt rule, group and file, the redirects, each licence's URL and
+terms, the statements, the rendered headers) occurs in `told`. The record's
+own sentences (`refusal`, `breach`, `failure`) name those values whole beside
+it, so a reader sees both what the record holds and what the agent was
+told. Test: `a_refused_crossing_gives_the_agent_no_text_from_the_source`
+and `a_refused_search_result_gives_the_agent_no_text_from_the_supplier`
+(`crates/commonmeasure-harness/src/mcp/tests/refusal_corpus.rs`) check
+this across every refusal and failure path a loopback origin can reach, in
+the mode that refuses it; `a_delivered_page_records_nothing_told` pins the
+absence.
+
+The string is recorded rather than a digest of it: a digest lets a holder
+of the transcript verify what was said, but not check absence without the
+transcript, which is the check this field exists for. Its size is that of
+one tool error.
+
 A crossing whose authority is the enrolled hub's is refused before any bytes
 move, as a host-policy refusal is, and by the runtime rather than by the
 operator's policy: the authority of the enrolment's `hub`, of its
@@ -263,13 +338,14 @@ and appears on a mediated fetch that received a body and on no other record.
 `content_hash` beside it covers the whole text extracted from that body,
 delivered to the agent or withheld from it, which for an HTML page is the
 page's readable text and not its markup ([`docs/contracts/processor.md`](processor.md) §Status, `html-text-extractor`). An
-origin that serves the body under the gzip content coding, which some do
-whatever the request accepts, has `retrieved_hash` over the coded bytes it
-served and `content_hash` over the text taken from what they decode to. The
-two are equal only where the body was served with no content coding and
-delivered as decoded. A body under any other content coding, or one that
-does not decode, delivers nothing: the crossing carries the `failure` that
-names the cause and neither hash. Where the two hashes differ,
+origin that serves the body under the gzip content coding, the one coding
+each request names in `Accept-Encoding`, has `retrieved_hash` over the coded
+bytes it served and `content_hash` over the text taken from what they decode
+to. The two are equal only where the body was served with no content coding
+and delivered as decoded. A body under any other content coding, which the
+request did not accept and the `failure` says so, or one that does not
+decode, delivers nothing: the crossing carries the `failure` that names the
+cause and neither hash. Where the two hashes differ,
 the `processor_invoked` record of the extractor written before the crossing
 carries `retrieved_hash` as its input hash and `content_hash` as its output
 hash, and a reader re-derives the second from the bytes the first names by
@@ -334,8 +410,12 @@ carries:
 
 - `content_type` is `application/pdf` for a PDF, whatever the origin
   labelled it. On a crossing refused because the body is another file
-  (`image/png`, an archive) it is the type as served, and `refusal` names
-  it. It is absent on a body delivered as text.
+  (`image/png`, an archive) it is the type as served, in lower case, and
+  `refusal` names it. Where that type held bytes that are not UTF-8,
+  `content_type_rendered` is true and `content_type` is the rendering
+  described under §Source declarations, lower-cased with the rest of the
+  type, so the byte 0xE9 reads `\xe9`; otherwise the flag is absent.
+  `content_type` is absent on a body delivered as text.
 - `content_hash` is SHA-256 over exactly the bytes handed over, after any
   gzip coding is removed; `retrieved_hash` is over the bytes as served, and
   the two are equal where the origin served no coding. No extractor
@@ -866,8 +946,8 @@ on the crossing, with three more fields:
 - `failure` — the client's account of a transport failure, when the request
   left the machine and nothing usable answered, or of this edge's own reason
   for not sending it. Beside `http_status`, the host answered and this edge
-  could not record the answer in its back-off store, so the answer was not
-  used; `failure` says so and names the repair.
+  could not record the answer in its back-off store, or could not date the
+  host's next `Crawl-delay` turn from it, so the answer was not used; `failure` says so and names the repair.
 - `declarations` — what was read, from where, and what it adds up to.
 
 The reader (`crates/commonmeasure-harness/src/declarations.rs`, the cache and
@@ -909,6 +989,7 @@ addresses is `unknown`, never `disallow`.
   "licences": [{"url": "https://publisher.example/license.xml", "mechanism": "robots-license",
                 "cache": "fetched", "status": 200, "content": "/",
                 "terms": {"statements": [], "payment": {"kind": "use", "amount": {"currency": "USD", "decimal": "0.015"}},
+                          "offer": 1,
                           "reporting": [{"kind": "telemetry", "profile": "https://contenttelemetry.org/profiles/spur",
                                          "endpoint": "…", "config": {"conformance_level": "grounding"}}]}}],
   "content_usage_header": "train-ai=n",
@@ -917,13 +998,24 @@ addresses is `unknown`, never `disallow`.
 }
 ```
 
-`robots.txt` and the licence it names are read before the request, so a
+`content_usage_header` is the header's text as received. Where the value
+holds bytes that are not UTF-8 (obs-text, RFC 9110 §5.5), the record keeps a
+rendering of it, each byte from 0x80 written `\xHH` and each backslash
+`\\`, and `content_usage_header_rendered` is true; otherwise it is absent.
+The flag is what tells the byte 0xE9, recorded `\xE9`, from ASCII text that
+reads `\xE9`, recorded as itself. The same flag is `content_type_rendered`
+beside a crossing's `content_type` (§Crossing, a fetched PDF) and beside
+`content_type` in the extractor's `processor_invoked` detail.
+
+`robots.txt` and the licences it names are read before the request, so a
 statement they carry is ruled on before any bytes move; the header and a
 `Link: rel="license"` licence are read from the response, so a statement they
 carry is ruled on after, and the bytes are withheld from context until it
 has been read. The host's cache file keeps, per page URL, the licence the
 page's `Link` header named when it was last fetched (`page_licences`), so a
 later crossing to a host that states a delay reads it before the page. A
+response whose `Link` names a licence this edge cannot read (below) leaves
+that entry as it was. A
 `robots.txt` answer is used for 24 hours, or for the response's `max-age`
 where shorter, and asked for again once it has expired. It is cached per
 origin (scheme, host and port) under
@@ -947,7 +1039,8 @@ that waited out a turn is dated when it was sent, not when the wait began.
 A licence is `unread` (true) where it exists and could not be read: it was
 not asked for, the request failed or timed out, the host answered outside
 2xx other than 404 and 410, the body was over the bound or did not parse as
-RSL. A 401, 403, 451 or any other 4xx but 404 and 410 says the document
+RSL, or choosing its `<content>` entry for the page takes more work than
+this edge does for one page (below). A 401, 403, 451 or any other 4xx but 404 and 410 says the document
 exists and is withheld from this fetcher, so it is `unread`. A 5xx is
 `unread`. Redirects are followed where `robots.txt` at the target's origin
 allows them (below), and the final status decides. A licence
@@ -1005,6 +1098,68 @@ of `robots.txt` that refused it expires.
 {"url": "https://licences.example/rsl.xml", "mechanism": "link-header",
  "cache": "not_asked", "refused_by": "robots.txt", "unread": true,
  "unavailable": "https://licences.example/robots.txt disallows CommonMeasureBot at https://licences.example/rsl.xml: the `User-agent: *` group, which addresses every fetcher because no group names CommonMeasureBot; rule `Disallow: /`, a literal path prefix"}
+```
+
+Every `Link` field of the response is read, from its bytes. A member's
+target and its `rel` and `type` parameters are all this edge reads
+(RFC 8288 §3); a byte that is not UTF-8 in any other parameter, such as
+`title`, or in a member that names no licence, changes nothing. `rel*` and
+`type*` are read as `rel` and `type` once their RFC 8187 encoding is
+decoded, in UTF-8 or ISO-8859-1. The first of each of `rel`, `rel*`, `type`
+and `type*` is read and a later one is ignored. A member with both `rel` and
+`rel*`, or both `type` and `type*`, is read with each: RFC 8288 Appendix B.2
+step 16 has the starred parameter replace the plain one, a parser that does
+not apply it reads the plain one, and where the readings disagree about
+whether the member names an RSL licence the edge cannot know which the
+publisher meant, so the member is an unread licence. A member that
+cannot be parsed ends at the next comma outside a quoted string or `<…>`,
+so it costs no other member unless it leaves a quote or `<` open. A member
+mentions `license` where the word is in its bytes with quoted-pair escapes
+removed (`lic\ense`), or in its `rel` or `type` as decoded. A member is an
+unread licence where:
+
+- it names a licence of type `application/rsl+xml`, and its target is not
+  UTF-8 or does not resolve to a URL;
+- its `rel` mentions `license` and is not UTF-8, or it names a licence and
+  its `type` is not UTF-8, and the other parameter does not rule out an RSL
+  licence;
+- its `rel*` does not decode and the member mentions `license`, or it names
+  a licence and its `type*` does not decode, and the member's plain `rel` or
+  `type` in its place does not name an RSL licence (where it does, that
+  licence is read);
+- its `rel` and `rel*`, or its `type` and `type*`, disagree about whether
+  it names an RSL licence;
+- a parameter name is not a token, and the member mentions `license` and
+  lacks a `rel` or a `type`, which that name may have been;
+- it cannot be parsed and mentions `license` anywhere;
+- it names an RSL licence after another member of the response named a
+  different one. The first readable RSL licence is read; this edge reads
+  one licence per page, so a second is unread and withholds the page rather
+  than being passed over. Two members resolving to the same URL name one
+  licence.
+
+It is recorded with `mechanism: "link-header"`, `cache: "not_asked"`,
+`unread: true` and the reason in `unavailable`, and nothing is requested
+for it. `url` is the target as written, or the whole member where it could
+not be parsed, since a target read before the fault may not be the
+licence's, and for a second RSL licence the URL it resolves to; where it
+is not UTF-8 it is the rendering described above and `url_rendered` is true, so the byte 0xE9 and ASCII text reading `\xE9` are
+told apart. `url_rendered` is absent otherwise. Like any unread licence it
+withholds the page in every mode. The tool result names such a licence by
+position, since its `url` is the source's text, unless the `url` is an
+`http` or `https` URL exactly as the URL parser writes it, such as a second
+RSL licence's, which is shown as any source URL is
+([host integration](host-integration.md#text-from-the-source-in-a-result)).
+
+A licence named by a URL whose scheme is not `http` or `https` (`data:`,
+`urn:`), from a `Link` header or a `robots.txt` `License:` line, is unread:
+this edge requests nothing else, so nothing is requested for it and no
+origin's `robots.txt` is read for it. Its `url` is the URL whole and
+`unavailable` says why.
+
+```json
+{"url": "/licen\\xE9e.xml", "url_rendered": true, "mechanism": "link-header", "cache": "not_asked", "unread": true,
+ "unavailable": "the Link member names an RSL licence and its target holds bytes that are not UTF-8, so no URL is read from it"}
 ```
 
 `robots` is the access-rule attribution for the URL the crossing names.
@@ -1135,8 +1290,8 @@ has `cache: "fetched"`.
 `observe` and `prefer` made a disallowed request and recorded the breach with
 outcome `carried`, still read, and a reader treats `carried` as a `Disallow`
 that was not obeyed. Preferences read from `robots.txt`
-(`Content-Usage`, `Content-Signal`) are not the access rule and still follow
-the session's mode (below).
+(`Content-Usage`, `Content-Signal`) are not the access rule, and a statement
+that disallows AI input refuses in every mode as well (below).
 
 A `robots.txt` `Allow`, `Disallow` or `Content-Usage` path, and an RSL
 `<content>` `url`, relative or absolute, is compared with the page's URL
@@ -1242,8 +1397,8 @@ An anchored rule's last part must end the path: `Disallow: /*.pdf$` covers
 `/a.pdf/b.pdf`. A rule ranks by the length of its form, so spelling a rule
 longer does not make it more specific. Two spellings of one path tie, and
 the tie is settled as for two identical rules: `Allow` wins an access-rule
-tie, tied `Content-Usage` rules all apply, and between two relative
-`<content>` entries the later one governs. The URL requested and the URLs
+tie, tied `Content-Usage` rules all apply, and two relative `<content>`
+entries are read as one entry (below). The URL requested and the URLs
 recorded (`url`, `requested_url`, `reading.access_rule`, the licence's
 `content`) are as written.
 
@@ -1263,10 +1418,19 @@ The time of the last request to each host is kept under
 `$COMMONMEASURE_HOME/crawl-delay/`, one file per host with a lock file beside
 it, so the delay holds across sessions, across restarts and across two MCP
 servers on one edge: each request takes its turn under the lock, writing the
-time it will be sent before it waits. The file is named for the host, or, for
-a host too long for a file name, its first 40 characters and a SHA-256 digest
-of the whole name. `delay.outcome` is `clear` (the last request was longer ago
-than the delay), `waited` (`wait_ms` slept through before the request),
+time it will be sent before it waits. Once the request has been answered, or
+has failed, the file is moved forward to that moment where it holds an
+earlier time, so the next turn is measured from no earlier than the request
+reached the host. For requests made one after another, the name lookup, the
+back-off check and signing that come between a turn and its request do not
+shorten the gap the host sees. Two servers on one edge whose requests to a
+host interleave inside the delay can still reach it less than the delay
+apart: the second measures from the first's turn when the first has not yet
+been sent. That case is still open. The
+file is named for the host, or, for a host too long for a file name, its
+first 40 characters and a SHA-256 digest of the whole name.
+`delay.outcome` is `clear` (the last request was longer ago than the delay),
+`waited` (`wait_ms` slept through before the request),
 `refused` (the wait did not fit `budget_ms`; nothing was requested and
 `next_at` says when the host may next be asked) or `unavailable` (the turn
 itself could not be kept, and nothing was requested rather than a delay being
@@ -1360,7 +1524,10 @@ A probe refused by back-off records `cache: "not_asked"`, with no
 `fetched_at` or `expires_at` on its robots reading. The crawl-delay turn is taken
 after any back-off wait, against the remaining budget. A further check
 before transport catches back-off learned while taking that turn.
-`robots.txt` remains exempt from crawl-delay, but observes back-off.
+`robots.txt` remains exempt from crawl-delay, but observes back-off. It
+takes no turn, but on a host this call already paces (another origin of the
+same host, such as the `https` origin after an `http` redirect, or another
+port), its answer moves the host's next turn later, as any answer does.
 
 `budget_ms` is what the `context_fetch` may still spend asleep when the turn
 is taken. On an edge served over stdio one call may spend 60 seconds asleep
@@ -1536,8 +1703,9 @@ fields that carry what a supplier sent, at exactly these pointers, are
 served as received: a fetch's `content`, `url` and `next` and its
 `declarations.robots.requested_url`, `declarations.robots.robots_url` and
 `declarations.robots.final_url`, and a search's `results[].url`,
-`results[].title`, `results[].text` and `refusals[].url`
-(`SUPPLIER_FIELDS` in `crates/commonmeasure-harness/src/mcp.rs`). The same
+`results[].title` and `results[].text` (`SUPPLIER_FIELDS` in
+`crates/commonmeasure-harness/src/mcp.rs`); a search's `refusals[]` carry a
+result's position and the reason, never its URL. The same
 pointers under a fetched file's `structuredContent`, and its embedded
 resource's `blob` and `uri` in the answer (`SUPPLIER_BLOCK_FIELDS`), are
 served as received too: base64 can spell a path by chance, and the served
@@ -1584,35 +1752,249 @@ URL the agent names directly is judged by its own file with `redirects`
 empty. `statements` and `licences` are those of the origin that answered.
 Where a hop is refused by host policy before its file is read, `robots`
 stays the last hop that was evaluated and its `requested_url` says which.
+A redirect to a URL whose scheme is not `http` or `https` is refused in
+every mode before anything is read for it: this edge requests nothing else.
+The crossing is `crossing_refused`, `url` is the target whole, and
+`refusal` says the scheme is not http or https.
 
-What the operator's mode does with a disallowed `ai-input` statement, the use
-a mediated fetch makes of a page: `strict` refuses, before the request when
-the statement was known then and otherwise after it, in which case the bytes
-were fetched and are withheld from context, their hash on the refused crossing
-and `grounded` false; `observe` and `prefer` carry the crossing with the
-statement named in `breach`. A `robots.txt` `Disallow` for the selected group
-is not ruled on this way: it refuses in every mode (above). A licence whose
-AI-input permission is conditional on a payment, or on a token from a licence
-server, is a term this edge cannot meet without a settlement rail, and is
-ruled on the same way with the term named.
+A disallowed `ai-input` statement, the use a mediated fetch makes of a page,
+is one of the source's terms, and it refuses the crossing in every policy
+mode on every edge, enrolled or not ([fail policy](../FAIL-POLICY.md) §6):
+before the request when the statement was known then, and otherwise after
+it, in which case the bytes were fetched and are withheld from context, their
+hash on the refused crossing and `grounded` false. A licence whose AI-input
+permission is conditional on a payment, or on a token from a licence server,
+is a term this edge cannot meet without a settlement rail, and it refuses the
+crossing the same way, with the term named: the edge pays or does not fetch.
+The mode governs the operator's own policy, not these terms.
+
+A payment term is unmet unless the licence says it is free. RSL 1.0 §3.7
+defines eight `type` values and no default for a `<payment>` that names
+none, and reads an omitted `<payment>` as free. A term of type `free` or
+`attribution`, or with no type and no `<amount>`, `<standard>`, `<custom>`
+or `<accepts>`, needs nothing a rail would give. Any other term refuses: the
+six monetary types, a value §3.7 does not define (one a later revision adds
+included), a case variant of a defined value (`Use`; the values are given
+as written and XML attribute values are case-sensitive), and a term with no
+type that states an amount, points at terms or lists the payment methods it
+accepts. The agent is told a type
+§3.7 does not define as "a payment type this edge does not recognise",
+never the value, which is the source's text; the record keeps it whole
+under `licences[].terms.payment.kind`. One rule decides this for the
+refusal, the price the allowance gate reserves and the choice among offers
+below (`RslPayment::needs_settlement` in
+`crates/commonmeasure-harness/src/declarations.rs`). A licence with more
+than one `<payment>` needs settlement if any one does.
+`licences[].terms.payment` is the one ruled: the first that needs
+settlement, else the first (`RslLicence::payment`). Where the offer has more
+than one, `licences[].terms.payments` lists every one in document order.
+
+A licence's usage `<permits>` and `<prohibits>` are each read as every
+token of every element of that kind it writes: §3.5 allows one, and a
+document that writes more states each as a term, so none is dropped and
+their order does not change the ruling.
+
+A licence with no usage `<permits>` is silent on usage. A licence silent on
+usage is a grant only where no licence of the same `<content>` names AI
+input in a usage `<permits>` or `<prohibits>` (`ai-input`, `ai-all` or
+`all`). §3.5 restricts usage only where a `<permits>` of that type exists,
+so such a licence covers every usage; §3.1.1 gives the more specific
+declaration precedence and reads licences conservatively, so where a sibling
+names AI input, that sibling's permits, prohibits and payment decide as
+written and the silent licence is no offer. A sibling that names only other
+usages (`search`, `ai-train`) leaves it a grant. A silent licence that is a
+grant has its payment term and its entry's licence server ruled on as those
+of a licence that permits AI input by name, and its AI-input statement reads
+`licence <n> lists no usage it permits, so covers usage ai-input`.
+
+A licence with a `<permits>` or `<prohibits>` of type `user` or `geo`
+authorises nothing: the edge cannot show which class of user it acts for or
+where. It is no offer. Where it permits a usage by name it permits it only
+to that class, so for this edge it permits none and its statement for that
+usage is a Disallow; a priced offer restricted this way therefore refuses
+and is never read as no term. A restricted licence silent on usage that
+asks for payment gives a Disallow for AI input as well: inside the class
+the price binds and this edge cannot pay, and outside it nothing grants the
+page. A restricted licence silent on usage and free adds no statement. Its
+prohibitions bind as any licence's do. The record lists the positions of
+restricted licences, counted from 1, in `licences[].terms.restricted`.
+Where no licence authorises AI input, `licences[].terms.payment` (and
+`payments`, where it has more than one) is the payment term of the first
+restricted licence that asks for payment, so the price is on the record
+although no `offer` is; the agent is told the Disallow, not the price.
+
+Several `<license>` elements in one `<content>` are offers (§3.4), and the
+order they are written in does not change what they mean (§3.1.1). The edge
+may take any offer whose terms it can meet, so among the licences that
+authorise AI input it takes one whose payment term needs no settlement, then
+the first written. Its position, counted from 1, is
+`licences[].terms.offer`, and its payment term is
+`licences[].terms.payment`. Where every offer needs settlement, the first is
+the one the refusal names. A free offer beside a priced one is therefore
+delivered whichever comes first.
+
+A prohibition of AI input takes precedence over a permit in another licence
+of the entry that governs the page (§3.1.1). Where any of its licences
+prohibits AI input, no offer is taken, whatever another licence permits by
+name or by silence, free or priced, and in either document order, and the
+AI-input statement is a Disallow that names the prohibiting licence: `licence
+<n> prohibits usage ai-input, which takes precedence over the permit of
+licence <m>` where another licence permits AI input by name, and `no licence
+permits usage ai-input (licence <n>)` otherwise. A licence prohibits AI input
+where a usage `<prohibits>` covers it and its own usage `<permits>` does not
+name AI input more specifically: within one licence the more specific term
+stands, so `permits ai-input` beside `prohibits all` permits, and `prohibits
+ai-input` or `prohibits ai-all` beside `permits ai-input` prohibits. A
+licence restricted to a class of user or a region that prohibits AI input
+counts, since the edge cannot show it is outside the class or the region.
+The same holds for entries read as one (below).
+
+The choice among offers does not read reporting demands. Of two free offers
+that differ only in a reporting demand this edge cannot meet on its route,
+the first written is taken, so the document order decides whether the page
+is delivered: with the demanding offer first the crossing is refused on the
+demand, and with it second the page is delivered under the other offer.
+This order dependence is recorded and kept. It applies within one
+`<content>` and across entries read as one, which includes two entries of
+unequal length neither of which lies within the other (`/xy` and `/x*z` for
+`/xyz`) and an absolute scope read with a relative entry of the same path.
+
+Of the `<content>` entries that match the page, the narrowest govern, as
+§3.1.1 gives the more specific declaration precedence: each matching entry
+whose scope strictly contains another matching entry's scope is set aside,
+and the entries left govern together. So `/ab` governs alone over `/a*b` for
+`/abc`, `/news/` over `/new*s/` for `/news/1`, `/p` over `/*p` for `/p` and
+over `/*` for `/page`, and `/blog/a.pdf$` over `/*.pdf$`. The length of a
+pattern plays no part. Entries of the same scope, written twice, in two
+spellings or with and without a trailing `*` (`/news/` and `/%6Eews/`, `/`
+and `/*`, `/p` and `/p*`), govern together, and so do scopes neither of
+which lies within the other (`/xy` and `/x*z` for `/xyz`, `/a*/x` and
+`/*b*x`, `/blog/` and `/*.pdf$` for `/blog/a.pdf`). Scope A lies within
+scope B when B matches A's most general target: A's form with each `*`, and
+the open end of a pattern with no final `$`, read as an octet no pattern can
+name.
+
+An absolute scope the page is under takes part by the path and query of its
+request target in the matching form, compared as the literal prefix it is.
+So `https://host/` and `/` are one scope and govern together, `https://host/`
+and `/*` govern together, `https://host/a` lies within `/*` and within `/`,
+and `/a` lies within `https://host/`. Of two absolute scopes of one path in
+different spellings, one that does not match the page as written is set
+aside beside one that does, and then the shorter written beside the longer.
+An empty `url`, and an absolute scope that does not parse, which is matched
+as written, govern only where no other entry matches: the scope that does
+not parse over the empty `url`, the longer written over the shorter, and two
+of one kind and written length together.
+
+Entries that govern together are read as one entry, since §3.1 does not
+let document order change what a document means: its licences are theirs
+in document order, numbered from 1 across them for `offer` and
+`restricted`, its licence server is the first any of them names, and the
+licence's `content` is the first's `url`. A free or attribution offer
+permitting AI input by name beside a priced offer in governing overlapping
+entries is taken in either document order, provided its other terms are met.
+For example, `/blog/` offering AI input free beside `/*.pdf$` pricing AI
+input makes `/blog/a.pdf` available free in either order. A prohibition of
+AI input in either governing entry still refuses it. A prohibition in one
+and a licence silent on usage in the other are siblings, so the prohibition
+refuses in either order, and a prohibition in one refuses beside a permit by
+name in the other (above). So where `/blog/` permits AI input by name and
+`/*.pdf$` prohibits it, `/blog/a.pdf` is refused and `/blog/a.html` is
+delivered. A narrower entry that permits beside a broader one that prohibits
+governs alone, so `/p` permitting beside `/*` prohibiting delivers `/page`.
+
+Selection compares the matching entries with each other, so its cost grows
+with the square of their number and with the length of their patterns. It is
+bounded by the work it does, counted before any test is made: every
+matching entry's form read once, and for each ordered pair of distinct forms
+the octets one test compares (the inner scope's general target and the outer
+scope's form) plus 64 for the test itself. Every entry that matches the
+reading counts toward the budget, relative and absolute alike, since no
+entry outranks another before the tests are made; entries that do not match
+the page, an empty `url` and an absolute scope that does not parse are not
+compared and count nothing. Where the work would exceed 64,000,000, nothing
+is selected and the licence is `unread` for the page: `unavailable` says
+that choosing among the `<content>` entries that match this page takes more
+work than this edge does for one page, `content` and `terms` are absent, and
+the crossing is refused in every mode, as for any unread licence. No entry
+is selected in its place, so a prohibition or price among those entries is
+never passed over. 256 matching entries with patterns of up to 64 octets are
+within the budget. Where entries match and the tests leave none governing,
+which happens only where a containment could not be decided, the licence is
+`unread` in the same way, and `unavailable` says that `<content>` entries
+match this page and none of them could be ruled the narrowest. A reading past
+the budget ends the search: a later reading is not tried, and an earlier one
+that selected an entry keeps it. One crossing selects a licence body for a
+page once, across its redirect hops and the `Link` licence; a body that
+changed within the call is selected again. The budget counts the comparisons
+among matching entries only: matching each entry against each reading of
+the page is not counted, and its cost grows with the number of entries, the
+length of the page's path and the number of its readings.
+
+A `<content>` entry's licence server binds whatever its offers (§3.7: a
+server binds regardless of the payment type), so the crossing is refused on
+it wherever no Disallow has refused it first, an entry with no `<license>`
+included (§3.3 requires at least one). An entry with no `<license>` and no
+server makes no offer: no `offer` is recorded and the crossing proceeds as
+the other statements leave it.
+
+Every `License:` line in the selected `robots.txt` group, or the global
+lines where the group has none (§4.4.2), is read, and each is an entry in
+`licences`, in the order written, with a URL named twice read once. Each is
+a separate document, and §4.9 binds the most restrictive combination of
+their terms: the payment, licence-server and reporting terms of every one
+are ruled on, so a free licence and a priced one refuse on the priced one.
+A licence the page's `Link` header names is more specific (§4.9) and, where
+it was read, governs those terms in place of the `robots.txt` licences;
+`licence.reference` on the crossing is the first governing licence, as
+before. On a host that states a delay each licence with no current reading
+takes a turn before the page, and where a licence before it was not sent the
+later ones are recorded `not_asked` and the crossing is refused on them.
 
 A licence's reporting demands are ruled on where the source's own statements
 govern, whatever the combined AI-input preference. A `Content-Signal` in
 `robots.txt` or a `Content-Usage` header that disallows AI input beside a
-licence that permits it does not set the demand aside: `observe` and `prefer`
-carry the Disallow as a breach, and the demand is ruled on as well.
+licence that permits it does not set the demand aside: the Disallow refuses
+the crossing, and the demand is ruled on as well and recorded in
+`declarations.reporting`.
 
 Which demands apply follows RSL 1.0 §3.12, under which a demand binds activity
 the enclosing licence authorises. A licence authorises AI input where its
 `<permits type="usage">` covers it, or where it has no usage `<permits>` at
-all, because §3.5 restricts usage only where a `<permits>` of that type
-exists (§3.4 and the grammar make every child of `<license>` optional); in
-both cases no usage `<prohibits>` may cover it. The demands of the licence the
-crossing is taken under are ruled on: one that permits AI input by name
-first, else one silent on usage. Where no licence in the governing entry
-authorises AI input and the crossing goes on outside `strict`, every demand in
-the entry is ruled on: taking the page outside the licence does not excuse
-the fetcher from the report its owner asks for.
+all and no licence of the entry names AI input, because §3.5 restricts usage
+only where a `<permits>` of that type exists (§3.4 and the grammar make
+every child of `<license>` optional); in both cases no usage `<prohibits>`
+may cover it, and a licence restricted by user class or region authorises
+nothing (above). The demands of the offer the
+crossing is taken under are ruled on, and so are its payment term and its
+entry's licence server: one choice of offer, above, serves all three. Where
+no licence in the governing entry authorises AI input, every demand in the
+entry is ruled on, whatever else refuses the crossing: taking the page
+outside the licence does not excuse the fetcher from the report its owner
+asks for. Where `robots.txt` names several licences, the demands of each are
+ruled on.
+
+The operator's recorded agreement with a source is a reporting demand too.
+Where the source policy's `terms` entry for the page's host sets
+`requires_reporting` ([source policy §Terms](source-policy.md#terms)), the
+crossing carries a telemetry demand attributed to the agreement, ruled as a
+licence's telemetry demand is and in every policy mode (owner decision, 30
+September 2026: the source agreed to it, so it is a source term). The
+agreement names no endpoint, so the hub the edge is enrolled with is its one
+route (below), and it names no profile or level, so neither is checked.
+Where the receiver is not that hub, the reason says that the agreement names
+no endpoint, so only the hub this edge is enrolled with is a route. Its
+refusal tells the agent the operator's own `reference` and nothing the
+source chose: "The operator's agreement with the source (`<reference>`)
+requires reporting of each use and the demand cannot be met: …", or, where
+consent alone is missing, "The source needs reporting: the operator's
+agreement with it (`<reference>`) requires reporting of each use, and …".
+An agreement that also names `access_context` is unmet in every scope while
+the relay withholds such crossings (below). Tested in
+`crates/commonmeasure-cli/tests/mediated_e2e.rs`
+`reporting_demand::an_agreement_requiring_reporting_with_no_route_is_refused_in_every_mode`,
+`an_agreement_requiring_reporting_is_met_through_the_hub_in_every_mode` and
+`an_agreement_not_requiring_reporting_is_unchanged_in_every_mode`.
 
 A licence's telemetry reporting demand is met when its profile is the Content
 Telemetry binding this runtime speaks, its conformance level is one this
@@ -1625,7 +2007,8 @@ address is reached only under `allow_private_hosts` or a prefix named in
 `record_internal_prefixes`, and under neither on a hosted edge in service
 mode, which holds the private-address floor), `policy.json` as it stands at
 the ruling loads, `$COMMONMEASURE_HOME/relay.json` is
-one the relay loads and names a receiver, automatic delivery is in force, no
+one the relay loads and names a receiver, that receiver is a route to the
+licence's endpoint (below), automatic delivery is in force, no
 operator terms hold the session back (below), and the operator has agreed to
 reporting (§Reporting consent). A
 `relay.json` the relay refuses leaves the demand unmet with the load
@@ -1639,6 +2022,43 @@ telemetry clearance does not decide the demand: a crossing admitted under
 consent leaves under consent in a scope that clears nothing, or that sets
 `allow_telemetry_egress: false`, and a cleared scope does not stand in for
 consent that was not given.
+
+The receiver is a route to the licence's endpoint in two cases, checked in
+this order and recorded as `route`:
+
+- `licence_endpoint`: the relay posts to the endpoint the licence's
+  `<reporting type="telemetry">` element names. The URL posted to, the
+  receiver followed by `/events`, must equal the endpoint after the parse two
+  receivers are compared by ([telemetry projection §One
+  receiver](telemetry-projection.md#one-receiver)); path and query are
+  compared as sent, so a receiver copied from the endpoint does not match.
+- `hub`: the edge is enrolled (`$COMMONMEASURE_HOME/enrolment.json`, the
+  record `connect` writes) and the receiver has the origin of the hub it is
+  enrolled with, the same origin test `connect` applies before it gives a
+  receiver the hub's ingest key. The hub delivers each event on to the
+  endpoints its source declares ([onward delivery](onward-delivery.md)). A
+  revoked key is no route, since the hub refuses its events. `hub` names
+  the route, not the test that found it.
+
+Any other receiver leaves the demand unmet in every mode, whatever the
+operator agreed to: the events would go somewhere the licence did not name.
+The reason says the receiver is neither the hub this edge is enrolled with
+nor the licence's endpoint, names the endpoint (the source's text, shortened
+for the agent as other source URLs are), says that the relay posts to the
+receiver followed by `/events`, and says whether the edge is enrolled and
+with which hub by origin, or that its key is revoked, or why
+`enrolment.json` did not read. A licence that names no endpoint can be met
+through the hub alone. `enrolment.json` is read at each ruling, like
+`relay.json`, so `disconnect` refuses the next demanding crossing of a
+running server. `consent_needed` is never set for this reason, since
+agreeing would admit nothing. Tested in
+`crates/commonmeasure-cli/tests/mediated_e2e.rs`
+`reporting_demand::an_unenrolled_edge_relaying_to_a_receiver_that_does_not_forward_is_refused`,
+`an_enrolled_edge_relaying_to_its_hub_is_admitted_through_the_hub`,
+`a_receiver_posting_to_the_licence_endpoint_is_admitted_through_it` and
+`a_receiver_differing_from_the_licence_endpoint_only_in_path_is_refused`, and
+in `crates/commonmeasure-harness/src/mcp.rs`
+`a_reporting_demand_is_met_only_through_the_enrolled_hub_or_the_licence_endpoint`.
 
 The relay withholds each crossing it clears whose host falls under operator
 terms naming institution identifiers (`terms[].access_context`), because the
@@ -1766,22 +2186,48 @@ crossing. The mode the
 operator set is not the source's consent, and RSL 1.0 §3.12 says an activity
 whose applicable demands are not satisfied is unlicensed. The operator's
 choice is whether to report, which the marker expresses, not whether to
-decline the duty and still read. Every other declaration ruling keeps the
-mode discipline above. Tested in `crates/commonmeasure-cli/tests/mediated_e2e.rs`
+decline the duty and still read. The other source terms above bind in every
+mode in the same way; the operator's host policy on a host a `robots.txt`
+redirected to keeps the mode discipline. Tested in `crates/commonmeasure-cli/tests/mediated_e2e.rs`
 `reporting_demand::a_disallow_in_robots_does_not_excuse_an_unmet_reporting_demand`,
 `a_content_usage_disallow_does_not_excuse_an_unmet_reporting_demand`,
 `a_licence_without_permits_still_binds_its_reporting_demand` and
-`a_met_demand_beside_a_disallow_is_carried_with_the_breach_in_observe`.
+`a_met_demand_beside_a_disallow_is_refused_on_the_disallow_in_observe`.
 
-The telemetry ruling is on the record as `declarations.reporting`: the
-profile and level demanded, the receiver named or its absence, whether the
+The telemetry ruling is on the record as `declarations.reporting`: where the
+operator's agreement made the demand, `source: "operator-agreement"` and the
+agreement's `reference` (a licence's demand has no `source`); the
+profile and level demanded, the receiver named or its absence, the `route`
+it provides to the licence's endpoint where it provides one, whether the
 scope clears egress (`telemetry_egress_cleared`, recorded for the reader; it
 does not decide the demand), `consent` (§Reporting consent), `met`, and the
 first reason it is not, the marker included. `consent_needed` is `true` where every other
 check passed and the demand is unmet for want of consent alone, so agreeing
 would admit the source; `status`, `doctor` and the console count those
 refusals. A demand of another type has no entry there; its refusal is the
-record of it.
+record of it. Where more than one telemetry demand was ruled on (several
+governing licences, or a licence and the operator's agreement),
+`declarations.reporting` is the first that is unmet, else the last, and
+`declarations.reporting_demands` holds every one in the order ruled: each
+governing licence's, then the agreement's. With one demand
+`reporting_demands` is absent.
+
+```json
+"reporting": {"source": "operator-agreement", "reference": "agreement-42",
+              "receiver": {"origin": "https://hub.example", "digest": "sha256:<16 hex digits>"},
+              "route": "hub", "telemetry_egress_cleared": false,
+              "consent": {"state": "agreed", "at": "…", "text_version": "1"}, "met": true}
+```
+
+`receiver` names the receiver by origin and digest, never by its path, query
+or credentials, which can hold a key: `{"origin": "https://hub.example",
+"digest": "sha256:<16 hex digits>"}`, the digest over the value as
+`relay.json` holds it, so it matches the operator's own file and tells two
+receivers at one origin apart. `origin` is absent for a value that is not a
+URL. Records written before 0.4.10 hold the receiver as a URL string.
+`route` is `hub` or `licence_endpoint` (above); it is absent where no
+receiver is configured or the receiver is no route, and present on a demand
+unmet for another reason, so `met` alone says whether the demand is met.
 
 `content_telemetry_id` is the UUID a mediated fetch sent as its
 `Content-Telemetry-ID` request header (Content Telemetry section 7.2), so
@@ -1800,12 +2246,11 @@ before the request, quoted a price for AI input and whose principal declares
 an allowance: the consultation, the quoted price reserved before the request
 (`decision`: `reserved`, `proceeded_with_breach` or `declined`), and its
 settlement against the receipt. Strict refuses an exhausted or incomparable
-allowance before the request; observe and prefer carry the fetch with the
-breach named. No settlement rail that pays a quoted price is built, so the
-receipt
-reports no charge, the reservation is released on it, and `paid` says
-nothing was; a rail that pays reconciles the same reservation against what
-it charged. Absent where no licence quoted a price or the principal declares
+allowance before the request; observe and prefer record the breach and go on
+to the licence's terms. No settlement rail that pays a quoted price is built,
+so the licence's payment term refuses the fetch before the request in every
+mode, and the reservation is released on that refusal with nothing paid; a
+rail that pays reconciles the same reservation against what it charged. Absent where no licence quoted a price or the principal declares
 no allowance.
 
 `named_by` says who named the source of a mediated fetch: `user` when a
@@ -1863,12 +2308,13 @@ existing home has no consent until the operator gives it.
   one that sets `allow_telemetry_egress: false`, where the other checks
   above pass.
 - Without it (no file, or `withdrawn`), a demand is refused in every scope,
-  a cleared one included. The refusal the agent reads and the record's
-  `refusal` name the source, that it needs reporting, and the command that
-  agrees: "`<host>` needs reporting: its licence `<url>` requires telemetry
-  reporting of each use (profile `<profile>`), and the operator has not
-  agreed to report to sources that require it; agree with `commonmeasure
-  consent agree`."
+  a cleared one included. The record's `refusal` names the source, that it
+  needs reporting, and the command that agrees: "`<host>` needs reporting:
+  its licence `<url>` requires telemetry reporting of each use (profile
+  `<profile>`), and the operator has not agreed to report to sources that
+  require it; agree with `commonmeasure consent agree`." The refusal the
+  agent reads says the same of "the source", with the host, the licence and
+  the profile left to the record.
 - A file that does not read or parse, or records a text version this binary
   does not know, is not consent: the demand is refused and the reason names
   the file's error rather than saying consent was never given.
@@ -2054,13 +2500,14 @@ no network request.
 
 ## The nudge issuance
 
-The plugin's `SessionStart` hook emits the standing mediation nudge
-(`plugin/README.md` §The standing nudge) and records that it did:
+The `SessionStart` hook, the plugin's or the one `install claude` writes,
+emits the standing mediation nudge (`plugin/README.md` §The standing nudge)
+and records that it did:
 
 ```json
 {
   "session_id": "…", "host": "claude-code",
-  "timestamp": "…", "nudge": "mediation-nudge/4", "source": "startup",
+  "timestamp": "…", "nudge": "mediation-nudge/5", "source": "startup",
   "basis": "emitted on the SessionStart hook's stdout for the host to add to the session's context; injection is the host's act and is not witnessed"
 }
 ```

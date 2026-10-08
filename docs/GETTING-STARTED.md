@@ -15,108 +15,61 @@ are defined in the [glossary](GLOSSARY.md).
 
 ## 1. Install the binary and register it with Claude Code
 
-You get the binary and the host registration that records your next session.
-If you came from the site's installation steps, go straight to the check.
+With a Common Measure Hub organisation, one line installs the binary,
+registers it with every agent host on the machine, connects the machine to
+the hub and relays its first evidence. Copy the line from the hub's Enrol
+this machine card, which mints the token, and run it in the project
+directory whose sessions the hub should see:
 
 ```sh
-curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh
-commonmeasure install claude
-commonmeasure doctor claude
+cd ~/code/your-project
+curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh -s -- --connect HUB --token TOKEN
 ```
 
-The installer's release-download example was checked on 0.4.4 on macOS
-(Apple silicon); it has not been rerun here. Registration and `doctor` were
-rerun with the current build in a scratch home. Registration prints these
-lines (absolute paths replaced with `<home>` and `<binary>`):
+After the install and the [reporting consent](INSTALL.md#reporting-consent)
+question, it prints one line per step:
 
-```text
-claude-code: five hooks (SessionStart, PostToolUse, UserPromptSubmit, Stop, SessionEnd) registered in <home>/.claude/settings.json, each naming <binary>
-claude-code: MCP server commonmeasure registered at user scope in <home>/.claude.json, naming the same binary
-claude-code: a running session picks this up on its next start
-```
+- `hosts:` the hosts found and registered, each as `commonmeasure install
+  <host>` registers it, and those not found, for which nothing is written.
+- `connect:` the hub, the organisation and the policy revision in force, or
+  `waiting for revision` while the organisation has published none.
+- `enrol:` hub reporting for the directory. The line does not confirm the
+  directory's existing history for you; it prints the `commonmeasure enrol
+  … --include-history` command that does. Run from your home directory or
+  `/`, nothing is enrolled. A directory enrolled earlier is reported as it
+  stands, such as `awaiting approval` until an owner approves it on the
+  hub's Project reporting page.
+- `fetch:` one governed fetch of `https://commonmeasure.ai/`. This release
+  reports it as not made: the source record has no host word for a fetch
+  the installer makes. Without reporting consent the line names
+  `commonmeasure consent agree`.
+- `relay:` what was delivered to the hub. For a host that sends no
+  session-end event (Codex, Pi, Claude Desktop, Cursor, Copilot CLI, VS
+  Code), macOS gets the background relay service and Linux the line to run
+  under your service manager.
+- `evidence:` the hub's Fleet evidence address, then `console:` the local
+  console's.
 
-Checkpoint: `doctor` names the registered hooks and MCP server. Act on any
-`!` or `?` beside them before starting a new session. A missing console or
-receiver does not stop local recording.
+A step that fails stops the run, names the remedy and exits 3; the binary
+stays installed. The token goes to the hub and is printed or stored nowhere,
+including in a hub refusal. A successful hub response that echoes it is
+refused before being accepted or saved.
+`--connect` needs `--token`; empty or whitespace-only values are refused
+before any download, and neither combines with `--update`.
 
-With a terminal, the installer asks once whether to report to sources whose
-licence requires it; without that consent those sources are refused. Change
-the answer at any time with `commonmeasure consent agree` or `withdraw`
-([Reporting consent](INSTALL.md#reporting-consent)).
-
-[Installing and updating](INSTALL.md) covers platforms, checksums and
-pinning. [Connect an agent host](integrate/host.md#register-with-the-host)
-covers other hosts and the alternative Claude Code plugin registration.
-Use only one Claude Code registration route to avoid duplicate records.
-
-### Updating
-
-When upgrading from 0.4.5 or earlier, that release's `update` still refuses
-while hosts run the binary. Run the installer once instead.
-See [Updating](INSTALL.md#updating) for the commands and service behaviour.
+Without a hub, or to do it step by step: steps 01 and 02 of [Install Common
+Measure](https://commonmeasure.ai/install/), install Edge and connect your
+agent.
 
 ## 2. Record a session of your own work
 
-You get a source record of the content your agent acquired.
-Open a new Claude Code session and ask it to fetch a public page with
-`context_fetch`. Then read the record:
-
-```sh
-commonmeasure session
-commonmeasure status
-```
-
-`session` shows the most recent session. To select another, pass its id.
-A recorded one-page host example, checked on 0.4.0, includes these lines;
-paths, identities and individual crossings are omitted:
-
-```text
-records    3
-crossings  1 observed, 0 mediated, 0 refused, 0 reconstructed
-grounded   1 put page text into the model's context
-```
-
-Your counts depend on the tools your agent used. Hooks record built-in tool
-calls after they happen; only the mediated tools can refuse a crossing.
-The session-start instruction asks the agent to prefer mediated tools, but
-it cannot block the host's built-in tools. MCP crossings may appear under a
-separate `local-*` session because the host does not pass its session id to
-the MCP server. Both records appear in the console.
-
-Checkpoint: find the fetched URL and its evidence grade. An observed
-crossing establishes what the hook saw, not that policy admitted it.
-[Session records](OPERATING.md#record-a-session-of-your-own-work) explains
-hashes, context snapshots and the separate host and MCP records.
+Step 03 of [Install Common Measure](https://commonmeasure.ai/install/): make a read and see the record.
 
 ## 3. Credentials, when you want provider search
 
-You can see which suppliers are configured without making a paid call.
-Skip this step if you only need page fetches.
+Step 05 of [Install Common Measure](https://commonmeasure.ai/install/): add a provider key.
 
-```sh
-commonmeasure credentials
-```
-
-With no keys, the report includes these lines (other providers and the
-credentials-file guidance are omitted):
-
-```text
-· exa          unavailable (EXA_API_KEY is not set)
-· tavily       unavailable (TAVILY_API_KEY is not set)
-```
-
-The report names each provider, its required variable and whether it is
-configured. A missing credential means search is unavailable, not that the
-search found no results. `context_fetch` needs no provider key.
-
-Checkpoint: before asking for provider search, confirm that provider is
-configured. Put keys in `$COMMONMEASURE_HOME/credentials.env` (by default
-`~/.commonmeasure/credentials.env`), restrict the file to its owner and
-restart the host session so the MCP server loads it, or add a key from
-the console's Sources page (§5). Supplier calls may cost money. [Credentials](OPERATING.md#credentials-when-you-want-provider-search)
-has the file format, environment precedence and the local corpus option.
-
-## 4. Policy: refusing a crossing before it happens
+## 4. Walkthrough without an agent host
 
 You get a refusal before the edge requests a page your policy excludes.
 Use a scratch home for this example so it does not replace your own policy:
@@ -204,38 +157,9 @@ example, including a publisher's payment terms. For directory rules,
 principals and spend limits, see
 [Scopes, engagements, principals and allowances](OPERATING.md#scopes-engagements-principals-and-allowances).
 
-## 5. The console
-
-You can read the same source record in the browser.
-Keep the scratch home selected and run:
-
-```sh
-commonmeasure serve --listen 127.0.0.1:18473
-```
-
-In another terminal with the same `COMMONMEASURE_HOME`, run:
-
-```sh
-commonmeasure console --listen 127.0.0.1:18473
-```
-
-The status line is below; the process id is replaced with `<pid>` and the
-page list is omitted:
-
-```text
-✓ console: http://127.0.0.1:18473 answers, Common Measure 0.4.6, pid <pid>
-```
-
-Open the reported loopback address, `http://127.0.0.1:18473`. This example
-uses a separate port so it can run beside your usual console.
-Under **Record**, select `door-walkthrough`; its refused card names the
-policy rule. A new crossing appears on reload. The **Policy** page shows
-the current source policy and lets you edit a personal policy.
-
-Checkpoint: the console and command-line record show the same admitted and
-refused crossings. [The console](CONSOLE.md) describes its pages and address
-options. Stop `serve` with Ctrl-C when finished. In the walkthrough shell,
-return to your usual home with:
+To read the same record in the browser, run `commonmeasure serve --listen
+127.0.0.1:18473` with the scratch home still selected and open that address
+([The console](CONSOLE.md)). When finished, return to your usual home:
 
 ```sh
 unset COMMONMEASURE_HOME
@@ -244,11 +168,9 @@ unset COMMONMEASURE_HOME
 If you had set a custom home before the example, restore that value instead.
 The scratch directory keeps the example's records until you remove it.
 
-### Keep the console running (macOS)
+## 5. The console
 
-Use the [login service](INSTALL.md#keep-the-console-running-macos) when you
-want the console to start at login. Its reference covers installation,
-status, logs and restarts after an update.
+Step 06 of [Install Common Measure](https://commonmeasure.ai/install/): open the console.
 
 ## Later, when you need them
 
@@ -280,9 +202,13 @@ commonmeasure service install relay
 
 On other platforms, run `commonmeasure relay --every 300` under your service
 manager. `connect --managed` offers to install the relay on macOS when it is
-missing; without a terminal it prints the command. Check `commonmeasure status`
-or `commonmeasure doctor codex` for whether the relay is running. Without it,
-Codex refuses sources whose licences demand usage reporting.
+missing and no hosted service holds the home. With non-terminal input or
+output, any non-empty `CI` value, or `--no-relay-offer`, it prints the command
+without prompting. Moving another home's relay requires explicit agreement;
+that home loses its background reporting. An installation failure leaves
+enrolment successful and prints the retry command. Check `commonmeasure status`
+or `commonmeasure doctor codex` for whether the relay is running. Without an
+automatic relay, Codex refuses sources whose licences demand usage reporting.
 
 ### Joining Common Measure Hub
 
@@ -307,8 +233,6 @@ local recording or reporting for a project. Reporting includes eligible
 history only with acknowledgement; a managed edge also needs the owner's
 approval. Other worktrees are separate directories.
 
-[^checked]: Policy, MCP fetches, record reading, credentials, registration,
-    doctor and console commands rerun on 29 September 2026 with the build
-    from `17b0daba`, in scratch homes. The host-session excerpt was checked
-    on 0.4.0; release installation on 0.4.4. No interactive host session,
-    paid search, update or login-service installation was rerun.
+[^checked]: Policy, MCP fetches, record reading and doctor commands rerun on
+    29 September 2026 with the build from `17b0daba`, in scratch homes. No
+    interactive host session, paid search or update was rerun.

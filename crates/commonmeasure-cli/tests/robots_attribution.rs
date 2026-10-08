@@ -144,6 +144,26 @@ fn error_text(response: &Value) -> String {
         .to_owned()
 }
 
+/// The refusal sentence the last refused crossing under `home` recorded.
+fn recorded_refusal(home: &Path) -> String {
+    let mut refusals = Vec::new();
+    for entry in std::fs::read_dir(home.join("sessions")).expect("sessions") {
+        let text = std::fs::read_to_string(entry.expect("entry").path()).expect("a log");
+        for line in text.lines().filter(|line| !line.trim().is_empty()) {
+            let record: Value = serde_json::from_str(line).expect("NDJSON");
+            if record["event"] == "crossing_refused" {
+                refusals.push(
+                    record["payload"]["refusal"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    refusals.pop().expect("a refused crossing")
+}
+
 fn home_with_mode(mode: &str) -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -222,8 +242,17 @@ fn a_wildcard_group_disallow_is_named_as_such_and_strict_stops_before_the_reques
     let responses = converse(home.path(), &[fetch(&article)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    // The agent reads the ruling in this edge's words; the record's
+    // sentence names the URL, the file, the group and the rule.
     for needed in [
         "refused before the crossing",
+        "disallows this fetcher at this path",
+        REFUSED,
+    ] {
+        assert!(detail.contains(needed), "missing {needed:?} in {detail}");
+    }
+    let refusal = recorded_refusal(home.path());
+    for needed in [
         article.as_str(),
         site.robots_url().as_str(),
         "`User-agent: *` group",
@@ -231,7 +260,7 @@ fn a_wildcard_group_disallow_is_named_as_such_and_strict_stops_before_the_reques
         "`Disallow: /`, a literal path prefix",
         REFUSED,
     ] {
-        assert!(detail.contains(needed), "missing {needed:?} in {detail}");
+        assert!(refusal.contains(needed), "missing {needed:?} in {refusal}");
     }
     assert_eq!(
         site.requests(),
@@ -280,8 +309,10 @@ fn a_wildcard_pattern_rule_is_identified_as_a_wildcard_and_observe_refuses_it() 
     let responses = converse(home.path(), &[fetch(&report)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    assert!(detail.contains(REFUSED), "{detail}");
+    let refusal = recorded_refusal(home.path());
     for needed in ["`Disallow: /private*`, a wildcard pattern", REFUSED] {
-        assert!(detail.contains(needed), "missing {needed:?} in {detail}");
+        assert!(refusal.contains(needed), "missing {needed:?} in {refusal}");
     }
     assert_eq!(
         site.requests(),
@@ -333,9 +364,14 @@ fn a_more_specific_allow_beats_the_wildcard_disallow_and_the_record_names_it() {
 
     assert_eq!(responses[1]["result"]["isError"], true, "{}", responses[1]);
     assert!(
-        error_text(&responses[1]).contains("`Disallow: /`"),
+        error_text(&responses[1]).contains("disallows this fetcher at this path"),
         "{}",
         error_text(&responses[1])
+    );
+    assert!(
+        recorded_refusal(home.path()).contains("`Disallow: /`"),
+        "{}",
+        recorded_refusal(home.path())
     );
     assert_eq!(
         site.requests(),
@@ -397,7 +433,7 @@ fn the_commonmeasurebot_group_governs_where_the_file_names_it() {
     );
 
     assert_eq!(responses[1]["result"]["isError"], true, "{}", responses[1]);
-    let detail = error_text(&responses[1]);
+    let detail = recorded_refusal(home.path());
     assert!(
         detail.contains("`User-agent: CommonMeasureBot` group")
             && detail.contains("`Disallow: /members/`, a literal path prefix")
@@ -437,6 +473,8 @@ fn a_shorteners_disallow_is_attributed_to_the_shortener_and_observe_refuses_the_
     let responses = converse(home.path(), &[fetch(&short)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    assert!(detail.contains(REFUSED), "{detail}");
+    let detail = recorded_refusal(home.path());
     assert!(
         detail.contains(&format!(
             "{} disallows CommonMeasureBot at {short}",
@@ -482,6 +520,8 @@ fn strict_refuses_a_disallowed_shortener_before_requesting_it_and_never_reaches_
     let responses = converse(home.path(), &[fetch(&short)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    assert!(detail.contains(REFUSED), "{detail}");
+    let detail = recorded_refusal(home.path());
     assert!(
         detail.contains(&format!(
             "{} disallows CommonMeasureBot at {short}",
@@ -527,15 +567,19 @@ fn a_disallowed_destination_is_refused_before_the_hop_is_requested() {
     let responses = converse(home.path(), &[fetch(&short)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    for needed in ["at the target of redirect 1", REFUSED] {
+        assert!(detail.contains(needed), "missing {needed:?} in {detail}");
+    }
+    assert!(!detail.contains(&landing), "{detail}");
+    let refusal = recorded_refusal(home.path());
     for needed in [
-        format!("a redirect to {landing}"),
         format!(
             "{} disallows CommonMeasureBot at {landing}",
             destination.robots_url()
         ),
         REFUSED.to_owned(),
     ] {
-        assert!(detail.contains(&needed), "missing {needed:?} in {detail}");
+        assert!(refusal.contains(&needed), "missing {needed:?} in {refusal}");
     }
     assert_eq!(
         shortener.requests(),
@@ -608,8 +652,15 @@ fn observe_and_prefer_refuse_a_disallowed_destination_hop_with_the_destination_n
             responses[0]
         );
         let detail = error_text(&responses[0]);
+        for needed in ["at the target of redirect 1", REFUSED] {
+            assert!(
+                detail.contains(needed),
+                "{mode}: missing {needed:?} in {detail}"
+            );
+        }
+        assert!(!detail.contains(&landing), "{mode}: {detail}");
+        let refusal = recorded_refusal(home.path());
         for needed in [
-            format!("a redirect to {landing}"),
             format!(
                 "{} disallows CommonMeasureBot at {landing}",
                 destination.robots_url()
@@ -617,8 +668,8 @@ fn observe_and_prefer_refuse_a_disallowed_destination_hop_with_the_destination_n
             REFUSED.to_owned(),
         ] {
             assert!(
-                detail.contains(&needed),
-                "{mode}: missing {needed:?} in {detail}"
+                refusal.contains(&needed),
+                "{mode}: missing {needed:?} in {refusal}"
             );
         }
         assert!(
@@ -709,6 +760,8 @@ fn an_independently_obtained_destination_url_receives_its_own_check() {
     let responses = converse(home.path(), &[fetch(&landing)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = error_text(&responses[0]);
+    assert!(!detail.contains("redirect"), "{detail}");
+    let detail = recorded_refusal(home.path());
     assert!(
         detail.contains(&format!(
             "{} disallows CommonMeasureBot at {landing}",

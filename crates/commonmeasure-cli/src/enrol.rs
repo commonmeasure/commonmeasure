@@ -1,5 +1,5 @@
 use commonmeasure_harness::{directory, home_dir};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(clap::Args)]
 pub struct Enrol {
@@ -53,23 +53,20 @@ pub fn run(args: Enrol) -> Result<(), String> {
             .reporting
             .ok_or("choose --reporting local or --reporting hub")?
             == "hub";
-        if reporting && !args.include_history {
-            return Err(format!(
-                "hub reporting covers {} and descendants, including existing eligible witnessed evidence. Confirm with --include-history; related Git worktrees need separate enrolment",
-                root.display()
-            ));
-        }
-        // Validate managed authority before writing the local selection.
-        commonmeasure_harness::policy::PolicyDocument::read(&home)?;
-        let project = directory::Registry::enrol(&home, &root, &name, reporting)?;
-        if reporting && commonmeasure_harness::managed::is_managed(&home)? {
-            let result = directory::request(&home, &project)?;
-            println!(
-                "hub request: {}",
-                serde_json::to_string(&result).map_err(|e| e.to_string())?
-            );
-            directory::sync(&home)?;
-        }
+        select(
+            &home,
+            &root,
+            &name,
+            reporting,
+            args.include_history,
+            |result| {
+                println!(
+                    "hub request: {}",
+                    serde_json::to_string(result).map_err(|e| e.to_string())?
+                );
+                Ok(())
+            },
+        )?;
     }
     if args.sync {
         directory::sync_all(&home)?;
@@ -80,4 +77,35 @@ pub fn run(args: Enrol) -> Result<(), String> {
             .map_err(|e| e.to_string())?
     );
     Ok(())
+}
+
+/// Select `root` under `name` with local or hub reporting, as `enrol --name
+/// --reporting` does, and on a managed home send the hub its request and
+/// refresh the approvals. `hub_request` receives the hub's answer before the
+/// refresh. Hub reporting covers the evidence already recorded under the
+/// root, so it is refused unless `include_history` acknowledges that; the
+/// first run never passes it.
+pub(crate) fn select(
+    home: &Path,
+    root: &Path,
+    name: &str,
+    reporting: bool,
+    include_history: bool,
+    hub_request: impl FnOnce(&serde_json::Value) -> Result<(), String>,
+) -> Result<directory::Project, String> {
+    if reporting && !include_history {
+        return Err(format!(
+            "hub reporting covers {} and descendants, including existing eligible witnessed evidence. Confirm with --include-history; related Git worktrees need separate enrolment",
+            root.display()
+        ));
+    }
+    // Validate managed authority before writing the local selection.
+    commonmeasure_harness::policy::PolicyDocument::read(home)?;
+    let project = directory::Registry::enrol(home, root, name, reporting)?;
+    if reporting && commonmeasure_harness::managed::is_managed(home)? {
+        let result = directory::request(home, &project)?;
+        hub_request(&result)?;
+        directory::sync(home)?;
+    }
+    Ok(project)
 }

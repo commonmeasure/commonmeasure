@@ -397,6 +397,7 @@ pub fn capture(
             estimated_tokens: tokens,
             delivered: None,
             content_type: None,
+            content_type_rendered: false,
             delivered_file: None,
             grounded,
             // No host tool reports rights, and accessibility is not permission.
@@ -421,6 +422,8 @@ pub fn capture(
             identity: None,
             challenge: None,
             allowance: None,
+            told: None,
+            told_position: None,
         };
 
     match kind {

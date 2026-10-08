@@ -318,10 +318,18 @@ the origin shown is sensitive too.
 The comparison is by URL. Two host names that resolve to one server, such
 as `localhost` and `127.0.0.1`, are two receivers to it.
 
-The list narrows what this edge sends. It is not the authority on what a
-supplier may see: that follows the supplier's grant, and an operator may
-narrow within it but never widen it (owner decision, 22 September 2026).
-Nothing here checks the list against a grant yet.
+Supplier reporting belongs to the hub: a supplier is to receive only the
+events it served. The relay carries no per-supplier receiver. The relay sends
+every cleared event to the one receiver `relay.json` names and does not divide
+them by supplier.
+
+The same comparison decides whether a receiver is a licence's reporting
+endpoint itself: the URL the relay posts to, the receiver followed by
+`/events`, equals the endpoint after the parse above. The endpoint is the URL
+events are posted to, so nothing is added to it, and a receiver copied from
+the endpoint posts under it, to another path. A reporting demand is met only
+through that endpoint or the hub the edge is enrolled with ([session
+evidence §Source declarations](session-evidence.md#source-declarations)).
 
 ## Ingestion measure
 

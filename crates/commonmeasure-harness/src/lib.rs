@@ -49,6 +49,7 @@ pub mod registration;
 pub mod relay_config;
 pub mod session;
 pub mod snapshot;
+pub mod source_text;
 
 pub use enrolment::{EnrolmentRecord, enrolled_key_id};
 pub use hook::{HookInput, HostSurface, capture};

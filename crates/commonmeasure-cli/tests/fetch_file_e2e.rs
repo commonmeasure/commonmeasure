@@ -297,14 +297,21 @@ fn observe_records_a_denied_host_ahead_of_the_screens_on_a_delivered_pdf() {
     let recorded = crossings(home.path());
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["event"], "crossing_mediated");
-    for breach in [
-        &payload(&responses[0])["breach"],
-        &recorded[0]["payload"]["breach"],
+    // The result's `breach` is the agent's sentence; the record's names the host.
+    for (breach, opening) in [
+        (
+            &payload(&responses[0])["breach"],
+            "The job denies this source's host. ",
+        ),
+        (
+            &recorded[0]["payload"]["breach"],
+            "The job denies host 127.0.0.1. ",
+        ),
     ] {
         assert!(
             breach
                 .as_str()
-                .is_some_and(|breach| breach.starts_with("The job denies host 127.0.0.1. ")),
+                .is_some_and(|breach| breach.starts_with(opening)),
             "{breach}"
         );
         assert_unscreened_breach(breach);
@@ -444,9 +451,11 @@ fn an_image_is_unavailable_nothing_is_saved_and_the_crossing_says_why() {
             json!({"url": site.url("/chart.png")}),
         )],
     );
+    // The agent is told the top-level type; the rest of it is the origin's
+    // text, which the record keeps (EDG-116).
     let detail = error_text(&responses[0]);
     assert!(
-        detail.starts_with("unavailable:") && detail.contains("image/png"),
+        detail.starts_with("unavailable:") && detail.contains("is image/…"),
         "{detail}"
     );
     assert!(saved_files(home.path()).is_empty());
@@ -647,9 +656,16 @@ fn a_robots_disallow_or_a_content_usage_prohibition_refuses_a_pdf_before_a_byte_
     assert_eq!(disallowed.page_hits.load(Ordering::SeqCst), 0);
     let withheld = error_text(&responses[1]);
     assert!(
-        withheld.contains("withheld from context") && withheld.contains("ai-use=n"),
+        withheld.contains("withheld from context")
+            && withheld.contains("in the response's Content-Usage header"),
         "{withheld}"
     );
+    assert!(!withheld.contains("ai-use=n"), "{withheld}");
+    let refusal = crossings(home.path())[1]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
+    assert!(refusal.contains("ai-use=n"), "{refusal}");
     assert_eq!(prohibited.page_hits.load(Ordering::SeqCst), 1);
     assert!(saved_files(home.path()).is_empty());
 

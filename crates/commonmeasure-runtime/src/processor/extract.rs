@@ -255,15 +255,18 @@ pub struct Extraction {
 impl Extraction {
     /// The text a screen ruled on, named so a refusal sentence says what was
     /// examined: the extracted text of the page, or the unextracted body with
-    /// its content type.
+    /// its content type's top-level type. The sentence reaches the agent, and
+    /// the rest of the type is the origin's text, so it is kept in
+    /// `content_type` on the extraction record and not repeated here.
     pub fn basis(&self, reference: &str) -> String {
         if self.extracted {
             format!("the extracted text of {reference}")
         } else {
             match &self.content_type {
-                Some(content_type) => {
-                    format!("the unextracted body of {reference} ({content_type})")
-                }
+                Some(content_type) => format!(
+                    "the unextracted body of {reference} ({})",
+                    commonmeasure_http::media_type_named(content_type)
+                ),
                 None => format!("the unextracted body of {reference} (no content type declared)"),
             }
         }
@@ -289,12 +292,15 @@ pub fn is_html(content_type: &str) -> bool {
 ///
 /// `body` is the body with any content coding removed; `coded` is the
 /// coding and the bytes as served where the transport removed one, which is
-/// what the input hash covers.
+/// what the input hash covers. `content_type_rendered` says the content type
+/// held bytes that are not UTF-8 and is their rendering, which the record
+/// marks so that its text is not read as the text received.
 pub fn invoke(
     reference: &str,
     body: &[u8],
     coded: Option<(&str, &[u8])>,
     content_type: Option<&str>,
+    content_type_rendered: bool,
 ) -> (Invocation, Extraction) {
     let started_at = Utc::now();
     let served = coded.map_or(body, |(_, bytes)| bytes);
@@ -339,6 +345,21 @@ pub fn invoke(
     } else {
         Vec::new()
     };
+    let mut detail = json!({
+        "content_type": content_type,
+        "content_coding": coded.map(|(coding, _)| coding),
+        "extracted": extracted,
+        "bytes_received": served.len(),
+        "bytes_decoded": body.len(),
+        "characters_delivered": text.chars().count(),
+        "lossy_decoding": lossy,
+        "embedded_credential": inspection.evidence,
+        "credential_wrapper_removed": wrapper_removed,
+        "token_basis": TOKEN_BASIS,
+    });
+    if content_type_rendered {
+        detail["content_type_rendered"] = json!(true);
+    }
     let invocation = Invocation::new(
         manifest(),
         started_at,
@@ -354,18 +375,7 @@ pub fn invoke(
             content_hash: Some(content_hash.clone()),
             tokens: Some(approximate_tokens(&text)),
         }],
-        json!({
-            "content_type": content_type,
-            "content_coding": coded.map(|(coding, _)| coding),
-            "extracted": extracted,
-            "bytes_received": served.len(),
-            "bytes_decoded": body.len(),
-            "characters_delivered": text.chars().count(),
-            "lossy_decoding": lossy,
-            "embedded_credential": inspection.evidence,
-            "credential_wrapper_removed": wrapper_removed,
-            "token_basis": TOKEN_BASIS,
-        }),
+        detail,
         gaps,
         BLIND_SPOTS.to_vec(),
     );
@@ -712,12 +722,14 @@ mod tests {
             body,
             None,
             Some("text/html; charset=utf-8"),
+            false,
         );
         let (_, two) = invoke(
             "https://a.example/p",
             body,
             None,
             Some("text/html; charset=utf-8"),
+            false,
         );
         assert_eq!(one.text, two.text);
         assert_eq!(one.content_hash, two.content_hash);
@@ -745,17 +757,20 @@ mod tests {
     fn a_body_that_is_not_html_is_decoded_and_delivered_with_equal_hashes() {
         let body = b"<p>Not a page: a text file quoting markup.</p>";
         let (invocation, extraction) =
-            invoke("https://a.example/t", body, None, Some("text/plain"));
+            invoke("https://a.example/t", body, None, Some("text/plain"), false);
         assert!(!extraction.extracted);
         assert_eq!(extraction.text, String::from_utf8_lossy(body));
         assert_eq!(extraction.retrieved_hash, extraction.content_hash);
         assert_eq!(
             extraction.basis("https://a.example/t"),
-            "the unextracted body of https://a.example/t (text/plain)"
+            "the unextracted body of https://a.example/t (text/…)"
         );
         let record = invocation.to_value();
         assert_eq!(record["detail"]["extracted"], false);
         assert_eq!(record["detail"]["lossy_decoding"], false);
+        // The agent's sentence names the top-level type; the record keeps
+        // the type as declared.
+        assert_eq!(record["detail"]["content_type"], "text/plain");
     }
 
     /// A body served under gzip: the input hash is over the coded bytes the
@@ -771,6 +786,7 @@ mod tests {
             decoded,
             Some(("gzip", served)),
             Some("text/plain"),
+            false,
         );
         assert_eq!(extraction.retrieved_hash, sha256_digest(served));
         assert_eq!(extraction.content_hash, sha256_digest(decoded));
@@ -792,7 +808,7 @@ mod tests {
     #[test]
     fn a_body_that_is_not_utf8_records_the_lossy_decoding() {
         let body = b"caf\xe9 au lait";
-        let (invocation, extraction) = invoke("https://a.example/t", body, None, None);
+        let (invocation, extraction) = invoke("https://a.example/t", body, None, None, false);
         assert_ne!(extraction.retrieved_hash, extraction.content_hash);
         assert_eq!(invocation.to_value()["detail"]["lossy_decoding"], true);
         assert_eq!(

@@ -73,8 +73,9 @@ fn every_fixture_reads_as_its_expected_outcomes_say() {
                 let page = format!("https://{name}.example{path}");
                 let content = document
                     .content_for(&page)
+                    .expect("within the bound")
                     .expect("a content entry matches");
-                statements.extend(declarations::licence_terms(content, licence_url).statements);
+                statements.extend(declarations::licence_terms(&content, licence_url).statements);
             }
             let effective = declarations::combine(&statements);
             for category in Category::ALL {

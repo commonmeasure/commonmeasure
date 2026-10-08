@@ -52,7 +52,7 @@ no reinstall of the plugin.
 ## Install
 
 From a release, with no checkout, `install.sh` places the binary and can
-unpack the standalone archive beside it (`docs/GETTING-STARTED.md` §1). From
+unpack the standalone archive beside it (`docs/INSTALL.md`). From
 this checkout, with the binary already installed (`docs/GETTING-STARTED.md`
 §8):
 
@@ -83,7 +83,8 @@ gives.
 beside it.
 
 For `context_search`, put provider keys in `~/.commonmeasure/credentials.env`
-(`docs/GETTING-STARTED.md` §3). Check what is configured with:
+(`docs/OPERATING.md#credentials-when-you-want-provider-search`). Check what
+is configured with:
 
 ```sh
 commonmeasure credentials
@@ -160,8 +161,11 @@ writes the same five hooks into the user settings file.
 
 `PostToolUse` fires *after* the crossing, so a hook can record what the agent
 read but cannot refuse it. Where the router answered the call (§Routed) the
-native tool did not run and this hook is not run for it, so the crossing is
-recorded once, as mediated. What the hook records otherwise:
+native tool did not run, so the crossing is recorded once, as mediated, by
+the edge. Claude Code 2.1.289 runs no `PostToolUse` hook outside managed
+settings for a call a mod answered; the module also skips the settings
+hooks for the calls it answered, as a guard against that changing. What
+the hook records otherwise:
 
 - `WebFetch` — retrieved **and** grounded, with the SHA-256 of the text that
   entered the model's context. The hash is of the text, not of the transport
@@ -179,7 +183,10 @@ recorded once, as mediated. What the hook records otherwise:
   `mcp__commonmeasure__*`. The hook matcher includes `mcp__.*`, which catches
   both, so a mediated fetch would otherwise appear twice — once correctly as
   mediated, and once as an observed crossing that scraped every URL out of
-  the page body it had just returned.
+  the page body it had just returned. A tool named `context_fetch`,
+  `context_search` or `context_status` on any other server (another MCP
+  server, a tool another mod registers, a claude.ai connector) is not this
+  edge's, and is recorded as an MCP result.
 - Subagent identity, when the host supplies it. `agent_type` and `agent_id` are
   Claude Code's own discriminators; main-agent calls carry neither, and neither
   is inferred from payload shape.
@@ -216,7 +223,8 @@ served over stdio. These run *before* the crossing, so policy can refuse.
   with its own file tools. The edge does not screen a PDF for personal data
   or injection, so under `policy_mode` `strict` a PDF is refused.
 - `context_search` needs a provider credential, loaded at start from
-  `$COMMONMEASURE_HOME/credentials.env` (`docs/GETTING-STARTED.md` §3).
+  `$COMMONMEASURE_HOME/credentials.env`
+  (`docs/OPERATING.md#credentials-when-you-want-provider-search`).
   Without a credential it reports `unavailable`,
   naming the missing variable and the file to create; it does not return an
   empty search result. Provider `internal` is the exception: it queries
@@ -259,7 +267,10 @@ the same files and the built-in tools stay observed.
   tool's result shape. Lines the model reads after the result name the
   policy ruling, where the crossing is recorded, any breach, and the
   `context_fetch` call that continues a truncated page. A PDF is returned as
-  the path the edge saved it under, with no model call. A refusal or an
+  the path the edge saved it under, with no model call; one the edge did not
+  save, and returned as an embedded resource, is refused with the gap named,
+  since a `WebFetch` result carries text only, and the model is told to call
+  `context_fetch` for it directly. A refusal or an
   unavailable answer from the edge refuses the `WebFetch` in the edge's own
   words, and says that there is no unmediated fallback in this session.
 - **`WebSearch`** calls `context_search` on the first configured provider
@@ -275,8 +286,11 @@ the same files and the built-in tools stay observed.
   native tool runs, the `PostToolUse` hook records it after the fact, and
   one dim line in the transcript says so. The module finds the server from
   the session's tool list, under the plugin's spelling
-  (`plugin_commonmeasure_commonmeasure`) or the direct registration's
-  (`commonmeasure`).
+  (`plugin_commonmeasure_commonmeasure`, preferred) or the direct
+  registration's (`commonmeasure`), and takes no other: a `context_fetch`
+  on any other server, a tool another mod registers or a claude.ai
+  connector is never used for a routed call. Once the edge's server has
+  answered in a session, its later absence refuses the call.
 - **With the server connected and unable to carry a call**, including a
   hook that throws or overruns its budget, the call is refused with the gap
   named. A native fetch in its place would be the weaker mode the operator
@@ -290,7 +304,10 @@ the same files and the built-in tools stay observed.
   `mcp__plugin_commonmeasure_commonmeasure__context_fetch` (and
   `context_search`, `context_status` for `WebSearch`), or list them in the
   settings' `permissions.allow`. Without the grant the routed call is
-  refused with the host's own reason, never fetched natively.
+  refused with the host's own reason, never fetched natively. A routed call
+  is ruled by source policy and the grant for the mediated tool; the host's
+  own `WebFetch` and `WebSearch` permission rules, managed ones included,
+  apply only when the router stands aside.
 - **Grade.** A routed crossing is `mediated`, recorded by the edge under
   the server's session as a direct `context_fetch` is. The record carries
   the hash of the text the edge delivered to the plugin; the summary the
@@ -302,9 +319,9 @@ the same files and the built-in tools stay observed.
   gap. It fetches nothing itself, reads no file and starts no process. A
   mod runs with the user's permissions and is not a sandbox; the user can
   disable it (`/plugin`, `--safe-mode`, `disableAllHooks`), so it is
-  mediation, not enforcement. Enforcement is the managed fence (deny rules
-  in managed settings), beside which the router makes the deny rarely
-  bite.
+  mediation, not enforcement. Deny rules for `WebFetch` and `WebSearch` in
+  managed settings hold for the calls the router stands aside from; a routed
+  call never reaches them, and source policy rules on it instead.
 - **Tests.** `claude plugin test plugin` runs `tests/router.test.ts`
   against stubs for Claude Code and the edge: no model, network or process.
 
@@ -320,7 +337,7 @@ resumes, and the rebuilds after `/clear` and compaction. It asks the agent to
 prefer `context_fetch` and `context_search` over `WebFetch` and `WebSearch`,
 to treat an unavailable mediated tool and a policy refusal as different
 answers, and to respect a refusal rather than retrying it with a built-in
-tool. The wording is versioned (`mediation-nudge/4`,
+tool. The wording is versioned (`mediation-nudge/5`,
 `crates/commonmeasure-harness/src/nudge.rs`), and each emission is recorded in the
 session log as `nudge_issued` (`docs/contracts/session-evidence.md`), so a
 later review can distinguish sessions that were asked from sessions that were
@@ -328,12 +345,16 @@ not.
 
 Its limits, stated because the record depends on them:
 
-- **A nudge, not enforcement.** Nothing blocks the built-in tools, the agent
-  is free to ignore the request, and observed capture keeps recording
-  built-in use either way. Only the mediated path can refuse, and only when
-  it is called: by the agent, or by the router on its behalf (§Routed). The
-  hook that emits the nudge cannot tell whether the router loaded, so the
-  text names the condition rather than claiming it.
+- **A nudge, not enforcement.** The nudge blocks nothing, the agent is free
+  to ignore the request, and observed capture keeps recording built-in use
+  either way. Only the mediated path can refuse, and only when it is called:
+  by the agent, or by the router on its behalf (§Routed), in which case a
+  refused `WebFetch` or `WebSearch` has no native fallback. The same text
+  comes from the plugin and from the hooks `install claude` writes, and the
+  hook that emits it cannot tell whether the router loaded, so it tells the
+  model what it can see: a result or refusal that says it went through
+  Common Measure was answered by the mediated tools, and one that does not
+  ran natively.
 - **Emission is what is witnessed.** The host adds `SessionStart` stdout to
   the context; that act is the host's, and the `nudge_issued` record's basis
   says so rather than claiming injection.
@@ -514,7 +535,11 @@ whether an answer used what was read cannot be observed on that host.
 ## Policy
 
 `$COMMONMEASURE_HOME/policy.json`, or `~/.commonmeasure/policy.json`. If the file
-is absent the mode is observe: record everything, refuse nothing.
+is absent the mode is observe: the operator's own rules are recorded and not
+enforced. The source's terms (`robots.txt`, `Crawl-delay`, content signals,
+licences, payment and reporting) refuse a mediated fetch (`context_fetch`)
+in every mode; search results are not yet ruled on the source's terms
+([fail policy](../docs/FAIL-POLICY.md) §6).
 
 ```json
 {

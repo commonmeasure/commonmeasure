@@ -6,14 +6,14 @@
 //!
 //! A test that waits one out uses two seconds, which keeps the file quick. It
 //! asserts the turns the store reserved, read at the origin as each request
-//! arrives, and that each request arrived at or after its own turn: a gap
-//! between two arrivals shrinks whenever a loaded machine is late sending the
-//! first, without any fault in the pacing. The one wall-clock bound is on
-//! lateness: a request must arrive less than half the delay after its turn.
-//! Measured lateness is 6 to 22 ms, so the bound is loose on purpose; it is
-//! there to catch slow work between taking a turn and sending, which would
-//! let the origin see two requests closer than the delay while every turn
-//! was reserved correctly.
+//! arrives, that each request arrived at or after its own turn, and that
+//! requests one server sent in turn arrived a whole delay apart. The edge
+//! measures a turn from when the last request to the host was answered, so a
+//! loaded machine late sending the first request does not bring the second
+//! closer (EDG-109). A request must also arrive less than half the delay
+//! after its turn. Measured lateness is 6 to 22 ms, so that bound is loose on
+//! purpose; it catches a request held up for most of a second after its
+//! turn.
 //!
 //! A test that needs a refusal writes the turn another request would have
 //! left, dated ahead, so the wait is longer than the whole budget and no test
@@ -282,8 +282,9 @@ fn seed_turn(home: &Path, host: &str, at: chrono::DateTime<chrono::Utc>) {
     .expect("the record");
 }
 
-/// The turn the store holds for `host`: the send time of the last request
-/// to it, or of the one waiting to be sent. `None` where no turn was taken.
+/// The turn the store holds for `host`: when the last request to it was
+/// answered, or the send time of the one waiting to be sent. `None` where no
+/// turn was taken.
 fn recorded_turn(home: &Path, host: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let path = commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home).path_of(host);
     let bytes = match std::fs::read(&path) {
@@ -305,12 +306,13 @@ fn recorded_turn(home: &Path, host: &str) -> Option<chrono::DateTime<chrono::Utc
 /// least `delay` after the request before it. These are orderings against
 /// the times the store wrote, so they allow nothing below the turn.
 ///
-/// Each request must also arrive less than `delay / 2` after its turn.
-/// Without that bound, work done between taking a turn and sending (or a
-/// back-dated turn) would bring two arrivals closer than the delay while
-/// every turn still looked kept. Measured lateness is 6 to 22 ms, so half a
-/// two-second delay fails only a gross regression or a process stalled for
-/// most of a second.
+/// Each request must also arrive less than `delay / 2` after its turn, which
+/// fails only a gross regression or a process stalled for most of a second,
+/// and a whole delay after the request before it, less 10 ms for the origin's
+/// clock reading. The edge measures each turn from when the previous request
+/// was answered, so the second holds however late the previous request went
+/// out after its turn; measured from the turn alone, as before EDG-109, it
+/// failed under load.
 fn assert_turns_kept(arrivals: &[Arrival], delay: chrono::Duration) {
     for arrival in arrivals {
         let turn = arrival
@@ -332,6 +334,12 @@ fn assert_turns_kept(arrivals: &[Arrival], delay: chrono::Duration) {
         assert!(
             pair[1].turn.unwrap() >= pair[0].turn.unwrap() + delay,
             "{} was given a turn inside the delay of {}: {pair:?}",
+            pair[1].target,
+            pair[0].target
+        );
+        assert!(
+            pair[1].received - pair[0].received >= delay - chrono::Duration::milliseconds(10),
+            "{} reached the origin inside the delay of {}: {pair:?}",
             pair[1].target,
             pair[0].target
         );
@@ -461,9 +469,20 @@ fn an_unreadable_delay_is_recorded_and_ignored() {
     let responses = converse(home.path(), &[fetch(1, &article), fetch(2, &article)]);
     assert_eq!(responses[1]["result"]["isError"], false, "{}", responses[1]);
     let shown = payload(&responses[1])["declarations"]["robots"].clone();
-    assert_eq!(shown["crawl_delay"]["unreadable"][0], "soon");
+    // The unreadable value is the source's text: the agent is told there
+    // was one, and the record keeps it as written (EDG-116).
+    assert_eq!(
+        shown["crawl_delay"]["unreadable"],
+        "1 value(s) that are not a number of seconds, recorded as written"
+    );
     assert!(shown["crawl_delay"]["delay_ms"].is_null(), "{shown}");
     assert!(shown["delay"].is_null(), "{shown}");
+    let record = std::fs::read_to_string(home.path().join("sessions/test-session.ndjson"))
+        .expect("the session log");
+    assert!(
+        record.contains(r#""unreadable":["soon"]"#),
+        "the record keeps the value: {record}"
+    );
     assert_eq!(site.pages().len(), 2, "nothing was withheld");
 }
 
@@ -490,15 +509,16 @@ fn a_delay_beyond_the_wait_budget_refuses_the_fetch_naming_the_host_and_the_dela
     let detail = text_of(&responses[0]);
     for needed in [
         "refused before the crossing",
-        "Crawl-delay: 60",
+        "Crawl-delay of 60s",
         "binds in every policy mode",
-        "127.0.0.1",
         "may be sent",
         "this fetch may still wait",
         "Nothing was requested.",
     ] {
         assert!(detail.contains(needed), "missing {needed:?} in {detail}");
     }
+    // The host is the record's; the agent reads it by position.
+    assert!(!detail.contains("127.0.0.1"), "{detail}");
     assert_eq!(site.pages().len(), 0, "nothing was requested");
 
     let recorded = crossings(home.path());
@@ -506,6 +526,10 @@ fn a_delay_beyond_the_wait_budget_refuses_the_fetch_naming_the_host_and_the_dela
     assert_eq!(recorded[0]["event"], "crossing_refused");
     let payload = &recorded[0]["payload"];
     assert_eq!(payload["grounded"], false);
+    let refusal = payload["refusal"].as_str().expect("a refusal");
+    for needed in ["Crawl-delay: 60", "127.0.0.1"] {
+        assert!(refusal.contains(needed), "missing {needed:?} in {refusal}");
+    }
     assert!(payload["http_status"].is_null(), "nothing was requested");
     let robots = &payload["declarations"]["robots"];
     assert_eq!(robots["delay"]["outcome"], "refused");
@@ -532,13 +556,20 @@ fn a_delay_over_the_bound_is_kept_at_the_bound_and_recorded_as_capped() {
     let responses = converse(home.path(), &[fetch(1, &article)]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = text_of(&responses[0]);
-    assert!(detail.contains("Crawl-delay: 3600"), "{detail}");
-    assert!(
-        detail.contains("kept at this edge's bound of 60s"),
-        "{detail}"
-    );
+    assert!(detail.contains("Crawl-delay of 60s"), "{detail}");
+    assert!(detail.contains("kept at this edge's bound"), "{detail}");
+    assert!(!detail.contains("3600"), "{detail}");
     assert_eq!(site.pages().len(), 0);
 
+    let refusal = crossings(home.path())[0]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
+    assert!(refusal.contains("Crawl-delay: 3600"), "{refusal}");
+    assert!(
+        refusal.contains("kept at this edge's bound of 60s"),
+        "{refusal}"
+    );
     let robots = &crossings(home.path())[0]["payload"]["declarations"]["robots"];
     assert_eq!(robots["reading"]["crawl_delay"]["delay_ms"], 3_600_000);
     assert_eq!(robots["reading"]["crawl_delay"]["honoured_ms"], 60_000);
@@ -649,7 +680,13 @@ fn two_servers_asking_at_once_do_not_both_fire_inside_the_delay() {
             "a page was sent inside the delay of the turn already taken: {page:?}"
         );
     }
-    let last = recorded_turn(home.path(), "127.0.0.1").expect("a turn");
+    // Read as each page arrived: once answered, a request's turn is moved to
+    // when its answer came, so the record left after the run is not a turn.
+    let last = pages
+        .iter()
+        .filter_map(|page| page.turn)
+        .max()
+        .expect("a turn");
     assert!(
         last >= seeded + delay * 2,
         "the later server's turn was not measured from the earlier's: {last} after {seeded}"
@@ -658,6 +695,11 @@ fn two_servers_asking_at_once_do_not_both_fire_inside_the_delay() {
     assert!(
         latest >= last,
         "no page waited for the later turn {last}: {pages:?}"
+    );
+    let left = recorded_turn(home.path(), "127.0.0.1").expect("a turn");
+    assert!(
+        left >= latest,
+        "the next turn is measured from before the last page arrived: {left}, {pages:?}"
     );
 }
 
@@ -678,8 +720,9 @@ fn a_redirect_hop_takes_its_own_hosts_turn() {
     let responses = converse(home.path(), &[fetch(1, &shortener.url("/s/abc"))]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = text_of(&responses[0]);
-    assert!(detail.contains("Crawl-delay: 60"), "{detail}");
-    assert!(detail.contains("localhost"), "{detail}");
+    assert!(detail.contains("Crawl-delay of 60s"), "{detail}");
+    assert!(!detail.contains("localhost"), "{detail}");
+    assert!(detail.contains("at the target of redirect 1"), "{detail}");
     assert_eq!(
         destination.pages().len(),
         0,
@@ -784,8 +827,21 @@ fn a_store_that_cannot_be_kept_refuses_and_names_the_remedy() {
     let responses = converse(home.path(), &[fetch(1, &site.url("/article"))]);
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     let detail = text_of(&responses[0]);
-    for needed in ["back-off", "cannot be read", "127.0.0.1.backoff.json"] {
+    // The agent reads the fault's class and the store's directory; the file
+    // is named for the host, so the record names it.
+    for needed in [
+        "back-off record for the host could not be read",
+        "crawl-delay",
+    ] {
         assert!(detail.contains(needed), "missing {needed:?} in {detail}");
+    }
+    assert!(!detail.contains("backoff.json"), "{detail}");
+    let refusal = crossings(home.path())[0]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
+    for needed in ["back-off", "cannot be read", "127.0.0.1.backoff.json"] {
+        assert!(refusal.contains(needed), "missing {needed:?} in {refusal}");
     }
     assert!(
         site.requests().is_empty(),
@@ -801,8 +857,13 @@ fn a_store_that_cannot_be_kept_refuses_and_names_the_remedy() {
 fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
     // Both origins answer as `127.0.0.1`, so they are one host and one pace,
     // which is what a publisher behind two ports sees.
+    let home = home_with_mode("observe");
+    // When the second hop arrived, and the turn the store held for it then:
+    // once answered, its turn is moved to when the answer came, so the
+    // record left after the run is not the turn it was sent on.
     let received = Arc::new(Mutex::new(None));
     let arrival = Arc::clone(&received);
+    let landing_home = home.path().to_path_buf();
     let destination = Server::bind("127.0.0.1:0")
         .unwrap()
         .spawn(move |request| {
@@ -810,13 +871,15 @@ fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
                 return Response::text(200, WILDCARD_TWO_SECONDS);
             }
             if request.target == "/landing" {
-                *arrival.lock().unwrap() = Some(chrono::Utc::now());
+                *arrival.lock().unwrap() = Some((
+                    chrono::Utc::now(),
+                    recorded_turn(&landing_home, "127.0.0.1").expect("a turn"),
+                ));
             }
             Response::text(200, "landing")
         })
         .unwrap();
     let landing = format!("{}/landing", destination.url());
-    let home = home_with_mode("observe");
     let seeded = Arc::new(Mutex::new(None));
     let first_turn = Arc::new(Mutex::new(None));
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -891,18 +954,19 @@ fn a_same_host_redirect_takes_two_turns_and_the_second_has_less_budget() {
             >= Duration::from_millis(3_900),
         "the first hop did not wait out the turn already taken"
     );
-    let path =
-        commonmeasure_harness::crawl_delay::CrawlDelayStore::open(home.path()).path_of("127.0.0.1");
-    let record: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let second_turn: chrono::DateTime<chrono::Utc> =
-        record["at"].as_str().unwrap().parse().unwrap();
+    let (landed, second_turn) = received.lock().unwrap().expect("the second hop arrived");
     assert!(
         second_turn >= first_turn.lock().unwrap().unwrap() + chrono::Duration::seconds(2),
         "the two recorded send turns are inside the delay"
     );
     assert!(
-        received.lock().unwrap().unwrap() >= second_turn,
+        landed >= second_turn,
         "the destination received the second hop before its reserved turn"
+    );
+    let left = recorded_turn(home.path(), "127.0.0.1").expect("a turn");
+    assert!(
+        left >= landed,
+        "the next turn is measured from before the second hop arrived: {left}, {landed}"
     );
 }
 
@@ -939,13 +1003,15 @@ fn the_manifest_takes_the_crossings_free_turn_the_page_waits_behind_it_and_robot
 }
 
 /// A licence whose AI-input permission carries a telemetry reporting demand,
-/// which binds in every policy mode.
+/// which binds in every policy mode. Its endpoint is where the relay posts
+/// for the receiver `http://127.0.0.1:9/telemetry`, so that receiver meets
+/// the demand.
 const REPORTING_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
   <content url="/"><license>
     <permits type="usage">ai-input</permits>
     <payment type="attribution"/>
     <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur"
-               endpoint="https://telemetry.example.com/v1/events">
+               endpoint="http://127.0.0.1:9/telemetry/events">
       <![CDATA[{"conformance_level": "grounding", "privacy_level": "minimal"}]]>
     </reporting>
   </license></content></rsl>"#;
@@ -982,7 +1048,8 @@ fn a_licence_with_no_current_reading_is_read_before_the_page_and_its_demand_rule
         "the page's turn is not taken for a crossing its licence refused: {declarations}"
     );
 
-    // Met: the operator agreed to reporting and a receiver is named. The
+    // Met: the operator agreed to reporting and the receiver is the
+    // licence's endpoint. The
     // licence is read first, the page waits a whole delay behind it, and a
     // second page on the same host reuses the licence and takes one turn
     // only.
@@ -1090,8 +1157,8 @@ fn licence_then_page_beyond_the_budget_is_refused_before_any_request() {
     let detail = text_of(&responses[0]);
     for needed in [
         "refused before the crossing",
-        "Crawl-delay: 30",
-        "/license.xml has not been read",
+        "Crawl-delay of 30s",
+        "The licence the source names has not been read",
         "the page the turn after it",
         "Nothing was requested.",
     ] {
@@ -1270,10 +1337,10 @@ fn cache_declarations(home: &Path, site: &Origin, robots: &str, licence: Option<
     .expect("the cached declarations");
 }
 
-/// The breach sentence observe carries for a `Content-Signal` that
-/// disallows AI input. A `Disallow` would refuse before any turn in every
-/// mode (WP-29), so these tests carry a preference instead.
-const SIGNAL_CARRIED: &str = "The source disallows AI input";
+/// The ruling on a `Content-Signal` that disallows AI input. It refuses in
+/// every mode (owner decision, 30 September 2026), so it is never a carried
+/// breach.
+const SIGNAL_RULED: &str = "The source disallows AI input";
 /// The host constraint's breach sentence.
 const HOST_CARRIED: &str = "allowed-host";
 
@@ -1281,10 +1348,11 @@ const SIGNALLED_LICENSED_THIRTY_SECONDS: &str = "License: /license.xml\nUser-age
      Content-Signal: ai-input=no\nCrawl-delay: 30\n";
 
 /// Catches a refusal on the licence's turn that drops what observe was
-/// carrying: the host's breach and the `Content-Signal` the robots file
-/// states are both kept, each once, and nothing is sent.
+/// carrying: the host's breach is kept once, and nothing is sent. The
+/// `Content-Signal` the robots file states refuses in every mode, so it is
+/// not a carried breach; its statement stays on the record.
 #[test]
-fn licence_then_page_over_budget_keeps_the_signal_and_host_breaches_in_observe() {
+fn licence_then_page_over_budget_keeps_the_host_breach_in_observe() {
     let site = licensed_origin(SIGNALLED_LICENSED_THIRTY_SECONDS, REPORTING_LICENCE);
     let home = tempfile::tempdir().expect("tempdir");
     std::fs::write(
@@ -1319,10 +1387,18 @@ fn licence_then_page_over_budget_keeps_the_signal_and_host_breaches_in_observe()
         payload["declarations"]["robots"]["delay"]["licence_first"].is_string(),
         "refused on the licence's turn: {payload}"
     );
-    let breach = payload["breach"].as_str().expect("the breaches are kept");
-    assert_eq!(breach.matches(SIGNAL_CARRIED).count(), 1, "{breach}");
-    assert!(breach.contains("Content-Signal"), "{breach}");
+    let breach = payload["breach"].as_str().expect("the breach is kept");
     assert_eq!(breach.matches(HOST_CARRIED).count(), 1, "{breach}");
+    assert!(!breach.contains(SIGNAL_RULED), "{breach}");
+    assert!(
+        payload["declarations"]["statements"]
+            .as_array()
+            .expect("statements")
+            .iter()
+            .any(|statement| statement["category"] == "ai-input"
+                && statement["preference"] == "disallow"),
+        "{payload}"
+    );
     assert!(payload["allowance"].is_null(), "{payload}");
 }
 
@@ -1333,14 +1409,16 @@ const PRICED_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
     <payment type="use"><amount currency="USD">0.015</amount></payment>
   </license></content></rsl>"#;
 
-/// Catches a refusal on the page's own turn that drops what observe was
-/// carrying: the host's breach, the unmet payment term and the allowance
-/// breach are each kept once, the reservation is released naming the delay,
-/// and nothing is sent. The robots file states no preference: one that
-/// disallows AI input is ruled on in place of the payment term.
+/// A licence's payment term this edge cannot meet refuses before the page's
+/// own turn is taken, in observe as in every mode (owner decision, 30
+/// September 2026), so the delay that would have refused the turn is never
+/// ruled on. The refusal keeps what observe was carrying: the host's breach
+/// and the allowance breach, each once. The reservation is released naming
+/// the refusal, and nothing is sent. The robots file states no preference:
+/// one that disallows AI input is ruled on in place of the payment term.
 #[cfg(unix)]
 #[test]
-fn a_refused_page_turn_keeps_host_declaration_and_allowance_breaches() {
+fn a_payment_term_refuses_before_the_page_turn_and_keeps_host_and_allowance_breaches() {
     let site = licensed_origin(LICENSED_THIRTY_SECONDS, PRICED_LICENCE);
     let home = tempfile::tempdir().expect("tempdir");
     // SAFETY: `geteuid` has no arguments or memory preconditions.
@@ -1388,19 +1466,22 @@ fn a_refused_page_turn_keeps_host_declaration_and_allowance_breaches() {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["event"], "crossing_refused");
     let payload = &recorded[0]["payload"];
-    assert_eq!(
-        payload["declarations"]["robots"]["delay"]["outcome"],
-        "refused"
+    assert!(
+        payload["refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.contains("payment term is unmet")),
+        "{payload}"
+    );
+    assert!(
+        payload["declarations"]["robots"]["delay"]["outcome"].is_null(),
+        "the page's turn was never taken: {payload}"
     );
     assert_eq!(payload["declarations"]["licences"][0]["cache"], "reused");
     let breach = payload["breach"].as_str().expect("the breaches are kept");
-    for sentence in [
-        HOST_CARRIED,
-        "payment term is unmet",
-        "cumulative allowance",
-    ] {
+    for sentence in [HOST_CARRIED, "cumulative allowance"] {
         assert_eq!(breach.matches(sentence).count(), 1, "{sentence}: {breach}");
     }
+    assert!(!breach.contains("payment term is unmet"), "{breach}");
     let allowance = &payload["allowance"];
     assert_eq!(
         allowance["decision"], "proceeded_with_breach",
@@ -1409,7 +1490,7 @@ fn a_refused_page_turn_keeps_host_declaration_and_allowance_breaches() {
     assert!(
         allowance
             .to_string()
-            .contains("Crawl-delay refused the fetch before the request"),
+            .contains("the fetch was refused before the request"),
         "{allowance}"
     );
     assert!(
@@ -1712,9 +1793,14 @@ fn a_backoff_update_fault_is_the_edges_and_repair_allows_the_next_probe() {
         )),
         "{detail}"
     );
+    // The OS error is the record's.
+    let refusal = crossings(home.path())[0]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
     assert!(
-        detail.contains("Permission denied") || detail.contains("os error 13"),
-        "{detail}"
+        refusal.contains("Permission denied") || refusal.contains("os error 13"),
+        "{refusal}"
     );
     assert!(!detail.contains("unreachable"), "{detail}");
     let declaration: Value = serde_json::from_slice(
@@ -1766,10 +1852,12 @@ fn a_503_the_store_cannot_record_keeps_its_status_and_names_the_directory() {
         "Make the back-off directory, {}, writable, and try again.",
         dir.display()
     );
+    // The agent reads the host by position and the fault's class; the
+    // record's `failure` names the host and the lock.
     assert!(
         detail.starts_with(&format!(
             "{url} answered HTTP 503, and this edge could not record the answer, so it is not \
-             used: the back-off record for 127.0.0.1 could not be locked: "
+             used: the back-off record for the host could not be kept. "
         )),
         "{detail}"
     );
@@ -1778,7 +1866,15 @@ fn a_503_the_store_cannot_record_keeps_its_status_and_names_the_directory() {
     let records = crossings(home.path());
     let crossing = &records[0]["payload"];
     assert_eq!(crossing["http_status"], 503, "{crossing}");
-    assert_eq!(crossing["failure"], json!(detail));
+    let failure = crossing["failure"].as_str().expect("a failure");
+    assert!(
+        failure.starts_with(&format!(
+            "{url} answered HTTP 503, and this edge could not record the answer, so it is not \
+             used: the back-off record for 127.0.0.1 could not be locked: "
+        )),
+        "{failure}"
+    );
+    assert!(failure.ends_with(&remedy), "{failure}");
     let event = &crossing["declarations"]["backoff"][0];
     assert_eq!(event["outcome"], "unavailable");
     assert!(

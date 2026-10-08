@@ -119,13 +119,56 @@ weaker successful mode and nothing to fall back to.
 
 ## 6. Per-mode enforcement, identical recording
 
-`PolicyMode` decides what happens to a breach, never whether it is recorded.
-`Strict` refuses; `Prefer` and `Observe` carry the breach and record it
-identically.
+`PolicyMode` governs the operator's own policy: the host lists and access
+rules, required licences, allowances and caps, and processor verdicts. It
+decides what happens to a breach of that policy, never whether it is
+recorded. `Strict` refuses; `Prefer` and `Observe` carry the breach and
+record it identically. A required licence is the operator's policy, so a
+source whose licence is unknown is a breach of it in every mode, never a
+source that satisfies it: `strict` refuses the source, and `observe` and
+`prefer` carry it with the breach and an `evidence_missing` gap recorded.
 
-Two refusals are unconditional in every mode, because neither is a matter of
-operator preference: a source that carries no text cannot ground an answer,
-and a required licence is not satisfied by an unknown one.
+The source's terms bind in every mode on every edge, enrolled or not,
+because they are not a matter of operator preference: the operator's mode is
+not the source's consent. A mediated fetch is refused, in `observe` and
+`prefer` as in `strict`, on:
+
+- a `robots.txt` `Disallow` for this fetcher, or a `robots.txt` that could
+  not be reached or read with no copy held;
+- a `Crawl-delay` or a back-off the fetch cannot keep;
+- a licence the source names that could not be read, including one in
+  which choosing the `<content>` entry for the page would take more work
+  than the edge's selection budget, or would leave no entry governing: no
+  entry is selected in its place, and the record says which cause applied;
+- a `Content-Signal` or `Content-Usage` statement that disallows AI input;
+- a licence that prohibits AI input in the `<content>` entry governing the
+  page, or in an entry read with it, whatever another licence there permits:
+  the narrowest matching entries govern, and entries that govern together
+  are read as one;
+- a licence whose AI-input permission needs a payment this edge cannot make
+  or a licence token it cannot obtain: no settlement rail means no fetch. A
+  payment term is unmet unless the licence says it is free, a licence with
+  no usage `<permits>` covers AI input on its own payment and licence-server
+  terms where no licence of the same `<content>`, entries read as one
+  ([session evidence](contracts/session-evidence.md) §Source declarations),
+  names AI input, and a licence server binds whatever the offers;
+- a reporting demand the session cannot meet, whether a licence states it
+  or the operator's recorded agreement with the source does. The offer whose
+  demand is ruled is chosen on payment and then document order, not on
+  whether its demand can be met, so of two free offers that differ only in
+  such a demand the first written decides whether the page is delivered
+  (recorded in [session evidence](contracts/session-evidence.md) §Source
+  declarations).
+
+A term known before the request refuses before it, and the page is never
+asked for. A term known only from the response (a `Content-Usage` header, a
+licence named in a `Link` header) withholds the bytes from context, with
+their hash on the refused crossing. Each refusal is a `crossing_refused`
+with the term in `refusal` and `grounded` false
+([session evidence](contracts/session-evidence.md) §Source declarations).
+
+A source that carries no text is refused in every mode as well, because it
+cannot ground an answer.
 
 A processor's verdict is under the same discipline, with one stated
 exception. The injection screen's match refuses the crossing in `strict` and
@@ -157,8 +200,14 @@ breach and the gap recorded (§5, §7)
   (`crates/commonmeasure-runtime/src/processor/pii.rs`)
 - `observe_mode_records_the_breach_it_does_not_enforce`,
   `a_source_without_text_is_refused_in_every_mode`,
-  `a_required_licence_is_not_satisfied_by_an_unknown_one`
+  `a_required_licence_is_not_satisfied_by_an_unknown_one`,
+  `an_unknown_licence_against_a_required_one_is_a_breach_outside_strict`
   (`crates/commonmeasure-runtime/tests/policy_and_selection.rs`)
+- `a_content_signal_disallowing_ai_input_refuses_in_every_mode`,
+  `a_payment_term_with_no_settlement_rail_refuses_in_every_mode`,
+  `a_licence_server_with_no_token_rail_refuses_in_every_mode`,
+  `a_content_usage_disallow_withholds_the_page_in_every_mode`
+  (`crates/commonmeasure-harness/src/mcp.rs`)
 - `observe_mode_carries_the_crossing_and_still_records_it`,
   `a_compliant_crossing_records_no_breach`,
   `a_fetch_carrying_pii_from_a_private_address_is_carried_in_strict_mode_and_recorded`,
@@ -340,7 +389,11 @@ are not recorded.
 
 An unreadable store refuses before the request. A read-only store does not
 prevent a healthy host's successful answer when no failure needs resetting:
-that answer takes no lock and writes nothing. An update that cannot be kept
+that answer takes no back-off lock and writes nothing to the back-off store.
+A host this edge paces for `Crawl-delay` is different: its answer takes the
+host's crawl-delay lock and writes the time of the answer to its record, and
+when that cannot be done the answer is not used, as for a back-off update
+that cannot be kept. An update that cannot be kept
 is an edge failure, never cached or attributed to the host as an unreachable
 `robots.txt`. A page's crossing keeps the answer's `http_status`, and its
 `failure` says the host answered and the answer was not used. The error

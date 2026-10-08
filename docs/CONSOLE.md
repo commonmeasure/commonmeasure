@@ -29,7 +29,7 @@ until the index is deleted. To clear it, stop the console (`Ctrl-C` on
 and `telemetry.db-shm` beside it, and start it again (`commonmeasure serve`,
 or `commonmeasure service install console` from a shell with the same Edge
 home: [Keep the console
-running](GETTING-STARTED.md#keep-the-console-running-macos)). A console
+running](INSTALL.md#keep-the-console-running-macos)). A console
 left running keeps the deleted index open and serves it until it stops.
 
 A measurement the record does not hold is shown as "unknown", never as zero
@@ -42,7 +42,7 @@ LaunchAgent for the Edge home of the installing shell, logging to
 `logs/console.log` in that home. `commonmeasure service status` reports the
 service, the Edge home and log its plist names, and any console on the port
 that the service did not start
-([`docs/GETTING-STARTED.md`](GETTING-STARTED.md) §5). `commonmeasure update`
+([Keep the console running](INSTALL.md#keep-the-console-running-macos)). `commonmeasure update`
 stops the service before it replaces the binary the service runs, and starts
 it again with the Edge home and log in its plist, whichever home the shell
 running `update` selects. It refuses a plist edited since `service install`

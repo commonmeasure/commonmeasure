@@ -765,26 +765,53 @@ fn an_unreadable_token_file_is_named_by_no_path_before_authentication() {
 }
 
 /// An allowance ledger the edge cannot read leaves the remaining allowance
-/// unknown. Observe fetches with the breach recorded and strict refuses;
-/// either way the tenant is told the ledger relative to the home (review
-/// R1.2). A subject binding carries the allowance, so no OS user is needed.
+/// unknown. Observe records the breach and strict refuses on it; either way
+/// the ledger is named relative to the home (review R1.2). In observe the
+/// licence's payment term then refuses the fetch, since the source's terms
+/// bind in every mode and this edge holds no settlement rail, so the ledger
+/// is named on the refusal's record. A subject binding carries the
+/// allowance, so no OS user is needed.
 #[test]
 fn an_unreadable_allowance_ledger_is_named_by_no_path_when_observed() {
     let (fetched, home) = fetch_against_an_unreadable_ledger("observe");
     assert_eq!(
         body(&fetched)["result"]["isError"],
-        false,
+        true,
         "{}",
         text(&fetched)
     );
-    let result = payload(&fetched);
-    for said in [&result["breach"], &result["allowance"]["reason"]] {
-        let said = said.as_str().unwrap_or_default();
-        assert!(
-            said.contains("ledger could not be consulted: allowance/ledger.ndjson line 1"),
-            "{result}"
-        );
-    }
+    // The agent reads the term's class; the record's `breach` names the
+    // ledger relative to the home.
+    let detail = payload(&fetched)["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(detail.contains("payment term is unmet"), "{detail}");
+    assert!(!detail.contains("ledger.ndjson"), "{detail}");
+    let records: Vec<Value> = session_files(home.path())
+        .iter()
+        .flat_map(|file| {
+            std::fs::read_to_string(file)
+                .expect("the session log")
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("NDJSON"))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let recorded = crossings(&records);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0]["event"], "crossing_refused");
+    let breach = recorded[0]["payload"]["breach"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        breach.contains("ledger could not be consulted: allowance/ledger.ndjson line 1"),
+        "{breach}"
+    );
+    assert!(
+        !breach.contains(&home.path().display().to_string()),
+        "{breach}"
+    );
     assert_names_no_home(home.path(), &fetched);
 }
 
@@ -802,7 +829,8 @@ fn an_unreadable_allowance_ledger_is_named_by_no_path_when_refused() {
         .unwrap_or_default()
         .to_owned();
     assert!(
-        detail.contains("ledger could not be consulted: allowance/ledger.ndjson line 1")
+        detail.contains("ledger could not be consulted")
+            && !detail.contains("ledger.ndjson")
             && detail.ends_with("(the operator's policy)"),
         "{detail}"
     );
@@ -814,20 +842,26 @@ fn an_unreadable_allowance_ledger_is_named_by_no_path_when_refused() {
 /// entry.
 fn fetch_against_an_unreadable_ledger(mode: &str) -> (Response, tempfile::TempDir) {
     let home = tempfile::tempdir().expect("tempdir");
-    let (fetched, _) =
-        fetch_page_against_an_unreadable_ledger(mode, &home, "/article", "the priced article");
+    let (fetched, _) = fetch_page_against_an_unreadable_ledger(
+        mode,
+        &home,
+        "/article",
+        "the priced article",
+        "License: /license.xml\nUser-agent: *\nAllow: /\n",
+    );
     (fetched, home)
 }
 
-/// As [`fetch_against_an_unreadable_ledger`], for `page` served at `target`.
-/// Returns the answer and the URL asked for.
+/// As [`fetch_against_an_unreadable_ledger`], for `page` served at `target`
+/// under `robots`, which names the priced licence or does not. Returns the
+/// answer and the URL asked for.
 fn fetch_page_against_an_unreadable_ledger(
     mode: &str,
     home: &tempfile::TempDir,
     target: &str,
     page: &str,
+    robots: &'static str,
 ) -> (Response, String) {
-    const ROBOTS: &str = "License: /license.xml\nUser-agent: *\nAllow: /\n";
     const PRICED: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
   <content url="/"><license>
     <permits type="usage">ai-input</permits>
@@ -838,7 +872,7 @@ fn fetch_page_against_an_unreadable_ledger(
     let publisher = Server::bind("127.0.0.1:0")
         .expect("bind")
         .spawn(move |request| match request.target.as_str() {
-            "/robots.txt" => Response::text(200, ROBOTS),
+            "/robots.txt" => Response::text(200, robots),
             "/license.xml" => Response::new(200, PRICED.as_bytes().to_vec()),
             "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
             _ => Response::text(200, &page),
@@ -884,8 +918,10 @@ fn fetch_page_against_an_unreadable_ledger(
 /// A page that quotes the operator's home, fetched at a URL naming it, is
 /// served as the publisher sent it: its content matches its hash and range,
 /// its URL and the `next` built from it still name the page. The operator's
-/// words in the same answer name the ledger relative to the home (review
-/// F1; the review's probe).
+/// words in the same answer name the session record relative to the home
+/// (review F1; the review's probe). The page names no licence: a priced one
+/// refuses the fetch in every mode, since this edge holds no settlement
+/// rail, so no allowance is consulted and the ledger is not named here.
 #[test]
 fn a_page_quoting_the_home_is_served_as_received_beside_operator_words_named_relative() {
     let home = tempfile::tempdir().expect("tempdir");
@@ -902,7 +938,13 @@ fn a_page_quoting_the_home_is_served_as_received_beside_operator_words_named_rel
         .take(70_000)
         .collect();
     let target = format!("/page?p={given}/x");
-    let (fetched, url) = fetch_page_against_an_unreadable_ledger("observe", &home, &target, &page);
+    let (fetched, url) = fetch_page_against_an_unreadable_ledger(
+        "observe",
+        &home,
+        &target,
+        &page,
+        "User-agent: *\nAllow: /\n",
+    );
     assert_eq!(
         body(&fetched)["result"]["isError"],
         false,
@@ -935,22 +977,11 @@ fn a_page_quoting_the_home_is_served_as_received_beside_operator_words_named_rel
         )
         .as_str()
     );
-    for said in [&result["breach"], &result["allowance"]["reason"]] {
-        let said = said.as_str().unwrap_or_default();
-        assert!(
-            said.contains("ledger could not be consulted: allowance/ledger.ndjson line 1"),
-            "{said}"
-        );
-        assert!(
-            !said.contains(&given) && !said.contains(&resolved),
-            "{said}"
-        );
-    }
+    assert!(result["allowance"].is_null(), "{result}");
+    let recorded_in = result["recorded_in"].as_str().unwrap_or_default();
+    assert!(recorded_in.starts_with("sessions/"), "{result}");
     assert!(
-        !result["recorded_in"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(&given),
+        !recorded_in.contains(&given) && !recorded_in.contains(&resolved),
         "{result}"
     );
 }
@@ -1049,7 +1080,7 @@ fn a_relative_home_leaves_a_word_that_spells_it() {
     assert_eq!(answered.status, 200, "{}", text(&answered));
     assert_eq!(
         payload(&answered)["error"],
-        "offset must be a non-negative integer, got \"cm\""
+        "offset must be a non-negative integer; the call gave another value"
     );
     assert_names_no_home(&home, &answered);
 }
@@ -1428,7 +1459,7 @@ fn robots_refusals_on_the_hosted_edge(mode: &str) {
         let detail = text(&refused);
         assert!(detail.contains(expected), "{mode} {outcome}: {detail}");
         assert!(
-            detail.contains(&format!("{}/robots.txt", site.url())),
+            !detail.contains(&format!("{}/robots.txt", site.url())),
             "{mode} {outcome}: {detail}"
         );
     }
@@ -1442,14 +1473,22 @@ fn robots_refusals_on_the_hosted_edge(mode: &str) {
     let recorded = records(home.path(), &session);
     let crossings = crossings(&recorded);
     assert_eq!(crossings.len(), 3, "{mode}");
-    for (crossing, outcome) in crossings
+    for ((crossing, outcome), (site, _, _)) in crossings
         .iter()
         .zip(["refused", "unreachable", "unreachable"])
+        .zip(&cases)
     {
         assert_eq!(crossing["event"], "crossing_refused", "{mode} {outcome}");
         let robots = &crossing["payload"]["declarations"]["robots"];
         assert_eq!(robots["mode"], mode, "{mode} {outcome}");
         assert_eq!(robots["outcome"], outcome, "{mode}: {robots}");
+        // The record's sentence names the file.
+        assert!(
+            crossing["payload"]["refusal"]
+                .as_str()
+                .is_some_and(|refusal| refusal.contains(&format!("{}/robots.txt", site.url()))),
+            "{mode} {outcome}: {crossing}"
+        );
     }
 }
 
@@ -1629,8 +1668,8 @@ fn one_pace_per_host_is_shared_between_tenants_and_the_refusal_names_no_time() {
         &call(1, "context_fetch", json!({"url": handle.url()})),
     );
     let detail = text(&refused);
-    assert!(detail.contains("Crawl-delay: 60"), "{detail}");
-    assert!(detail.contains("127.0.0.1"), "{detail}");
+    assert!(detail.contains("Crawl-delay of 60s"), "{detail}");
+    assert!(!detail.contains("127.0.0.1"), "{detail}");
     assert!(
         !detail.contains("may be sent"),
         "the refusal names another tenant's fetch time: {detail}"
@@ -2668,10 +2707,20 @@ fn a_hosted_edge_records_a_denied_host_ahead_of_the_screens_on_a_delivered_pdf()
     let recorded = records(home.path(), &session);
     let crossing = crossings(&recorded)[0];
     assert_eq!(crossing["event"], "crossing_mediated", "{crossing}");
-    for breach in [&payload(&fetched)["breach"], &crossing["payload"]["breach"]] {
+    // The result's `breach` is the agent's sentence; the record's names the host.
+    for (breach, opening) in [
+        (
+            &payload(&fetched)["breach"],
+            "The job denies this source's host. ",
+        ),
+        (
+            &crossing["payload"]["breach"],
+            "The job denies host 127.0.0.1. ",
+        ),
+    ] {
         assert!(
             breach.as_str().is_some_and(|breach| {
-                breach.starts_with("The job denies host 127.0.0.1. ")
+                breach.starts_with(opening)
                     && breach.contains("The PII detector did not rule")
                     && breach.contains("The injection screen did not rule")
             }),

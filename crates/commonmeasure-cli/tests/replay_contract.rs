@@ -46,6 +46,55 @@ fn commonmeasure(args: &[&str], output: &Path) -> Command {
     command
 }
 
+/// Retained Valyu responses exercise both production adapter paths. This
+/// establishes recorded replay, never a live adapter call.
+#[test]
+#[cfg_attr(
+    not(evidence_recon),
+    ignore = "needs retained Valyu captures and manifest entries under COMMONMEASURE_PRIVATE_EVIDENCE"
+)]
+fn valyu_search_and_fetch_replay_observed_costs_and_seal_recorded_bytes() {
+    for (job, capability, micros, count) in [
+        ("demo/jobs/recon-valyu-search.json", "search", 4500, 3),
+        ("demo/jobs/recon-valyu-fetch.json", "fetch", 1000, 1),
+    ] {
+        let (directory, summary) = replay_run_of(job);
+        let plan = summary["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|plan| plan["provider"] == "valyu")
+            .unwrap();
+        assert_eq!(plan["capability"], capability);
+        assert_eq!(plan["verification_state"], "replay-tested");
+        assert_eq!(plan["acquisition"]["result_count"], count);
+        assert_eq!(plan["acquisition"]["charge"]["money"]["micros"], micros);
+        assert_eq!(plan["acquisition"]["charge"]["money"]["currency"], "USD");
+        assert_eq!(plan["acquisition"]["charge"]["native"]["basis"], "observed");
+        assert_eq!(
+            plan["acquisition"]["replay"]["matches_recorded_input"],
+            true
+        );
+        assert!(plan["answer"].is_null());
+        assert!(
+            directory
+                .path()
+                .join("replay")
+                .join(plan["acquisition"]["response_ref"].as_str().unwrap())
+                .is_file()
+        );
+        credential_sweep::no_artefact_carries_a_credential(
+            &directory.path().join("replay"),
+            &[
+                "summary.json",
+                "manifest.json",
+                "evidence.ndjson",
+                "replay.json",
+            ],
+        );
+    }
+}
+
 fn replay_run() -> (tempfile::TempDir, Value) {
     replay_run_of("demo/jobs/eu-ai-act-replay.json")
 }

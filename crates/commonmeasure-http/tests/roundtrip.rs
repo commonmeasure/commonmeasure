@@ -335,3 +335,84 @@ fn setting_a_header_again_keeps_its_position() {
     assert_eq!(names, ["A", "b", "C"]);
     assert_eq!(request.headers.get("B"), Some("replaced"));
 }
+
+/// An origin that records the request head it was sent and answers with
+/// `answer` verbatim, so a test can serve bytes the codec would not write.
+fn raw_origin(answer: &'static [u8]) -> (String, std::thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/robots.txt", listener.local_addr().expect("addr"));
+    let serving = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream);
+        let mut head = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read the request head");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            head.push_str(&line);
+        }
+        reader.get_mut().write_all(answer).expect("answer");
+        head
+    });
+    (url, serving)
+}
+
+/// RFC 9110 §12.5.3: a request with no `Accept-Encoding` accepts any
+/// coding. Every request names gzip, the one coding decoded.
+#[test]
+fn every_request_names_the_coding_it_decodes() {
+    let (url, serving) = raw_origin(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nUser-agent:");
+    let response = send(&url, Request::get("/")).expect("send");
+    assert_eq!(response.body, b"User-agent:");
+    let head = serving.join().expect("the origin thread");
+    assert!(head.contains("\r\nAccept-Encoding: gzip\r\n"), "{head}");
+}
+
+/// A caller that must keep the bytes as served asks for identity, and a
+/// gzip answer to it is refused as unrequested rather than decoded.
+#[test]
+fn a_caller_asking_for_identity_is_not_handed_a_decoded_body() {
+    let (url, serving) =
+        raw_origin(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 4\r\n\r\nxxxx");
+    let mut request = Request::get("/");
+    request.headers.set("Accept-Encoding", "identity");
+    let error = send(&url, request).expect_err("gzip was not requested");
+    let head = serving.join().expect("the origin thread");
+    assert!(head.contains("\r\nAccept-Encoding: identity\r\n"), "{head}");
+    assert!(
+        format!("{error:#}")
+            .contains("content coding gzip was not requested: the request accepted identity only"),
+        "{error:#}"
+    );
+}
+
+/// An origin that answers `br` although the request named gzip only is
+/// still refused, and the refusal says the coding was not requested.
+#[test]
+fn an_unrequested_coding_is_refused_by_name() {
+    let (url, serving) =
+        raw_origin(b"HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 4\r\n\r\nxxxx");
+    let error = send(&url, Request::get("/")).expect_err("br was not requested");
+    serving.join().expect("the origin thread");
+    assert!(
+        format!("{error:#}")
+            .contains("content coding br was not requested: the request accepted gzip only"),
+        "{error:#}"
+    );
+}
+
+/// A coding the transport cannot decode is not asked for.
+#[test]
+fn a_request_for_a_coding_not_decoded_is_not_sent() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/", listener.local_addr().expect("addr"));
+    listener.set_nonblocking(true).expect("nonblocking");
+    let mut request = Request::get("/");
+    request.headers.set("Accept-Encoding", "br");
+    let error =
+        send_with_timeout(&url, request, Duration::from_secs(2)).expect_err("br is not decoded");
+    assert!(format!("{error:#}").contains("is not sent"), "{error:#}");
+    assert!(listener.accept().is_err(), "no connection was opened");
+}

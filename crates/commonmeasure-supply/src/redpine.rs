@@ -162,9 +162,14 @@ impl RedpineAdapter {
                 detail: format!("JSON-RPC error on initialize: {error}"),
             });
         }
+        // The id is sent back on every call, so a rendering of bytes that are
+        // not UTF-8 would name a session the server never issued.
         let session = response
             .headers
-            .get("mcp-session-id")
+            .text("mcp-session-id")
+            .map_err(|opaque| SupplyError::Malformed {
+                detail: format!("initialize answered an unusable session id: {opaque}"),
+            })?
             .map(str::to_owned)
             .ok_or_else(|| SupplyError::Malformed {
                 detail: "initialize answered without an mcp-session-id response header, and \

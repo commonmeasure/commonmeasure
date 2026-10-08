@@ -17,6 +17,9 @@ use std::sync::{Arc, Mutex};
 use commonmeasure_http::{Request, Response, Server, ServerHandle};
 use sha2::{Digest, Sha256};
 
+#[path = "support/terminal.rs"]
+mod terminal;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPOSITORY: &str = "commonmeasure/commonmeasure";
 
@@ -120,8 +123,24 @@ fn recorded_release(
     (server, requests)
 }
 
+/// Runs `command` in a new session, so it has no controlling terminal: the
+/// installer asks for consent on /dev/tty whatever stdin is, and would
+/// otherwise wait on the terminal of whoever runs the tests.
+fn without_terminal(command: &mut Command) -> &mut Command {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: setsid is async-signal-safe and changes only the child's
+    // session, between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        })
+    }
+}
+
 fn install(origin: &ServerHandle, home: &Path, dir: &Path, tag: Option<&str>) -> Output {
     let mut command = Command::new("/bin/sh");
+    without_terminal(&mut command);
     command.arg(repo_root().join("install.sh"));
     if let Some(tag) = tag {
         command.args(["--tag", tag]);
@@ -436,7 +455,7 @@ fn needs_no_credential_and_no_github_client() {
     let origin = release(&tag, binary, &sum, true);
     let home = tempfile::tempdir().expect("tempdir");
     let dir = home.path().join("bin");
-    let output = Command::new("/bin/sh")
+    let output = without_terminal(&mut Command::new("/bin/sh"))
         .arg(repo_root().join("install.sh"))
         .args(["--tag", &tag, "--dir"])
         .arg(&dir)
@@ -481,13 +500,38 @@ fn script_reporting(version: &str) -> Vec<u8> {
     format!("#!/bin/sh\necho \"commonmeasure {version}\"\n").into_bytes()
 }
 
+/// Copies `from` to `to` with `cp` and makes `to` executable, so that no
+/// descriptor open for writing on `to` ever exists in this process. On Linux
+/// a file one test thread writes is also open in any child another thread
+/// forks meanwhile, until that child execs, and running the file in that
+/// window fails with "Text file busy" (ETXTBSY). Writing under another name
+/// and renaming does not avoid it: the inherited descriptor holds the inode.
+fn place_executable(from: &Path, to: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let status = Command::new("cp")
+        .arg(from)
+        .arg(to)
+        .status()
+        .expect("cp runs");
+    assert!(status.success(), "cp {} {}", from.display(), to.display());
+    std::fs::set_permissions(to, std::fs::Permissions::from_mode(0o755)).expect("mode");
+}
+
+/// Writes `script` to `path` as an executable through [`place_executable`]:
+/// this process writes only `<path>.written`, which nothing runs.
+fn write_executable(path: &Path, script: &str) {
+    let written = path.with_extension("written");
+    std::fs::write(&written, script).expect("script");
+    place_executable(&written, path);
+}
+
 /// This build's binary, copied to `<home>/bin/commonmeasure`.
 #[cfg(debug_assertions)]
 fn installed_copy(home: &Path) -> PathBuf {
     let dir = home.join("bin");
     std::fs::create_dir_all(&dir).expect("bin");
     let target = dir.join("commonmeasure");
-    std::fs::copy(env!("CARGO_BIN_EXE_commonmeasure"), &target).expect("copy the binary");
+    place_executable(Path::new(env!("CARGO_BIN_EXE_commonmeasure")), &target);
     target
 }
 
@@ -517,7 +561,6 @@ fn launchctl_wrapper(label: &str, log: &Path) -> String {
 /// nothing reaches launchd, and returns its exit code, whether it would have
 /// forwarded the call, and its log.
 fn run_wrapper(dir: &Path, label: &str, args: &[&str]) -> (Option<i32>, bool, String) {
-    use std::os::unix::fs::PermissionsExt as _;
     let log = dir.join("calls.log");
     let _ = std::fs::remove_file(&log);
     let script = launchctl_wrapper(label, &log);
@@ -525,8 +568,7 @@ fn run_wrapper(dir: &Path, label: &str, args: &[&str]) -> (Option<i32>, bool, St
     assert_eq!(script.matches(forward).count(), 1, "{script}");
     let script = script.replace(forward, "printf 'FORWARDED\\n'; exit 0\n");
     let wrapper = dir.join("launchctl");
-    std::fs::write(&wrapper, script).expect("wrapper");
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    write_executable(&wrapper, &script);
     let output = Command::new(&wrapper)
         .args(args)
         .output()
@@ -618,7 +660,6 @@ fn the_launchctl_wrapper_refuses_every_other_call_before_forwarding() {
 
 #[cfg(debug_assertions)]
 fn update(origin: &ServerHandle, binary: &Path, args: &[&str]) -> Output {
-    use std::os::unix::fs::PermissionsExt as _;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static CALLS: AtomicUsize = AtomicUsize::new(0);
     let label = format!(
@@ -630,9 +671,7 @@ fn update(origin: &ServerHandle, binary: &Path, args: &[&str]) -> Output {
     let tools = home.join("tools");
     std::fs::create_dir_all(&tools).expect("tools");
     let log = tools.join(format!("{label}.log"));
-    let launchctl = tools.join("launchctl");
-    std::fs::write(&launchctl, launchctl_wrapper(&label, &log)).expect("launchctl");
-    std::fs::set_permissions(&launchctl, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    write_executable(&tools.join("launchctl"), &launchctl_wrapper(&label, &log));
     let path = std::env::join_paths(std::iter::once(tools.clone()).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
@@ -672,6 +711,30 @@ fn update(origin: &ServerHandle, binary: &Path, args: &[&str]) -> Output {
         assert!(!calls.is_empty(), "launchd was asked under {label}");
     }
     output
+}
+
+/// Where `update` began its list of the processes still running the
+/// release it replaced, and the line it printed there for `pid`. The list
+/// covers every process of this user that may run the binary, so on a
+/// machine whose own edge runs it also names that edge's processes; only
+/// the test's own line is asserted.
+#[cfg(debug_assertions)]
+fn listed_line(stdout: &str, pid: u32) -> (usize, &str) {
+    let header = format!(
+        "These processes run commonmeasure {VERSION}, or a release installed before it, until \
+         their host restarts them:\n"
+    );
+    let start = stdout.find(&header).unwrap_or_else(|| panic!("{stdout}"));
+    let prefix = format!("  pid {pid}  ");
+    let mine: Vec<&str> = stdout[start + header.len()..]
+        .lines()
+        .take_while(|line| line.starts_with("  pid "))
+        .filter(|line| line.starts_with(&prefix))
+        .collect();
+    match mine[..] {
+        [line] => (start, line),
+        _ => panic!("one line for pid {pid}: {stdout}"),
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -930,14 +993,16 @@ fn update_replaces_this_binary_while_another_process_runs_it_and_names_that_proc
     );
     // Pid, the subcommand and the home; no other argument and no other
     // environment entry.
-    let listing = stdout
-        .find(&format!(
-            "These processes run commonmeasure {VERSION}, or a release installed before it, \
-             until their host restarts them:\n  pid {}  mcp  COMMONMEASURE_HOME={}\n",
+    let (listing, line) = listed_line(&stdout, mcp.id());
+    assert_eq!(
+        line,
+        format!(
+            "  pid {}  mcp  COMMONMEASURE_HOME={}",
             mcp.id(),
             edge.display()
-        ))
-        .unwrap_or_else(|| panic!("{stdout}"));
+        ),
+        "{stdout}"
+    );
     let sessions = stdout
         .find("sessions opened from now on run 9.9.9")
         .unwrap_or_else(|| panic!("{stdout}"));
@@ -990,13 +1055,14 @@ fn reinstalling_the_current_release_names_the_processes_still_running_it() {
         still_running,
         "the MCP server kept running through the reinstall"
     );
-    assert!(
-        stdout.contains(&format!(
-            "These processes run commonmeasure {VERSION}, or a release installed before it, \
-             until their host restarts them:\n  pid {}  mcp  COMMONMEASURE_HOME={}\n",
+    let (_, line) = listed_line(&stdout, mcp.id());
+    assert_eq!(
+        line,
+        format!(
+            "  pid {}  mcp  COMMONMEASURE_HOME={}",
             mcp.id(),
             edge.display()
-        )),
+        ),
         "{stdout}"
     );
     assert!(!stdout.contains("sessions opened from now on"), "{stdout}");
@@ -1005,4 +1071,93 @@ fn reinstalling_the_current_release_names_the_processes_still_running_it() {
         assert!(!text.contains("AAA_SENTINEL"), "{text}");
         assert!(!text.contains("claude-code"), "{text}");
     }
+}
+
+/// EDG-101: `curl | sh` has no terminal stdin, so the installer asks for
+/// reporting consent on the controlling terminal whatever stdin is. Only a
+/// non-empty `CI`, or no controlling terminal, defers the question.
+#[test]
+fn the_installer_asks_for_consent_on_the_terminal_unless_ci_is_set() {
+    // Exercise the real binary's consent commands without transferring and
+    // hashing its full debug image inside the terminal deadline. The other
+    // installer tests verify distribution of the binary itself.
+    let executable = env!("CARGO_BIN_EXE_commonmeasure").replace('\'', "'\\''");
+    let binary = format!("#!/bin/sh\nexec '{executable}' \"$@\"\n").into_bytes();
+    let sum = sha256_hex(&binary);
+    let tag = format!("v{VERSION}");
+    let origin = release(&tag, binary, &sum, true);
+    let installer = |home: &Path, script: &str| {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script, "install"])
+            .arg(repo_root().join("install.sh"))
+            .arg(&tag)
+            .arg(home.join("bin"))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", home)
+            .env("COMMONMEASURE_HOME", home.join("edge"))
+            .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+            .env("CODEX_HOME", home.join("codex"))
+            .env(
+                "COMMONMEASURE_RELEASE_URL",
+                format!("{}/{REPOSITORY}/releases", origin.url()),
+            );
+        command
+    };
+    let piped = r#"cat "$1" | sh -s -- --tag "$2" --dir "$3""#;
+    let direct = r#"sh "$1" --tag "$2" --dir "$3""#;
+    let consent = |home: &Path| home.join("edge/consent.json");
+
+    // The `curl | sh` shape: the script arrives on a pipe, the answer
+    // through the terminal.
+    let home = tempfile::tempdir().unwrap();
+    let (status, output) = terminal::run(
+        &mut installer(home.path(), piped),
+        false,
+        b"y\n",
+        // Concurrent release tests hash full debug binaries; allow time
+        // for installation and the real CLI's consent reads as well.
+        std::time::Duration::from_secs(60),
+    );
+    assert!(status.success(), "{output}");
+    assert!(output.contains("[y/N]"), "{output}");
+    assert!(consent(home.path()).exists(), "{output}");
+    let shown = Command::new(home.path().join("bin/commonmeasure"))
+        .args(["consent", "show", "--json"])
+        .env_clear()
+        .env("HOME", home.path())
+        .env("COMMONMEASURE_HOME", home.path().join("edge"))
+        .output()
+        .unwrap();
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["state"], "agreed", "{output}");
+
+    for ci in ["true", "0"] {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = installer(home.path(), direct);
+        command.env("CI", ci);
+        let (status, output) =
+            terminal::run(&mut command, true, b"", std::time::Duration::from_secs(60));
+        assert!(status.success(), "CI={ci}: {output}");
+        assert!(!output.contains("[y/N]"), "CI={ci}: {output}");
+        assert!(
+            output.contains("commonmeasure consent agree"),
+            "CI={ci}: {output}"
+        );
+        assert!(!consent(home.path()).exists(), "CI={ci}: {output}");
+        assert!(home.path().join("bin/commonmeasure").exists());
+    }
+
+    // A new session without a controlling terminal: /dev/tty does not open.
+    let home = tempfile::tempdir().unwrap();
+    let output = without_terminal(&mut installer(home.path(), piped))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!stdout.contains("[y/N]"), "{stdout}");
+    assert!(stdout.contains("commonmeasure consent agree"), "{stdout}");
+    assert!(!consent(home.path()).exists(), "{stdout}");
 }

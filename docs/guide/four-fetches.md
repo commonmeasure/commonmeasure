@@ -282,10 +282,12 @@ the same sentence, and the refusal is in the log with the licence it was
 read from.
 
 The refusal is not a verdict on the publisher. This is a licence an agent
-can act on, and the agent acted on it. The same licence admits the page the
-moment the operator holds the subscription and declares it in the source
-policy as **terms**, an agreement the operator holds with a source, which
-govern over the source's published statements.
+can act on, and the agent acted on it. The payment term binds in every
+policy mode: the edge pays or does not fetch, and no edge holds a settlement
+rail yet. An operator that holds a subscription can declare it in the source
+policy as **terms**, an agreement the operator holds with a source; the
+reference is recorded on the host's crossings beside the source's statements
+and does not override them.
 
 ## 4. The Economist: refused by the operator before anything was asked
 

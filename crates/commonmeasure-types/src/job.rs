@@ -8,7 +8,8 @@ use crate::Money;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyMode {
-    /// Record what happened; refuse nothing.
+    /// Record the operator's policy, not enforce it; refuse only on the
+    /// source's terms.
     Observe,
     /// Prefer eligible routes, but let an ineligible one through with the
     /// breach recorded.

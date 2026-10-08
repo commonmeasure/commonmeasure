@@ -1,0 +1,56 @@
+{
+  "label": "Valyu recorded fetch: W3C PROV-DM, without inference",
+  "job": {
+    "id": "784fedb3-8e66-47b4-af4f-383d28f7aa04",
+    "kind": "research.answer",
+    "prompt": "What does the W3C PROV data model (PROV-DM) define, and which document is the current W3C Recommendation for it?",
+    "policy_mode": "strict",
+    "objective": {
+      "kind": "weighted",
+      "quality": 1,
+      "coverage": 1,
+      "freshness": 0.5,
+      "cost": 0.4,
+      "latency": 0.2,
+      "policy_risk": 1
+    },
+    "constraints": [
+      {
+        "kind": "maximum_acquisition_cost",
+        "amount": {
+          "currency": "USD",
+          "micros": 100000
+        }
+      },
+      {
+        "kind": "maximum_context_tokens",
+        "tokens": 4000
+      },
+      {
+        "kind": "maximum_latency_ms",
+        "milliseconds": 30000
+      },
+      {
+        "kind": "allowed_source_host",
+        "host": "www.w3.org"
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "description": "The W3C Recommendation that defines PROV-DM",
+        "required": true
+      }
+    ]
+  },
+  "model_plan": {
+    "name": "operator-pinned-answer-model",
+    "version": "2",
+    "model": "tensorzero::model_name::contextops_gpt_4o_mini_2024_07_18"
+  },
+  "result_limit": 3,
+  "suite_version": "recon-valyu-fetch/v1",
+  "fetch_target": "https://www.w3.org/TR/prov-dm/",
+  "providers": [
+    "valyu"
+  ]
+}

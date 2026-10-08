@@ -11,6 +11,7 @@ mod consent;
 mod console;
 mod doctor;
 mod enrol;
+mod first_run;
 mod hosted;
 mod hosted_tokens;
 mod inspect;
@@ -208,8 +209,9 @@ enum Command {
     /// configured. Names variables, paths and digests; never prints a value.
     Credentials,
     /// Register this binary with a host, by absolute path, in the host's own
-    /// configuration: Claude Code gets the five hooks and the MCP server at
-    /// user scope; Codex gets the MCP server table, with the approval mode
+    /// configuration: Claude Code gets the five hooks, the MCP server at
+    /// user scope, and `context_fetch` and `context_search` pre-approved in
+    /// its user settings' `permissions.allow`; Codex gets the MCP server table, with the approval mode
     /// that lets its non-interactive runs call the tools; Pi gets an
     /// extension that runs the server, because Pi has no MCP client; Claude
     /// Desktop gets the MCP server in its configuration file; Cursor gets
@@ -345,9 +347,9 @@ enum Command {
         /// only. While it runs it holds relay-loop.lock in the home, so a
         /// session on a host that sends no session-end event (Claude Desktop,
         /// Codex, Cursor) has automatic delivery, and a source whose licence
-        /// demands usage reporting is admitted there where the policy scope
-        /// clears telemetry egress and relay.json names a receiver not scoped
-        /// to suppliers. A second one on the
+        /// demands usage reporting is admitted there under reporting consent
+        /// where relay.json names the hub this edge is enrolled with or the
+        /// licence's endpoint. A second one on the
         /// same home is refused. Skips a run while relay/manual is present.
         /// `commonmeasure service install relay` runs it at login on macOS.
         #[arg(
@@ -384,7 +386,24 @@ enum Command {
         /// mode and enrolment changes no policy.
         #[arg(long)]
         managed: bool,
+        /// Print the relay command without offering installation after managed enrolment.
+        #[arg(long)]
+        no_relay_offer: bool,
     },
+    /// The steps `install.sh --connect <hub> --token <token>` runs once the
+    /// binary is in place, one line each: register every host present on
+    /// this machine as `install <host>` does, `connect <hub> --token
+    /// <token> --managed`, check the working directory's hub reporting,
+    /// relay, and print the hub's Fleet evidence address and the console's.
+    /// A fresh directory stays unenrolled until you confirm history with
+    /// `enrol --name NAME --reporting hub --include-history`; the home
+    /// directory and `/` are never enrolled. In this release the fetch of
+    /// https://commonmeasure.ai/ is reported as not made: the session record
+    /// has no host word for installer traffic.
+    /// A step that fails stops the run and exits non-zero; a refused page,
+    /// missing consent and a hub waiting for a revision or an approval are
+    /// reported and the run goes on.
+    FirstRun(first_run::FirstRun),
     /// Register, renew, close and read a working instance at the hub this
     /// edge is enrolled with (docs/contracts/session-evidence.md §Instance
     /// registration). Each command records what it did and the accepted
@@ -645,7 +664,9 @@ fn main() -> ExitCode {
             hub,
             token,
             managed,
-        } => connect(hub.as_deref(), token.as_deref(), managed),
+            no_relay_offer,
+        } => connect(hub.as_deref(), token.as_deref(), managed, no_relay_offer),
+        Command::FirstRun(args) => first_run::run(args),
         Command::Instance { command } => instance::run(command),
         Command::Disconnect => disconnect(),
         Command::Artifact(args) => artifact::run(args),
@@ -1394,8 +1415,7 @@ fn install_host(host: &str, binary: Option<&Path>) -> Result<(), String> {
     let paths = registration::HostPaths::from_environment()?;
     let binary = registration::resolve_binary(binary)?;
     let mut lines = registration::install(surface, &binary, &paths)?;
-    let running =
-        home_dir().is_ok_and(|home| commonmeasure_harness::delivery::relay_loop_running(&home));
+    let running = home_dir().is_ok_and(|home| relay_setup::running(&home));
     if let Some(hint) = relay_setup::host_hint(surface.id(), running, cfg!(target_os = "macos")) {
         lines.push(hint);
     }
@@ -1936,7 +1956,12 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
 
 /// Enrol with a hub. Both the hub and the token must be named: there is no
 /// default hub and no ambient token, and the refusal says which is missing.
-fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), String> {
+fn connect(
+    hub: Option<&str>,
+    token: Option<&str>,
+    managed: bool,
+    no_relay_offer: bool,
+) -> Result<(), String> {
     let (Some(hub), Some(token)) = (hub, token) else {
         let missing = match (hub, token) {
             (None, None) => "no hub URL and no --token",
@@ -1950,8 +1975,8 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
         ));
     };
     let home = home_dir().map_err(|error| error.to_string())?;
-    let report = commonmeasure_relay::connect(&home, hub, token, managed)
-        .map_err(|error| format!("{error:#}"))?;
+    let connected = enrol_edge(&home, hub, token, managed)?;
+    let report = &connected.report;
     let mut out = format!(
         "enrolled with {} in {} as {}\n  key id   {}\n  receiver {}\n  written  {}, {} and {}\n",
         report.hub,
@@ -1981,15 +2006,8 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
              to retry\n"
         )),
     }
-    // What --managed did, and whether the machine is where the operator
-    // asked it to be. A scripted setup reads the exit code, so a pin that
-    // was refused or a first synchronisation that failed exits non-zero.
-    // An organisation awaiting its first revision is enrolled successfully;
-    // its local policy stays in force and it has not converged.
-    let mut managed_failure: Option<String> = None;
-    match &report.managed {
-        None => {}
-        Some(Ok(pin)) => {
+    match (&report.managed, &connected.sync) {
+        (Some(Ok(pin)), sync) => {
             out.push_str(&format!(
                 "deployment  managed: signer {} pinned in {}; policy from {}\n",
                 pin.key_id,
@@ -1999,59 +2017,111 @@ fn connect(hub: Option<&str>, token: Option<&str>, managed: bool) -> Result<(), 
             if let Some(previous) = &pin.replaced {
                 out.push_str(&format!("  replaced {previous}\n"));
             }
-            match commonmeasure_harness::managed::sync(
-                &home,
-                &edge_identity(&home),
-                chrono::Utc::now,
-            ) {
-                Ok(sync) => {
+            match sync {
+                Some(Ok(sync)) => {
                     out.push_str("first policy sync:\n");
-                    for line in sync_report_text(&sync).lines() {
+                    for line in sync_report_text(sync).lines() {
                         out.push_str(&format!("  {line}\n"));
                     }
                     if sync.awaiting_first_revision() {
                         out.push_str("  managed enrolment complete; waiting for the organisation's first policy revision.\n");
-                    } else if sync.sync.outcome == "no_revision" {
-                        managed_failure = Some(format!(
-                            "enrolled and pinned to signer {}, but the hub has no published policy revision; publish a revision on the hub's Policy page",
-                            pin.key_id
-                        ));
-                    } else if !sync.converged() {
-                        managed_failure = Some(format!(
-                            "enrolled and pinned to signer {}, but the first policy \
-                             synchronisation did not activate a policy ({}); the local policy \
-                             stays in force until `commonmeasure policy sync` converges",
-                            pin.key_id, sync.sync.outcome
-                        ));
                     }
                 }
-                Err(error) => {
+                Some(Err(error)) => {
                     out.push_str(&format!("first policy sync refused: {error}\n"));
-                    managed_failure = Some(format!(
+                }
+                None => {}
+            }
+        }
+        (Some(Err(reason)), _) => {
+            out.push_str(&format!(
+                "deployment  not pinned: {reason}\n  the enrolment stands and the edge is in \
+                 local mode\n"
+            ));
+        }
+        (None, _) => {}
+    }
+    write_stdout(&out)?;
+    match connected.failure {
+        Some(failure) => Err(failure),
+        None if managed => relay_setup::offer(&home, no_relay_offer),
+        None => Ok(()),
+    }
+}
+
+/// What enrolling with a hub did: the enrolment itself, the first policy
+/// synchronisation where `--managed` pinned a signer, and why the machine
+/// is not where the operator asked it to be, where it is not.
+pub(crate) struct Connected {
+    pub(crate) report: commonmeasure_relay::ConnectReport,
+    /// The first synchronisation after a pin; `None` where nothing was
+    /// pinned.
+    pub(crate) sync: Option<Result<commonmeasure_harness::managed::SyncReport, String>>,
+    /// A pin that was refused, or a first synchronisation that failed: the
+    /// enrolment stands, but a scripted setup reads the exit code, so this
+    /// fails the command. An organisation awaiting its first revision is
+    /// enrolled successfully; its local policy stays in force and it has
+    /// not converged.
+    pub(crate) failure: Option<String>,
+}
+
+/// Enrol this edge with `hub` and, with `managed`, make the first policy
+/// synchronisation. `connect` prints the whole of it; the first run prints
+/// one line.
+pub(crate) fn enrol_edge(
+    home: &Path,
+    hub: &str,
+    token: &str,
+    managed: bool,
+) -> Result<Connected, String> {
+    let report = commonmeasure_relay::connect(home, hub, token, managed)
+        .map_err(|error| format!("{error:#}"))?;
+    let mut failure = None;
+    let sync = match &report.managed {
+        None => None,
+        Some(Ok(pin)) => {
+            let sync =
+                commonmeasure_harness::managed::sync(home, &edge_identity(home), chrono::Utc::now);
+            match &sync {
+                Ok(sync) if sync.awaiting_first_revision() => {}
+                Ok(sync) if sync.sync.outcome == "no_revision" => {
+                    failure = Some(format!(
+                        "enrolled and pinned to signer {}, but the hub has no published policy revision; publish a revision on the hub's Policy page",
+                        pin.key_id
+                    ));
+                }
+                Ok(sync) if !sync.converged() => {
+                    failure = Some(format!(
+                        "enrolled and pinned to signer {}, but the first policy \
+                         synchronisation did not activate a policy ({}); the local policy \
+                         stays in force until `commonmeasure policy sync` converges",
+                        pin.key_id, sync.sync.outcome
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some(format!(
                         "enrolled and pinned to signer {}, but the first policy synchronisation \
                          was refused: {error}",
                         pin.key_id
                     ));
                 }
             }
+            Some(sync)
         }
         Some(Err(reason)) => {
-            out.push_str(&format!(
-                "deployment  not pinned: {reason}\n  the enrolment stands and the edge is in \
-                 local mode\n"
-            ));
-            managed_failure = Some(format!(
+            failure = Some(format!(
                 "enrolled, but not managed: {reason}. Run `commonmeasure connect` again with \
                  --managed once the signer can be read"
             ));
+            None
         }
-    }
-    write_stdout(&out)?;
-    match managed_failure {
-        Some(failure) => Err(failure),
-        None if managed => relay_setup::offer(&home),
-        None => Ok(()),
-    }
+    };
+    Ok(Connected {
+        report,
+        sync,
+        failure,
+    })
 }
 
 /// Leave the hub. The local files go either way; whether the hub revoked

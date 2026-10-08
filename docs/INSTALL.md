@@ -51,6 +51,27 @@ The home directory is written as `~` above; the installer prints it in full.
 With a terminal, the installer also asks for reporting consent between the
 `PATH` lines and `Next:` (below).
 
+### Connect during installation
+
+The Hub's **Enrol this machine** card supplies `--connect HUB --token TOKEN`
+for the installer. After installing, it runs `commonmeasure first-run`,
+registers detected hosts, connects under managed policy, checks directory
+reporting, relays and prints the evidence addresses. The token is single-use
+and short-lived; it is not printed or stored.
+
+Run the line in the project directory. A fresh directory remains unenrolled
+until you confirm history with `commonmeasure enrol --name NAME --reporting
+hub --include-history`. The home directory and `/` are never enrolled. In
+this release the first-run fetch is reported as not made: the session record
+has no host word for installer traffic. See [Getting started](GETTING-STARTED.md)
+for the steps and remedies.
+
+Both arguments must be present and non-empty; whitespace-only values and
+`--connect` with `--update` are refused before any download (exit 2). If a
+first-run step fails, the installer exits 3 with the binary still installed
+and names the failed step. Steps already completed stand; later steps do not
+run. Reporting consent remains the operator's choice, as below.
+
 ### Reporting consent
 
 Some sources license their content only if each use of it is reported. They
@@ -83,12 +104,12 @@ The closing `Next:` line ends by what the recorded answer lets leave:
   use is reported until a policy scope clears egress."
 
 Any answer but `y` or `yes` records nothing, and the installer prints the
-command that agrees later. An install with no terminal records nothing and
-prints the same line, unless it is given `--agree-reporting` or
-`COMMONMEASURE_REPORTING_CONSENT=agree`, which record agreement without
-asking. A home that already records an answer is not asked again, and
-`--update` never asks. The same answer is shown, given and withdrawn at any
-time with one command:
+command that agrees later. An install with no terminal, or with a non-empty
+`CI` value, records nothing and prints the same line, unless it is given
+`--agree-reporting` or `COMMONMEASURE_REPORTING_CONSENT=agree`, which record
+agreement without asking. A home that already records an answer is not asked
+again, and `--update` never asks. The same answer is shown, given and
+withdrawn at any time with one command:
 
 ```sh
 commonmeasure consent            # the answer recorded and the text it refers to
@@ -151,8 +172,7 @@ installer has not been run on Windows.
 ## Updating
 
 If your installed updater refuses while hosts run the binary, run the
-installer once instead; it replaces the binary in place. See the
-[upgrade note](GETTING-STARTED.md#updating).
+installer once instead; it replaces the binary in place.
 
 ```sh
 curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh
@@ -392,10 +412,18 @@ commonmeasure service uninstall relay
 ```
 
 After a successful `connect --managed`, macOS offers to install the relay if
-none is installed for this Edge home and no loop is running. Installation
-requires an explicit yes at the terminal. Without a terminal, or with captured
-output, the command is printed for later; other platforms print
-`commonmeasure relay --every 300` for your service manager.
+none is installed for this Edge home and neither a relay loop nor a hosted
+service holds it. Installation requires an explicit yes at the terminal. If
+the installed relay serves another home, the offer names that home and asks
+whether to move it, defaulting to no. Moving it stops that home's background
+reporting; hosts without a session-end event there refuse sources requiring
+usage reporting until another automatic relay runs.
+
+With any non-empty `CI` value, non-terminal stdin or stdout, or
+`--no-relay-offer`, the finding and command are printed without prompting or
+installing. Other platforms print `commonmeasure relay --every 300` for your
+service manager. If an accepted installation fails, enrolment still succeeds
+and the finding names the failure and the command to retry.
 
 `install relay` writes `~/Library/LaunchAgents/ai.commonmeasure.relay.plist`,
 which runs `commonmeasure relay --every 300` at login, logging to

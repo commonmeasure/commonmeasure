@@ -68,7 +68,7 @@ External dependencies are configured explicitly:
   `KEENABLE_API_KEY`, `LINKUP_API_KEY`, `NIMBLE_API_KEY`,
   `OZONE_LIVE_API_KEY`, `PARALLEL_API_KEY`, `REDPINE_API_KEY`,
   `SEARCH1API_API_KEY`, `SERPDIVE_API_KEY`, `TAVILY_API_KEY`,
-  `TINYFISH_API_KEY`, `TOLLBIT_API_KEY`, `YOU_API_KEY`). These calls are
+  `TINYFISH_API_KEY`, `TOLLBIT_API_KEY`, `VALYU_API_KEY`, `YOU_API_KEY`). These calls are
   billable. **Skill invocation** is behind the same `--live` gate: it
   executes a third party's program on this machine. A skill needs no
   credential; it needs an entry in the catalogue at

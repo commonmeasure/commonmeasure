@@ -197,18 +197,21 @@ fn assert_refused(
     let robots_url = site.url("/robots.txt");
     assert_eq!(response["result"]["isError"], true, "{mode}: {response}");
     let detail = text_of(response);
+    // The agent reads the ruling in this edge's words, and none of the
+    // file's; the record's sentence names the URL, the file, the group and
+    // the rule.
     for needed in [
         "refused before the crossing",
-        page,
-        robots_url.as_str(),
-        &format!("`User-agent: {group}` group"),
-        &format!("`{rule}`"),
+        "disallows this fetcher at this path",
         REFUSED,
     ] {
         assert!(
             detail.contains(needed),
             "{mode}: missing {needed:?} in {detail}"
         );
+    }
+    for absent in [robots_url.as_str(), group, rule] {
+        assert!(!detail.contains(absent), "{mode}: {absent:?} in {detail}");
     }
     assert_eq!(
         site.requests(),
@@ -229,10 +232,18 @@ fn assert_refused(
     let refusal = payload["refusal"]
         .as_str()
         .expect("a refusal names its reason");
-    assert!(
-        refusal.contains(&robots_url) && refusal.contains(rule) && refusal.contains(REFUSED),
-        "{mode}: {refusal}"
-    );
+    for needed in [
+        page,
+        robots_url.as_str(),
+        &format!("`User-agent: {group}` group"),
+        &format!("`{rule}`"),
+        REFUSED,
+    ] {
+        assert!(
+            refusal.contains(needed),
+            "{mode}: missing {needed:?} in {refusal}"
+        );
+    }
     let robots = &payload["declarations"]["robots"];
     assert_eq!(robots["url"], robots_url, "{mode}");
     assert_eq!(robots["requested_url"], page, "{mode}");
@@ -285,7 +296,11 @@ fn a_wildcard_disallow_refuses_in_every_mode_where_no_group_names_the_token() {
             home.path(),
         );
         assert!(
-            text_of(&response).contains("addresses every fetcher because no group names"),
+            crossings(home.path())[0]["payload"]["refusal"]
+                .as_str()
+                .is_some_and(
+                    |refusal| refusal.contains("addresses every fetcher because no group names")
+                ),
             "{mode}: the wildcard group is named as one"
         );
     }
@@ -352,6 +367,22 @@ fn assert_unreachable(
 ) {
     assert_eq!(response["result"]["isError"], true, "{mode}: {response}");
     let detail = text_of(response);
+    // The agent reads that the file could not be reached, and why by class;
+    // the record's sentence names the file, the page, the host and the fault.
+    for needed in [
+        "robots.txt could not be reached",
+        "An unreachable robots.txt is a complete disallow in every policy mode",
+    ] {
+        assert!(
+            detail.contains(needed),
+            "{mode}: missing {needed:?} in {detail}"
+        );
+    }
+    assert!(!detail.contains("127.0.0.1"), "{mode}: {detail}");
+    let refusal = crossings(home)[0]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
     for needed in [
         site.url("/robots.txt").as_str(),
         page,
@@ -361,8 +392,8 @@ fn assert_unreachable(
         "An unreachable robots.txt is a complete disallow in every policy mode",
     ] {
         assert!(
-            detail.contains(needed),
-            "{mode}: missing {needed:?} in {detail}"
+            refusal.contains(needed),
+            "{mode}: missing {needed:?} in {refusal}"
         );
     }
     assert!(
@@ -456,11 +487,16 @@ fn a_429_or_503_is_ruled_by_the_stale_copy_held_in_every_mode() {
                 "{status} {mode}: {refused}"
             );
             let detail = text_of(&refused);
+            assert!(detail.contains(REFUSED), "{status} {mode}: {detail}");
+            let refusal = crossings(home.path())[0]["payload"]["refusal"]
+                .as_str()
+                .expect("a refusal")
+                .to_owned();
             assert!(
-                detail.contains("`Disallow: /private/`")
-                    && detail.contains("held because the file could not be read now")
-                    && detail.contains(REFUSED),
-                "{status} {mode}: {detail}"
+                refusal.contains("`Disallow: /private/`")
+                    && refusal.contains("held because the file could not be read now")
+                    && refusal.contains(REFUSED),
+                "{status} {mode}: {refusal}"
             );
             let admitted = fetch(home.path(), &open);
             assert_eq!(
@@ -565,7 +601,10 @@ fn an_oversized_robots_file_is_read_to_the_parsing_limit_in_every_mode() {
             &response,
             home.path(),
         );
-        let detail = text_of(&response);
+        let detail = crossings(home.path())[0]["payload"]["refusal"]
+            .as_str()
+            .expect("a refusal")
+            .to_owned();
         assert!(
             detail.contains(&format!("of its {size} bytes")) && detail.contains("section 2.5"),
             "{mode}: {detail}"
@@ -632,18 +671,25 @@ fn assert_redirect_declined(
     );
     assert_eq!(site.requests(), ["/robots.txt"], "{mode}");
     assert!(www.requests().is_empty(), "{mode}: {:?}", www.requests());
-    let detail = text_of(&response);
+    let detail = crossings(home)[0]["payload"]["refusal"]
+        .as_str()
+        .expect("a refusal")
+        .to_owned();
     assert!(
         detail.contains("section 2.3.1.2 on redirects"),
         "{mode}: {detail}"
     );
+    // The agent is pointed at the policy, with the redirect's target left to
+    // the record.
+    let told = text_of(&response);
     assert!(
-        detail.contains(&format!(
-            "(operator policy in {}, which does not admit {www_robots}, where the source's \
-             robots.txt redirected;",
+        told.contains(&format!(
+            "(operator policy in {}, which does not admit the host the source's robots.txt \
+             redirected to;",
             home.join("policy.json").display()
-        )) && !detail.contains("(the source's robots.txt,"),
-        "{mode}: {detail}"
+        )) && !told.contains("(the source's robots.txt")
+            && !told.contains(www_robots),
+        "{mode}: {told}"
     );
     let robots = &crossings(home)[0]["payload"]["declarations"]["robots"];
     assert_eq!(robots["declined_redirect"], www_robots, "{mode}: {robots}");
@@ -716,16 +762,26 @@ fn a_robots_redirect_to_a_host_outside_the_allowlist_is_declined_under_strict() 
         let home = allow_only_site(mode);
         let refused = fetch(home.path(), &site.url("/private/report"));
         assert_eq!(refused["result"]["isError"], true, "{mode}: {refused}");
+        // The file that ruled, and the redirect that led to it, are the
+        // record's; the agent reads the ruling.
         assert!(
-            text_of(&refused).contains(&format!(
+            text_of(&refused).contains("disallows this fetcher at this path"),
+            "{mode}: {refused}"
+        );
+        let refusal = crossings(home.path())[0]["payload"]["refusal"]
+            .as_str()
+            .expect("a refusal")
+            .to_owned();
+        assert!(
+            refusal.contains(&format!(
                 "{} (redirected to {www_robots}) disallows",
                 site.url("/robots.txt")
             )),
-            "{mode}: {refused}"
+            "{mode}: {refusal}"
         );
         assert!(
-            text_of(&refused).contains("`Disallow: /private/`"),
-            "{mode}: {refused}"
+            refusal.contains("`Disallow: /private/`"),
+            "{mode}: {refusal}"
         );
         let admitted = fetch(home.path(), &site.url("/article"));
         assert_eq!(admitted["result"]["isError"], false, "{mode}: {admitted}");
@@ -773,7 +829,9 @@ fn a_robots_redirect_the_policy_admits_is_followed_and_its_file_rules() {
     let refused = fetch(home.path(), &site.url("/private/report"));
     assert_eq!(refused["result"]["isError"], true, "{refused}");
     assert!(
-        text_of(&refused).contains("`Disallow: /private/`"),
+        crossings(home.path())[0]["payload"]["refusal"]
+            .as_str()
+            .is_some_and(|refusal| refusal.contains("`Disallow: /private/`")),
         "{refused}"
     );
     let admitted = fetch(home.path(), &site.url("/article"));
@@ -819,8 +877,10 @@ fn a_robots_file_five_redirects_away_is_read_and_six_is_unreachable() {
         assert_eq!(robots["outcome"], outcome, "{redirects}: {robots}");
         if outcome == "unreachable" {
             assert!(
-                text_of(&response).contains("redirect limit exceeded"),
-                "{response}"
+                robots["unavailable"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("redirect limit exceeded")),
+                "{robots}"
             );
         }
         assert!(
@@ -962,7 +1022,9 @@ fn a_page_past_the_readings_cap_is_refused_in_every_mode() {
         let response = fetch(home.path(), &page);
         assert_eq!(response["result"]["isError"], true, "{mode}: {response}");
         assert!(
-            text_of(&response).contains("more than 64 readings"),
+            crossings(home.path())[0]["payload"]["refusal"]
+                .as_str()
+                .is_some_and(|refusal| refusal.contains("more than 64 readings")),
             "{mode}: {response}"
         );
         assert_eq!(site.requests(), ["/robots.txt"], "{mode}");
@@ -1147,8 +1209,15 @@ fn a_content_usage_path_rule_binds_an_encoded_spelling_of_its_path() {
         assert_eq!(response["result"]["isError"], true, "{path}: {response}");
         let detail = text_of(&response);
         assert!(
-            detail.contains("disallows AI input") && detail.contains(rule),
+            detail.contains("disallows AI input")
+                && detail.contains("a Content-Usage rule in its robots.txt"),
             "{path}: {detail}"
+        );
+        assert!(
+            crossings(home.path())[0]["payload"]["refusal"]
+                .as_str()
+                .is_some_and(|refusal| refusal.contains(rule)),
+            "{path}: {response}"
         );
         assert_eq!(site.requests(), ["/robots.txt"], "{path}");
         let statements = &crossings(home.path())[0]["payload"]["declarations"]["statements"];

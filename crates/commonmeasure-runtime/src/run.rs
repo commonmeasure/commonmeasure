@@ -1396,6 +1396,13 @@ impl Execution<'_> {
                      unverifiable price is declined rather than discovered on the receipt.",
                     allowance.principal
                 ),
+                crate::agent_text![
+                    "Principal ",
+                    crate::agent_text::Given::text(&allowance.principal),
+                    " holds a cumulative allowance and the quote is not a price in a currency \
+                     the allowance can be checked against; buying at an unverifiable price is \
+                     declined rather than discovered on the receipt."
+                ],
                 Gap::new(
                     GapReason::EvidenceMissing,
                     "The quoted price could not be verified against the principal's cumulative \

@@ -459,9 +459,20 @@ fn the_relay_report_names_the_governing_engagement_that_cleared_what_it_delivere
         reported.iter().any(|name| name == "commonmeasure"),
         "the console reports the other identity: {reported:?}"
     );
-    assert!(
-        !report.contains("commonmeasure"),
-        "a read-time reporting name has no place in the account of an \
+    // Withheld-session explanations include policy paths. Judge the
+    // engagement rows, not an incidental checkout directory in those paths.
+    let governing: Vec<&str> = report
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .split_once(" under governing engagement ")
+                .map(|(_, engagement)| engagement)
+        })
+        .collect();
+    assert_eq!(
+        governing,
+        ["personal"],
+        "only the governing engagement belongs in the account of an \
          enforcement act; got: {report}"
     );
 }

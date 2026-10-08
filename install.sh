@@ -3,7 +3,7 @@
 # release of the product repository, github.com/commonmeasure/commonmeasure:
 #
 #   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR] [--update]
-#                 [--agree-reporting]
+#                 [--agree-reporting] [--connect HUB --token TOKEN]
 #
 # A release holds one binary per supported platform, the plugin archive and
 # SHA256SUMS over every asset. The installer picks the binary for this
@@ -16,14 +16,31 @@
 # the first-install next steps and the consent question; `commonmeasure
 # update` runs this script, as embedded in the binary, with it.
 #
+# --connect HUB --token TOKEN uses the token the hub's Enrol this machine
+# card mints: after the install and the consent question it runs
+# `commonmeasure first-run HUB --token TOKEN`, which registers every host
+# found on this machine as `commonmeasure install <host>` does, connects to
+# the hub under its managed policy, checks the directory's hub reporting,
+# relays, and prints the hub's Fleet evidence
+# address and the local console's, one line per step. Run it in the project
+# directory whose sessions the hub should see. A fresh directory remains
+# unenrolled until you confirm history with `commonmeasure enrol --name
+# NAME --reporting hub --include-history`; the home directory and / are
+# never enrolled. In this release the first-run fetch of
+# https://commonmeasure.ai/ is reported as not made: the session record has
+# no host word for installer traffic. HUB and TOKEN are checked
+# before anything is downloaded: each needs the other, and --connect cannot
+# be combined with --update. The token is passed to the binary and printed
+# nowhere.
+#
 # Reporting consent: some sources license their content only if each use is
 # reported, and they are refused until the operator agrees to report to
 # them. When the operator home records no answer, the installer shows the
 # consent text and asks once, reading the answer from the terminal
 # (/dev/tty, since `curl | sh` has no stdin). --agree-reporting, or
 # COMMONMEASURE_REPORTING_CONSENT=agree in the environment, records
-# agreement without asking, for an unattended install. Without a terminal
-# and without either, nothing is recorded and the installer prints the
+# agreement without asking, for an unattended install. A non-empty CI, or
+# no terminal, with neither of those, records nothing and prints the
 # command that agrees later: `commonmeasure consent agree`. A declined answer
 # records nothing either. The answer is the binary's to record, in the
 # operator home it resolves (COMMONMEASURE_HOME or its default).
@@ -44,7 +61,9 @@
 # Exit status: 0 installed; 1 a download failed verification, or the downloaded
 # binary did not report the release version, and the binary already in place
 # (if any) was left as it was;
-# 2 the installer cannot proceed on this machine, and the message names why.
+# 2 the installer cannot proceed on this machine, or its arguments are
+# wrong, and the message names why; 3 the binary is installed and a step of
+# --connect failed, named on the line above with what to do.
 set -eu
 
 releases=${COMMONMEASURE_RELEASE_URL:-https://github.com/commonmeasure/commonmeasure/releases}
@@ -53,10 +72,14 @@ dir="$HOME/.local/bin"
 plugin=""
 update=""
 agree_reporting=""
+connect=""
+token=""
+connect_given=""
+token_given=""
 [ "${COMMONMEASURE_REPORTING_CONSENT:-}" = agree ] && agree_reporting=1
 
 usage() {
-  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update] [--agree-reporting]"
+  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update] [--agree-reporting] [--connect HUB --token TOKEN]"
 }
 
 while [ $# -gt 0 ]; do
@@ -66,12 +89,37 @@ while [ $# -gt 0 ]; do
     --plugin) plugin=$2; shift 2 ;;
     --update) update=1; shift ;;
     --agree-reporting) agree_reporting=1; shift ;;
+    --connect|--token)
+      [ $# -ge 2 ] || { echo "commonmeasure installer: $1 needs a value" >&2; usage >&2; exit 2; }
+      case "$1" in
+        --connect) connect=$2; connect_given=1 ;;
+        *) token=$2; token_given=1 ;;
+      esac
+      shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "commonmeasure installer: unknown argument $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 cannot() { echo "commonmeasure installer: cannot $1" >&2; exit 2; }
+
+# The first-run arguments are checked before anything is downloaded. A hub
+# URL is https, or http to a loopback origin, with no credentials, query or
+# fragment, as `commonmeasure connect` requires; the binary checks it again.
+if [ -n "$connect_given" ] || [ -n "$token_given" ]; then
+  [ -n "$connect_given" ] || cannot "use --token without --connect: pass the hub's address as --connect HUB"
+  [ -n "$token_given" ] || cannot "connect to $connect without a token: copy the whole line from the hub's Enrol this machine card, which mints one, or add --token TOKEN"
+  # POSIX character classes cover tabs and newlines as well as spaces.
+  case "$connect" in *[![:space:]]*) ;; *) cannot "use --connect with an empty or whitespace-only value" ;; esac
+  case "$token" in *[![:space:]]*) ;; *) cannot "use --token with an empty or whitespace-only value" ;; esac
+  [ -z "$update" ] || cannot "combine --connect with --update: an update changes the binary only"
+  case "$connect" in
+    *@*|*\?*|*#*|*" "*) cannot "connect to $connect: a hub address carries no credentials, query, fragment or space" ;;
+    https://?*|http://127.0.0.1|http://127.0.0.1[:/]*|http://localhost|http://localhost[:/]*|http://\[::1\]|http://\[::1\][:/]*) ;;
+    *) cannot "connect to $connect: the hub address must be https, or http to 127.0.0.1, localhost or [::1]" ;;
+  esac
+fi
+
 fail()   { echo "commonmeasure installer: $1" >&2; exit 1; }
 
 command -v curl >/dev/null 2>&1 || cannot "download: curl is not installed"
@@ -196,7 +244,7 @@ case "$consent_state" in
       "$target" consent agree || echo "commonmeasure installer: recording reporting consent failed; run: commonmeasure consent agree" >&2
     elif [ -n "$update" ]; then
       :
-    elif (: </dev/tty) 2>/dev/null; then
+    elif [ -z "${CI:-}" ] && (: </dev/tty) 2>/dev/null; then
       {
         echo
         "$target" consent show
@@ -225,6 +273,16 @@ esac
 # egress. A withdrawn or unreadable consent refuses the next demanding
 # source, but a use admitted while consent was agreed carries that consent
 # on its record and is still reported.
+# The first run's own lines say what each step did; the binary stays in
+# place whatever they say. Its stdin is not the script's, which `curl | sh`
+# feeds through the same pipe.
+if [ -n "$connect" ]; then
+  "$target" first-run "$connect" --token "$token" </dev/null || {
+    echo "commonmeasure installer: $target is installed; the first run stopped at the step named above" >&2
+    exit 3
+  }
+fi
+
 if [ -z "$update" ]; then
   consent_state=$("$target" consent show --json 2>/dev/null | sed -n 's/^ *"state": *"\([a-z_]*\)".*/\1/p')
   case "$consent_state" in
@@ -235,6 +293,10 @@ if [ -z "$update" ]; then
     *)
       boundary="Session records stay on this machine. Without reporting consent agreed, sources whose licence demands reporting are refused; a use admitted while consent was agreed is still reported to the telemetry receiver relay.json names, and no other use is reported until a policy scope clears egress." ;;
   esac
+  if [ -n "$connect" ]; then
+    echo "$boundary"
+    exit 0
+  fi
   echo "Next: commonmeasure install claude (or codex, pi, claude-desktop, cursor, copilot, vscode, chrome) to register with your host, then work a session, then run 'commonmeasure session' to see what it recorded and 'commonmeasure serve' for the console on loopback. $boundary"
   case "$os" in
     Darwin) echo "For Codex and other hosts without a session end, configure a reporting receiver, then run: commonmeasure service install relay" ;;

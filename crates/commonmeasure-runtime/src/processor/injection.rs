@@ -35,6 +35,8 @@ use super::{
     ArtefactRef, Determinism, FailBehaviour, FailureByMode, IN_PROCESS, INVOCATION_VERSION,
     Invocation, NO_AMBIENT_AUTHORITY, ProcessorManifest, Stage,
 };
+use crate::agent_text;
+use crate::agent_text::AgentText;
 use crate::policy::{Ruling, approximate_tokens};
 
 pub const NAME: &str = "injection-screen";
@@ -220,7 +222,7 @@ pub fn invoke(
         Ruling::Allowed
     } else {
         let matched: BTreeSet<&'static str> = findings.iter().map(|f| f.rule.label()).collect();
-        let summary = matched.into_iter().collect::<Vec<_>>().join(", ");
+        let summary = matched.iter().copied().collect::<Vec<_>>().join(", ");
         Ruling::breach(
             mode,
             format!(
@@ -228,6 +230,17 @@ pub fn invoke(
                 findings.len(),
                 if findings.len() == 1 { "" } else { "s" },
             ),
+            // The rule labels are this crate's; the basis names the source,
+            // which the record keeps.
+            agent_text![
+                "The injection screen matched ",
+                findings.len(),
+                " known prompt-injection phrasing",
+                if findings.len() == 1 { "" } else { "s" },
+                " (",
+                AgentText::list(matched.iter().copied(), ", "),
+                ") in the text screened."
+            ],
             Gap::new(
                 GapReason::PolicyRefused,
                 format!(
@@ -276,7 +289,7 @@ pub fn invoke(
 pub fn not_read(
     mode: PolicyMode,
     source_ref: &str,
-    basis: &str,
+    basis: &'static str,
     content_hash: Option<&str>,
 ) -> (Invocation, Ruling) {
     let started_at = Utc::now();
@@ -292,6 +305,11 @@ pub fn not_read(
         format!(
             "The injection screen did not rule: the body is {basis}, which the edge does not read."
         ),
+        agent_text![
+            "The injection screen did not rule: the body is ",
+            basis,
+            ", which the edge does not read."
+        ],
         gap.clone(),
     );
     let decision = if ruling.is_refusal() {

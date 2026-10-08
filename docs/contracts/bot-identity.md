@@ -174,7 +174,7 @@ The hub serves `<identity origin>/.well-known/signature-agent-card.json`:
   "web_bot_auth": {
     "expected-user-agent": "CommonMeasureBot/*",
     "rfc9309-product-token": "CommonMeasureBot",
-    "rfc9309-compliance": ["User-Agent", "Allow", "Disallow"],
+    "rfc9309-compliance": ["User-Agent", "Allow", "Disallow", "Crawl-delay"],
     "trigger": "fetcher",
     "purpose": "ai-input",
     "targeted-content": "Public web pages an operator's agent reads as grounding for its own work"
@@ -187,10 +187,54 @@ The hub serves `<identity origin>/.well-known/signature-agent-card.json`:
 no keys.
 
 `rfc9309-compliance` lists the `robots.txt` records the edge obeys for the
-`CommonMeasureBot` product token. The edge also honours `Crawl-delay`, in
-every policy mode, and treats an unreachable `robots.txt` as RFC 9309 §2.3.1
-says ([session evidence §Source declarations](session-evidence.md#source-declarations)).
-The card does not yet list `Crawl-delay`.
+`CommonMeasureBot` product token, in every policy mode. The edge treats an
+unreachable `robots.txt` as RFC 9309 §2.3.1 says ([session evidence §Source
+declarations](session-evidence.md#source-declarations)).
+
+### What the card declares about the source's terms
+
+The hub serves `source-terms` once its release floor, below which it lists
+no edge key ([enrolment §The directory proof and its
+renewal](enrolment.md#the-directory-proof-and-its-renewal)), is at or above
+the edge release that rules every term the object names. The hub's constant
+for that release is `0.4.10`. Below that floor the card is the one shown
+above.
+
+Every edge keeps the source's terms in every policy mode, enrolled or not
+([fail policy](../FAIL-POLICY.md) §6). Only an enrolled edge signs as
+`CommonMeasureBot`, so the card is where a source reads that commitment, in
+`source-terms`, an object this contract defines, since Web Bot Auth has no
+field for these terms:
+
+```json
+"source-terms": {
+  "binding": "every-policy-mode",
+  "content-signals": ["Content-Signal", "Content-Usage"],
+  "licence": "rsl-1.0",
+  "payment": "pays-or-does-not-fetch",
+  "reporting": ["content-telemetry"]
+}
+```
+
+- `binding`: the operator's policy mode sets none of these terms aside.
+- `content-signals`: the statements the edge reads for AI input. One that
+  disallows `ai-input` refuses the fetch.
+- `licence`: the edge reads an RSL 1.0 licence named in `robots.txt` or in a
+  `Link` header before it uses the page. A licence that cannot be read
+  refuses the fetch.
+- `payment`: a licence term that needs a payment, or a token from a licence
+  server, that the edge cannot provide refuses the fetch. No edge holds a
+  settlement rail yet, so every such term refuses. A payment term is unmet
+  unless the licence says it is free, and a licence with no usage
+  `<permits>` covers AI input on its own payment and licence-server terms
+  where no licence beside it names AI input.
+  The hub declares `payment: pays-or-does-not-fetch` once its floor is at
+  or above the edge release that rules these two terms (`0.4.10`); until
+  then the object omits `payment`.
+- `reporting`: the reporting demand types the edge can meet. A demand of
+  one of these types is met through the enrolled hub or the licence's
+  endpoint, or the fetch is refused. A demand of any other type refuses the
+  fetch.
 
 ## The bot page
 

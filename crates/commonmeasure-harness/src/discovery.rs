@@ -41,6 +41,8 @@ use crate::declarations::{
     StatementSource,
 };
 use crate::policy::TermsDeclaration;
+use commonmeasure_runtime::agent_text;
+use commonmeasure_runtime::agent_text::AgentText;
 use commonmeasure_types::PolicyMode;
 
 /// How long a `robots.txt` copy is used before it is fetched again.
@@ -817,15 +819,20 @@ impl RobotsOutcome {
     /// The file as the record names it: the URL asked for, and the URL the
     /// reading came from where a redirect led elsewhere.
     fn file(&self) -> String {
+        self.file_with(&|url: &str| crate::source_text::sentence_url(url).to_owned())
+    }
+
+    /// [`Self::file`] with each URL written as `show` gives it.
+    fn file_with(&self, show: &dyn Fn(&str) -> String) -> String {
         let answered = match &self.held_copy {
             Some(copy) => &copy.final_url,
             None => &self.final_url,
         };
         match answered {
             Some(answered) if *answered != self.url => {
-                format!("{} (redirected to {answered})", self.url)
+                format!("{} (redirected to {})", show(&self.url), show(answered))
             }
-            _ => self.url.clone(),
+            _ => show(&self.url),
         }
     }
 
@@ -907,9 +914,10 @@ impl RobotsOutcome {
             && ruling.outcome == DelayOutcome::Refused
         {
             let first = format!(
-                "The licence {licence} has not been read, and a page is not fetched under terms \
-                 this edge has not read, so the licence takes the host's next turn and the page \
-                 the turn after it"
+                "The licence {} has not been read, and a page is not fetched under terms this \
+                 edge has not read, so the licence takes the host's next turn and the page the \
+                 turn after it",
+                crate::source_text::sentence_url(licence)
             );
             let budget = crate::crawl_delay::seconds(ruling.budget_ms);
             return Some(
@@ -969,10 +977,133 @@ impl RobotsOutcome {
         }
     }
 
+    /// [`Self::delay_refusal`] as the agent reads it: the delay as this edge
+    /// keeps it, in seconds, the times and budgets, and the file, the host
+    /// and the licence by position. The record keeps the sentence that names
+    /// them.
+    pub fn delay_refusal_agent(&self) -> Option<AgentText> {
+        let ruling = self.delay.as_ref()?;
+        let read = self
+            .reading
+            .as_ref()
+            .and_then(|reading| reading.crawl_delay.as_ref());
+        let delay = Duration::from_millis(ruling.delay_ms);
+        let budget = Duration::from_millis(ruling.budget_ms);
+        let stated = agent_text![
+            "The source's robots.txt states a Crawl-delay of ",
+            delay,
+            "s for this fetcher",
+            if read.is_some_and(|delay| delay.capped) {
+                ", kept at this edge's bound"
+            } else {
+                ""
+            },
+            ", and it binds in every policy mode"
+        ];
+        if ruling.licence_first.is_some() && ruling.outcome == DelayOutcome::Refused {
+            let first = AgentText::fixed(
+                "The licence the source names has not been read, and a page is not fetched \
+                 under terms this edge has not read, so the licence takes the host's next turn \
+                 and the page the turn after it",
+            );
+            return Some(
+                match (&ruling.unavailable, ruling.next_at, ruling.wait_ms) {
+                    (Some(_), _, _) => agent_text![
+                        stated,
+                        ". ",
+                        first,
+                        "; the licence was not read, so the page was not requested. The record \
+                         names the reason."
+                    ],
+                    (None, Some(next), Some(wait)) => agent_text![
+                        stated,
+                        ". ",
+                        first,
+                        ": ",
+                        Duration::from_millis(wait),
+                        "s in all, the host next free ",
+                        next,
+                        ", which is beyond the ",
+                        budget,
+                        "s this fetch may still wait. Nothing was requested."
+                    ],
+                    _ => agent_text![
+                        stated,
+                        ". ",
+                        first,
+                        ", and the two turns together are beyond the ",
+                        budget,
+                        "s this fetch may still wait: this is a hosted edge, whose sessions are \
+                         served over HTTP, where the host ends a tool call well before a whole \
+                         delay could be waited out. Nothing was requested."
+                    ],
+                },
+            );
+        }
+        match ruling.outcome {
+            DelayOutcome::Clear | DelayOutcome::Waited => None,
+            DelayOutcome::Refused => Some(match (ruling.next_at, ruling.wait_ms) {
+                (Some(next), Some(wait)) => agent_text![
+                    stated,
+                    ". The next request to the host may be sent ",
+                    next,
+                    ", in ",
+                    Duration::from_millis(wait),
+                    "s, which is beyond the ",
+                    budget,
+                    "s this fetch may still wait. Nothing was requested."
+                ],
+                _ => agent_text![
+                    stated,
+                    ". The host was asked inside its delay by this edge, which paces every \
+                     session it serves as one fetcher, and the wait is beyond the ",
+                    budget,
+                    "s this fetch may still wait: this is a hosted edge, whose sessions are \
+                     served over HTTP, where the host ends a tool call well before a whole \
+                     delay could be waited out. Nothing was requested; ask again shortly."
+                ],
+            }),
+            DelayOutcome::Unavailable => Some(agent_text![
+                stated,
+                ". The turn could not be kept for the host, because this edge's crawl-delay \
+                 store could not be read or written, so the delay could not be kept either, \
+                 and a fetch that cannot keep it is not sent. Nothing was requested. The record \
+                 names the fault and the remedy."
+            ]),
+        }
+    }
+
     /// The attribution a person or agent reads: which URL, which file,
-    /// which group and which rule, with a wildcard named as one.
+    /// which group and which rule, with a wildcard named as one. A source
+    /// URL whose scheme is not http or https is named by position
+    /// ([`crate::source_text::sentence_url`]); an http or https one is
+    /// written whole, for the record, and shortened for the agent at the
+    /// `context_fetch` boundary.
     pub fn attribution(&self) -> String {
-        let failure = self.unavailable.as_deref().unwrap_or("no answer");
+        self.attribution_with(&|url: &str| crate::source_text::sentence_url(url).to_owned())
+    }
+
+    /// [`Self::attribution`] with each URL it names, including those in the
+    /// reason the file could not be read, written as `show` gives it: the
+    /// agent's summary shows the source's URLs as
+    /// [`crate::source_text::quoted_url`] does as it builds the text.
+    pub fn attribution_with(&self, show: &dyn Fn(&str) -> String) -> String {
+        let failure = self.unavailable.as_deref().map(|failure| {
+            let mut urls: Vec<&str> = [
+                Some(self.url.as_str()),
+                self.final_url.as_deref(),
+                self.declined_redirect.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            urls.sort_by_key(|url| std::cmp::Reverse(url.len()));
+            urls.dedup();
+            urls.into_iter().fold(failure.to_owned(), |failure, url| {
+                failure.replace(url, &show(url))
+            })
+        });
+        let failure = failure.as_deref().unwrap_or("no answer");
         let Some(reading) = &self.reading else {
             if self.unreachable {
                 // A declined redirect is unreachable because RFC 9309 expects
@@ -986,8 +1117,8 @@ impl RobotsOutcome {
                     "{} could not be reached for {}: {failure}. No copy of it is held, so every \
                      path on {} is treated as disallowed for {PRODUCT_TOKEN} (RFC 9309 \
                      {sections})",
-                    self.file(),
-                    self.requested_url,
+                    self.file_with(show),
+                    show(&self.requested_url),
                     crate::grounding::host_of(&self.requested_url),
                 );
             }
@@ -997,15 +1128,16 @@ impl RobotsOutcome {
                      own, so the host is not held to have failed and the file is asked for \
                      again at the next crossing. No copy of it is held, and a page is not \
                      fetched under a robots.txt this edge has not read",
-                    self.url,
-                    self.requested_url,
+                    show(&self.url),
+                    show(&self.requested_url),
                     // A back-off store fault's reason ends with its own full stop.
                     failure.trim_end_matches('.'),
                 );
             }
             return format!(
                 "{} could not be read for {}: {failure}",
-                self.url, self.requested_url,
+                show(&self.url),
+                show(&self.requested_url),
             );
         };
         let mut about_copy = self.held_copy.as_ref().map_or_else(String::new, |copy| {
@@ -1025,16 +1157,16 @@ impl RobotsOutcome {
         if let Some(too_many) = &reading.too_many_readings {
             return format!(
                 "{} is not compared with {}: {too_many}{about_copy}",
-                self.file(),
-                self.requested_url
+                self.file_with(show),
+                show(&self.requested_url)
             );
         }
         let Some(group) = &reading.group else {
             return format!(
                 "{} publishes no group for {PRODUCT_TOKEN} or `*`, so no access rule applies to \
                  {}{about_copy}",
-                self.file(),
-                self.requested_url
+                self.file_with(show),
+                show(&self.requested_url)
             );
         };
         let group = if reading.group_is_wildcard {
@@ -1045,8 +1177,16 @@ impl RobotsOutcome {
             format!("the `User-agent: {group}` group, which names {PRODUCT_TOKEN}")
         };
         let rule = match (&reading.access_rule, reading.access_rule_wildcard) {
-            (Some(rule), Some(true)) => format!("rule `{rule}`, a wildcard pattern"),
-            (Some(rule), _) => format!("rule `{rule}`, a literal path prefix"),
+            // The pattern is the source's text; the reading keeps it as
+            // written and the sentence quotes it as a path.
+            (Some(rule), Some(true)) => format!(
+                "rule `{}`, a wildcard pattern",
+                crate::source_text::quoted_rule(rule)
+            ),
+            (Some(rule), _) => format!(
+                "rule `{}`, a literal path prefix",
+                crate::source_text::quoted_rule(rule)
+            ),
             (None, _) => "no rule matching the path, which permits it".to_owned(),
         };
         let verdict = if reading.crawlable == Some(false) {
@@ -1056,8 +1196,8 @@ impl RobotsOutcome {
         };
         format!(
             "{} {verdict} {PRODUCT_TOKEN} at {}: {group}; {rule}{about_copy}",
-            self.file(),
-            self.requested_url
+            self.file_with(show),
+            show(&self.requested_url)
         )
     }
 }
@@ -1076,6 +1216,11 @@ pub enum LicenceMechanism {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LicenceOutcome {
     pub url: String,
+    /// True where `url` is a rendering of bytes that are not UTF-8
+    /// ([`commonmeasure_http::render_value`]): an unread `link-header`
+    /// licence whose target or member held such bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub url_rendered: bool,
     pub mechanism: LicenceMechanism,
     pub cache: CacheDecision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1110,6 +1255,11 @@ pub struct LicenceOutcome {
     /// read, so it is also `unread`, and `unavailable` gives the rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_by: Option<String>,
+    /// Why selecting the licence's `<content>` entry for this page did not
+    /// finish, where that left the licence `unread`; `unavailable` holds
+    /// the same cause in words, which is what the record keeps.
+    #[serde(skip)]
+    pub selection: Option<declarations::SelectionUnread>,
 }
 
 /// The declarations record on a mediated crossing: what was read, from
@@ -1133,6 +1283,11 @@ pub struct Declarations {
     /// has been fetched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_usage_header: Option<String>,
+    /// True where that header held bytes that are not UTF-8, so
+    /// `content_usage_header` is their rendering
+    /// ([`commonmeasure_http::render_value`]) and not the text received.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub content_usage_header_rendered: bool,
     /// Every statement gathered, with its source.
     pub statements: Vec<Statement>,
     /// Most-restrictive-wins per category over `statements`.
@@ -1141,28 +1296,50 @@ pub struct Declarations {
     /// beside the source's statements; it does not override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terms: Option<TermsDeclaration>,
-    /// How a telemetry reporting demand was ruled on, where the licence or
-    /// the terms carried one.
+    /// How a telemetry reporting demand was ruled on, where a governing
+    /// licence or the operator's recorded agreement for the host
+    /// (`terms.requires_reporting`) carried one. Where several were ruled
+    /// on, the first that is unmet, else the last.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporting: Option<ReportingRuling>,
+    /// Every telemetry demand ruled on, in the order ruled (each governing
+    /// licence's, then the operator's agreement), where there was more than
+    /// one; `reporting` is the one that decided.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reporting_demands: Vec<ReportingRuling>,
 }
 
 /// The ruling on a reporting demand: what was demanded, the receiver the
 /// session would report through, and whether the demand is met. A demand is
 /// met only where the profile is the Content Telemetry binding, the level
 /// is one the relay emits, the page is one the relay projects, the policy
-/// loads, a receiver is configured, delivery happens without a person and
-/// the operator has agreed to reporting (`crate::consent`); `reason` names
-/// the first of those that fails.
+/// loads, a receiver is configured and is a route to the licence's endpoint
+/// ([`ReportingRoute`]), delivery happens without a person and the operator
+/// has agreed to reporting (`crate::consent`); `reason` names the first of
+/// those that fails.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportingRuling {
+    /// Who made the demand. Absent for a licence's `<reporting>` element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ReportingSource>,
+    /// The operator's own reference for the agreement, where `source` is
+    /// [`ReportingSource::OperatorAgreement`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conformance_level: Option<String>,
-    /// The receiver named in `relay.json`, or absent when none is.
+    /// The receiver named in `relay.json` by origin and digest, or absent
+    /// when none is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receiver: Option<String>,
+    pub receiver: Option<crate::relay_config::ReceiverOnRecord>,
+    /// How events for the receiver reach the licence's endpoint, where they
+    /// do. Absent where no receiver is configured or it is no route to the
+    /// endpoint; present on a demand unmet for another reason, so `met`
+    /// alone says whether the demand is met.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<ReportingRoute>,
     /// Whether the session's scope clears telemetry egress. Recorded for the
     /// reader; the operator's reporting consent, not this, decides whether
     /// the demand is met (owner decision, 27 September 2026).
@@ -1180,6 +1357,39 @@ pub struct ReportingRuling {
     pub met: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// `reason` as the agent reads it where the demand refuses the
+    /// crossing: the source by position and the operator's files as the
+    /// operator's. Not recorded: `reason` is the record's.
+    #[serde(skip)]
+    pub agent_reason: Option<AgentText>,
+}
+
+/// Where a reporting demand came from, when not from a licence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportingSource {
+    /// The operator's recorded agreement with the source: a `terms` entry
+    /// for the host in the source policy with `requires_reporting` set.
+    /// The source agreed to it, so it binds as a licence's telemetry demand
+    /// does, in every policy mode (owner decision, 30 September 2026).
+    OperatorAgreement,
+}
+
+/// Why the configured receiver is a route to a licence's reporting endpoint
+/// (owner decision, 30 September 2026: a reporting demand is met only
+/// through the enrolled hub or the licence's endpoint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportingRoute {
+    /// The receiver is the hub, which delivers each cleared event on to the
+    /// endpoints its source declares (`docs/contracts/onward-delivery.md`).
+    /// Today the edge takes the hub it is enrolled with as that hub
+    /// (EDG-124); NET-6 is to replace that test with the hub's own
+    /// statement, and the record names the route the same way either way.
+    Hub,
+    /// The relay posts to the licence's endpoint itself
+    /// ([`crate::relay_config::posts_to`]).
+    LicenceEndpoint,
 }
 
 impl Declarations {
@@ -1204,17 +1414,34 @@ impl Declarations {
             .collect()
     }
 
-    /// The licence terms that govern AI input: the page-level licence from
-    /// the `Link` header where one was read, else the site-level one from
-    /// `robots.txt` (RSL section 4.9, the more specific licence first).
+    /// The first of [`Self::governing_licences`]: the licence a crossing
+    /// records as its licence reference.
     pub fn licence_terms(&self) -> Option<(&LicenceOutcome, &LicenceTerms)> {
-        let ranked = |mechanism: LicenceMechanism| {
+        self.governing_licences().into_iter().next()
+    }
+
+    /// Every licence whose terms govern AI input, in the order they were
+    /// named: those the page's `Link` header named where any was read, else
+    /// those `robots.txt` named (RSL 1.0 §4.9, the more specific licence
+    /// first). Each is a separate document the source points to, and §4.9
+    /// says a client honours the most restrictive combination where two
+    /// conflict, so the terms of every one bind: a payment or reporting
+    /// term any of them states is ruled on. The offers within one document
+    /// are its own to choose among ([`declarations::licence_terms`]).
+    pub fn governing_licences(&self) -> Vec<(&LicenceOutcome, &LicenceTerms)> {
+        let ranked = |mechanism: LicenceMechanism| -> Vec<(&LicenceOutcome, &LicenceTerms)> {
             self.licences
                 .iter()
-                .filter(move |licence| licence.mechanism == mechanism)
-                .find_map(|licence| licence.terms.as_ref().map(|terms| (licence, terms)))
+                .filter(|licence| licence.mechanism == mechanism)
+                .filter_map(|licence| licence.terms.as_ref().map(|terms| (licence, terms)))
+                .collect()
         };
-        ranked(LicenceMechanism::LinkHeader).or_else(|| ranked(LicenceMechanism::RobotsLicense))
+        let page = ranked(LicenceMechanism::LinkHeader);
+        if page.is_empty() {
+            ranked(LicenceMechanism::RobotsLicense)
+        } else {
+            page
+        }
     }
 
     fn recombine(&mut self) {
@@ -1296,19 +1523,29 @@ impl RobotsRead {
         self.refused_by_the_access_rule
     }
 
-    /// The licence `robots.txt` names for this page, resolved against the
-    /// file it was read from.
-    fn robots_licence(&self) -> Option<String> {
-        self.robots
-            .reading
-            .as_ref()
-            .and_then(|reading| reading.licences.first().cloned())
-            .and_then(|licence| {
-                url::Url::parse(&self.robots_url)
-                    .and_then(|base| base.join(&licence))
-                    .ok()
-                    .map(|joined| joined.to_string())
-            })
+    /// The licences `robots.txt` names for this page, in the order written,
+    /// each resolved against the file it was read from and named once. RSL
+    /// 1.0 §4.4.1: each directive is an additional candidate licence, and
+    /// §4.9 has a client honour the most restrictive combination of their
+    /// terms, so every one is read.
+    fn robots_licences(&self) -> Vec<String> {
+        let mut licences: Vec<String> = Vec::new();
+        let Some(reading) = self.robots.reading.as_ref() else {
+            return licences;
+        };
+        for licence in &reading.licences {
+            let Some(joined) = url::Url::parse(&self.robots_url)
+                .and_then(|base| base.join(licence))
+                .ok()
+                .map(|joined| joined.to_string())
+            else {
+                continue;
+            };
+            if !licences.contains(&joined) {
+                licences.push(joined);
+            }
+        }
+        licences
     }
 
     /// The licences to be read before `page_url`, each with whether it is
@@ -1332,16 +1569,15 @@ impl RobotsRead {
                 .get(url)
                 .is_some_and(|probe| probe.url == url && probe.expires_at > now)
         };
-        let robots_licence = self.robots_licence();
-        let mut first = Vec::new();
-        if let Some(url) = &robots_licence
-            && !current(url)
-        {
-            first.push((url.clone(), true));
-        }
+        let robots_licences = self.robots_licences();
+        let mut first: Vec<(String, bool)> = robots_licences
+            .iter()
+            .filter(|url| !current(url))
+            .map(|url| (url.clone(), true))
+            .collect();
         if paced
             && let Some(url) = self.record.page_licences.get(page_url)
-            && Some(url) != robots_licence.as_ref()
+            && !robots_licences.contains(url)
             && !current(url)
         {
             first.push((url.clone(), false));
@@ -1621,6 +1857,7 @@ impl InHand<'_> {
             LicenceMechanism::RobotsLicense,
             page_url,
             now,
+            pacing.map(|(pacing, _)| pacing.licence_readings()),
         )
     }
 
@@ -1656,6 +1893,14 @@ impl InHand<'_> {
             cut_short: false,
             refused_by: None,
         };
+        // This edge requests http and https only, so a licence named by any
+        // other URL is unread, and nothing is asked of any origin for it.
+        if !crate::source_text::fetchable(url) {
+            return (
+                unsent(OTHER_SCHEME_LICENCE.to_owned(), now),
+                CacheDecision::NotAsked,
+            );
+        }
         match self.rule_probe(url, now, probe, pacing.map(|(pacing, _)| pacing)) {
             ProbeRuling::Allowed => {
                 let mut slot = self.record.licences.remove(url);
@@ -1711,12 +1956,13 @@ pub fn read_declared(
     probe: Prober<'_>,
     pacing: Option<&Pacing>,
 ) -> Declarations {
-    // The first candidate licence in the applicable scope. RSL lets a client
-    // retrieve each listed document; one is read here, and the record names
-    // which. RSL requires the directive's value to be absolute; a relative
-    // one is resolved against the file it was read from rather than dropped,
-    // and the record carries the resolved URL.
-    let robots_licence = read.robots_licence();
+    // Every candidate licence in the applicable scope, each read and each
+    // a licence entry in the record (RSL 1.0 §4.4.3 lets a client retrieve
+    // each listed document, and §4.9 binds the most restrictive combination
+    // of their terms). RSL requires the directive's value to be absolute; a
+    // relative one is resolved against the file it was read from rather
+    // than dropped, and the record carries the resolved URL.
+    let robots_licences = read.robots_licences();
     let page_delay = pacing.and_then(|pacing| pacing.delay_for(&read.host));
     let first = read.licences_first(page_url, now, page_delay.is_some());
     let RobotsRead {
@@ -1773,7 +2019,7 @@ pub fn read_declared(
     let mut now = now;
     if let Some(ruling) = refusal {
         robots.delay = Some(ruling);
-        if let Some(url) = &robots_licence {
+        for url in &robots_licences {
             licences.push(not_asked(
                 url,
                 "reading this licence before the page, and the page after it, does not fit \
@@ -1843,7 +2089,8 @@ pub fn read_declared(
                             })
                     });
                     unsent = Some(format!(
-                        "{url} was not asked for: {}",
+                        "{} was not asked for: {}",
+                        crate::source_text::sentence_url(url),
                         reason.unwrap_or_else(|| "no reason recorded".to_owned())
                     ));
                     break;
@@ -1871,13 +2118,19 @@ pub fn read_declared(
                 licence_first: Some(first_named.clone()),
             });
         }
-        // A current reading of the licence `robots.txt` names was not read
-        // above; it is reused here and takes no turn.
-        if let Some(url) = &robots_licence
-            && !licences
+        // A current reading of a licence `robots.txt` names was not read
+        // above; it is reused here and takes no turn. One that was to be read
+        // first and was not reached, because a licence before it was not
+        // sent, is not asked for now either: the crossing is refused on the
+        // unread licence, and a request here would take a turn nobody
+        // reserved.
+        for url in &robots_licences {
+            if licences
                 .iter()
                 .any(|licence: &LicenceOutcome| &licence.url == url)
-        {
+            {
+                continue;
+            }
             let outcome = if refused_by_the_access_rule {
                 let mut outcome = not_asked(
                     url,
@@ -1887,6 +2140,12 @@ pub fn read_declared(
                 // Refused already; its terms are not what refuses it.
                 outcome.unread = false;
                 outcome
+            } else if first.iter().any(|(first, _)| first == url) {
+                not_asked(
+                    url,
+                    "a licence named before it was not read, so this one was not asked for \
+                     either",
+                )
             } else {
                 InHand {
                     cache,
@@ -1919,10 +2178,12 @@ pub fn read_declared(
         redirects: Vec::new(),
         licences,
         content_usage_header: None,
+        content_usage_header_rendered: false,
         statements,
         effective: BTreeMap::new(),
         terms: terms.cloned(),
         reporting: None,
+        reporting_demands: Vec::new(),
     };
     declarations.recombine();
     declarations
@@ -1932,6 +2193,7 @@ pub fn read_declared(
 fn not_asked(url: &str, why: &str) -> LicenceOutcome {
     LicenceOutcome {
         url: url.to_owned(),
+        url_rendered: false,
         mechanism: LicenceMechanism::RobotsLicense,
         cache: CacheDecision::NotAsked,
         status: None,
@@ -1941,6 +2203,7 @@ fn not_asked(url: &str, why: &str) -> LicenceOutcome {
         unread: true,
         missing: None,
         refused_by: None,
+        selection: None,
     }
 }
 
@@ -1951,7 +2214,10 @@ fn not_asked(url: &str, why: &str) -> LicenceOutcome {
 /// admitted; where it has no current reading it takes the host's next turn
 /// from what the call has left, and where that does not fit it is recorded
 /// unread and the bytes are withheld. The page's record keeps which licence
-/// it named, so the next crossing reads it before the page instead.
+/// it named, so the next crossing reads it before the page instead. A `Link`
+/// member that names a licence and cannot be read is an unread licence too
+/// ([`declarations::rsl_links`]), and it leaves the licence the page last
+/// named in the record.
 pub fn after_fetch(
     cache: &DeclarationCache,
     declarations: &mut Declarations,
@@ -1963,6 +2229,8 @@ pub fn after_fetch(
 ) {
     if let Some(header) = response.headers.get("Content-Usage") {
         declarations.content_usage_header = Some(header.to_owned());
+        declarations.content_usage_header_rendered =
+            response.headers.text("Content-Usage").is_err();
         for (category, preference, label) in declarations::parse_content_usage(header) {
             declarations.statements.push(Statement {
                 source: StatementSource::ContentUsageHeader,
@@ -1972,24 +2240,24 @@ pub fn after_fetch(
             });
         }
     }
-    let named = response
-        .headers
-        .get("Link")
-        .and_then(|link| declarations::rsl_link(link, page_url));
+    let links = declarations::rsl_links(response.headers.all_bytes("Link"), page_url);
     let key = origin_key(page_url);
     let mut record = cache.load(&key);
     let remembered = record.page_licences.get(page_url).cloned();
-    match &named {
+    match &links.named {
         Some(url) => {
             record
                 .page_licences
                 .insert(page_url.to_owned(), url.clone());
         }
+        // A field this edge could not read is not a page that stopped
+        // naming its licence, so the one it last named is kept.
+        None if !links.unread.is_empty() => {}
         None => {
             record.page_licences.remove(page_url);
         }
     }
-    if let Some(licence_url) = named
+    if let Some(licence_url) = links.named
         && !declarations
             .licences
             .iter()
@@ -2015,6 +2283,7 @@ pub fn after_fetch(
             LicenceMechanism::LinkHeader,
             page_url,
             now,
+            pacing.map(Pacing::licence_readings),
         );
         if let Some(terms) = &outcome.terms {
             declarations
@@ -2025,6 +2294,25 @@ pub fn after_fetch(
         cache.save(&key, &record);
     } else if remembered != record.page_licences.get(page_url).cloned() {
         cache.save(&key, &record);
+    }
+    // A licence the response names and this edge could not read has terms
+    // nobody knows, so it is recorded unread, and an unread licence
+    // withholds the page in every mode (`rule_on_declarations`).
+    for unread in &links.unread {
+        declarations.licences.push(LicenceOutcome {
+            url: unread.written.clone(),
+            url_rendered: unread.rendered,
+            mechanism: LicenceMechanism::LinkHeader,
+            cache: CacheDecision::NotAsked,
+            status: None,
+            unavailable: Some(unread.why.clone()),
+            content: None,
+            terms: None,
+            unread: true,
+            missing: None,
+            refused_by: None,
+            selection: None,
+        });
     }
     declarations.recombine();
 }
@@ -2060,11 +2348,13 @@ fn read_licence(
         mechanism,
         page_url,
         now,
+        pacing.map(|(pacing, _)| pacing.licence_readings()),
     )
 }
 
 /// What a licence probe says for `page_url`. The second value is when the
-/// request was sent, or `now` where nothing was.
+/// request was sent, or `now` where nothing was. `readings` are the licence
+/// bodies the call has already read for a page, where the caller keeps them.
 fn licence_outcome(
     licence_probe: &Probe,
     cache_decision: CacheDecision,
@@ -2072,6 +2362,7 @@ fn licence_outcome(
     mechanism: LicenceMechanism,
     page_url: &str,
     now: DateTime<Utc>,
+    readings: Option<&LicenceReadings>,
 ) -> (LicenceOutcome, DateTime<Utc>) {
     let sent_at = match cache_decision {
         CacheDecision::Fetched => licence_probe.fetched_at,
@@ -2079,6 +2370,7 @@ fn licence_outcome(
     };
     let mut outcome = LicenceOutcome {
         url: licence_url.to_owned(),
+        url_rendered: false,
         mechanism,
         cache: cache_decision,
         status: licence_probe.status,
@@ -2088,6 +2380,7 @@ fn licence_outcome(
         unread: false,
         missing: None,
         refused_by: licence_probe.refused_by.clone(),
+        selection: None,
     };
     if licence_probe.body.is_none()
         && licence_probe.error.is_none()
@@ -2118,24 +2411,103 @@ fn licence_outcome(
             );
         return (outcome, sent_at);
     };
-    match declarations::parse_rsl(body) {
-        Ok(document) => match document.content_for(page_url) {
-            Some(content) => {
-                outcome.content = Some(content.url.clone());
-                outcome.terms = Some(declarations::licence_terms(content, licence_url));
+    let read = readings
+        .and_then(|readings| readings.find(licence_url, page_url, body))
+        .unwrap_or_else(|| {
+            let read = BodyReading::of(body, licence_url, page_url);
+            if let Some(readings) = readings {
+                readings.keep(licence_url, page_url, body, &read);
             }
-            None => {
-                outcome.unavailable =
-                    Some("no <content> entry in the licence matches this page".to_owned());
-            }
-        },
-        Err(error) => {
-            outcome.unread = true;
-            outcome.unavailable = Some(error);
-        }
-    }
+            read
+        });
+    outcome.content = read.content;
+    outcome.terms = read.terms;
+    outcome.unread = read.unread;
+    outcome.unavailable = read.unavailable;
+    outcome.selection = read.selection;
     (outcome, sent_at)
 }
+
+/// What one licence body says for one page: its document parsed, its
+/// `<content>` entry selected and its terms read.
+#[derive(Clone)]
+struct BodyReading {
+    content: Option<String>,
+    terms: Option<LicenceTerms>,
+    unread: bool,
+    unavailable: Option<String>,
+    selection: Option<declarations::SelectionUnread>,
+}
+
+impl BodyReading {
+    fn of(body: &str, licence_url: &str, page_url: &str) -> Self {
+        let mut read = Self {
+            content: None,
+            terms: None,
+            unread: false,
+            unavailable: None,
+            selection: None,
+        };
+        match declarations::parse_rsl(body) {
+            Ok(document) => match document.content_for(page_url) {
+                Ok(Some(content)) => {
+                    read.content = Some(content.url.clone());
+                    read.terms = Some(declarations::licence_terms(&content, licence_url));
+                }
+                Ok(None) => {
+                    read.unavailable =
+                        Some("no <content> entry in the licence matches this page".to_owned());
+                }
+                Err(unselected) => {
+                    read.unread = true;
+                    read.unavailable = Some(unselected.to_string());
+                    read.selection = Some(unselected);
+                }
+            },
+            Err(error) => {
+                read.unread = true;
+                read.unavailable = Some(error);
+            }
+        }
+        read
+    }
+}
+
+/// The licence bodies one call has read, each for one page, with what each
+/// said. A crossing reads the licence for the page it names, for every
+/// redirect hop, and for a licence the final response's `Link` names, and a
+/// hop can name a page already read; parsing and selecting a body whose
+/// selection the publisher can make costly is done once per body and page
+/// instead. A reading is reused only for the same licence URL, the same
+/// page and the same body, compared whole, so a body that changed within
+/// the call is read again. Nothing is kept past the call.
+#[derive(Default)]
+pub(crate) struct LicenceReadings(std::cell::RefCell<Vec<(String, String, String, BodyReading)>>);
+
+impl LicenceReadings {
+    fn find(&self, licence_url: &str, page_url: &str, body: &str) -> Option<BodyReading> {
+        self.0
+            .borrow()
+            .iter()
+            .find(|(licence, page, read_body, _)| {
+                licence == licence_url && page == page_url && read_body == body
+            })
+            .map(|(.., read)| read.clone())
+    }
+
+    fn keep(&self, licence_url: &str, page_url: &str, body: &str, read: &BodyReading) {
+        self.0.borrow_mut().push((
+            licence_url.to_owned(),
+            page_url.to_owned(),
+            body.to_owned(),
+            read.clone(),
+        ));
+    }
+}
+
+/// Why a licence named by a URL whose scheme is not `http` or `https` is
+/// unread.
+const OTHER_SCHEME_LICENCE: &str = "this edge requests http and https URLs only";
 
 /// `robots.txt` at the page's origin: same scheme, host and port, with a
 /// domain host's trailing dot removed.

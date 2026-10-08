@@ -10,7 +10,8 @@ section: reference
 This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 
 This contract covers credential custody on the **existing supplier API** path,
-for Exa, Ozone Live and Tavily: an organisation's supplier account key is held
+for every remote supplier the edge implements (§Usage limits lists them): an
+organisation's supplier account key is held
 by the Hub and released to that organisation's hosted edges. It establishes
 credential custody, per-edge authorisation, release, reload, limits and audit.
 It claims no entitlement, licence, publisher admission, reporting mapping or
@@ -55,7 +56,7 @@ here.
 | Identity | Identifier and relationship |
 |---|---|
 | Organisation | Reuse Hub `organization.id`. Resolved from the enrolled key on release, from the session on administration; never from a request body. |
-| Supplier connection | New Hub row, one per connected supplier account: `id` (opaque), `organization_id`, `provider` (a name `required_variable` in `crates/commonmeasure-supply/src/lib.rs` maps), `label`, `ciphertext`, `created_by`, `created_at`, `rotated_at`, `revoked_at`, `revoked_by`. A connection belongs to one organisation. `provider` names a remote supplier: `exa`, `ozone` or `tavily`. The edge holds an entry only where `variable` equals its own `required_variable(provider)`, and refuses `internal` and `skill:` providers, whose variables are paths on the edge's machine. |
+| Supplier connection | New Hub row, one per connected supplier account: `id` (opaque), `organization_id`, `provider` (a name `required_variable` in `crates/commonmeasure-supply/src/lib.rs` maps), `label`, `ciphertext`, `created_by`, `created_at`, `rotated_at`, `revoked_at`, `revoked_by`. A connection belongs to one organisation. `provider` names a remote supplier: `dataville`, `exa`, `firecrawl`, `keenable`, `linkup`, `nimble`, `ozone`, `parallel`, `peopleinc`, `redpine`, `search1api`, `serpdive`, `tavily`, `tinyfish`, `tollbit`, `valyu` or `you`. The edge holds an entry only where `variable` equals its own `required_variable(provider)`, and refuses `internal` and `skill:` providers, whose variables are paths on the edge's machine. |
 | Enrolled edge | Reuse the hub's `edge_keys.key_id`, assigned at enrolment. An edge belongs to one organisation; the mapping from key id to organisation lives only in that table. |
 | Edge authorisation | New Hub row `(connection_id, key_id, authorised_by, authorised_at, withdrawn_at, withdrawn_by)`. Both sides must resolve to the same organisation, enforced by constraint and by test, not by the administration screen alone. |
 | Provider variable | The environment name `required_variable(provider)` returns. It is the only name the edge's `unavailable` message, credentials doctor and adapter construction share. The hub holds a copy for the providers it serves, because the release answer carries `variable`; the edge holds a released value only when that `variable` is the one `required_variable(provider)` returns. |
@@ -346,7 +347,7 @@ reuse `apply`.
   supplier's key is unchanged and still works for anyone
   holding it. The acceptance record MUST state this bound and MUST NOT
   describe it as revocation at the supplier.
-- **True revocation for Exa, Ozone Live and Tavily is rotation of the upstream key**,
+- **True revocation for every supplier is rotation of the upstream key**,
   which revokes every edge using that key, followed by a Hub rotate. This
   custody path releases the supplier account key; it does not mint scoped
   sub-credentials.
@@ -370,14 +371,23 @@ policy revision; the hub adds no limit of its own.
   limits). A connection authorised to two edges has two independent
   allowances. A Hub-side shared reservation is an open choice of instance
   registration (`docs/contracts/instance-registration.md` §Open choices, 4).
-- Exa receipts carry an observed charge; Tavily's search charge is quoted from
+- Each supplier's allowance evidence follows how its adapter records a charge.
+  Exa receipts carry an observed charge; Tavily's search charge is quoted from
   the published price and its extract cost is unknown
   because its responses carry no cost field. An unpriced dispatch can exceed an
   allowance by one dispatch's cost (`docs/FAIL-POLICY.md` §7. Unknown is never zero).
-  Allowance evidence MUST be labelled `observed` for Exa and `quote-bound` for
-  Tavily, and `unknown` for Ozone Live, whose response reports no charge and
-  supplies no price to quote. The Hub screen MUST show the evidence beside
-  the provider. Unknown cost MUST NOT be recorded as zero or described as free.
+  Allowance evidence MUST be labelled as follows. Where a supplier's
+  capabilities differ, the label follows its search charge.
+
+  | Label | Suppliers | Why |
+  |---|---|---|
+  | `observed` | Dataville, Exa, Firecrawl, Parallel, Redpine | The response or receipt reports the charge; Firecrawl in credits, Parallel in billing units, never converted to currency |
+  | `quote-bound` | Linkup, Nimble, Search1API, SERPdive, Tavily, TinyFish, You.com | No charge is reported; the charge is quoted from the published price |
+  | `unknown` | Keenable, Ozone Live, People Inc, TollBit | No charge is reported and no price is supplied to quote |
+
+  The Hub screen MUST show the evidence beside the provider. Unknown cost MUST
+  NOT be recorded as zero or described as free. A supplier added to the edge
+  is added to this table and to the Hub's provider list together.
 
 ## Audit
 

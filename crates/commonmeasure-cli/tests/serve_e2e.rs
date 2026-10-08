@@ -1212,26 +1212,53 @@ fn all_write_routes_preserve_origin_guards_and_negotiate_failures() {
 /// The publisher serves source declarations through the production fetch,
 /// licence and manifest readers. Terms and priced admission are separate
 /// crossings: operator terms deliberately bypass the allowance gate. The
-/// licence demands no reporting: an unmet demand refuses in every mode even
-/// beside the `Content-Signal` Disallow, and this crossing must be carried
-/// for its allowance record to settle.
+/// priced licence and the `Content-Signal` Disallow are the source's terms,
+/// which refuse in every mode (owner decision, 30 September 2026), so the
+/// priced crossing is refused and its reservation released. The terms
+/// crossing is to a second publisher, whose free licence and manifest admit
+/// it, so its telemetry id and manifest record are rendered.
 #[cfg(unix)]
 #[test]
 fn record_details_and_budget_render_real_declarations_discovery_and_allowance_evidence() {
     use commonmeasure_http::{Response, Server};
     let server = Server::bind("127.0.0.1:0").unwrap();
     let manifest_url = "https://127.0.0.1/.well-known/content-telemetry.json";
+    let manifest = move || {
+        Response::json(
+            200,
+            &json!({
+                "schema_version":"1.0", "id":manifest_url, "roles":["content_owner"],
+                "operator":{"name":"Local publication"},
+                "telemetry":{"endpoint":"https://telemetry.example/events"},
+                "domains":["127.0.0.1"]
+            })
+            .to_string(),
+        )
+    };
+    let free = Server::bind("127.0.0.1:0")
+        .unwrap()
+        .spawn(move |request| match request.target.as_str() {
+            "/robots.txt" => Response::text(
+                200,
+                "User-agent: CommonMeasureBot\nAllow: /\nLicense: /license.xml\n",
+            ),
+            "/license.xml" => Response::text(
+                200,
+                r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/"><license>
+            <permits type="usage">ai-input</permits><payment type="attribution"/>
+            </license></content></rsl>"#,
+            ),
+            "/.well-known/content-telemetry.json" => manifest(),
+            _ => Response::text(200, "The published cap is reviewed quarterly."),
+        })
+        .unwrap();
     let origin = server.spawn(move |request| match request.target.as_str() {
         "/robots.txt" => Response::text(200, "User-agent: CommonMeasureBot\nAllow: /\nContent-Usage: train-ai=n\nContent-Signal: ai-input=no\nLicense: /license.xml\n"),
         "/license.xml" => Response::text(200, r#"<rsl xmlns="https://rslstandard.org/rsl"><content url="/"><license>
             <permits type="usage">ai-input</permits>
             <payment type="use"><amount currency="USD">0.015</amount></payment>
             </license></content></rsl>"#),
-        "/.well-known/content-telemetry.json" => Response::json(200, &json!({
-            "schema_version":"1.0", "id":manifest_url, "roles":["content_owner"],
-            "operator":{"name":"Local publication"}, "telemetry":{"endpoint":"https://telemetry.example/events"},
-            "domains":["127.0.0.1"]
-        }).to_string()),
+        "/.well-known/content-telemetry.json" => manifest(),
         _ => Response::text(200, "The published cap is reviewed quarterly."),
     }).unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -1249,13 +1276,26 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         "local-details",
         &format!("{}/article", origin.url()),
     );
+    // An agreement that required reporting would bind its duty, which a
+    // loopback page can never meet (the relay sends nothing for a local
+    // address); this one records the reference alone.
     policy["terms"] =
-        json!([{"host":"127.0.0.1", "reference":"operator-agreement", "requires_reporting":true}]);
+        json!([{"host":"127.0.0.1", "reference":"agreement-ref-1", "requires_reporting":false}]);
     write_policy(home.path(), &policy.to_string());
     record_mediated_crossing(
         home.path(),
         "local-details",
-        &format!("{}/terms-article", origin.url()),
+        &format!("{}/terms-article", free.url()),
+    );
+    // One that does require it, refused on the loopback page: the pane
+    // shows the demand's source, which only this crossing carries.
+    policy["terms"] =
+        json!([{"host":"127.0.0.1", "reference":"agreement-ref-2", "requires_reporting":true}]);
+    write_policy(home.path(), &policy.to_string());
+    record_mediated_crossing(
+        home.path(),
+        "local-details",
+        &format!("{}/agreed-article", free.url()),
     );
     let console = Console::start(home.path());
     let records = console.get_json("/api/sessions/local-details");
@@ -1263,22 +1303,45 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         .as_array()
         .unwrap()
         .iter()
-        .filter(|r| r["event"] == "crossing_mediated")
+        .filter(|r| {
+            r["event"]
+                .as_str()
+                .is_some_and(|event| event.starts_with("crossing_"))
+        })
         .collect();
-    assert_eq!(crossings.len(), 2, "{records}");
+    assert_eq!(crossings.len(), 3, "{records}");
+    assert_eq!(crossings[0]["event"], "crossing_refused", "{records}");
+    assert_eq!(crossings[1]["event"], "crossing_mediated", "{records}");
+    assert_eq!(crossings[2]["event"], "crossing_refused", "{records}");
+    let third = &crossings[2]["payload"]["declarations"];
+    assert_eq!(
+        third["reporting"]["source"], "operator-agreement",
+        "{third}"
+    );
+    assert_eq!(
+        third["reporting"]["reference"], "agreement-ref-2",
+        "{third}"
+    );
     let first = &crossings[0]["payload"];
     assert_eq!(first["declarations"]["effective"]["ai-input"], "disallow");
     assert_eq!(first["allowance"]["decision"], "reserved", "{first}");
-    assert_eq!(first["allowance"]["settlement"]["reconciled"], true);
+    assert_eq!(first["allowance"]["settlement"]["reconciled"], false);
+    assert!(
+        first["allowance"]["settlement"]["note"]
+            .as_str()
+            .is_some_and(|note| note.starts_with("released: ")),
+        "{first}"
+    );
+    let second = &crossings[1]["payload"];
     assert_eq!(
-        crossings[1]["payload"]["declarations"]["terms"]["reference"],
-        "operator-agreement"
+        second["declarations"]["terms"]["reference"],
+        "agreement-ref-1"
     );
     let manifest = records
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["event"] == "manifest_resolved" && r["seq"] == first["manifest_record"])
+        .find(|r| r["event"] == "manifest_resolved" && r["seq"] == second["manifest_record"])
         .unwrap();
     assert_eq!(manifest["payload"]["outcome"], "verified", "{manifest}");
     let pane = console.text("/app/fragments/session/local-details");
@@ -1288,6 +1351,8 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         "CommonMeasureBot",
         "ai-input",
         "disallow",
+        "agreement-ref-1",
+        "agreement-ref-2",
         "operator-agreement",
         "Named by",
         "Manifest record",
@@ -1297,12 +1362,12 @@ fn record_details_and_budget_render_real_declarations_discovery_and_allowance_ev
         "Allowance",
         "reserved",
         "settlement",
-        "reconciled",
+        "released",
     ] {
         assert!(pane.contains(text), "missing {text}: {pane}");
     }
     assert!(pane.contains(first["allowance"]["reservation_id"].as_str().unwrap()));
-    assert!(pane.contains(first["content_telemetry_id"].as_str().unwrap()));
+    assert!(pane.contains(second["content_telemetry_id"].as_str().unwrap()));
     let budget = console.get_json("/api/budget");
     assert_eq!(budget["acquisition_charge"]["recorded"], false);
     assert_eq!(

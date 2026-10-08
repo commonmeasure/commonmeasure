@@ -61,8 +61,10 @@ one paragraph to every session's context asking the agent to prefer
 respect a refusal rather than retrying it with a built-in tool
 (`plugin/README.md` §The standing nudge). Each delivery is recorded in the
 session log as `nudge_issued` under the wording's versioned identity. It is
-a request, not enforcement: nothing blocks the built-in tools, so expect
-mediated crossings alongside observed ones.
+a request, not enforcement: the request blocks nothing, so expect mediated
+crossings alongside observed ones. Where the plugin's router answers the
+built-in `WebFetch` and `WebSearch` (`plugin/README.md` §Routed), the edge's
+refusals apply to them too.
 
 A mediated fetch checks the operator's source policy first, records the
 crossing either way, and hands the agent the bytes plus the hash it just
@@ -102,6 +104,13 @@ loaded file is recorded as `credentials_loaded` with path, digest and
 variable names. `commonmeasure credentials` lists every provider the
 adapters know and the variable each reads. A saved key reaches sessions that
 start after it; a running session keeps the keys it started with.
+
+People Inc uses `PEOPLEINC_API_KEY` through these same credential paths.
+`context_search` selects it with `provider: "peopleinc"`; the batch runner
+also supports named-article `fetch_target` jobs. `context_fetch` does not
+select this adapter. Calls can be billable while their monetary cost and
+licence stay unknown. See [People Inc](integrate/peopleinc.md) for result
+limits, URL validation, failures and verification state.
 
 The console's Sources page ([Sources](CONSOLE.md#sources)) lists the same
 providers and adds, replaces or removes one key in the file without opening

@@ -515,7 +515,7 @@ fn a_strict_access_rule_refuses_the_fetch_and_names_the_rule() {
     let detail = error_text(&responses[0]);
     assert!(detail.contains("refused before the crossing"), "{detail}");
     assert!(
-        detail.contains("access rule 2 (*) refuses host 127.0.0.1"),
+        detail.contains("access rule 2 (*) refuses this source's host"),
         "the refusal names the rule by position and pattern: {detail}"
     );
     let recorded = crossings(home.path());
@@ -888,7 +888,7 @@ fn an_identifier_in_page_text_is_carried_in_strict_mode_with_offsets_into_the_de
         result["breach"]
             .as_str()
             .unwrap()
-            .contains("the extracted text of"),
+            .contains("in the text screened"),
         "the breach names what was scanned: {}",
         result["breach"]
     );
@@ -1936,7 +1936,7 @@ Allow: /
         assert!(
             detail.contains("refused before the crossing")
                 && detail.contains("disallows AI input")
-                && detail.contains("Content-Signal: ai-input=no"),
+                && detail.contains("a Content-Signal line in its robots.txt"),
             "{detail}"
         );
         assert_eq!(
@@ -1973,14 +1973,16 @@ Allow: /
         );
     }
 
-    /// Observe carries the same page and records the breach with the
-    /// statement named; the agent gets the bytes and the effective
-    /// preferences. The `Content-Usage` path rule for the by-name group is
-    /// read where its path matches. The group's `Disallow` is the access
-    /// rule, which binds in every mode (WP-29): observe refuses that path
-    /// before the request.
+    /// Observe refuses the same page before the request: a statement that
+    /// disallows AI input is the source's term and binds in every mode
+    /// (owner decision, 30 September 2026). The refusal names the statement,
+    /// and the record keeps the effective preferences and every statement's
+    /// source. The `Content-Usage` path rule for the by-name group is read
+    /// where its path matches. The group's `Disallow` is the access rule,
+    /// which binds in every mode (WP-29): observe refuses that path before
+    /// the request too.
     #[test]
-    fn observe_carries_a_page_its_statements_disallow_and_refuses_a_disallowed_path() {
+    fn observe_refuses_a_page_its_statements_disallow_and_a_disallowed_path() {
         let site = publisher(ROBOTS_BY_NAME, "", None);
         let home = tempfile::tempdir().expect("tempdir");
         write_policy(
@@ -1995,28 +1997,26 @@ Allow: /
                 call("context_fetch", json!({"url": site.url("/members/only")})),
             ],
         );
-        assert_eq!(responses[0]["result"]["isError"], false);
-        let result = payload(&responses[0]);
-        assert_eq!(result["content"], "the article text");
-        assert_eq!(result["declarations"]["effective"]["ai-input"], "disallow");
-        assert_eq!(
-            result["declarations"]["effective"]["train-ai"], "disallow",
-            "the Content-Signal's ai-train=no and the path rule's train-ai=y combine most-restrictive"
-        );
-        assert!(
-            result["breach"]
-                .as_str()
-                .expect("the breach is stated to the agent")
-                .contains("disallows AI input")
-        );
+        assert_eq!(responses[0]["result"]["isError"], true);
+        let detail = error_text(&responses[0]);
+        assert!(detail.contains("refused before the crossing"), "{detail}");
+        assert!(detail.contains("disallows AI input"), "{detail}");
+        assert_eq!(site.page_hits.load(Ordering::SeqCst), 0);
 
         let recorded = crossings(home.path());
         assert_eq!(recorded.len(), 2);
-        assert_eq!(recorded[0]["event"], "crossing_mediated");
-        assert_eq!(recorded[0]["payload"]["grounded"], true);
-        assert_eq!(recorded[0]["payload"]["http_status"], 200);
-        let breach = recorded[0]["payload"]["breach"].as_str().expect("breach");
-        assert!(breach.contains("Content-Signal: ai-input=no"), "{breach}");
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert_eq!(recorded[0]["payload"]["grounded"], false);
+        assert!(recorded[0]["payload"]["http_status"].is_null());
+        assert!(recorded[0]["payload"]["breach"].is_null());
+        let refusal = recorded[0]["payload"]["refusal"].as_str().expect("refusal");
+        assert!(refusal.contains("Content-Signal: ai-input=no"), "{refusal}");
+        let effective = &recorded[0]["payload"]["declarations"]["effective"];
+        assert_eq!(effective["ai-input"], "disallow");
+        assert_eq!(
+            effective["train-ai"], "disallow",
+            "the Content-Signal's ai-train=no and the path rule's train-ai=y combine most-restrictive"
+        );
         let sources: Vec<&str> = recorded[0]["payload"]["declarations"]["statements"]
             .as_array()
             .unwrap()
@@ -2074,7 +2074,8 @@ Allow: /
         assert_eq!(responses[0]["result"]["isError"], true);
         let detail = error_text(&responses[0]);
         assert!(
-            detail.contains("withheld from context") && detail.contains("Content-Usage: ai-use=n"),
+            detail.contains("withheld from context")
+                && detail.contains("in the response's Content-Usage header"),
             "{detail}"
         );
         assert!(
@@ -2112,9 +2113,10 @@ Allow: /
     /// An RSL licence named by the page's `Link` header is read after the
     /// fetch: its permits become statements, the crossing's licence is the
     /// licence URL, and its terms are ruled on. The payment term this edge
-    /// cannot meet is a breach under observe; the reporting demand binds in
-    /// every mode, so it refuses the crossing here (owner decision, 22
-    /// September 2026). The bytes were fetched and are withheld.
+    /// cannot meet and the reporting demand each bind in every mode (owner
+    /// decisions, 22 and 30 September 2026); the payment term is ruled on
+    /// first and refuses the crossing here, and the unmet demand is on the
+    /// record. The bytes were fetched and are withheld.
     #[test]
     fn a_linked_rsl_licence_yields_statements_a_declared_licence_and_the_unmet_terms() {
         let site = publisher("User-agent: *\nAllow: /\n", LICENCE, None);
@@ -2134,9 +2136,7 @@ Allow: /
         assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
         let detail = error_text(&responses[0]);
         assert!(
-            detail.contains("withheld from context")
-                && detail.contains("requires telemetry reporting")
-                && detail.contains("no telemetry receiver is configured"),
+            detail.contains("withheld from context") && detail.contains("payment term is unmet"),
             "{detail}"
         );
 
@@ -2168,24 +2168,29 @@ Allow: /
         );
         let refusal = payload["refusal"]
             .as_str()
-            .expect("the refusal names the demand it could not meet");
+            .expect("the refusal names the term it could not meet");
         assert!(
-            refusal.contains("requires telemetry reporting"),
+            refusal.contains("payment type use (0.015 USD)")
+                && refusal.contains("no settlement rail"),
             "{refusal}"
         );
-        // The refusal keeps the licence's other unmet term on the record.
-        let breach = payload["breach"]
-            .as_str()
-            .expect("the payment term is still a breach");
-        assert!(breach.contains("payment type use (0.015 USD)"), "{breach}");
-        assert!(breach.contains("no settlement rail"), "{breach}");
+        assert!(payload["breach"].is_null(), "{payload}");
+        // The licence's other unmet term is on the record.
+        let reporting = &payload["declarations"]["reporting"];
+        assert_eq!(reporting["met"], false, "{reporting}");
+        assert!(
+            reporting["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("no telemetry receiver is configured")),
+            "{reporting}"
+        );
     }
 
     /// The same licence named from `robots.txt` is known before the request:
-    /// under observe the reporting demand refuses before the page is
-    /// fetched, and the payment term is still a breach on the refusal.
+    /// under observe the payment term refuses before the page is fetched,
+    /// and the unmet reporting demand is on the record.
     #[test]
-    fn observe_refuses_before_the_request_and_keeps_the_payment_breach_on_the_record() {
+    fn observe_refuses_on_the_payment_term_before_the_request_and_records_the_demand() {
         let site = publisher(ROBOTS_LICENSED, LICENCE, None);
         let home = tempfile::tempdir().expect("tempdir");
         write_policy(
@@ -2207,13 +2212,12 @@ Allow: /
         assert!(payload["content_hash"].is_null(), "nothing was fetched");
         let refusal = payload["refusal"].as_str().expect("a refusal");
         assert!(
-            refusal.contains("requires telemetry reporting"),
+            refusal.contains("payment type use (0.015 USD)"),
             "{refusal}"
         );
-        let breach = payload["breach"]
-            .as_str()
-            .expect("the payment term is still a breach");
-        assert!(breach.contains("payment type use (0.015 USD)"), "{breach}");
+        assert!(payload["breach"].is_null(), "{payload}");
+        assert_eq!(payload["declarations"]["reporting"]["met"], false);
+        assert_eq!(site.page_hits.load(Ordering::SeqCst), 0);
     }
 
     /// The same licence named from `robots.txt` is known before the request,
@@ -2713,9 +2717,18 @@ mod discovery_probes {
         when(later).saturating_duration_since(when(earlier))
     }
 
-    /// A turn under `Crawl-delay: 1`, less the scheduling noise between a
-    /// turn's time and the request's arrival.
-    const TURN: Duration = Duration::from_millis(900);
+    /// A turn under `Crawl-delay: 1`, as the publisher sees it. The edge
+    /// measures each turn from when its last request to the host was
+    /// answered, which is after the publisher stamped that request, and
+    /// sends the next no earlier than the delay after it: two requests made
+    /// one after another arrive a whole delay apart however late either went
+    /// out. Two servers interleaving inside the delay are not covered
+    /// (EDG-119), and this test does not make them. The 10 ms
+    /// allow for the wall clock the edge dates turns by drifting against
+    /// the monotonic clock these stamps are read from. Before EDG-109 the
+    /// edge measured from when the turn was taken, and under load arrivals
+    /// came as little as 741 ms apart.
+    const TURN: Duration = Duration::from_millis(990);
 
     /// `a.b.example.localhost` answers 404 for its manifest: the registrable
     /// domain, `example.localhost`, is asked once, after its own
@@ -4002,11 +4015,13 @@ mod pre_authorisation {
         );
     }
 
-    /// Under observe the same fetch goes ahead with the allowance breach
-    /// named, the reservation held over the request and released on the
-    /// receipt, because no rail paid the quoted price.
+    /// Under observe the exhausted allowance is recorded as a breach and
+    /// the reservation is taken, but the licence's payment term refuses the
+    /// fetch before the request, in every mode, since no settlement rail can
+    /// pay the quoted price (owner decision, 30 September 2026). The
+    /// reservation is released on the refusal and nothing is spent.
     #[test]
-    fn observe_carries_the_fetch_records_the_breach_and_releases_on_the_receipt() {
+    fn observe_records_the_breach_and_the_payment_term_refuses_before_the_request() {
         let (site, hits) = publisher(PRICED_LICENCE);
         let home = tempfile::tempdir().expect("tempdir");
         write_policy(home.path(), &policy("observe", 5_000));
@@ -4018,28 +4033,29 @@ mod pre_authorisation {
                 json!({"url": format!("{}/article", site.url())}),
             )],
         );
-        assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
-        let result = payload(&responses[0]);
-        assert_eq!(result["content"], "the priced article");
-        assert_eq!(result["allowance"]["decision"], "proceeded_with_breach");
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+        let detail = error_text(&responses[0]);
+        assert!(detail.contains("payment term is unmet"), "{detail}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
 
         let recorded = crossings(home.path());
         let payload = &recorded[0]["payload"];
-        assert_eq!(recorded[0]["event"], "crossing_mediated");
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        assert_eq!(payload["grounded"], false);
+        let refusal = payload["refusal"].as_str().expect("a refusal");
+        assert!(refusal.contains("payment term is unmet"), "{refusal}");
         let breach = payload["breach"].as_str().expect("breach");
         assert!(breach.contains("cumulative allowance"), "{breach}");
-        assert!(breach.contains("payment term is unmet"), "{breach}");
+        assert!(!breach.contains("payment term is unmet"), "{breach}");
         let allowance = &payload["allowance"];
+        assert_eq!(allowance["decision"], "proceeded_with_breach");
         assert!(allowance["reservation_id"].is_string(), "{allowance}");
         assert!(
-            allowance["settlement"]["note"]
-                .as_str()
-                .unwrap()
-                .contains("released on the receipt"),
+            allowance
+                .to_string()
+                .contains("the fetch was refused before the request"),
             "{allowance}"
         );
-        assert!(allowance["paid"].as_str().unwrap().starts_with("nothing:"));
         let ledger = std::fs::read_to_string(home.path().join("allowance/ledger.ndjson")).unwrap();
         assert!(
             ledger.contains("\"reserved\"") && ledger.contains("\"released\""),
@@ -4068,10 +4084,12 @@ mod pre_authorisation {
   </license></content></rsl>"#;
 
     /// Under observe an exhausted allowance is carried as a breach; when the
-    /// same licence's reporting demand then refuses before the request, the
-    /// refusal keeps the allowance breach beside the payment term.
+    /// same licence's terms then refuse before the request, the refusal keeps
+    /// the allowance breach. The payment term is the first of the licence's
+    /// terms ruled on, so it is the refusal; the unmet reporting demand is on
+    /// the record in `declarations.reporting`.
     #[test]
-    fn a_reporting_refusal_before_the_request_keeps_the_allowance_breach() {
+    fn a_licence_term_refusal_before_the_request_keeps_the_allowance_breach() {
         let (site, hits) = publisher(PRICED_REPORTING_LICENCE);
         let home = tempfile::tempdir().expect("tempdir");
         write_policy(home.path(), &policy("observe", 5_000));
@@ -4090,21 +4108,22 @@ mod pre_authorisation {
         assert_eq!(recorded[0]["event"], "crossing_refused");
         let refusal = payload["refusal"].as_str().expect("a refusal");
         assert!(
-            refusal.contains("requires telemetry reporting"),
+            refusal.contains("payment type use (0.015 USD)"),
             "{refusal}"
         );
+        assert_eq!(payload["declarations"]["reporting"]["met"], false);
         let breach = payload["breach"].as_str().expect("breaches kept");
         assert!(breach.contains("cumulative allowance"), "{breach}");
-        assert!(breach.contains("payment type use (0.015 USD)"), "{breach}");
+        assert!(!breach.contains("payment type"), "{breach}");
     }
 
-    /// The same on a refused redirect hop: the asked-for URL's licence quotes
-    /// a price the allowance cannot hold and its host breaks an observe
-    /// constraint; the hop's own licence demands reporting and is refused.
-    /// The refusal keeps the allowance breach and the asked-for host's
-    /// breach.
+    /// The asked-for URL's licence quotes a price the allowance cannot hold
+    /// and its host breaks an observe constraint. Its payment term refuses
+    /// before the request, so the redirect it would have answered is never
+    /// seen and the destination is never asked for. The refusal keeps the
+    /// allowance breach and the host's breach.
     #[test]
-    fn a_refused_redirect_hop_keeps_the_allowance_and_host_breaches() {
+    fn a_priced_licence_refuses_before_a_redirect_and_keeps_the_allowance_and_host_breaches() {
         let (destination, destination_hits) = publisher(REPORTING_LICENCE);
         let to = format!("{}/article", destination.url());
         let first = Server::bind("127.0.0.1:0")
@@ -4134,7 +4153,8 @@ mod pre_authorisation {
         );
         assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
         let detail = error_text(&responses[0]);
-        assert!(detail.contains("a redirect to"), "{detail}");
+        assert!(detail.contains("payment term is unmet"), "{detail}");
+        assert!(!detail.contains("redirect"), "{detail}");
         assert_eq!(
             destination_hits.load(std::sync::atomic::Ordering::SeqCst),
             0
@@ -4143,17 +4163,14 @@ mod pre_authorisation {
         let payload = &recorded[0]["payload"];
         assert_eq!(recorded[0]["event"], "crossing_refused");
         let refusal = payload["refusal"].as_str().expect("a refusal");
-        assert!(
-            refusal.contains("requires telemetry reporting"),
-            "{refusal}"
-        );
+        assert!(refusal.contains("payment term is unmet"), "{refusal}");
         let breach = payload["breach"].as_str().expect("breaches kept");
         assert!(breach.contains("cumulative allowance"), "{breach}");
         assert!(breach.contains("allowed-host"), "{breach}");
     }
 
-    /// With room in the allowance the price is reserved and released; a free
-    /// licence consults nothing.
+    /// With room in the allowance the price is reserved, and released when
+    /// the payment term refuses the fetch; a free licence consults nothing.
     #[test]
     fn a_price_within_the_allowance_is_reserved_then_released_and_a_free_licence_consults_nothing()
     {
@@ -4167,10 +4184,15 @@ mod pre_authorisation {
                 json!({"url": format!("{}/article", site.url())}),
             )],
         );
-        assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
         let allowance = &crossings(home.path())[0]["payload"]["allowance"];
         assert_eq!(allowance["decision"], "reserved", "{allowance}");
-        assert_eq!(allowance["settlement"]["reconciled"], true);
+        assert!(
+            allowance
+                .to_string()
+                .contains("the fetch was refused before the request"),
+            "{allowance}"
+        );
 
         let (free, _) = publisher(FREE_LICENCE);
         let home = tempfile::tempdir().expect("tempdir");
@@ -4193,40 +4215,12 @@ mod pre_authorisation {
             "attribution asks no payment this edge cannot make"
         );
     }
-
-    /// A priced page asked for past the end of its text was still requested,
-    /// so the refused crossing keeps the allowance's reservation and its
-    /// settlement against the receipt, as a grounded one would.
-    #[test]
-    fn a_priced_page_asked_past_its_end_keeps_the_allowance_record() {
-        let (site, hits) = publisher(PRICED_LICENCE);
-        let home = tempfile::tempdir().expect("tempdir");
-        write_policy(home.path(), &policy("observe", 100_000));
-        let responses = converse(
-            home.path(),
-            &[call(
-                "context_fetch",
-                json!({"url": format!("{}/article", site.url()), "offset": 18}),
-            )],
-        );
-        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
-        assert!(
-            error_text(&responses[0]).contains("offset 18 is past the end of the text"),
-            "{responses:?}"
-        );
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let recorded = &crossings(home.path())[0];
-        assert_eq!(recorded["event"], "crossing_refused");
-        let allowance = &recorded["payload"]["allowance"];
-        assert_eq!(allowance["decision"], "reserved", "{allowance}");
-        assert_eq!(allowance["settlement"]["reconciled"], true, "{allowance}");
-    }
 }
 
 /// The reporting demand a licence carries, ruled on before the request: met
 /// where the session's scope clears telemetry egress and the demanded level
-/// is one the relay emits; otherwise refused in strict with the demand
-/// named, and carried with the breach in observe.
+/// is one the relay emits; otherwise refused in every mode with the demand
+/// named.
 mod reporting_demand {
     use super::*;
 
@@ -4236,7 +4230,7 @@ mod reporting_demand {
     <permits type="usage">ai-input</permits>
     <payment type="attribution"/>
     <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur"
-               endpoint="https://telemetry.example.com/v1/events">
+               endpoint="http://127.0.0.1:9/telemetry/events">
       <![CDATA[{"conformance_level": "grounding", "privacy_level": "minimal"}]]>
     </reporting>
   </license></content></rsl>"#;
@@ -4278,7 +4272,7 @@ mod reporting_demand {
         );
         std::fs::write(
             home.path().join("relay.json"),
-            r#"{"receiver":"http://127.0.0.1:9/telemetry"}"#,
+            json!({"receiver": LICENCE_RECEIVER}).to_string(),
         )
         .unwrap();
         agree(home.path());
@@ -4288,13 +4282,39 @@ mod reporting_demand {
     fn publisher(
         licence: &'static str,
     ) -> (ServerHandle, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        serve_licence(move || licence.to_owned())
+    }
+
+    /// The receiver a [`publisher_reporting_to`] licence names the endpoint
+    /// of, set by the test before each home first reads the licence.
+    type Routed = std::sync::Arc<std::sync::Mutex<String>>;
+
+    /// A publisher whose licence is [`REPORTING_LICENCE`] with its endpoint
+    /// where the relay posts for the receiver `routed` holds, so that
+    /// receiver is a route to the endpoint (owner decision, 30 September
+    /// 2026: a demand is met only through the enrolled hub or the licence's
+    /// endpoint). A fresh home reads the licence afresh.
+    fn publisher_reporting_to(
+        routed: &Routed,
+    ) -> (ServerHandle, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let routed = std::sync::Arc::clone(routed);
+        serve_licence(move || {
+            let receiver = routed.lock().unwrap();
+            assert!(!receiver.is_empty(), "the test names its receiver first");
+            REPORTING_LICENCE.replace(LICENCE_ENDPOINT, &format!("{receiver}/events"))
+        })
+    }
+
+    fn serve_licence(
+        licence: impl Fn() -> String + Send + Sync + 'static,
+    ) -> (ServerHandle, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = std::sync::Arc::clone(&hits);
         let handle = Server::bind("127.0.0.1:0")
             .expect("bind")
             .spawn(move |request| match request.target.as_str() {
                 "/robots.txt" => Response::text(200, ROBOTS),
-                "/license.xml" => Response::new(200, licence.as_bytes().to_vec()),
+                "/license.xml" => Response::new(200, licence().into_bytes()),
                 "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
                 _ => {
                     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -4359,7 +4379,8 @@ mod reporting_demand {
             assert_eq!(refused[0]["result"]["isError"], true);
             let detail = error_text(&refused[0]);
             assert!(
-                detail.contains(&format!("{PUBLIC_NAME} needs reporting"))
+                detail.contains("The source needs reporting")
+                    && !detail.contains(PUBLIC_NAME)
                     && detail.contains("requires telemetry reporting of each use")
                     && detail.contains("has not agreed to report to sources that require it")
                     && detail.contains("`commonmeasure consent agree`"),
@@ -4420,9 +4441,296 @@ mod reporting_demand {
             assert_eq!(met["telemetry_egress_cleared"], false);
             assert_eq!(met["consent"]["state"], "agreed");
             assert_eq!(met["consent"]["text_version"], "1");
-            assert_eq!(met["receiver"], "http://127.0.0.1:9/telemetry");
+            assert_eq!(
+                met["receiver"],
+                receiver_on_record("http://127.0.0.1:9", LICENCE_RECEIVER)
+            );
+            assert_eq!(met["route"], "licence_endpoint");
             assert_eq!(met["conformance_level"], "grounding");
             assert_eq!(met["profile"], "https://contenttelemetry.org/profiles/spur");
+        }
+    }
+
+    /// What [`REPORTING_LICENCE`] names as its telemetry endpoint, and the
+    /// receiver the relay posts there for: batches go to the receiver
+    /// followed by `/events`.
+    const LICENCE_ENDPOINT: &str = "http://127.0.0.1:9/telemetry/events";
+    const LICENCE_RECEIVER: &str = "http://127.0.0.1:9/telemetry";
+
+    /// A home as [`reporting_home`] makes it, its `relay.json` naming
+    /// `receiver`, and, with `hub`, enrolled with the hub at that URL through
+    /// the enrolment record and edge key a `connect` leaves. The record is
+    /// the one the product reads; no hub exchange is exercised here.
+    fn routed_home(
+        mode: &str,
+        receiver: &str,
+        hub: Option<&str>,
+    ) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+        let (home, workspace, cleared) = reporting_home(mode);
+        std::fs::write(
+            home.path().join("relay.json"),
+            json!({"receiver": receiver}).to_string(),
+        )
+        .unwrap();
+        if let Some(hub) = hub {
+            enrol(home.path(), hub);
+        }
+        (home, workspace, cleared)
+    }
+
+    fn enrol(home: &Path, hub: &str) {
+        let key = commonmeasure_harness::identity::EdgeKey::generate().unwrap();
+        key.store(home).unwrap();
+        std::fs::write(
+            home.join("enrolment.json"),
+            json!({
+                "hub": hub, "organization": {"id": "route-test", "name": "Route test"},
+                "name": "route-test", "key_id": key.thumbprint(),
+                "identity": {"origin": hub, "bot_page": format!("{hub}/bot")},
+                "enrolled_at": "2026-09-30T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    /// How the record names a receiver: its origin and the first 16 hex
+    /// digits of the SHA-256 of the configured value.
+    fn receiver_on_record(origin: &str, receiver: &str) -> Value {
+        let digest = sha256_digest(receiver.as_bytes());
+        json!({"origin": origin, "digest": &digest[.."sha256:".len() + 16]})
+    }
+
+    /// One fetch of the demanding page in `home`: the responses, the
+    /// crossing it recorded, and whether the publisher's page was requested.
+    fn fetch_demanding_page(
+        home: &Path,
+        cleared: &Path,
+        site: &ServerHandle,
+        hits: &std::sync::atomic::AtomicUsize,
+    ) -> (Vec<Value>, Value, bool) {
+        let before = hits.load(std::sync::atomic::Ordering::SeqCst);
+        let earlier = if home.join("sessions").join("test-session.ndjson").exists() {
+            crossings(home).len()
+        } else {
+            0
+        };
+        let responses = converse_in(
+            home,
+            Some(cleared),
+            &[call(
+                "context_fetch",
+                json!({"url": format!("{}/article", public(site))}),
+            )],
+        );
+        let recorded = crossings(home);
+        assert_eq!(recorded.len(), earlier + 1, "{recorded:?}");
+        let requested = hits.load(std::sync::atomic::Ordering::SeqCst) != before;
+        (responses, recorded[earlier].clone(), requested)
+    }
+
+    /// The fetch is refused before the request with a route refusal that
+    /// contains `expected`, and the record carries no route.
+    fn assert_route_refused(
+        (responses, crossing, requested): &(Vec<Value>, Value, bool),
+        expected: &str,
+        case: &str,
+    ) {
+        assert_eq!(responses[0]["result"]["isError"], true, "{case}");
+        assert_eq!(crossing["event"], "crossing_refused", "{case}");
+        assert!(!requested, "{case}: refused before the request");
+        let refusal = crossing["payload"]["refusal"].as_str().unwrap();
+        assert!(
+            refusal.contains(
+                "is neither the hub this edge is enrolled with nor the licence's endpoint"
+            ) && refusal.contains(expected),
+            "{case}: {refusal}"
+        );
+        let reporting = &crossing["payload"]["declarations"]["reporting"];
+        assert_eq!(reporting["met"], false, "{case}");
+        assert!(reporting.get("route").is_none(), "{case}: {reporting}");
+    }
+
+    /// Owner decision, 30 September 2026 (EDG-124): a reporting demand is met
+    /// only when the configured receiver is a route to the licence's
+    /// endpoint. An edge that is not enrolled, whose `relay.json` names a
+    /// receiver that forwards nowhere, is refused in every mode before the
+    /// request, with consent given and delivery automatic. The refusal says
+    /// the receiver is neither the enrolled hub nor the licence's endpoint
+    /// and that the edge is not enrolled, and names the receiver by origin
+    /// and digest: the key in its path reaches neither the agent nor the
+    /// record. The record carries the receiver the same way and no route.
+    #[test]
+    fn an_unenrolled_edge_relaying_to_a_receiver_that_does_not_forward_is_refused() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        let receiver = "https://collector.example/ingest/ak_PLANTED";
+        for mode in ["strict", "observe"] {
+            let (home, _workspace, cleared) = routed_home(mode, receiver, None);
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert_eq!(responses[0]["result"]["isError"], true, "{mode}");
+            assert_eq!(crossing["event"], "crossing_refused", "{mode}");
+            assert!(!requested, "{mode}: refused before the request");
+            let refusal = crossing["payload"]["refusal"].as_str().unwrap();
+            let shown = error_text(&responses[0]);
+            // The record names the licence's endpoint; the agent reads it by
+            // position (EDG-129), and the receiver as the operator's.
+            for (text, endpoint) in [
+                (
+                    refusal,
+                    "nor the licence's endpoint http://127.0.0.1:9/telemetry/events",
+                ),
+                (shown.as_str(), "nor the endpoint the licence names"),
+            ] {
+                assert!(
+                    text.contains("is neither the hub this edge is enrolled with ")
+                        && text.contains(endpoint)
+                        && text.contains("this edge is not enrolled with a hub")
+                        && text.contains("the receiver at https://collector.example (sha256:"),
+                    "{mode}: {text}"
+                );
+                assert!(!text.contains("ak_PLANTED"), "{mode}: {text}");
+            }
+            assert!(
+                shown.contains("(the source's terms; "),
+                "{mode}: a reporting demand is the source's term: {shown}"
+            );
+            let reporting = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], false, "{mode}");
+            assert!(reporting.get("consent_needed").is_none(), "{mode}");
+            assert!(reporting.get("route").is_none(), "{mode}: {reporting}");
+            assert_eq!(
+                reporting["receiver"],
+                receiver_on_record("https://collector.example", receiver),
+                "{mode}"
+            );
+            assert!(
+                !crossing.to_string().contains("ak_PLANTED"),
+                "{mode}: the record never holds the receiver's path"
+            );
+        }
+    }
+
+    /// Route (a) of EDG-124: an edge enrolled with a hub, whose `relay.json`
+    /// names a receiver on the hub's origin (what `connect` writes), meets
+    /// the demand through the hub, which delivers onward to the endpoints the
+    /// source declares; the record names the route `hub`. The enrolment
+    /// record is read at each ruling: once it is revoked, or removed as
+    /// `disconnect` removes it, the same receiver is refused and the reason
+    /// says which.
+    #[test]
+    fn an_enrolled_edge_relaying_to_its_hub_is_admitted_through_the_hub() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        let hub = "http://localhost:9";
+        let receiver = "http://localhost:9/api/v1/telemetry";
+        for mode in ["strict", "observe"] {
+            let (home, _workspace, cleared) = routed_home(mode, receiver, Some(hub));
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert_eq!(
+                responses[0]["result"]["isError"], false,
+                "{mode}: {responses:?}"
+            );
+            assert_eq!(crossing["event"], "crossing_mediated", "{mode}");
+            assert!(requested, "{mode}");
+            let reporting = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], true, "{mode}: {reporting}");
+            assert_eq!(reporting["route"], "hub", "{mode}");
+            assert_eq!(
+                reporting["receiver"],
+                receiver_on_record("http://localhost:9", receiver),
+                "{mode}"
+            );
+
+            let path = home.path().join("enrolment.json");
+            let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            record["revoked_at"] = json!("2026-09-30T01:00:00Z");
+            record["revocation"] = json!("owner");
+            std::fs::write(&path, record.to_string()).unwrap();
+            assert_route_refused(
+                &fetch_demanding_page(home.path(), &cleared, &site, &hits),
+                "the key this edge enrolled with the hub at http://localhost:9 is revoked",
+                &format!("{mode} revoked"),
+            );
+
+            std::fs::remove_file(&path).unwrap();
+            assert_route_refused(
+                &fetch_demanding_page(home.path(), &cleared, &site, &hits),
+                "this edge is not enrolled with a hub",
+                &format!("{mode} disconnected"),
+            );
+        }
+    }
+
+    /// Route (b) of EDG-124: a receiver the relay posts to the licence's
+    /// endpoint for is the endpoint itself, compared as two receivers are
+    /// (`docs/contracts/telemetry-projection.md` §One receiver): the URL
+    /// posted to, the receiver followed by `/events`, equals the endpoint
+    /// after the URL parse, so a trailing slash or the scheme's case does not
+    /// matter. The edge is not enrolled, and the record names the route
+    /// `licence_endpoint`.
+    #[test]
+    fn a_receiver_posting_to_the_licence_endpoint_is_admitted_through_it() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        for mode in ["strict", "observe"] {
+            for receiver in [LICENCE_RECEIVER, "HTTP://127.0.0.1:9/telemetry/"] {
+                let case = format!("{mode} {receiver}");
+                let (home, _workspace, cleared) = routed_home(mode, receiver, None);
+                let (responses, crossing, requested) =
+                    fetch_demanding_page(home.path(), &cleared, &site, &hits);
+                assert_eq!(
+                    responses[0]["result"]["isError"], false,
+                    "{case}: {responses:?}"
+                );
+                assert_eq!(crossing["event"], "crossing_mediated", "{case}");
+                assert!(requested, "{case}");
+                let reporting = &crossing["payload"]["declarations"]["reporting"];
+                assert_eq!(reporting["met"], true, "{case}: {reporting}");
+                assert_eq!(reporting["route"], "licence_endpoint", "{case}");
+                assert_eq!(
+                    reporting["receiver"],
+                    receiver_on_record("http://127.0.0.1:9", receiver),
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    /// Route (b) compares the path as sent. A receiver on the endpoint's
+    /// origin whose posted path differs is refused in every mode: one naming
+    /// another path, and one that copies the endpoint itself, since the relay
+    /// posts to it followed by `/events`. The reason names the licence's
+    /// endpoint, the source's text, and says where the relay posts. An
+    /// enrolled edge's hub on another origin does not help.
+    #[test]
+    fn a_receiver_differing_from_the_licence_endpoint_only_in_path_is_refused() {
+        let (site, hits) = publisher(REPORTING_LICENCE);
+        for mode in ["strict", "observe"] {
+            for receiver in ["http://127.0.0.1:9/other", LICENCE_ENDPOINT] {
+                for hub in [None, Some("http://localhost:9")] {
+                    let case = format!("{mode} {receiver} enrolled={hub:?}");
+                    let (home, _workspace, cleared) = routed_home(mode, receiver, hub);
+                    let fetched = fetch_demanding_page(home.path(), &cleared, &site, &hits);
+                    let enrolment = match hub {
+                        Some(_) => "this edge is enrolled with the hub at http://localhost:9",
+                        None => "this edge is not enrolled with a hub",
+                    };
+                    assert_route_refused(&fetched, enrolment, &case);
+                    let refusal = fetched.1["payload"]["refusal"].as_str().unwrap();
+                    assert!(
+                        refusal.contains(&format!(
+                            "the licence's endpoint {LICENCE_ENDPOINT} (the relay posts to the \
+                             receiver followed by /events)"
+                        )) && refusal.contains("the receiver at http://127.0.0.1:9 (sha256:"),
+                        "{case}: {refusal}"
+                    );
+                    assert_eq!(
+                        fetched.1["payload"]["declarations"]["reporting"]["receiver"],
+                        receiver_on_record("http://127.0.0.1:9", receiver),
+                        "{case}"
+                    );
+                }
+            }
         }
     }
 
@@ -4523,7 +4831,8 @@ mod reporting_demand {
     /// page is refused.
     #[test]
     fn what_the_edge_admits_under_consent_is_what_the_relay_delivers() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let plain = Server::bind("127.0.0.1:0")
             .unwrap()
             .spawn(|request| match request.target.as_str() {
@@ -4557,6 +4866,7 @@ mod reporting_demand {
             r#"{"policy_mode":"strict","allow_private_hosts":true,
                 "scopes":[{"match":"reporting-false","engagement":"client","allow_telemetry_egress":false}]}"#,
         );
+        *routed.lock().unwrap() = receiver.url();
         std::fs::write(
             home.path().join("relay.json"),
             json!({"receiver": receiver.url()}).to_string(),
@@ -4695,7 +5005,8 @@ mod reporting_demand {
         use std::os::unix::fs::PermissionsExt as _;
         const AGREED: &str =
             r#"{"reporting":{"answer":"agreed","at":"2026-09-29T10:00:00Z","text_version":"1"}}"#;
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         for case in ["symlink", "symlink to writable", "mode 0666"] {
             let (mut receiver, bodies) = recording_receiver();
             let home = tempfile::tempdir().expect("tempdir");
@@ -4705,6 +5016,7 @@ mod reporting_demand {
                 home.path(),
                 r#"{"policy_mode":"strict","allow_private_hosts":true,"scopes":[]}"#,
             );
+            *routed.lock().unwrap() = receiver.url();
             std::fs::write(
                 home.path().join("relay.json"),
                 json!({"receiver": receiver.url()}).to_string(),
@@ -4824,7 +5136,8 @@ mod reporting_demand {
     /// delivers its retrieval and grounding.
     #[test]
     fn a_demand_under_terms_needing_access_context_is_refused_and_nothing_is_delivered() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let page = format!("{}/article", public(&site));
         for (scope, scopes) in PAIRED_SCOPES {
             for terms in [true, false] {
@@ -4837,6 +5150,7 @@ mod reporting_demand {
                     home.path(),
                     &access_context_policy(terms.then_some(PUBLIC_NAME), scopes),
                 );
+                *routed.lock().unwrap() = receiver.url();
                 std::fs::write(
                     home.path().join("relay.json"),
                     json!({"receiver": receiver.url()}).to_string(),
@@ -4930,7 +5244,8 @@ mod reporting_demand {
     /// `institution.test`; the admitted later crossing is counted as held.
     #[test]
     fn a_later_crossing_admitted_or_refused_does_not_strand_an_earlier_reported_one() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let plain = undemanding_site();
         let demanded = format!("{}/first", public(&site));
         let later_pages = [
@@ -4956,6 +5271,7 @@ mod reporting_demand {
                 std::fs::create_dir_all(&earlier_dir).unwrap();
                 std::fs::create_dir_all(&later_dir).unwrap();
                 write_policy(home.path(), &ordering_policy(scopes));
+                *routed.lock().unwrap() = receiver.url();
                 std::fs::write(
                     home.path().join("relay.json"),
                     json!({"receiver": receiver.url()}).to_string(),
@@ -5032,7 +5348,8 @@ mod reporting_demand {
     /// nothing of `institution.test`.
     #[test]
     fn a_demand_after_a_held_crossing_is_admitted_and_delivered_without_it() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let plain = undemanding_site();
         let held = format!("{}/page", plain.url().replace("127.0.0.1", INSTITUTION));
         let demanded = format!("{}/second", public(&site));
@@ -5047,6 +5364,7 @@ mod reporting_demand {
             std::fs::create_dir_all(&earlier_dir).unwrap();
             std::fs::create_dir_all(&later_dir).unwrap();
             write_policy(home.path(), &ordering_policy(scopes));
+            *routed.lock().unwrap() = receiver.url();
             std::fs::write(
                 home.path().join("relay.json"),
                 json!({"receiver": receiver.url()}).to_string(),
@@ -5102,7 +5420,8 @@ mod reporting_demand {
     /// nothing and names the log it skipped.
     #[test]
     fn a_demand_into_a_session_log_the_relay_cannot_read_is_refused_and_nothing_is_delivered() {
-        let (site, hits) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, hits) = publisher_reporting_to(&routed);
         let demanded = format!("{}/page", public(&site));
         for (scope, scopes) in PAIRED_SCOPES {
             let (mut receiver, bodies) = recording_receiver();
@@ -5111,6 +5430,7 @@ mod reporting_demand {
             let paired = workspace.path().join("paired");
             std::fs::create_dir_all(&paired).unwrap();
             write_policy(home.path(), &access_context_policy(None, scopes));
+            *routed.lock().unwrap() = receiver.url();
             std::fs::write(
                 home.path().join("relay.json"),
                 json!({"receiver": receiver.url()}).to_string(),
@@ -5194,7 +5514,8 @@ mod reporting_demand {
     /// it is refused and skipped: the test above.)
     #[test]
     fn a_demand_into_a_session_log_ending_in_a_torn_line_is_admitted_and_delivered() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let demanded = format!("{}/page", public(&site));
         let torn = "{\"seq\":1,\"event\":\"host_process\",\"payl";
         for (scope, scopes) in PAIRED_SCOPES {
@@ -5204,6 +5525,7 @@ mod reporting_demand {
             let paired = workspace.path().join("paired");
             std::fs::create_dir_all(&paired).unwrap();
             write_policy(home.path(), &access_context_policy(None, scopes));
+            *routed.lock().unwrap() = receiver.url();
             std::fs::write(
                 home.path().join("relay.json"),
                 json!({"receiver": receiver.url()}).to_string(),
@@ -5463,15 +5785,22 @@ mod reporting_demand {
             .expect("the unmet demand is a refusal")
             .to_owned();
         assert!(
-            refusal.contains("demands citation conformance"),
+            refusal.contains("demands a conformance level other than retrieval or grounding"),
             "{refusal}"
+        );
+        // The level the licence named is the licence's text: the reason
+        // names it by position and the ruling keeps it (EDG-116).
+        assert_eq!(
+            recorded[0]["payload"]["declarations"]["reporting"]["conformance_level"],
+            "citation"
         );
     }
 
     const AUDIT_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
   <content url="/"><license>
     <permits type="usage">ai-input</permits>
-    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur">
+    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur"
+               endpoint="http://127.0.0.1:9/telemetry/events">
       <![CDATA[{"conformance_level": "grounding"}]]>
     </reporting>
     <reporting type="audit" profile="https://audit.example/profiles/quarterly"
@@ -5801,7 +6130,8 @@ mod reporting_demand {
     #[cfg(unix)]
     #[test]
     fn a_claude_desktop_session_is_admitted_and_delivered_only_while_the_background_relay_runs() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let bodies: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
         let receiver = {
             let bodies = std::sync::Arc::clone(&bodies);
@@ -5827,6 +6157,7 @@ mod reporting_demand {
             r#"{"policy_mode":"observe","allow_private_hosts":true,
                 "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
         );
+        *routed.lock().unwrap() = receiver.url();
         std::fs::write(
             home.path().join("relay.json"),
             json!({"receiver": receiver.url()}).to_string(),
@@ -5945,7 +6276,8 @@ mod reporting_demand {
     #[cfg(unix)]
     #[test]
     fn the_reporting_ruling_reads_relay_json_at_each_fetch_of_one_session() {
-        let (site, _) = publisher(REPORTING_LICENCE);
+        let routed = Routed::default();
+        let (site, _) = publisher_reporting_to(&routed);
         let receiver = Server::bind("127.0.0.1:0")
             .unwrap()
             .spawn(|_| Response::json(201, r#"{"status":"ok","events_created":0}"#))
@@ -5960,6 +6292,7 @@ mod reporting_demand {
                 "scopes":[{"match":"reporting-cleared","engagement":"research","allow_telemetry_egress":true}]}"#,
         );
         let relay_json = home.path().join("relay.json");
+        *routed.lock().unwrap() = receiver.url();
         let unscoped = json!({"receiver": receiver.url()}).to_string();
         std::fs::write(&relay_json, &unscoped).unwrap();
         agree(home.path());
@@ -6162,7 +6495,8 @@ mod reporting_demand {
     /// authorises AI input and section 3.12 binds its demand.
     const UNLISTED_USAGE_LICENCE: &str = r#"<rsl xmlns="https://rslstandard.org/rsl">
   <content url="/"><license>
-    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur">
+    <reporting type="telemetry" profile="https://contenttelemetry.org/profiles/spur"
+               endpoint="http://127.0.0.1:9/telemetry/events">
       <![CDATA[{"conformance_level": "grounding"}]]>
     </reporting>
   </license></content></rsl>"#;
@@ -6214,16 +6548,16 @@ mod reporting_demand {
 
     /// Catches: a licence's reporting demand ruled on only where the
     /// combined AI-input preference was Allow. A `Content-Signal` in
-    /// `robots.txt` that disallows AI input made it Disallow, so observe and
-    /// prefer carried the Disallow and returned the bytes with the demand
-    /// never ruled on. The demand binds in every mode (owner decision, 22
-    /// September 2026): refused before the request, the refusal naming the
-    /// demand and the Disallow kept on the record beside it.
+    /// `robots.txt` that disallows AI input made it Disallow, and the demand
+    /// was never ruled on. The demand and the Disallow each bind in every
+    /// mode (owner decisions, 22 and 30 September 2026): refused before the
+    /// request on the Disallow, the first term ruled on, with the unmet
+    /// demand on the record in `declarations.reporting`.
     #[test]
     fn a_disallow_in_robots_does_not_excuse_an_unmet_reporting_demand() {
         let (site, hits) = declaring_publisher(SIGNAL_DISALLOWS, REPORTING_LICENCE, &[]);
         let url = format!("{}/article", public(&site));
-        for mode in ["observe", "prefer"] {
+        for mode in ["observe", "prefer", "strict"] {
             let (responses, recorded) = fetch_in_mode(&url, mode, true);
             assert_eq!(
                 responses[0]["result"]["isError"], true,
@@ -6235,22 +6569,18 @@ mod reporting_demand {
                 .as_str()
                 .expect("a refusal names its reason");
             assert!(
-                refusal.contains("requires telemetry reporting")
-                    && refusal.contains("relay/manual"),
+                refusal.contains("The source disallows AI input")
+                    && refusal.contains("Content-Signal"),
                 "{mode}: {refusal}"
             );
-            let breach = recorded[0]["payload"]["breach"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{mode}: the Disallow is kept on the record"));
-            assert_eq!(
-                breach.matches("The source disallows AI input").count(),
-                1,
-                "{mode}: {breach}"
-            );
-            assert!(breach.contains("Content-Signal"), "{mode}: {breach}");
-            assert_eq!(
-                recorded[0]["payload"]["declarations"]["reporting"]["met"], false,
-                "{mode}"
+            assert!(recorded[0]["payload"]["breach"].is_null(), "{mode}");
+            let reporting = &recorded[0]["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], false, "{mode}");
+            assert!(
+                reporting["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("relay/manual")),
+                "{mode}: {reporting}"
             );
             assert_eq!(
                 hits.load(std::sync::atomic::Ordering::SeqCst),
@@ -6263,8 +6593,8 @@ mod reporting_demand {
     /// The same, where the Disallow comes from the page's own
     /// `Content-Usage` header and the licence from its `Link` header: both
     /// are only known once the bytes are fetched, so they are withheld from
-    /// context, and the demand the licence made refuses the crossing in
-    /// observe and prefer.
+    /// context. The Disallow refuses the crossing in observe and prefer, and
+    /// the unmet demand the licence made is on the record.
     #[test]
     fn a_content_usage_disallow_does_not_excuse_an_unmet_reporting_demand() {
         let (site, hits) = declaring_publisher(
@@ -6291,18 +6621,15 @@ mod reporting_demand {
                 .as_str()
                 .expect("a refusal names its reason");
             assert!(
-                refusal.contains("requires telemetry reporting"),
+                refusal.contains("The source disallows AI input")
+                    && refusal.contains("Content-Usage"),
                 "{mode}: {refusal}"
             );
-            let breach = recorded[0]["payload"]["breach"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{mode}: the Disallow is kept on the record"));
+            assert!(recorded[0]["payload"]["breach"].is_null(), "{mode}");
             assert_eq!(
-                breach.matches("The source disallows AI input").count(),
-                1,
-                "{mode}: {breach}"
+                recorded[0]["payload"]["declarations"]["reporting"]["met"], false,
+                "{mode}"
             );
-            assert!(breach.contains("Content-Usage"), "{mode}: {breach}");
             assert_eq!(recorded[0]["payload"]["grounded"], false, "{mode}");
             assert!(
                 recorded[0]["payload"]["content_hash"].is_string(),
@@ -6356,33 +6683,232 @@ mod reporting_demand {
     }
 
     /// The met case beside a Disallow: automatic delivery in force, so the
-    /// demand is met, and observe carries the crossing with the Disallow as
-    /// its breach.
+    /// demand is met, and the Disallow alone refuses the crossing before the
+    /// request, in observe as in every mode.
     #[test]
-    fn a_met_demand_beside_a_disallow_is_carried_with_the_breach_in_observe() {
+    fn a_met_demand_beside_a_disallow_is_refused_on_the_disallow_in_observe() {
         let (site, hits) = declaring_publisher(SIGNAL_DISALLOWS, REPORTING_LICENCE, &[]);
         let url = format!("{}/article", public(&site));
         let (responses, recorded) = fetch_in_mode(&url, "observe", false);
-        assert_eq!(responses[0]["result"]["isError"], false, "{responses:?}");
-        assert_eq!(payload(&responses[0])["content"], "the reported article");
-        assert_eq!(recorded[0]["event"], "crossing_mediated");
-        let breach = recorded[0]["payload"]["breach"]
+        assert_eq!(responses[0]["result"]["isError"], true, "{responses:?}");
+        assert_eq!(recorded[0]["event"], "crossing_refused");
+        let refusal = recorded[0]["payload"]["refusal"]
             .as_str()
-            .expect("the Disallow is carried as a breach");
+            .expect("a refusal names its reason");
         assert_eq!(
-            breach.matches("The source disallows AI input").count(),
+            refusal.matches("The source disallows AI input").count(),
             1,
-            "{breach}"
+            "{refusal}"
         );
         assert!(
-            !breach.contains("requires telemetry reporting"),
-            "the demand is met: {breach}"
+            !refusal.contains("requires telemetry reporting"),
+            "the demand is met: {refusal}"
         );
+        assert!(recorded[0]["payload"]["breach"].is_null());
         assert_eq!(
             recorded[0]["payload"]["declarations"]["reporting"]["met"],
             true
         );
-        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// The reference the operator's agreement with the publisher carries in
+    /// these tests.
+    const AGREEMENT: &str = "firm/publisher-agreement-7";
+
+    /// A publisher that names no licence and states no signal, so the only
+    /// reporting duty on its pages is the operator's agreement.
+    fn undeclaring_publisher() -> (ServerHandle, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&hits);
+        let handle = Server::bind("127.0.0.1:0")
+            .expect("bind")
+            .spawn(move |request| match request.target.as_str() {
+                "/robots.txt" => Response::text(200, "User-agent: *\nAllow: /\n"),
+                "/.well-known/content-telemetry.json" => Response::text(404, "no manifest"),
+                _ => {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Response::text(200, "the agreed article")
+                }
+            })
+            .expect("spawn");
+        (handle, hits)
+    }
+
+    /// A home as [`reporting_home`] makes it, whose source policy also
+    /// records the operator's agreement with [`PUBLIC_NAME`] under
+    /// [`AGREEMENT`], with `requires_reporting` as given. `relay.json` names
+    /// `receiver`, or nothing; with `hub` the edge is enrolled with it.
+    fn agreement_home(
+        mode: &str,
+        requires_reporting: bool,
+        receiver: Option<&str>,
+        hub: Option<&str>,
+    ) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+        let (home, workspace, cleared) = reporting_home(mode);
+        write_policy(
+            home.path(),
+            &json!({
+                "policy_mode": mode, "allow_private_hosts": true,
+                "scopes": [{"match": "reporting-cleared", "engagement": "research",
+                            "allow_telemetry_egress": true}],
+                "terms": [{"host": PUBLIC_NAME, "reference": AGREEMENT,
+                           "requires_reporting": requires_reporting}],
+            })
+            .to_string(),
+        );
+        match receiver {
+            Some(receiver) => std::fs::write(
+                home.path().join("relay.json"),
+                json!({"receiver": receiver}).to_string(),
+            )
+            .unwrap(),
+            None => std::fs::remove_file(home.path().join("relay.json")).unwrap(),
+        }
+        if let Some(hub) = hub {
+            enrol(home.path(), hub);
+        }
+        (home, workspace, cleared)
+    }
+
+    /// Owner decision, 30 September 2026: the operator's recorded agreement
+    /// with a source (`terms[].requires_reporting` in the source policy)
+    /// binds like a licence's telemetry demand, in every policy mode. With
+    /// no route for the report the crossing is refused before the request;
+    /// the agent reads the operator's own reference and nothing the source
+    /// chose, and the record names the demand's source.
+    #[test]
+    fn an_agreement_requiring_reporting_with_no_route_is_refused_in_every_mode() {
+        let (site, hits) = undeclaring_publisher();
+        for mode in ["observe", "prefer", "strict"] {
+            let (home, _workspace, cleared) = agreement_home(mode, true, None, None);
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert_eq!(
+                responses[0]["result"]["isError"], true,
+                "{mode}: {responses:?}"
+            );
+            assert!(!requested, "{mode}: refused before the request");
+            assert_eq!(crossing["event"], "crossing_refused", "{mode}");
+            let told = responses[0]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert!(
+                told.contains(&format!(
+                    "The operator's agreement with the source ({AGREEMENT}) requires reporting \
+                     of each use and the demand cannot be met: no telemetry receiver is \
+                     configured in "
+                )),
+                "{mode}: {told}"
+            );
+            assert!(!told.contains(PUBLIC_NAME), "{mode}: {told}");
+            let payload = &crossing["payload"];
+            assert_eq!(payload["grounded"], false, "{mode}");
+            assert!(
+                payload["refusal"].as_str().unwrap().contains(&format!(
+                    "The operator's agreement with {PUBLIC_NAME} ({AGREEMENT})"
+                )),
+                "{mode}: {payload}"
+            );
+            let reporting = &payload["declarations"]["reporting"];
+            assert_eq!(
+                reporting["source"], "operator-agreement",
+                "{mode}: {reporting}"
+            );
+            assert_eq!(reporting["reference"], AGREEMENT, "{mode}");
+            assert_eq!(reporting["met"], false, "{mode}");
+            assert!(reporting.get("route").is_none(), "{mode}: {reporting}");
+            assert_eq!(payload["declarations"]["terms"]["reference"], AGREEMENT);
+        }
+        // A receiver that is not the hub, on an edge enrolled with none: the
+        // sentence says the agreement names no endpoint, and no licence.
+        for mode in ["observe", "prefer", "strict"] {
+            let (home, _workspace, cleared) =
+                agreement_home(mode, true, Some("https://elsewhere.example/events"), None);
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert!(!requested, "{mode}: refused before the request");
+            let told = responses[0]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            let route = "is not the hub this edge is enrolled with, and the agreement names no \
+                         endpoint, so only the hub this edge is enrolled with is a route; this \
+                         edge is not enrolled with a hub";
+            assert!(
+                told.contains(&format!(
+                    "The operator's agreement with the source ({AGREEMENT}) requires reporting \
+                     of each use and the demand cannot be met: the receiver "
+                )),
+                "{mode}: {told}"
+            );
+            assert!(told.contains(route), "{mode}: {told}");
+            assert!(!told.contains("licence"), "{mode}: {told}");
+            let reporting = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["source"], "operator-agreement", "{mode}");
+            let reason = reporting["reason"].as_str().unwrap();
+            assert!(reason.contains(route), "{mode}: {reason}");
+            assert!(!reason.contains("licence"), "{mode}: {reason}");
+        }
+    }
+
+    /// The agreement names no endpoint, so the hub the edge is enrolled with
+    /// is its route. With it the page is delivered and the demand is met on
+    /// the record, beside the agreement's reference as before.
+    #[test]
+    fn an_agreement_requiring_reporting_is_met_through_the_hub_in_every_mode() {
+        let (site, hits) = undeclaring_publisher();
+        let hub = "http://localhost:9";
+        let receiver = "http://localhost:9/api/v1/telemetry";
+        for mode in ["observe", "prefer", "strict"] {
+            let (home, _workspace, cleared) = agreement_home(mode, true, Some(receiver), Some(hub));
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert_eq!(
+                responses[0]["result"]["isError"], false,
+                "{mode}: {responses:?}"
+            );
+            assert!(requested, "{mode}");
+            assert_eq!(crossing["event"], "crossing_mediated", "{mode}");
+            let reporting = &crossing["payload"]["declarations"]["reporting"];
+            assert_eq!(reporting["met"], true, "{mode}: {reporting}");
+            assert_eq!(reporting["route"], "hub", "{mode}");
+            assert_eq!(reporting["source"], "operator-agreement", "{mode}");
+            assert_eq!(reporting["reference"], AGREEMENT, "{mode}");
+            assert_eq!(
+                reporting["consent"]["state"], "agreed",
+                "{mode}: {reporting}"
+            );
+            assert_eq!(
+                crossing["payload"]["declarations"]["terms"]["reference"], AGREEMENT,
+                "{mode}: {crossing}"
+            );
+        }
+    }
+
+    /// An agreement that does not require reporting carries no demand: the
+    /// page is delivered with no receiver configured, and no reporting
+    /// ruling is recorded.
+    #[test]
+    fn an_agreement_not_requiring_reporting_is_unchanged_in_every_mode() {
+        let (site, hits) = undeclaring_publisher();
+        for mode in ["observe", "prefer", "strict"] {
+            let (home, _workspace, cleared) = agreement_home(mode, false, None, None);
+            let (responses, crossing, requested) =
+                fetch_demanding_page(home.path(), &cleared, &site, &hits);
+            assert_eq!(
+                responses[0]["result"]["isError"], false,
+                "{mode}: {responses:?}"
+            );
+            assert!(requested, "{mode}");
+            assert_eq!(crossing["event"], "crossing_mediated", "{mode}");
+            let declarations = &crossing["payload"]["declarations"];
+            assert!(
+                declarations.get("reporting").is_none(),
+                "{mode}: {declarations}"
+            );
+            assert_eq!(declarations["terms"]["requires_reporting"], false, "{mode}");
+            assert_eq!(declarations["terms"]["reference"], AGREEMENT, "{mode}");
+        }
     }
 }
 
@@ -6903,7 +7429,11 @@ Allow: /
             redirected.contains("the origin of the hub this edge is enrolled with"),
             "{redirected}"
         );
-        assert!(redirected.contains(&hub_route), "{redirected}");
+        assert!(!redirected.contains(&hub_route), "{redirected}");
+        assert!(
+            redirected.contains("at the target of redirect 1"),
+            "{redirected}"
+        );
 
         // The same route named directly.
         let answer = fetch(home.path(), &hub_route);
@@ -7399,7 +7929,7 @@ fn a_gzip_page_is_carried_with_the_retrieved_hash_over_the_coded_bytes() {
     );
     assert_eq!(responses[0]["result"]["isError"], true);
     assert!(
-        error_text(&responses[0]).contains("gzip body could not be decoded"),
+        error_text(&responses[0]).contains("its body could not be decoded"),
         "{}",
         error_text(&responses[0])
     );
@@ -8631,6 +9161,9 @@ fn a_tab_in_the_robots_response_header_allows_the_page_fetch() {
                 }
                 Err(error) => panic!("accept: {error}"),
             };
+            // An accepted socket inherits the listener's non-blocking mode on
+            // macOS, and a request not yet arrived then reads as EAGAIN.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();

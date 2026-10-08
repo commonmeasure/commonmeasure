@@ -99,7 +99,15 @@ pub fn events_url(receiver: &str) -> String {
 /// spellings as one receiver can only apply a scope, never lift one. `None`
 /// where the transport cannot post: not a URL, not http or https, or no host.
 fn posted_endpoint(receiver: &str) -> Option<url::Url> {
-    let mut endpoint = url::Url::parse(&events_url(receiver)).ok()?;
+    parsed_endpoint(&events_url(receiver))
+}
+
+/// `endpoint`, a URL batches are posted to, read as [`posted_endpoint`]
+/// reads the one it derives: the transport's parse, every terminal dot
+/// removed from the host, credentials and fragment dropped. `None` where
+/// the transport cannot post to it.
+fn parsed_endpoint(endpoint: &str) -> Option<url::Url> {
+    let mut endpoint = url::Url::parse(endpoint).ok()?;
     if !matches!(endpoint.scheme(), "http" | "https") {
         return None;
     }
@@ -207,6 +215,57 @@ pub fn same_receiver(one: &str, other: &str) -> bool {
         (posted_endpoint(one), posted_endpoint(other)),
         (Some(one), Some(other)) if one == other
     )
+}
+
+/// Whether batches for `receiver` are posted to `endpoint` itself, such as
+/// the endpoint of a licence's `<reporting>` binding: the URL the relay
+/// posts to ([`events_url`]) and `endpoint` are one after the parse
+/// [`same_receiver`] applies. A declared endpoint is the URL events are
+/// posted to, so no `/events` is added to it, and a receiver written as the
+/// endpoint itself posts under it, to another path. Path and query are
+/// compared as sent. A URL the transport cannot post to matches nothing.
+pub fn posts_to(receiver: &str, endpoint: &str) -> bool {
+    matches!(
+        (posted_endpoint(receiver), parsed_endpoint(endpoint)),
+        (Some(posted), Some(endpoint)) if posted == endpoint
+    )
+}
+
+/// A configured receiver as a record names it: its origin
+/// ([`receiver_origin`]) and a short digest of the whole configured value
+/// (owner decision, 26 September 2026: receiver and hub URLs in evidence).
+/// The digest tells two receivers at one origin apart and matches the
+/// operator's own `relay.json`, without the path, query or credentials that
+/// can hold a key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiverOnRecord {
+    /// Absent where the value has no origin (it is not a URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// `sha256:` and the first 16 hex digits of the SHA-256 of the value.
+    pub digest: String,
+}
+
+impl ReceiverOnRecord {
+    pub fn of(receiver: &str) -> Self {
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(receiver.as_bytes()));
+        Self {
+            origin: receiver_origin(receiver),
+            digest: format!("sha256:{}", &digest[..16]),
+        }
+    }
+}
+
+impl std::fmt::Display for ReceiverOnRecord {
+    /// How a reason names the receiver: `at <origin> (<digest>)`, or by its
+    /// digest alone where it has no origin.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.origin {
+            Some(origin) => write!(f, "at {origin} ({})", self.digest),
+            None => write!(f, "{}", self.digest),
+        }
+    }
 }
 
 /// Refused receivers each holding the key `ak_PLANTED` somewhere a key is
@@ -317,6 +376,59 @@ mod tests {
         .unwrap();
         let loaded = RelayConfig::load(home.path()).unwrap().unwrap();
         assert_eq!(loaded.receiver, "https://hub.example/api/v1/telemetry");
+    }
+
+    /// A licence's endpoint is the URL events are posted to, so a receiver
+    /// is that endpoint when the relay's POST URL for it equals the endpoint
+    /// after the parse [`same_receiver`] applies, with no `/events` added to
+    /// the endpoint.
+    #[test]
+    fn a_receiver_posts_to_an_endpoint_equal_to_its_events_url() {
+        assert!(posts_to(
+            "https://r.example/t",
+            "https://r.example/t/events"
+        ));
+        assert!(posts_to(
+            "https://r.example/t//",
+            "HTTPS://R.Example:443/t/events"
+        ));
+        assert!(posts_to("https://r.example", "https://r.example./events"));
+        assert!(!posts_to(
+            "https://r.example/t/events",
+            "https://r.example/t/events"
+        ));
+        assert!(!posts_to(
+            "https://r.example/t",
+            "https://r.example/t/events/"
+        ));
+        assert!(!posts_to(
+            "https://r.example/t",
+            "https://r.example/t/events?x"
+        ));
+        assert!(!posts_to("https://r.example/t", "ftp://r.example/t/events"));
+        assert!(!posts_to("r.example/t", "r.example/t/events"));
+    }
+
+    /// A receiver on the record is its origin and a 16-digit digest of the
+    /// whole value: two receivers at one origin differ, the key does not
+    /// appear, and a value with no origin is its digest alone.
+    #[test]
+    fn a_receiver_on_record_is_its_origin_and_a_short_digest() {
+        let one = ReceiverOnRecord::of("https://hub.example/hooks/ak_PLANTED");
+        let other = ReceiverOnRecord::of("https://hub.example/hooks/other");
+        assert_eq!(one.origin.as_deref(), Some("https://hub.example"));
+        assert_eq!(one.origin, other.origin);
+        assert_ne!(one.digest, other.digest);
+        assert_eq!(one.digest.len(), "sha256:".len() + 16);
+        let shown = format!("{one} {}", serde_json::to_string(&one).unwrap());
+        assert!(!shown.contains("ak_PLANTED"), "{shown}");
+        assert!(
+            shown.starts_with("at https://hub.example (sha256:"),
+            "{shown}"
+        );
+        let unparsed = ReceiverOnRecord::of("hub.example/ak_PLANTED");
+        assert_eq!(unparsed.origin, None);
+        assert_eq!(unparsed.to_string(), unparsed.digest);
     }
 
     /// A load error names the fault and the receiver's origin, never the

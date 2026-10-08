@@ -1505,6 +1505,48 @@ mod tests {
         );
     }
 
+    // Catches: projecting what the agent was told. On an own edge `told`
+    // names the operator's own files, so it stays in the operator record;
+    // the projection reads named fields, and a record with `told` projects
+    // as the same record without it.
+    #[test]
+    fn what_the_agent_was_told_is_not_projected() {
+        let told = "refused before the crossing: The job denies this source's host. \
+                    (operator policy in /home/op/.commonmeasure/zqxv-told/policy.json)";
+        let grounded = part(
+            "https://publisher.example/page",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let mut failed = crossing("crossing_mediated", "https://b.example/x", false);
+        failed["payload"]["mode"] = json!("mediated");
+        failed["payload"]["failure"] = json!("connection refused");
+        let mut refused = crossing("crossing_refused", "https://c.example/x", false);
+        refused["payload"]["mode"] = json!("mediated");
+        refused["payload"]["refusal"] = json!("c.example is denied");
+        let mut search = refused.clone();
+        search["payload"]["supplier"] = json!("exa");
+        let records = [grounded, failed, refused, search];
+        let mut with_told = records.to_vec();
+        for record in &mut with_told[1..] {
+            record["payload"]["told"] = json!(told);
+        }
+        with_told[3]["payload"]["told_position"] = json!({"position": 2, "of": 5});
+        let project = |records: &[Value]| {
+            let projection = project_session(None, "s", records, &[], &|_| true);
+            (projection.refused, projection.batches)
+        };
+        let (refused_count, batches) = project(&with_told);
+        assert_eq!(refused_count, Some(2));
+        assert!(!batches.is_empty());
+        let text = serde_json::to_string(&batches).unwrap();
+        assert!(
+            !text.contains("zqxv-told") && !text.contains("told"),
+            "{text}"
+        );
+        assert_eq!((refused_count, batches), project(&records));
+    }
+
     /// [`host_observation_session`] with its first acquisition a delivered
     /// PDF and its observation under `representation_hash`.
     fn host_observed_file(representation_hash: &str) -> Vec<Value> {

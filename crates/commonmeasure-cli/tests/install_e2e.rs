@@ -184,6 +184,61 @@ fn claude_registration_round_trip_touches_only_this_products_entries() {
     assert!(text.contains("hooks: none of this product"), "{text}");
 }
 
+/// `install claude` pre-approves the two mediated tools the owner chose and
+/// nothing else of this product's; doctor reports them; uninstall removes
+/// them and keeps the operator's own allowance.
+#[test]
+fn claude_registration_pre_approves_fetch_and_search_and_nothing_else() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let claude = home.path().join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = claude.join("settings.json");
+    std::fs::write(&settings, r#"{"permissions": {"allow": ["Read"]}}"#).unwrap();
+
+    let output = run(home.path(), &["install", "claude"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let ours: Vec<Value> = json_at(&settings)["permissions"]["allow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            entry
+                .as_str()
+                .is_some_and(|name| name.starts_with("mcp__commonmeasure"))
+        })
+        .cloned()
+        .collect();
+    assert_eq!(
+        ours,
+        [
+            json!("mcp__commonmeasure__context_fetch"),
+            json!("mcp__commonmeasure__context_search")
+        ],
+        "exactly the two, no wildcard and no context_enrol"
+    );
+
+    let text = stdout(&run(home.path(), &["doctor", "claude"]));
+    assert!(
+        text.contains(
+            "permissions: mcp__commonmeasure__context_fetch and \
+             mcp__commonmeasure__context_search pre-approved"
+        ),
+        "{text}"
+    );
+
+    let output = run(home.path(), &["uninstall", "claude"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("2 pre-approval(s) removed"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        json_at(&settings)["permissions"],
+        json!({"allow": ["Read"]})
+    );
+}
+
 /// An enabled plugin already carries the hooks; a direct registration
 /// beside it would record every crossing twice, so install refuses and
 /// writes nothing, and doctor names the plugin.
@@ -1069,6 +1124,8 @@ fn chrome_registration_writes_the_native_messaging_manifest_byte_for_byte() {
     std::fs::create_dir_all(&brave).unwrap();
 
     let output = run(home.path(), &["install", "chrome"]);
+    assert!(!stdout(&output).contains("service install relay"));
+    assert!(!stdout(&output).contains("relay --every"));
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(
@@ -1147,4 +1204,32 @@ fn claude_code_install_needs_no_background_relay_hint() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stdout(&output).contains("service install relay"));
     assert!(!stdout(&output).contains("relay --every"));
+}
+
+#[test]
+fn a_hosted_service_holding_the_home_satisfies_the_install_hint() {
+    let home = tempfile::tempdir().unwrap();
+    let edge = home.path().join("commonmeasure");
+    std::fs::create_dir(&edge).unwrap();
+    let lock = std::fs::File::create(edge.join(commonmeasure_harness::delivery::SERVICE_LOCK_FILE))
+        .unwrap();
+    lock.lock().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["install", "codex"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home.path())
+        .env("COMMONMEASURE_HOME", &edge)
+        .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))
+        .env("CODEX_HOME", home.path().join("codex"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains("an automatic relay holds this home"),
+        "{text}"
+    );
+    assert!(!text.contains("service install relay"), "{text}");
+    assert!(!text.contains("relay --every"), "{text}");
 }

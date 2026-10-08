@@ -6,6 +6,7 @@
 //! so the binary above it is a thin argument parser and the artefacts below it
 //! are the whole story.
 
+pub mod agent_text;
 pub mod allowance;
 pub mod artifact;
 pub mod benchmark;

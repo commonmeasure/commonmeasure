@@ -8,7 +8,10 @@
 //! or now plus the wait) and releases the lock before waiting, or refuses
 //! because the wait does not fit what the fetch may still wait. Two servers
 //! asking at once are spaced by the delay: the second finds the first's turn
-//! already written and waits for it to pass.
+//! already written and waits for it to pass. Once a request to a paced host
+//! has been answered or has failed, its host's time is moved forward to then
+//! ([`Pacing::sent`]), so the next turn is measured from no earlier than the
+//! request went out, whatever held it up after its turn was taken.
 //!
 //! A record that cannot be read, or that is dated beyond the horizon a turn
 //! can legally reach, is not a turn to measure from and is not permission to
@@ -283,6 +286,10 @@ pub struct Pacing {
     backoff_events: RefCell<Vec<BackoffEvent>>,
     reservations: RefCell<BTreeMap<String, String>>,
     probe_reserve: std::cell::Cell<Duration>,
+    /// The licence documents this call has read for a page, so that one
+    /// crossing selects a licence body for a page once across its redirect
+    /// hops and the `Link` licence.
+    licence_readings: crate::discovery::LicenceReadings,
 }
 
 #[cfg(not(test))]
@@ -324,7 +331,13 @@ impl Pacing {
             backoff_events: RefCell::new(Vec::new()),
             reservations: RefCell::new(BTreeMap::new()),
             probe_reserve: std::cell::Cell::new(Duration::ZERO),
+            licence_readings: crate::discovery::LicenceReadings::default(),
         }
+    }
+
+    /// The licence documents this call has read for a page.
+    pub(crate) fn licence_readings(&self) -> &crate::discovery::LicenceReadings {
+        &self.licence_readings
     }
 
     /// Record the delay this call read for `host`, so the probes to it are
@@ -356,6 +369,21 @@ impl Pacing {
     /// may be sent or waited for.
     pub fn over_ceiling(&self) -> bool {
         self.left().is_zero()
+    }
+
+    /// [`Self::ceiling_reason`] as the agent reads it. The sentence is this
+    /// edge's own, so the two are the same words.
+    pub fn ceiling_reason_agent(&self) -> commonmeasure_runtime::agent_text::AgentText {
+        commonmeasure_runtime::agent_text![
+            "this call reached its time limit: one `context_fetch` may take ",
+            self.pace.call_ceiling().as_secs(),
+            "s on this edge",
+            match self.pace {
+                Pace::Own => "",
+                Pace::Hosted => ", which serves its sessions over HTTP",
+            },
+            ", and nothing further is sent once that is used"
+        ]
     }
 
     /// Why nothing more is sent once the ceiling is reached.
@@ -538,6 +566,24 @@ impl Pacing {
     /// edge's own file system.
     pub fn names_the_edge(&self) -> bool {
         self.pace.names_the_edge()
+    }
+
+    /// Date the next turn at `url`'s host from now, once its request has
+    /// been answered or has failed, where this call paces that host.
+    ///
+    /// A turn is written when it is taken, and the request goes out later:
+    /// after the name lookup, the back-off check and signing, any of which a
+    /// loaded machine can hold up for longer than a delay's margin. Measured
+    /// from the turn alone, the next request could reach the publisher less
+    /// than the delay after this one (EDG-109). Once this has run, the next
+    /// turn in this call, or in any server on the edge that takes it after,
+    /// is measured from an instant no earlier than this request was sent.
+    pub fn sent(&self, url: &str) -> Result<(), String> {
+        let host = crate::grounding::host_of(url);
+        if self.delay_ms(&host).is_none() {
+            return Ok(());
+        }
+        self.store.sent(&host, Utc::now(), self.pace)
     }
 }
 
@@ -775,14 +821,14 @@ impl CrawlDelayStore {
                     true => format!(
                         "the turn recorded for {} was {}, beyond the {}s a turn can reach, so the \
                          clock has moved backwards and this request owed a turn",
-                        ruling.host,
+                        crate::source_text::quoted_host(&ruling.host),
                         at.to_rfc3339(),
                         horizon.num_seconds()
                     ),
                     false => format!(
                         "the turn recorded for {} was beyond the {}s a turn can reach, so the \
                          clock has moved backwards and this request owed a turn",
-                        ruling.host,
+                        crate::source_text::quoted_host(&ruling.host),
                         horizon.num_seconds()
                     ),
                 });
@@ -821,6 +867,48 @@ impl CrawlDelayStore {
         let record = LastRequest {
             host: ruling.host.clone(),
             at: send_at,
+        };
+        let bytes = serde_json::to_vec_pretty(&record).map_err(|error| error.to_string())?;
+        crate::declaration::replace(&path, &bytes).map_err(|error| self.remedy(&error, pace))
+    }
+
+    /// Move `host`'s turn forward to `at` where it was recorded earlier, so
+    /// the next turn is measured from when the request went out rather than
+    /// from when its turn was taken. A later turn already recorded, one
+    /// another server has taken since, is left as it is.
+    fn sent(&self, host: &str, at: DateTime<Utc>, pace: Pace) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir).map_err(|error| {
+            self.remedy(
+                &format!(
+                    "{} could not be created: {error}",
+                    Self::named(&self.dir, pace)
+                ),
+                pace,
+            )
+        })?;
+        let lock_path = self.path_for(host, "lock");
+        let _lock = crate::declaration::lock(&lock_path).map_err(|refused| match refused {
+            crate::declaration::LockRefused::Busy(_) => format!(
+                "another server on this edge held {} while this request dated the host's next \
+                 turn",
+                Self::named(&lock_path, pace)
+            ),
+            crate::declaration::LockRefused::LockFile(cause) => self.lock_file_remedy(&cause, pace),
+            crate::declaration::LockRefused::Failed(reason) => self.remedy(&reason, pace),
+        })?;
+        let path = self.path_for(host, "json");
+        // A record that cannot be read is replaced, as a turn replaces it:
+        // this request is the last one sent to the host.
+        let recorded = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<LastRequest>(&bytes).ok())
+            .map(|record| record.at);
+        if recorded.is_some_and(|recorded| recorded >= at) {
+            return Ok(());
+        }
+        let record = LastRequest {
+            host: host.to_owned(),
+            at,
         };
         let bytes = serde_json::to_vec_pretty(&record).map_err(|error| error.to_string())?;
         crate::declaration::replace(&path, &bytes).map_err(|error| self.remedy(&error, pace))
@@ -955,6 +1043,36 @@ mod tests {
                 .outcome,
             DelayOutcome::Clear
         );
+    }
+
+    /// A request sent later than its turn dates the next turn from when it
+    /// went out, and a turn another server has taken since stays. Breaks
+    /// where the next turn is measured from the first turn alone (EDG-109),
+    /// which waits 500 ms here instead of 800.
+    #[test]
+    fn the_next_turn_is_measured_from_when_the_request_went_out() {
+        let home = tempfile::tempdir().unwrap();
+        let store = CrawlDelayStore::open(home.path());
+        let start = Utc::now();
+        let delay = Duration::from_secs(1);
+        let ms = chrono::Duration::milliseconds;
+        let first = store.take_turn(HOST, delay, WAIT_BUDGET, start, Pace::Own);
+        assert_eq!(first.outcome, DelayOutcome::Clear);
+        // The lookup, the back-off check and signing held the request up.
+        store.sent(HOST, start + ms(300), Pace::Own).unwrap();
+        let second = store.take_turn(HOST, delay, WAIT_BUDGET, start + ms(500), Pace::Own);
+        assert_eq!(wait_ms(&second), 800);
+
+        // The second turn is recorded at `start` + 1.3 s; a request dated
+        // before it leaves it in place.
+        store.sent(HOST, start + ms(900), Pace::Own).unwrap();
+        let third = store.take_turn(HOST, delay, WAIT_BUDGET, start + ms(500), Pace::Own);
+        assert_eq!(wait_ms(&third), 1_800);
+
+        // A host this call does not pace keeps no record.
+        let pacing = Pacing::new(store.clone(), Pace::Own);
+        pacing.sent("https://unpaced.example/story").unwrap();
+        assert!(!store.path_of("unpaced.example").exists());
     }
 
     #[test]

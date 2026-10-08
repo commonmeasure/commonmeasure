@@ -24,7 +24,122 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[cfg(unix)]
+#[path = "support/terminal.rs"]
+mod terminal;
 mod webbotauth;
+
+#[cfg(unix)]
+fn isolated_connect(home: &Path, hub: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    command
+        .args(["connect", hub, "--token", TOKEN, "--managed"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home)
+        .env("COMMONMEASURE_HOME", home.join("edge"))
+        .env("CLAUDE_CONFIG_DIR", home.join("claude"))
+        .env("CODEX_HOME", home.join("codex"))
+        .env(
+            "COMMONMEASURE_SERVICE_LABEL",
+            "ai.commonmeasure.test.relay-offer",
+        );
+    command
+}
+
+#[test]
+#[cfg(unix)]
+fn unattended_managed_connect_skips_the_offer_with_a_controlling_terminal() {
+    let server = hub(Arc::default());
+    for case in ["CI=true", "CI=0", "stdin", "flag"] {
+        let home = tempfile::tempdir().unwrap();
+        let mut command = isolated_connect(home.path(), &server.url());
+        match case {
+            "CI=true" => {
+                command.env("CI", "true");
+            }
+            "CI=0" => {
+                command.env("CI", "0");
+            }
+            "flag" => {
+                command.arg("--no-relay-offer");
+            }
+            _ => {}
+        }
+        let (status, output) = terminal::run(
+            &mut command,
+            case != "stdin",
+            b"",
+            std::time::Duration::from_secs(15),
+        );
+        assert!(status.success(), "{case}: {output}");
+        assert!(
+            output.contains(if cfg!(target_os = "macos") {
+                "commonmeasure service install relay"
+            } else {
+                "commonmeasure relay --every 300"
+            }),
+            "{output}"
+        );
+        assert!(!output.contains("[y/N]"), "{output}");
+        assert!(home.path().join("edge/deployment.json").exists());
+        assert!(!home.path().join("Library/LaunchAgents").exists());
+        assert!(!commonmeasure_harness::delivery::relay_loop_running(
+            &home.path().join("edge")
+        ));
+    }
+}
+
+#[test]
+#[cfg(all(target_os = "macos", debug_assertions))]
+fn a_failed_relay_install_leaves_managed_enrolment_successful() {
+    let server = hub(Arc::default());
+    let home = tempfile::tempdir().unwrap();
+    let mut command = isolated_connect(home.path(), &server.url());
+    // Fail context validation before any launchctl command can run.
+    command.env("COMMONMEASURE_SERVICE_LABEL", "invalid/label");
+    let (status, output) = terminal::run(
+        &mut command,
+        true,
+        b"y\n",
+        std::time::Duration::from_secs(15),
+    );
+    assert!(status.success(), "{output}");
+    assert!(
+        output.contains("background relay installation failed"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Retry with `commonmeasure service install relay`"),
+        "{output}"
+    );
+    assert!(home.path().join("edge/deployment.json").exists());
+    assert!(home.path().join("edge/enrolment.json").exists());
+    assert!(!home.path().join("Library/LaunchAgents").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_hosted_service_holding_the_home_needs_no_relay_offer() {
+    let server = hub(Arc::default());
+    let home = tempfile::tempdir().unwrap();
+    let edge = home.path().join("edge");
+    std::fs::create_dir(&edge).unwrap();
+    let lock = std::fs::File::create(edge.join(commonmeasure_harness::delivery::SERVICE_LOCK_FILE))
+        .unwrap();
+    lock.lock().unwrap();
+    let (status, output) = terminal::run(
+        &mut isolated_connect(home.path(), &server.url()),
+        true,
+        b"",
+        std::time::Duration::from_secs(15),
+    );
+    assert!(status.success(), "{output}");
+    assert!(!output.contains("service install relay"), "{output}");
+    assert!(!output.contains("relay --every"), "{output}");
+    assert!(!output.contains("[y/N]"), "{output}");
+    assert!(!home.path().join("Library/LaunchAgents").exists());
+}
 
 const TOKEN: &str = "et_0123456789abcdef";
 const API_KEY: &str = "ak_hub_issued_secret";
@@ -3274,4 +3389,74 @@ fn disconnect_names_the_relay_uninstall_while_its_launch_agent_is_installed() {
         );
     }
     server.stop();
+}
+
+#[test]
+#[cfg(all(target_os = "macos", debug_assertions))]
+fn another_homes_relay_is_named_and_never_moved_without_agreement() {
+    let server = hub(Arc::default());
+    for unattended in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        let other = home.path().join("other-edge");
+        let agents = home.path().join("Library/LaunchAgents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let plist = agents.join("ai.commonmeasure.test.relay-offer.relay.plist");
+        let written = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>ai.commonmeasure.test.relay-offer.relay</string>
+<key>WorkingDirectory</key><string>/</string>
+<key>ProgramArguments</key><array><string>{}</string><string>relay</string><string>--every</string><string>300</string></array>
+<key>EnvironmentVariables</key><dict><key>COMMONMEASURE_HOME</key><string>{}</string></dict>
+<key>StandardOutPath</key><string>{}/logs/relay.log</string>
+<key>StandardErrorPath</key><string>{}/logs/relay.log</string>
+</dict></plist>"#,
+            env!("CARGO_BIN_EXE_commonmeasure"),
+            other.display(),
+            other.display(),
+            other.display()
+        );
+        std::fs::write(&plist, &written).unwrap();
+        let mut command = isolated_connect(home.path(), &server.url());
+        if unattended {
+            command.env("CI", "true");
+        } else {
+            command.env("CI", "");
+        }
+        let (status, output) = terminal::run(
+            &mut command,
+            true,
+            if unattended { b"" } else { b"\n" },
+            std::time::Duration::from_secs(15),
+        );
+        assert!(status.success(), "{output}");
+        assert!(
+            output.contains(&format!("relays {}", other.display())),
+            "{output}"
+        );
+        assert!(
+            output.contains("commonmeasure service install relay"),
+            "{output}"
+        );
+        if unattended {
+            assert!(!output.contains("[y/N]"), "{output}");
+        } else {
+            assert!(
+                output.contains(&format!(
+                    "Move the background relay from {} to this home? [y/N]",
+                    other.display()
+                )),
+                "{output}"
+            );
+            assert!(
+                output.contains("stops that home's background reporting"),
+                "{output}"
+            );
+            assert!(!output.contains("Install it with"), "{output}");
+        }
+        assert_eq!(std::fs::read_to_string(plist).unwrap(), written);
+        assert!(!commonmeasure_harness::delivery::relay_loop_running(
+            &home.path().join("edge")
+        ));
+    }
 }

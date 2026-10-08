@@ -339,10 +339,14 @@ them: entitlements, CM Attestation and the network they make up.
 - **Terms** — an agreement the operator holds with a source, declared in
   `policy.json` by host and reference. The reference is recorded on the
   host's crossings; it does not override the source's published preference
-  and is never checked by the runtime.
-- **Policy mode** — how strictly policy acts: `observe` records only,
-  `prefer` records and steers, `strict` refuses what the rules do not
-  allow.
+  and is never checked by the runtime. Where the agreement requires
+  reporting (`requires_reporting`), that duty binds the host's crossings in
+  every mode, as a licence's reporting demand does.
+- **Policy mode** — how strictly the operator's own policy acts:
+  `observe` records only, `prefer` records and steers, `strict` refuses
+  what the rules do not allow. The source's terms bind a mediated fetch
+  (`context_fetch`) in every mode; search results are not yet ruled on
+  them ([fail policy](FAIL-POLICY.md) §6).
 
 ## Who the work is for
 

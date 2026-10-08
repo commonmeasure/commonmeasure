@@ -151,7 +151,11 @@ fn the_example_policy_refuses_a_subscription_licence_on_its_payment_term() {
         &[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                  "params": {"name": "context_fetch", "arguments": {"url": article}}})],
     );
-    let expected = format!(
+    // The agent reads the licence by position; the record names it.
+    let expected = "The licence the source names permits AI input under payment type \
+                    subscription, and this edge holds no settlement rail, so the payment term \
+                    is unmet.";
+    let recorded = format!(
         "The licence {}/license.xml permits AI input under payment type subscription, and this \
          edge holds no settlement rail, so the payment term is unmet.",
         site.url()
@@ -160,10 +164,12 @@ fn the_example_policy_refuses_a_subscription_licence_on_its_payment_term() {
     let detail = responses[0]["result"]["content"][0]["text"]
         .as_str()
         .expect("an error result carries text");
-    assert!(detail.contains(&expected), "{detail}");
+    assert!(detail.contains(expected), "{detail}");
+    assert!(!detail.contains("license.xml"), "{detail}");
 
     let log =
         std::fs::read_to_string(home.path().join("sessions/four-fetches.ndjson")).expect("log");
+    assert!(log.contains(&recorded), "{log}");
     let refused: Vec<Value> = log
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -171,7 +177,7 @@ fn the_example_policy_refuses_a_subscription_licence_on_its_payment_term() {
         .filter(|record: &Value| record["event"] == "crossing_refused")
         .collect();
     assert_eq!(refused.len(), 1);
-    assert_eq!(refused[0]["payload"]["refusal"], expected);
+    assert_eq!(refused[0]["payload"]["refusal"], recorded);
     assert!(
         refused[0]["payload"]["http_status"].is_null(),
         "the page was never requested"

@@ -43,6 +43,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::agent_text;
+use crate::agent_text::{AgentText, Given};
 use crate::declaration;
 use crate::policy::Ruling;
 
@@ -634,6 +636,7 @@ impl AllowanceContext {
                 let ruling = Ruling::breach(
                     mode,
                     refusal_reason(&self.principal, price, &checks),
+                    refusal_agent_reason(&self.principal, price, &checks),
                     breach_gap(&checks),
                 );
                 record["decision"] = json!("proceeded_with_breach");
@@ -650,6 +653,7 @@ impl AllowanceContext {
                 let ruling = Ruling::breach(
                     mode,
                     refusal_reason(&self.principal, price, &checks),
+                    refusal_agent_reason(&self.principal, price, &checks),
                     breach_gap(&checks),
                 );
                 record["decision"] = json!("declined");
@@ -760,6 +764,13 @@ impl AllowanceContext {
                         self.principal,
                         parts.join("; ")
                     ),
+                    agent_text![
+                        "Principal ",
+                        Given::text(&self.principal),
+                        " is over their cumulative allowance, and this provider declares no \
+                         price, so nothing further can be accounted before dispatch; the \
+                         allowance record names the amounts."
+                    ],
                     Gap::new(
                         GapReason::BudgetExhausted,
                         "The principal's periodic allowance is exhausted, so the acquisition \
@@ -886,12 +897,20 @@ pub fn refusal_reason(principal: &str, price: &Money, checks: &[PeriodCheck]) ->
     let mut parts = Vec::new();
     for check in checks {
         if !check.comparable {
+            // A price's currency can be a licence's text, and this reason
+            // reaches the agent: a code in ISO 4217's form is named, anything
+            // else by position. The record's price keeps it as written.
+            let currency = price.currency();
+            let named = if currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()) {
+                currency
+            } else {
+                "a currency that is not a three-letter code"
+            };
             parts.push(format!(
-                "the {} allowance is declared in {} and the price is in {}, which this runtime \
-                 holds no rate source to compare",
+                "the {} allowance is declared in {} and the price is in {named}, which this \
+                 runtime holds no rate source to compare",
                 check.period.as_str(),
                 check.declared.currency(),
-                price.currency()
             ));
         } else if check.would_exceed {
             let remaining = check
@@ -915,6 +934,49 @@ pub fn refusal_reason(principal: &str, price: &Money, checks: &[PeriodCheck]) ->
         "Principal {principal:?} is over their cumulative allowance: {}.",
         parts.join("; ")
     )
+}
+
+/// [`refusal_reason`] as the agent reads it where the crossing is refused:
+/// the principal and the amounts, which are of fixed form, and no period
+/// key.
+pub fn refusal_agent_reason(principal: &str, price: &Money, checks: &[PeriodCheck]) -> AgentText {
+    let parts = checks.iter().filter_map(|check| {
+        if !check.comparable {
+            Some(agent_text![
+                "the ",
+                check.period.as_str(),
+                " allowance (",
+                &check.declared,
+                ") and the price (",
+                price,
+                ") are in currencies this runtime holds no rate source to compare"
+            ])
+        } else if check.would_exceed {
+            let remaining = check
+                .declared
+                .micros
+                .saturating_sub(check.spent_before.micros);
+            Some(agent_text![
+                "the ",
+                check.period.as_str(),
+                " allowance has ",
+                &Money::new(check.declared.currency(), remaining),
+                " remaining of ",
+                &check.declared,
+                " and the price is ",
+                price
+            ])
+        } else {
+            None
+        }
+    });
+    agent_text![
+        "Principal ",
+        Given::text(principal),
+        " is over their cumulative allowance: ",
+        AgentText::list(parts, "; "),
+        "."
+    ]
 }
 
 /// Exhaustion is a spent budget; incomparability is missing evidence. The gap
@@ -967,6 +1029,12 @@ fn unreadable_ruling(principal: &str, mode: PolicyMode, error: &str) -> Ruling {
             "Principal {principal:?} holds a cumulative allowance whose ledger could not be \
              consulted: {error}"
         ),
+        agent_text![
+            "Principal ",
+            Given::text(principal),
+            " holds a cumulative allowance whose ledger could not be consulted; the allowance \
+             record names the fault."
+        ],
         Gap::new(
             GapReason::EvidenceMissing,
             "The allowance ledger was unreadable, so the remaining allowance is unknown and \

@@ -1663,12 +1663,12 @@ mod tests {
                 "text": "The home is /srv/cm/policy.json.",
                 "content_hash": "sha256:00",
             }],
-            "refusals": [{"url": "https://publisher.test/?p=/srv/cm/z", "reason": "refused: /srv/cm/policy.json"}],
+            "refusals": [{"position": 2, "of": 2, "reason": "refused: /srv/cm/policy.json"}],
             "recorded_in": "/srv/cm/sessions/s.ndjson",
         });
         let served = served_payload(&named.response(tool_answer(&searched)));
         assert_eq!(served["results"], searched["results"]);
-        assert_eq!(served["refusals"][0]["url"], searched["refusals"][0]["url"]);
+        assert_eq!(served["refusals"][0]["position"], 2);
         assert_eq!(served["refusals"][0]["reason"], "refused: policy.json");
         assert_eq!(served["recorded_in"], "sessions/s.ndjson");
     }

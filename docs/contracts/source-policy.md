@@ -293,14 +293,22 @@ agreement with it. The host is compared as a host pattern's is, and matched
 exactly: a subdomain needs its own entry. One entry per host is accepted.
 
 The reference is recorded on every mediated crossing of the host under
-`declarations.terms` ([session evidence](session-evidence.md#source-declarations))
-and nothing more: it does not override the source's published preference, it
+`declarations.terms` ([session evidence](session-evidence.md#source-declarations)):
+it does not override the source's published preference, it
 supplies no declared licence, and a supplier API subscription or access
 reference alone supplies no reuse permission. `requires_reporting` says the
-agreement requires usage reporting and `access_context` names the
-institution identifiers it attributes usage to, never a person; the relay
-withholds each crossing of a host under terms naming identifiers until
-session-document delivery is built. Which agreement permits what, and how an edge proves it,
+agreement requires usage reporting, and that duty binds: each crossing of
+the host carries a telemetry reporting demand ruled as a licence's is, in
+every policy mode, met only through the hub the edge is enrolled with, with
+the operator's reporting consent and subject to the private-address,
+delivery, session-log and `access_context` checks a licence's demand passes,
+and refused before the request otherwise ([session evidence §Source
+declarations](session-evidence.md#source-declarations)). `access_context`
+names the institution identifiers the agreement attributes usage to, never a
+person; the relay withholds each crossing of a host under terms naming
+identifiers until session-document delivery is built, so an entry that sets
+both `requires_reporting` and `access_context` refuses every crossing of its
+host until then. Which agreement permits what, and how an edge proves it,
 is settled by the network design (roadmap NET-14 and NET-15), which these
 fields wait on.
 

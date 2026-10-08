@@ -67,7 +67,13 @@ direct `context_fetch`. The router's call to the edge runs under the
 session's permission rules for the mediated tool: an interactive session
 asks once, a headless one needs the tool in `--allowedTools` or
 `permissions.allow`, and an ungranted call is refused with the host's
-reason, never fetched natively.
+reason, never fetched natively. A routed call is ruled by source policy and
+the grant for the mediated tool; the host's own `WebFetch` and `WebSearch`
+permission rules, managed ones included, apply only when the router stands
+aside. The router takes the edge's server only under its two names,
+`plugin_commonmeasure_commonmeasure` (preferred) and `commonmeasure`; a
+`context_fetch` on any other server is never used. Once the edge's server
+has answered in a session, its later absence refuses the call.
 
 ### The parts of a fetch
 
@@ -103,6 +109,93 @@ counts the part ([session evidence](session-evidence.md#crossing),
 The input schema sets `additionalProperties: false`. The server does not
 enforce it: an argument it does not know is ignored.
 
+### Text from the source in a result
+
+A result's sentences and summary fields (an error, `policy`, `breach`,
+`declarations`, `licence`, `allowance`, `url`) are the edge's text, which the
+agent reads without the injection screen that `content` passes. A value the
+source chose therefore appears in them only as follows
+(`crates/commonmeasure-harness/src/source_text.rs`):
+
+- **A refused or failed crossing carries no text from the source.** Where a
+  crossing is refused, in any policy mode, or fails before a page is
+  delivered, the error the agent reads is built from nothing the source or
+  any hop of the crossing chose: no host, path or redirect target, no header
+  value, no `robots.txt` or licence text, no certificate name, no transport
+  fault in the peer's words. It holds this edge's own sentences, the
+  operator's policy values (a rule, a licence identifier the operator wrote,
+  a file under the operator home), the URL the agent asked for as the agent
+  gave it, positions ("the target of redirect 2") and references to the
+  record. A redirect target is the source's even where the hop that named
+  it was admitted: the crossing is the unit. A fault on a hop the source
+  chose is named by its kind ("its name could not be resolved", "the
+  certificate it presented is not valid for the name asked for"). A remedy
+  that needs the host (`commonmeasure doctor --resolve`) points the operator
+  at the record for it. A refused search result gives its position among the
+  results and the reason, and neither its URL, its title nor its snippet.
+  This is enforced by construction: such text has one type
+  (`AgentText`, `crates/commonmeasure-runtime/src/agent_text.rs`), which
+  the compiler refuses to build from a `String` or a borrowed `&str`, and
+  every policy ruling carries two sentences, the record's and the agent's.
+  The record keeps every value whole in its own sentences.
+- **Named by position.** A header value, a `Link` member the edge could not
+  read, a licence's own text (a reporting type, a conformance level, an
+  amount that is not a price with a three-letter currency) and a transport
+  fault in the origin's bytes are named by where they were and why, not
+  quoted: "a licence in a member of the response's Link header", "a
+  cf-mitigated header", "a header line has no colon". Where the value is
+  one of a small set the edge recognises, the recognised value is the name:
+  `cf-mitigated: challenge`, a registered top-level media type (`image/…`),
+  a content coding RFC 9110 registers, an RSL payment or reporting type.
+- **A URL.** An `http` or `https` URL the source chose (a licence, a
+  redirect target, the final URL after redirects, a `robots.txt` file or
+  its redirect, a reporting profile or endpoint) is shown as its scheme,
+  host, port and path, with the host and the path each cut to 64 characters
+  and marked `…`, and a query or fragment shown only as `?…` or `#…`,
+  whatever characters they hold. The parts are the ones the URL parser
+  reads, and a URL is shown as written only where it is written as the
+  parser writes it: the parser removes dot segments (`/<long>/../x` is
+  `/x`) and decodes a percent-encoded host, so the cut applies to every
+  character the source wrote. A URL with any other scheme (`data:`, `urn:`, `mailto:`) is
+  named by position, "a URL whose scheme is not http or https": such a URL
+  can hold spaces, and this edge requests none, so a licence named by one
+  is unread and a redirect to one is refused. The URL the agent asked for
+  is shown whole. A `robots.txt` pattern is shown as a path,
+  percent-encoded and cut the same way.
+- **A host name** on a delivered page is cut to 64 characters and marked
+  `…`, as a URL's host is: in the `Crawl-delay` ruling in `declarations`
+  (`robots.delay.host`) and the `redirects[]` summaries. The `breach` and
+  `policy` a delivered result carries are the agent's sentences of the
+  rulings, which name no host. On a refused or failed crossing a host
+  reaches the agent only where it is the agent's own (above).
+- **In the record.** The session log keeps every value whole: the licence's
+  `url`, the crossing's `url`, `content_type`, `challenge` and `failure`,
+  the `robots.txt` reading and the licence's terms, and every sentence it
+  keeps (`refusal`, `breach`, a licence's `unavailable`) names the host
+  whole. Such a sentence names an `http` or `https` URL whole only where it
+  is exactly as the URL parser writes it, and any other URL by position.
+
+The result's `url` and `licence`, the `declarations` summary and the
+sentences written only for the agent apply this as they are built. A
+sentence the record keeps as well reaches the agent through one last step:
+before a result is returned, each `http` or `https` URL in its text is
+shortened as above, taken from its scheme to the next whitespace, since a
+URL as the URL parser writes it holds none. The parser accepts text with
+spaces or tabs in it, such as an unread `Link` target
+(`<http://x.test/l.xml SYSTEM …>`), and encodes them only in the URL it
+writes, so such a sentence names a source URL that is not in that form by
+position: an unread licence as "a licence in a member of the response's
+Link header", any other URL as "a URL the source wrote in a form this edge
+does not quote".
+
+The injection screen matches a bounded list of phrasings, and an instruction
+written with underscores passes it, so it is not what keeps the source's
+text out of these fields. On a delivered page a host name and a URL's path
+are still the source's words, bounded by URL syntax, which has no spaces,
+and by the cut: a host or path of 64 characters or fewer is shown as
+written. On a refused or failed crossing nothing of them is shown: the
+record is the place to read them.
+
 ### A fetched file
 
 A PDF is fetched as any page is (host policy, `robots.txt`, the licence,
@@ -128,7 +221,9 @@ decoded as text. The harness's own tools read it
   and the edge stops reading at the bound. A declared size over the bound
   is refused before any of the body is read.
 - **Another file.** An image or another listed type is an error starting
-  `unavailable:` that names the media type. Nothing of the body is kept.
+  `unavailable:` that names the top-level media type (`image/…`); the
+  crossing's `content_type` keeps the whole type. Nothing of the body is
+  kept.
 - **Not screened.** The PII detector and the injection screen rule on text,
   and the edge does not read a PDF, so they give no verdict on it. Each
   records a processor invocation with a `capability_unavailable` gap. Under
@@ -370,10 +465,18 @@ reader sees one version or the other and a `revoke` that returned survives
 a crash. A write that fails leaves the file as it was and no temporary file
 beside it.
 
-Under `observe` mode the mediated tools record everything and refuse
-nothing; that is the state with no policy file
-(`crates/commonmeasure-harness/src/policy.rs`). `prefer` records and steers; `strict`
-refuses what the rules do not allow ([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md)).
+The policy mode governs the operator's own policy: host lists and access
+rules, required licences, allowances and caps, and processor verdicts. Under
+`observe` the mediated tools record a breach of that policy and refuse
+nothing on its account; that is the state with no policy file
+(`crates/commonmeasure-harness/src/policy.rs`). `prefer` records and steers;
+`strict` refuses what the rules do not allow. The source's terms bind in
+every mode on every edge, enrolled or not: a `robots.txt` `Disallow`,
+`Crawl-delay`, a disallowed AI-input signal, an unread licence, a licence's
+payment or licence-server term the edge cannot meet, and a reporting demand
+the session cannot meet each refuse the fetch in `observe` as in `strict`
+([`docs/FAIL-POLICY.md`](../FAIL-POLICY.md) §6). For an enrolled edge under
+`connect --managed`, the hub's signed policy sets the mode.
 
 `--host` on the hook command accepts `claude-code`, `codex`, `pi`, `cursor`
 and `copilot-cli`, and the three browser surfaces `chatgpt-web`,
@@ -396,9 +499,9 @@ The binary writes, checks and removes its own registration with a host
 
 | Command | Claude Code | Codex | Pi |
 |---|---|---|---|
-| `commonmeasure install <host> [--binary PATH]` | the five hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; the state file is written first and restored if the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured), naming the binary, `mcp --host codex`, and `default_tools_approval_mode = "approve"`, without which Codex asks before every call and its non-interactive runs refuse the tools; the table is read by the Codex CLI, the ChatGPT desktop app and the Codex IDE extension | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
-| `commonmeasure uninstall <host>` | exactly those entries removed; every other key keeps its value | exactly that table removed; every other table, key and comment kept byte for byte | the extension and its directory removed |
-| `commonmeasure doctor [<host>] [--resolve <name>] [--json]` | one report of findings, each marked by its standing (§Doctor below); with `--resolve`, the addresses a name resolves to and whether the privacy floor calls them private, naming a fake-IP proxy's or a tailnet's range; per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration) | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
+| `commonmeasure install <host> [--binary PATH]` | the five hooks in `~/.claude/settings.json` and the MCP server at user scope in `~/.claude.json` (`$CLAUDE_CONFIG_DIR` honoured), each naming the binary's resolved absolute path; in the same settings, `permissions.allow` gains `mcp__commonmeasure__context_fetch` and `mcp__commonmeasure__context_search`, so a session does not ask before each fetch or search, and no other entry of this product's (no wildcard; `context_enrol` and `context_status` still ask); which of the two it added is recorded beside the settings in `commonmeasure-permissions.json`, written before the settings; the state file is written first and restored if the record or the settings write fails | one `[mcp_servers.commonmeasure]` table in `~/.codex/config.toml` (`$CODEX_HOME` honoured), naming the binary, `mcp --host codex`, and `default_tools_approval_mode = "approve"`, without which Codex asks before every call and its non-interactive runs refuse the tools; the table is read by the Codex CLI, the ChatGPT desktop app and the Codex IDE extension | one extension, `extensions/commonmeasure/index.ts` under `~/.pi/agent` (`$PI_CODING_AGENT_DIR` honoured), naming the binary; at each session start it spawns `mcp --host pi --session <Pi's session id>` and registers the server's tools with Pi |
+| `commonmeasure uninstall <host>` | exactly those entries removed, a pre-approval only where the record says install added it, so one the operator had before stays; the record removed; every other key keeps its value | exactly that table removed; every other table, key and comment kept byte for byte | the extension and its directory removed |
+| `commonmeasure doctor [<host>] [--resolve <name>] [--json]` | one report of findings, each marked by its standing (§Doctor below); with `--resolve`, the addresses a name resolves to and whether the privacy floor calls them private, naming a fake-IP proxy's or a tailnet's range; per host: what is registered and where, the binary each entry names and the version it reports when run, a plugin installed beside it and whether its install path and marketplace directory still exist (an enabled plugin whose files exist is reported as the registration; the double-recording warning is given only beside a direct registration); beside a direct registration, which of the two pre-approvals `permissions.allow` holds, and any other allowance of this server's tools, which needs the operator because install never writes one | the same, and whether the approval mode is on the table | the same, from the extension's `const BINARY` line |
 
 Every host file these commands write, for every host below as well, is
 replaced whole: a temporary file of the writer's own beside it, renamed over
@@ -650,13 +753,19 @@ declarations). The background relay is `commonmeasure relay --every
 <seconds>`, which `commonmeasure service install relay` runs at login on
 macOS ([telemetry projection §Relay on an interval](telemetry-projection.md#relay-on-an-interval));
 it is how hosts such as Codex and Claude Desktop deliver with nobody running
-a command. `install` prints the relay command for every host outside the
-session-end list: `service install relay` on macOS, `relay --every 300` on
-other platforms. Host registration installs no relay. After successful managed
+a command. `install` prints the relay command for mediated hosts outside the
+session-end list when neither a relay loop nor a hosted service holds the home
+(Chrome only observes, so receives no hint): `service install relay` on macOS,
+`relay --every 300` on other platforms. Host registration installs no relay. After successful managed
 enrolment, `connect --managed` offers the macOS installation when no relay
-is installed for the home and no loop holds it. It requires an explicit yes
-at the terminal; missing terminals and captured output print the command
-without installing. A host
+is installed for the home and neither a loop nor a hosted service holds it.
+It requires an explicit yes at the terminal. A relay installed for another
+home is named with its existing finding; the question asks whether to move it,
+defaulting to no, and warns that the other home's background reporting stops.
+Any non-empty `CI` value, non-terminal stdin or stdout, or `--no-relay-offer`
+prints the finding and command without prompting or installing. An accepted
+installation that fails leaves managed enrolment successful and reports the
+failure with the retry command. A host
 that runs Claude Code's `SessionEnd` command from its hook files is
 refused or accepted by the rules below, as at the other four events.
 
@@ -820,7 +929,9 @@ Facts behind the table:
   host's tool name to a fetch, a search or a third-party MCP result. A tool
   it does not know yields no crossing rather than a guessed one. The
   runtime's own mediated tools are excluded from observation so a crossing
-  is not recorded twice.
+  is not recorded twice. Under the `mcp__<server>__<tool>` spelling only
+  the server names this product registers under count as its own; a tool
+  of the same name on another server is a third-party MCP result.
 - **Private addresses.** Observed capture never records loopback, private
   network, `.local`, `.internal` or `file://` crossings unless the operator
   names a prefix in `record_internal_prefixes`. A host cannot lower that
@@ -937,7 +1048,7 @@ defines and are never collapsed.
 |---|---|---|
 | Claude Code, observed (hooks) | `fixture-tested` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the host's payload shapes |
 | Claude Code, mediated (MCP over stdio) | `live-verified` (bounded configuration) | Claude Code 2.1.273 on macOS 26.4 admitted the public Common Measure page and refused `example.com` in an interactive session under hosted policy and a signed reporting approval. The host tool response hash matches the source record; the selected session reached the correct Hub organisation and a separate unselected host session stayed local. The trial ran against the hosted Hub; its configuration, limits and redacted records are not published. Loopback refusal and privacy-floor tests remain in `mediated_e2e.rs`. |
-| Claude Code, routed (the mod) | `live-verified` for the refusal branch (bounded configuration); delivery `fixture-tested` | Claude Code 2.1.288, `claude -p` in a container whose egress proxy breaks TLS to the open web, 3 October 2026: the module loaded from `--plugin-dir`, answered the model's `WebFetch` of `https://example.com/` through `context_fetch` on the server named `plugin_commonmeasure_commonmeasure`, the edge recorded `crossing_refused` with `mode: mediated` (an unreachable `robots.txt` is a complete disallow) under its own `local-*` session beside the hooks' records, and the model read the refusal and did not retry; without `--allowedTools` the same run was refused by the host's permission rules and the module refused the `WebFetch` rather than fetching natively. No delivered page or routed `WebSearch` is recorded live. `plugin/tests/router.test.ts`, run by `claude plugin test plugin`, drives the module through Claude Code's own hooks test kit with the edge's result shapes stubbed: a `WebFetch` and a `WebSearch` answered through `context_fetch` and `context_search`, a refusal and an unavailable answer refusing the native call in the edge's words, a failed edge call refused rather than fetched natively, the native tool running where the server is absent or no search provider is configured, and the observed `PostToolUse` record suppressed for routed calls only |
+| Claude Code, routed (the mod) | `live-verified` for the refusal branch (bounded configuration); delivery `fixture-tested` | Claude Code 2.1.288, `claude -p` in a container whose egress proxy breaks TLS to the open web, 3 October 2026: the module loaded from `--plugin-dir`, answered the model's `WebFetch` of `https://example.com/` through `context_fetch` on the server named `plugin_commonmeasure_commonmeasure`, the edge recorded `crossing_refused` with `mode: mediated` (an unreachable `robots.txt` is a complete disallow) under its own `local-*` session beside the hooks' records, and the model read the refusal and did not retry; without `--allowedTools` the same run was refused by the host's permission rules and the module refused the `WebFetch` rather than fetching natively. No delivered page or routed `WebSearch` is recorded live. `plugin/tests/router.test.ts`, run by `claude plugin test plugin`, drives the module through Claude Code's own hooks test kit with the edge's result shapes stubbed: a `WebFetch` and a `WebSearch` answered through `context_fetch` and `context_search`, a refusal and an unavailable answer refusing the native call in the edge's words, a failed edge call refused rather than fetched natively, the native tool running where the server is absent or no search provider is configured, a `context_fetch` on another server never taken whether it is listed before the edge or alone, a PDF returned as an embedded resource refused with the gap named, and the observed `PostToolUse` record suppressed for routed calls only |
 | Claude Code, reconstructed (import) | `fixture-tested` | `crates/commonmeasure-cli/tests/import_e2e.rs` |
 | Claude Code, registration (`install`, `uninstall`, `doctor`) | `live-verified` for installation and use; remaining operations `fixture-tested` | The same trial ran `install claude` into an isolated configuration directory and loaded the generated hooks/MCP files into Claude Code 2.1.273 using its explicit settings/config options, and the interactive session of the mediated Claude Code row ran through them. `install_e2e.rs` still covers removal and diagnosis. |
 | Codex CLI, registration and mediated | `fixture-tested` | `install_e2e.rs` pins the registration and tool approval setting. `recorded_sessions.rs` reads the earlier private `codex exec` capture and the public interactive extract in `crates/commonmeasure-cli/tests/recorded/codex-interactive/` from 29 September 2026: Codex CLI 0.157.1 admitted part of the Common Measure public page and refused Google’s `/search` path under its robots declaration, with matching host-output and source-record hashes. Local relay state shows the paired session delivered; the receiving Hub organisation has not been independently read back. This does not verify an operator denied-host rule or either GUI host. |

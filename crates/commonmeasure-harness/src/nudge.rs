@@ -9,19 +9,23 @@
 //! `/clear` and compaction.
 //!
 //! It is a nudge, not enforcement, and nothing here may claim otherwise:
-//! no built-in tool is blocked, the agent is free to ignore the request, and
-//! observed capture keeps recording built-in use either way. On a Claude
-//! Code that loads the plugin's router (`plugin/hooks/register.js`) the
+//! the text blocks nothing, the agent is free to ignore the request, and
+//! observed capture keeps recording built-in use either way. The same text
+//! comes from the plugin and from the settings hooks `install claude`
+//! writes. On a Claude Code that loads the plugin's router
+//! (`plugin/hooks/register.js`) with the edge's server connected, the
 //! built-in web tools are answered through the mediated tools whether or not
-//! the agent obeys; the hook cannot tell whether that happened, so the text
-//! names the condition instead of claiming it. What this
+//! the agent obeys, and refused where the edge refuses; elsewhere they run
+//! natively. The hook cannot tell which holds, so the text names what the
+//! model can see, a result or refusal that says it went through Common
+//! Measure, instead of a host version. What this
 //! runtime witnesses is emission; injection into context is the host's act,
 //! which is why [`BASIS`] says exactly that on every issuance record.
 
 /// Versioned like an evaluator identity: a `nudge_issued` record naming
-/// `mediation-nudge/4` states exactly which wording was in force in that
+/// `mediation-nudge/5` states exactly which wording was in force in that
 /// session. Change [`TEXT`], bump this.
-pub const IDENTITY: &str = "mediation-nudge/4";
+pub const IDENTITY: &str = "mediation-nudge/5";
 
 /// What every session is asked. One short paragraph, deliberately: the cost
 /// of a standing instruction is paid into every session's context, so the
@@ -41,18 +45,18 @@ pub const IDENTITY: &str = "mediation-nudge/4";
 /// establishes that the refusal was about who asked; a bare 403 is equally a
 /// paywall or a block, and an agent guessing between them states something
 /// about a third party that nothing supports.
-pub const TEXT: &str = "Common Measure standing instruction, delivered by the installed commonmeasure \
-plugin: for external web content, prefer this session's mediated tools — call context_fetch \
-instead of WebFetch, and context_search instead of WebSearch — so operator policy can rule on \
-each crossing before it happens and the record carries the refusable grade of evidence. If a \
-mediated tool reports unavailable (for example an unconfigured search provider), the built-in \
-tools remain the fallback; if policy refuses a crossing, respect the refusal rather than \
-retrying it with a built-in tool; if a site refuses the request itself, report what the tool \
-said and no more, because falling back to a built-in tool there fetches as something other than \
-the declared fetcher and is recorded as your decision. On Claude Code 2.1.287 or later the \
-plugin routes WebFetch and WebSearch through these tools itself; elsewhere the built-in tools \
-keep working and are recorded after the fact. This is a nudge, not enforcement: nothing blocks \
-the built-in tools.\n";
+pub const TEXT: &str = "Common Measure standing instruction, from its SessionStart hook: for \
+external web content, prefer this session's mediated tools — call context_fetch instead of \
+WebFetch, and context_search instead of WebSearch — so operator policy can rule on each crossing \
+before it happens and the record carries the refusable grade of evidence. A WebFetch or WebSearch \
+whose result or refusal says it went through Common Measure was answered by these tools and has \
+no native fallback; one that does not say so ran natively and is recorded after the fact. If a \
+mediated tool reports unavailable (for example an unconfigured search provider), a built-in tool \
+that runs natively is the fallback; if policy refuses a crossing, respect the refusal rather than \
+retrying it with a built-in tool; if a site refuses the request itself, report what the tool said \
+and no more, because a built-in tool that runs natively fetches as something other than the \
+declared fetcher and is recorded as your decision. This is a nudge, not enforcement: it blocks \
+nothing itself.\n";
 
 /// The claim an issuance record can honestly make.
 pub const BASIS: &str = "emitted on the SessionStart hook's stdout for the host to add to the \
@@ -89,14 +93,35 @@ mod tests {
     #[test]
     fn the_nudge_claims_no_enforcement() {
         assert!(TEXT.contains("This is a nudge, not enforcement"));
-        assert!(TEXT.contains("nothing blocks the built-in tools"));
+        assert!(TEXT.contains("it blocks nothing itself"));
+    }
+
+    /// The same text is emitted by the plugin and by the settings hooks
+    /// `install claude` writes, with the router loaded or not, so it names
+    /// what the model can see in a result rather than a host version, and
+    /// promises no fallback or absence of blocking that the router's
+    /// refusals would contradict.
+    #[test]
+    fn the_nudge_names_the_condition_the_model_can_see() {
+        assert_eq!(IDENTITY, "mediation-nudge/5");
+        assert!(TEXT.contains("says it went through Common Measure"));
+        assert!(TEXT.contains("has no native fallback"));
+        for claim in [
+            "2.1.287",
+            "installed commonmeasure plugin",
+            "the plugin routes",
+            "nothing blocks the built-in tools",
+            "the built-in tools remain the fallback",
+        ] {
+            assert!(!TEXT.contains(claim), "the nudge must not say {claim:?}");
+        }
     }
 
     /// The text enters every session's context, so growth is a per-session
     /// cost. This bound is the reviewable budget: it holds the three
     /// conditions and their reasons plus the one sentence on the router, and
     /// raising it is a decision, not drift (950 bytes held nudge/3; nudge/4
-    /// added the router sentence).
+    /// added the router sentence; nudge/5 rewrote it within the same bound).
     #[test]
     fn the_nudge_stays_one_short_paragraph() {
         assert!(

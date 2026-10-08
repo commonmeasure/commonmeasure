@@ -35,6 +35,7 @@ mod linkup;
 mod nimble;
 mod ozone;
 mod parallel;
+mod peopleinc;
 mod redpine;
 mod search1api;
 mod serpdive;
@@ -42,6 +43,7 @@ mod skill;
 mod tavily;
 mod tinyfish;
 mod tollbit;
+mod valyu;
 mod you;
 
 pub use dataville::DatavilleAdapter;
@@ -53,6 +55,7 @@ pub use linkup::LinkupAdapter;
 pub use nimble::NimbleAdapter;
 pub use ozone::OzoneAdapter;
 pub use parallel::ParallelAdapter;
+pub use peopleinc::PeopleIncAdapter;
 pub use redpine::RedpineAdapter;
 pub use search1api::Search1ApiAdapter;
 pub use serpdive::SerpdiveAdapter;
@@ -63,6 +66,7 @@ pub use skill::{
 pub use tavily::TavilyAdapter;
 pub use tinyfish::TinyfishAdapter;
 pub use tollbit::TollbitAdapter;
+pub use valyu::ValyuAdapter;
 pub use you::YouAdapter;
 
 use commonmeasure_types::canonical::sha256_digest;
@@ -81,15 +85,16 @@ pub const ADAPTER_VERSION: &str = "commonmeasure-supply/0.1";
 /// run's plan list does not depend on map iteration. `internal` is the
 /// operator's own corpus (`query`); `redpine` is a licensed supplier bought by
 /// quote then confirm; `ozone` retrieves from a licensed publisher corpus with
-/// no quote gate; `dataville` searches public-source catalogues; the rest are
-/// open-web providers (`search`).
+/// no quote gate; `peopleinc` searches and fetches a licensed corpus with
+/// unknown rights and pricing; `dataville` searches public-source catalogues;
+/// the rest are open-web providers (`search`).
 ///
 /// Skill providers are deliberately absent and cannot be added: each one is
 /// named for a bundle the operator's catalogue declares at run time
 /// ([`SKILL_PROVIDER_PREFIX`]), so the set is not knowable at compile time
 /// and a list that pretended otherwise would be a list of somebody else's
 /// machine.
-pub const IMPLEMENTED_PROVIDERS: [&str; 16] = [
+pub const IMPLEMENTED_PROVIDERS: [&str; 18] = [
     "dataville",
     "exa",
     "firecrawl",
@@ -99,12 +104,14 @@ pub const IMPLEMENTED_PROVIDERS: [&str; 16] = [
     "nimble",
     "ozone",
     "parallel",
+    "peopleinc",
     "redpine",
     "search1api",
     "serpdive",
     "tavily",
     "tinyfish",
     "tollbit",
+    "valyu",
     "you",
 ];
 
@@ -425,6 +432,8 @@ pub fn required_variable(provider: &str) -> Option<&'static str> {
         "linkup" => "LINKUP_API_KEY",
         "nimble" => "NIMBLE_API_KEY",
         "ozone" => "OZONE_LIVE_API_KEY",
+        "valyu" => "VALYU_API_KEY",
+        "peopleinc" => "PEOPLEINC_API_KEY",
         "search1api" => "SEARCH1API_API_KEY",
         "serpdive" => "SERPDIVE_API_KEY",
         "you" => "YOU_API_KEY",
@@ -485,8 +494,13 @@ pub fn remote_adapter(
             credential,
         )),
         "ozone" => Box::new(OzoneAdapter::new(&at(ozone::DEFAULT_BASE_URL), credential)),
+        "valyu" => Box::new(ValyuAdapter::new(&at(valyu::DEFAULT_BASE_URL), credential)),
         "parallel" => Box::new(ParallelAdapter::new(
             &at(parallel::DEFAULT_BASE_URL),
+            credential,
+        )),
+        "peopleinc" => Box::new(PeopleIncAdapter::new(
+            &at(peopleinc::DEFAULT_BASE_URL),
             credential,
         )),
         "redpine" => Box::new(RedpineAdapter::new(
@@ -626,7 +640,9 @@ pub fn declared_provider_ref(provider: &str) -> Option<ProviderRef> {
         "linkup" => linkup::CAPABILITIES,
         "nimble" => nimble::CAPABILITIES,
         "ozone" => ozone::CAPABILITIES,
+        "valyu" => valyu::CAPABILITIES,
         "parallel" => parallel::CAPABILITIES,
+        "peopleinc" => peopleinc::CAPABILITIES,
         "redpine" => redpine::CAPABILITIES,
         "search1api" => search1api::CAPABILITIES,
         "serpdive" => serpdive::CAPABILITIES,
@@ -665,25 +681,18 @@ pub(crate) fn execute(
     endpoint: &str,
     request: commonmeasure_http::Request,
 ) -> Result<(commonmeasure_http::Response, u64), SupplyError> {
+    let mut request = request;
+    // A provider's response is sealed as the exact bytes it served and
+    // replayed by parsing those bytes, so this path asks for them uncoded
+    // instead of the transport's default gzip, and the transport refuses a
+    // coded answer rather than hand over something the provider did not send.
+    request.headers.set("Accept-Encoding", "identity");
     let started = std::time::Instant::now();
     let response =
         commonmeasure_http::send(endpoint, request).map_err(|error| SupplyError::Transport {
             detail: format!("{error:#}"),
         })?;
     let latency_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-    // A provider's response is sealed as the exact bytes it served and
-    // replayed by parsing those bytes, so a body the transport decoded from a
-    // content coding is refused here rather than sealed as something the
-    // provider did not send.
-    if let Some(coded) = &response.coded {
-        return Err(SupplyError::Transport {
-            detail: format!(
-                "{endpoint} answered with content encoding {}, which a sealed provider \
-                 response does not accept",
-                coded.coding
-            ),
-        });
-    }
     if !(200..300).contains(&response.status) {
         return Err(SupplyError::Status {
             status: response.status,

@@ -1319,9 +1319,18 @@ mod tests {
         if not_dumpable {
             command.env("COMMONMEASURE_TEST_NOT_DUMPABLE", "1");
         }
-        // On Linux, a child another test forks while this file is still open
-        // for writing holds it open until it execs: ETXTBSY for a moment.
-        let mut child = (0..50)
+        let mut child = spawn_copied(&mut command);
+        // Until the child has exec'd, the table shows this binary.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(child.try_wait().unwrap().is_none(), "the child runs");
+        child
+    }
+
+    /// Spawns `command`, whose program this process has just copied. On
+    /// Linux, a child another test forks while the copy is still open for
+    /// writing holds it open until it execs: ETXTBSY for a moment.
+    fn spawn_copied(command: &mut std::process::Command) -> std::process::Child {
+        (0..50)
             .find_map(|_| match command.spawn() {
                 Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1329,11 +1338,7 @@ mod tests {
                 }
                 result => Some(result.unwrap()),
             })
-            .expect("the file stayed busy");
-        // Until the child has exec'd, the table shows this binary.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        assert!(child.try_wait().unwrap().is_none(), "the child runs");
-        child
+            .expect("the file stayed busy")
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1403,18 +1408,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("sleep");
         std::fs::copy("/bin/sleep", &file).unwrap();
-        let mut child = std::process::Command::new(&file)
-            .arg("30")
-            .env_clear()
-            .spawn()
-            .unwrap();
+        let mut child = spawn_copied(std::process::Command::new(&file).arg("30").env_clear());
         std::thread::sleep(std::time::Duration::from_millis(300));
         let found = running(&file, &[]);
         child.kill().unwrap();
         child.wait().unwrap();
+        // Another `sleep` on the machine whose executable cannot be read,
+        // such as one outside this container's user namespace, is listed by
+        // name as well; only the child is asserted.
         let found = found.unwrap();
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].home, Home::Unknown);
+        let mine: Vec<_> = found
+            .iter()
+            .filter(|process| process.pid == child.id())
+            .collect();
+        assert_eq!(mine.len(), 1, "{found:?}");
+        assert_eq!(mine[0].runs, Runs::File, "{found:?}");
+        assert_eq!(mine[0].home, Home::Unknown);
     }
 
     #[test]

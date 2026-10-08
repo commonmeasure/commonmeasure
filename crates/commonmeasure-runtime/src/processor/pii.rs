@@ -25,6 +25,8 @@ use super::{
     ArtefactRef, Determinism, FailBehaviour, FailureByMode, IN_PROCESS, INVOCATION_VERSION,
     Invocation, NO_AMBIENT_AUTHORITY, ProcessorManifest, Stage,
 };
+use crate::agent_text;
+use crate::agent_text::AgentText;
 use crate::policy::{Ruling, approximate_tokens};
 
 pub const NAME: &str = "pii-detector";
@@ -144,7 +146,25 @@ pub fn invoke(
                  finding is recorded in the plan's processor invocations."
             ),
         );
-        Ruling::AllowedWithBreach { reason, gap }
+        let agent_reason = agent_text![
+            "The PII detector found ",
+            findings.len(),
+            " structured personal identifier",
+            if findings.len() == 1 { "" } else { "s" },
+            " (",
+            AgentText::list(
+                categories(&findings)
+                    .into_iter()
+                    .map(|(category, count)| agent_text![category.label(), " ×", count]),
+                ", "
+            ),
+            ") in the text screened."
+        ];
+        Ruling::AllowedWithBreach {
+            reason,
+            agent_reason,
+            gap,
+        }
     };
 
     let invocation = Invocation::new(
@@ -182,7 +202,7 @@ pub fn invoke(
 pub fn not_read(
     mode: PolicyMode,
     source_ref: &str,
-    basis: &str,
+    basis: &'static str,
     content_hash: Option<&str>,
 ) -> (Invocation, Ruling) {
     let started_at = Utc::now();
@@ -198,6 +218,11 @@ pub fn not_read(
         format!(
             "The PII detector did not rule: the body is {basis}, which the edge does not read."
         ),
+        agent_text![
+            "The PII detector did not rule: the body is ",
+            basis,
+            ", which the edge does not read."
+        ],
         gap.clone(),
     );
     let decision = if ruling.is_refusal() {

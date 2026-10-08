@@ -134,6 +134,7 @@ pub fn capture(
             estimated_tokens: None,
             delivered: None,
             content_type: None,
+            content_type_rendered: false,
             delivered_file: None,
             grounded: false,
             // No surface reports rights, and being shown a source is not
@@ -156,6 +157,8 @@ pub fn capture(
             identity: None,
             challenge: None,
             allowance: None,
+            told: None,
+            told_position: None,
         })
         .collect()
 }

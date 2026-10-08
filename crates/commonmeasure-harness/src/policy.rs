@@ -6,7 +6,8 @@
 //! second policy engine, and there is nothing a session can express that a job
 //! cannot.
 //!
-//! No policy file means observe: record everything, refuse nothing. That is the
+//! No policy file means observe: the operator's policy is recorded, not
+//! enforced, and only the source's terms refuse. That is the
 //! adoption on-ramp, and it is the state in which the mediated tools are still
 //! useful, because recording is the half that needs no configuration.
 
@@ -1171,7 +1172,7 @@ impl PolicyDocument {
                 scope: scope.clone(),
             },
         };
-        let mut withheld = (!resolved.allows_telemetry_egress()).then(&scope_withheld);
+        let mut withheld = (!resolved.allows_telemetry_egress()).then(scope_withheld);
         if let Some(registry) = &self.selection.registry {
             let project = actual.and_then(|cwd| registry.matching(cwd));
             // Every false winning scope vetoes a grant, including an omitted bool.
@@ -1423,6 +1424,13 @@ impl SessionPolicy {
         if let Some(reason) = &self.fail_closed {
             return Ruling::Refused {
                 reason: format!("Principal authority refused: {reason}."),
+                // The reason is this edge's own reading of the operator's
+                // policy and principal, never a source's.
+                agent_reason: commonmeasure_runtime::agent_text![
+                    "Principal authority refused: ",
+                    commonmeasure_runtime::agent_text::Given::text(reason),
+                    "."
+                ],
                 gap: commonmeasure_types::Gap::new(
                     commonmeasure_types::GapReason::PolicyRefused,
                     "No authenticated principal policy authorised this crossing.",
@@ -1437,6 +1445,11 @@ impl SessionPolicy {
         if let Some(reason) = &self.fail_closed {
             return Ruling::Refused {
                 reason: format!("Principal authority refused: {reason}."),
+                agent_reason: commonmeasure_runtime::agent_text![
+                    "Principal authority refused: ",
+                    commonmeasure_runtime::agent_text::Given::text(reason),
+                    "."
+                ],
                 gap: commonmeasure_types::Gap::new(
                     commonmeasure_types::GapReason::PolicyRefused,
                     "No authenticated principal policy authorised this crossing.",

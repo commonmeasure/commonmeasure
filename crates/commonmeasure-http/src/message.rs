@@ -69,19 +69,438 @@ fn over_ceiling(declared: Option<u64>) -> anyhow::Error {
 ///
 /// Wire order is not itself signed: an RFC 9421 signature base is built from
 /// the components the signature input names, in the order it names them.
+///
+/// An inbound value may carry obs-text, octets 0x80 to 0xFF that are not
+/// UTF-8 (RFC 9110 §5.5), as a Latin-1 `Content-Disposition` does. Such a
+/// value is kept as the bytes received ([`Headers::get_bytes`]) and read as
+/// text only through a lossless rendering ([`Headers::get`]); a use that
+/// needs the exact text asks [`Headers::text`], which refuses it by name.
 #[derive(Debug, Clone, Default)]
-pub struct Headers(Vec<(String, String)>);
+pub struct Headers(Vec<Field>);
+
+#[derive(Debug, Clone)]
+struct Field {
+    name: String,
+    /// The value as text: exactly the value where it is UTF-8, and otherwise
+    /// the rendering [`render_opaque`] makes of `opaque`.
+    value: String,
+    /// The value as received, where it is not UTF-8.
+    opaque: Option<Box<[u8]>>,
+}
+
+/// A header value that holds bytes that are not UTF-8, refused for a use
+/// that must act on its exact text: a URL to request, or a media type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpaqueValue {
+    /// The header's name as the message spelt it.
+    pub name: String,
+}
+
+impl std::fmt::Display for OpaqueValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the {} header holds bytes that are not UTF-8 (obs-text), so its value is not read \
+             as text",
+            self.name
+        )
+    }
+}
+
+impl std::error::Error for OpaqueValue {}
+
+/// A fault in bytes a peer sent, stated two ways. `Display` quotes the
+/// bytes, for a log or the source record; [`PeerError::named`] names them by
+/// position only, for text a model may read, which must not carry words the
+/// peer chose. [`named_chain`] renders a whole error that way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerError {
+    quoted: String,
+    named: String,
+}
+
+impl PeerError {
+    pub(crate) fn error(quoted: impl Into<String>, named: impl Into<String>) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            quoted: quoted.into(),
+            named: named.into(),
+        })
+    }
+
+    /// The fault with the peer's bytes named by position, not quoted.
+    pub fn named(&self) -> &str {
+        &self.named
+    }
+}
+
+impl std::fmt::Display for PeerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.quoted)
+    }
+}
+
+impl std::error::Error for PeerError {}
+
+/// `error` as `{error:#}` renders it, with each [`PeerError`] in its chain
+/// named by position rather than quoted.
+pub fn named_chain(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .map(|cause| match cause.downcast_ref::<PeerError>() {
+            Some(peer) => peer.named.clone(),
+            None => cause.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
+/// The most characters of a host name that text a model may read shows. A
+/// cut is marked with `…`.
+pub const QUOTED_HOST_CHARS: usize = 64;
+
+/// A host name as text a model may read shows it: cut to
+/// [`QUOTED_HOST_CHARS`] characters and marked with `…` where it was cut. A
+/// source chooses the host a redirect or a licence names, and DNS syntax
+/// keeps spaces out of it but not words (EDG-120); the cut bounds how many
+/// it can spell. The source record keeps the whole name.
+pub fn quoted_host(host: &str) -> String {
+    match host.char_indices().nth(QUOTED_HOST_CHARS) {
+        Some((cut, _)) => format!("{}…", &host[..cut]),
+        None => host.to_owned(),
+    }
+}
+
+/// `text` with `url`'s host, as the URL parser serialises it, shown as
+/// [`quoted_host`] shows it wherever it occurs. For a fault this crate
+/// raised for a request to `url`, which names the host it looked up,
+/// connected to or started TLS with.
+pub fn url_host_quoted(text: &str, url: &str) -> String {
+    let Some(host) = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+    else {
+        return text.to_owned();
+    };
+    let shown = quoted_host(&host);
+    if shown == host {
+        text.to_owned()
+    } else {
+        text.replace(&host, &shown)
+    }
+}
+
+/// `error`, raised for a request to `url`, as text a model may read gives
+/// it: [`named_chain`], with `url`'s host shown as [`quoted_host`] shows it
+/// ([`url_host_quoted`]) and a certificate that is not valid for the name
+/// asked for stated with its names shown the same way
+/// ([`named_certificate`]). `{error:#}` is the form the record keeps.
+pub fn named_fault(error: &anyhow::Error, url: &str) -> String {
+    let mut named = named_chain(error);
+    for cause in error.chain() {
+        let certificate = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+            .or_else(|| cause.downcast_ref::<rustls::Error>());
+        if let Some(rustls::Error::InvalidCertificate(
+            certificate @ rustls::CertificateError::NotValidForNameContext {
+                expected,
+                presented,
+            },
+        )) = certificate
+        {
+            named = named.replace(
+                &certificate.to_string(),
+                &named_certificate(&expected.to_str(), presented),
+            );
+        }
+    }
+    url_host_quoted(&named, url)
+}
+
+/// rustls's statement that a certificate is not valid for the name asked
+/// for, with each name shown as [`quoted_host`] shows it. The names the
+/// certificate presents are its subject alternative names as rustls writes
+/// them: a DNS name as `DnsName("…")`, an address as `IpAddress(…)`. Any
+/// other kind, or a DNS name holding a character DNS syntax does not allow,
+/// is named by position: its bytes are written as the certificate holds
+/// them.
+fn named_certificate(expected: &str, presented: &[String]) -> String {
+    let named = |name: &String| {
+        let dns = name
+            .strip_prefix("DnsName(\"")
+            .and_then(|rest| rest.strip_suffix("\")"))
+            .filter(|dns| {
+                !dns.is_empty()
+                    && dns.bytes().all(|b| {
+                        b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'*')
+                    })
+            });
+        let address = name
+            .strip_prefix("IpAddress(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .filter(|address| {
+                address
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() || matches!(b, b'.' | b':'))
+            });
+        match (dns, address) {
+            (Some(dns), _) => format!("DnsName(\"{}\")", quoted_host(dns)),
+            (None, Some(_)) => name.clone(),
+            (None, None) => "a name of another kind".to_owned(),
+        }
+    };
+    let names: Vec<String> = presented.iter().map(named).collect();
+    let valid_for = match names.as_slice() {
+        [] => "is not valid for any names (according to its subjectAltName extension)".to_owned(),
+        [one] => format!("is only valid for {one}"),
+        [all_but_last @ .., last] => {
+            format!("is only valid for {} or {last}", all_but_last.join(", "))
+        }
+    };
+    format!(
+        "certificate not valid for name \"{}\"; certificate {valid_for}",
+        quoted_host(expected)
+    )
+}
+
+/// A `Content-Type` value as text a model may read names it: its
+/// top-level type where that is one IANA registers, as `text/…`, since the
+/// subtype and parameters are the peer's words; otherwise `an unrecognised
+/// media type`.
+pub fn media_type_named(value: &str) -> &'static str {
+    // Each name is this crate's own text, so the result is `'static` and
+    // may be written into text built from nothing a peer sent.
+    const TOP_LEVEL: [(&str, &str); 11] = [
+        ("application", "application/…"),
+        ("audio", "audio/…"),
+        ("example", "example/…"),
+        ("font", "font/…"),
+        ("haptics", "haptics/…"),
+        ("image", "image/…"),
+        ("message", "message/…"),
+        ("model", "model/…"),
+        ("multipart", "multipart/…"),
+        ("text", "text/…"),
+        ("video", "video/…"),
+    ];
+    let top = value.split('/').next().unwrap_or_default().trim();
+    match TOP_LEVEL
+        .into_iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(top))
+    {
+        Some((_, named)) if value.contains('/') => named,
+        _ => "an unrecognised media type",
+    }
+}
+
+/// What kind of transport fault `error` is, for text that may carry nothing
+/// the peer sent: each kind is named in this crate's words alone, with no
+/// host, address, certificate name or peer bytes. `{error:#}` is the form
+/// the record keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultKind {
+    /// The name did not resolve, or resolved to no address.
+    Lookup,
+    /// No answer arrived within the exchange budget.
+    Timeout,
+    /// The connection was refused or not established.
+    Connect,
+    /// The connection was closed before an answer was read.
+    Closed,
+    /// The certificate the peer presented is not valid for the name asked
+    /// for.
+    CertificateName,
+    /// The certificate the peer presented is not one this edge trusts.
+    CertificateUntrusted,
+    /// The TLS session could not be started for another reason.
+    Tls,
+    /// The peer's bytes could not be read as an HTTP response.
+    Peer,
+    /// The body could not be decoded: its content coding was not the one
+    /// requested, or its gzip stream did not decode.
+    Body,
+    /// Any other fault.
+    Other,
+}
+
+impl FaultKind {
+    /// The fault as text that carries nothing the peer sent names it.
+    pub fn named(self) -> &'static str {
+        match self {
+            Self::Lookup => "its name could not be resolved",
+            Self::Timeout => "it did not answer within the time allowed",
+            Self::Connect => "the connection was refused or could not be made",
+            Self::Closed => "the connection was closed before an answer was read",
+            Self::CertificateName => {
+                "the certificate it presented is not valid for the name asked for"
+            }
+            Self::CertificateUntrusted => {
+                "the certificate it presented is not one this edge trusts"
+            }
+            Self::Tls => "the TLS session could not be started",
+            Self::Peer => "its answer could not be read as an HTTP response",
+            Self::Body => "its body could not be decoded",
+            Self::Other => "the request failed",
+        }
+    }
+}
+
+/// The [`FaultKind`] of `error`, an error this crate raised for a request.
+/// The timeout is recognised by the sentence [`send_to`](crate::send_to)
+/// wrote for it, since that sentence replaces the socket's own error.
+pub fn fault_kind(error: &anyhow::Error) -> FaultKind {
+    for cause in error.chain() {
+        if cause.downcast_ref::<PeerError>().is_some() {
+            return FaultKind::Peer;
+        }
+        let tls = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+            .or_else(|| cause.downcast_ref::<rustls::Error>());
+        match tls {
+            Some(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::NotValidForName
+                | rustls::CertificateError::NotValidForNameContext { .. },
+            )) => return FaultKind::CertificateName,
+            Some(rustls::Error::InvalidCertificate(_)) => return FaultKind::CertificateUntrusted,
+            Some(_) => return FaultKind::Tls,
+            None => {}
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind;
+            return match io.kind() {
+                ErrorKind::WouldBlock | ErrorKind::TimedOut => FaultKind::Timeout,
+                ErrorKind::ConnectionRefused
+                | ErrorKind::HostUnreachable
+                | ErrorKind::NetworkUnreachable
+                | ErrorKind::AddrNotAvailable => FaultKind::Connect,
+                ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::BrokenPipe
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::NotConnected => FaultKind::Closed,
+                _ => FaultKind::Other,
+            };
+        }
+    }
+    let text = format!("{error:#}");
+    if text.starts_with("resolve ") || text.contains(" resolved to no addresses") {
+        FaultKind::Lookup
+    } else if text.contains(" did not answer within the ")
+        || text.contains("timed out before a connection was established")
+    {
+        FaultKind::Timeout
+    } else if text.contains("no address to connect to") {
+        FaultKind::Connect
+    } else if text.contains("start tls session with ")
+        || text.contains("is not a valid TLS server name")
+    {
+        FaultKind::Tls
+    } else if text.contains("gzip body could not be decoded")
+        || text.contains("response content coding ")
+    {
+        FaultKind::Body
+    } else {
+        FaultKind::Other
+    }
+}
+
+/// A content coding as a fault message names it: the codings RFC 9110
+/// registers by name, and any other as unrecognised, since the name is the
+/// peer's choice.
+fn coding_named(coding: &str) -> &'static str {
+    const KNOWN: [&str; 8] = [
+        "gzip",
+        "x-gzip",
+        "deflate",
+        "compress",
+        "x-compress",
+        "br",
+        "zstd",
+        "dcb",
+    ];
+    KNOWN
+        .into_iter()
+        .find(|known| known.eq_ignore_ascii_case(coding))
+        .unwrap_or("an unrecognised coding")
+}
+
+/// A lossless text rendering of a value that is not UTF-8: each byte from
+/// 0x80 is written `\xHH` and a backslash `\\`, and every other byte, all
+/// visible ASCII, space or HTAB by the time a value is held, as itself.
+/// Nothing is guessed about a charset, so no byte is mis-decoded.
+fn render_opaque(bytes: &[u8]) -> String {
+    let mut rendered = String::with_capacity(bytes.len() + 8);
+    for &byte in bytes {
+        match byte {
+            b'\\' => rendered.push_str("\\\\"),
+            0x80.. => {
+                let _ = write!(rendered, "\\x{byte:02X}");
+            }
+            _ => rendered.push(char::from(byte)),
+        }
+    }
+    rendered
+}
+
+/// A value as text for the source record, and whether that text is a
+/// rendering: the value itself where it is UTF-8, and otherwise the lossless
+/// rendering [`Headers::get`] gives. A reader needs the flag to read the text
+/// back to the bytes, since UTF-8 text may itself read `\xE9`.
+pub fn render_value(bytes: &[u8]) -> (std::borrow::Cow<'_, str>, bool) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => (std::borrow::Cow::Borrowed(text), false),
+        Err(_) => (std::borrow::Cow::Owned(render_opaque(bytes)), true),
+    }
+}
 
 impl Headers {
     pub fn new() -> Self {
         Self(Vec::new())
     }
 
-    pub fn get(&self, name: &str) -> Option<&str> {
+    fn first(&self, name: &str) -> Option<&Field> {
         self.0
             .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
+            .find(|field| field.name.eq_ignore_ascii_case(name))
+    }
+
+    /// The first value for `name` as text. A value that is not UTF-8 comes
+    /// back as its lossless rendering (`\xE9` for the byte 0xE9), which a
+    /// parser of an ASCII grammar reads as it reads any unrecognised token.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.first(name).map(|field| field.value.as_str())
+    }
+
+    /// The first value for `name` exactly as text, refusing a value that is
+    /// not UTF-8 rather than acting on its rendering.
+    pub fn text(&self, name: &str) -> Result<Option<&str>, OpaqueValue> {
+        match self.first(name) {
+            None => Ok(None),
+            Some(field) if field.opaque.is_some() => Err(OpaqueValue {
+                name: field.name.clone(),
+            }),
+            Some(field) => Ok(Some(field.value.as_str())),
+        }
+    }
+
+    /// The first value for `name` as the bytes it holds: the bytes received
+    /// for an inbound value, and the UTF-8 of a value set here.
+    pub fn get_bytes(&self, name: &str) -> Option<&[u8]> {
+        self.first(name)
+            .map(|field| field.opaque.as_deref().unwrap_or(field.value.as_bytes()))
+    }
+
+    /// Every value for `name` as the bytes it holds, in the order received.
+    /// A list-valued field such as `Link` may be split over several fields,
+    /// and a reader of the list reads them all.
+    pub fn all_bytes<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a [u8]> + 'a {
+        self.0
+            .iter()
+            .filter(move |field| field.name.eq_ignore_ascii_case(name))
+            .map(|field| field.opaque.as_deref().unwrap_or(field.value.as_bytes()))
     }
 
     /// Replace any existing values for `name` with a single value, keeping
@@ -89,35 +508,61 @@ impl Headers {
     /// changes its value, not where the message carries it.
     pub fn set(&mut self, name: &str, value: &str) {
         let mut replaced = false;
-        self.0.retain_mut(|(existing, held)| {
-            if !existing.eq_ignore_ascii_case(name) {
+        self.0.retain_mut(|field| {
+            if !field.name.eq_ignore_ascii_case(name) {
                 return true;
             }
             if replaced {
                 return false;
             }
             replaced = true;
-            *existing = name.to_string();
-            *held = value.to_string();
+            *field = Field::text(name, value);
             true
         });
         if !replaced {
-            self.0.push((name.to_string(), value.to_string()));
+            self.0.push(Field::text(name, value));
         }
     }
 
     pub fn append(&mut self, name: &str, value: &str) {
-        self.0.push((name.to_string(), value.to_string()));
+        self.0.push(Field::text(name, value));
+    }
+
+    /// Append a value read from the wire, kept as received.
+    fn append_inbound(&mut self, name: &str, value: &[u8]) {
+        let field = match std::str::from_utf8(value) {
+            Ok(text) => Field::text(name, text),
+            Err(_) => Field {
+                name: name.to_string(),
+                value: render_opaque(value),
+                opaque: Some(value.into()),
+            },
+        };
+        self.0.push(field);
     }
 
     /// Drop every value for `name`. A header a caller attached for one
     /// origin and must not send to another leaves through here.
     pub fn remove(&mut self, name: &str) {
-        self.0.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.0
+            .retain(|field| !field.name.eq_ignore_ascii_case(name));
     }
 
+    /// Every field in order, each value as [`Headers::get`] gives it.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0.iter().map(|(n, v)| (n.as_str(), v.as_str()))
+        self.0
+            .iter()
+            .map(|field| (field.name.as_str(), field.value.as_str()))
+    }
+}
+
+impl Field {
+    fn text(name: &str, value: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            value: value.to_string(),
+            opaque: None,
+        }
     }
 }
 
@@ -225,7 +670,10 @@ fn reason_for(status: u16) -> &'static str {
     }
 }
 
-fn read_line_bounded(reader: &mut impl BufRead, budget: &mut usize) -> Result<String> {
+/// One line of a message head or of chunked framing, without its CRLF, as
+/// bytes: a field value, a reason phrase and a chunk extension may all carry
+/// obs-text, so UTF-8 is not required here.
+fn read_line_bounded(reader: &mut impl BufRead, budget: &mut usize) -> Result<Vec<u8>> {
     let mut line = Vec::new();
     loop {
         let mut byte = [0u8; 1];
@@ -239,7 +687,19 @@ fn read_line_bounded(reader: &mut impl BufRead, budget: &mut usize) -> Result<St
     if line.last() == Some(&b'\r') {
         line.pop();
     }
-    String::from_utf8(line).context("header line is not utf-8")
+    Ok(line)
+}
+
+/// A request line or status line, which carries no obs-text outside the
+/// reason phrase; the reason phrase is split off before this is asked.
+fn ascii_line(line: &[u8], what: &str) -> Result<String> {
+    if !line.is_ascii() {
+        return Err(PeerError::error(
+            format!("{what} {:?} is not ASCII", render_opaque(line)),
+            format!("the {what} is not ASCII"),
+        ));
+    }
+    Ok(String::from_utf8_lossy(line).into_owned())
 }
 
 /// Outbound values retain the strict configuration guard: no control bytes,
@@ -254,22 +714,40 @@ fn check_field(name: &str, value: &str) -> Result<()> {
 
 fn check_field_name(name: &str) -> Result<()> {
     if name.is_empty() || !name.bytes().all(is_token_byte) {
-        bail!("header name {name:?} is not a token");
+        return Err(PeerError::error(
+            format!("header name {name:?} is not a token"),
+            "a header name is not a token",
+        ));
     }
     Ok(())
 }
 
-/// RFC 9110 §5.5 permits HTAB inside an inbound value. Other control bytes
-/// remain invalid; optional whitespace is stripped by the reader.
-fn check_inbound_field(name: &str, value: &str) -> Result<()> {
+/// RFC 9110 §5.5 permits HTAB and obs-text (0x80 to 0xFF) inside an inbound
+/// value. Other control bytes remain invalid; optional whitespace is stripped
+/// by the reader.
+fn check_inbound_field(name: &str, value: &[u8]) -> Result<()> {
     check_field_name(name)?;
     if let Some(byte) = value
-        .bytes()
-        .find(|b| (*b < 0x20 && *b != b'\t') || *b == 0x7f)
+        .iter()
+        .find(|b| (**b < 0x20 && **b != b'\t') || **b == 0x7f)
     {
-        bail!("header {name} has control byte {byte:#04x} in its value");
+        return Err(PeerError::error(
+            format!("header {name} has control byte {byte:#04x} in its value"),
+            format!("a header has control byte {byte:#04x} in its value"),
+        ));
     }
     Ok(())
+}
+
+/// A value without the optional whitespace, space and HTAB only, around it.
+fn trim_ows(value: &[u8]) -> &[u8] {
+    let ows = |b: &u8| *b == b' ' || *b == b'\t';
+    let start = value.iter().position(|b| !ows(b)).unwrap_or(value.len());
+    let end = value
+        .iter()
+        .rposition(|b| !ows(b))
+        .map_or(start, |last| last + 1);
+    &value[start..end]
 }
 
 fn is_token_byte(byte: u8) -> bool {
@@ -283,14 +761,24 @@ fn read_headers(reader: &mut impl BufRead, budget: &mut usize) -> Result<Headers
         if line.is_empty() {
             return Ok(headers);
         }
-        let (name, value) = line
-            .split_once(':')
-            .with_context(|| format!("malformed header line {line:?}"))?;
+        let Some(colon) = line.iter().position(|b| *b == b':') else {
+            return Err(PeerError::error(
+                format!("malformed header line {:?}", render_opaque(&line)),
+                "a header line has no colon",
+            ));
+        };
+        let (name, value) = (&line[..colon], &line[colon + 1..]);
+        let Ok(name) = std::str::from_utf8(name) else {
+            return Err(PeerError::error(
+                format!("header name {:?} is not a token", render_opaque(name)),
+                "a header name is not a token",
+            ));
+        };
         // Only optional whitespace around the value is the sender's to add; a
         // space before the colon makes the line ambiguous, not trimmable.
-        let value = value.trim_matches([' ', '\t']);
+        let value = trim_ows(value);
         check_inbound_field(name, value)?;
-        headers.append(name, value);
+        headers.append_inbound(name, value);
     }
 }
 
@@ -309,7 +797,10 @@ fn content_length(headers: &Headers) -> Result<Option<usize>> {
         if let Some(first) = declared
             && first != value
         {
-            bail!("message declares content-length {first:?} and {value:?}");
+            return Err(PeerError::error(
+                format!("message declares content-length {first:?} and {value:?}"),
+                "the message declares two different content-length values",
+            ));
         }
         declared = Some(value);
     }
@@ -317,10 +808,27 @@ fn content_length(headers: &Headers) -> Result<Option<usize>> {
         return Ok(None);
     };
     if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-        bail!("content-length {value:?} is not a decimal number");
+        return Err(PeerError::error(
+            format!("content-length {value:?} is not a decimal number"),
+            "the content-length is not a decimal number",
+        ));
     }
     let len: usize = value.parse().context("parse content-length")?;
     Ok(Some(len))
+}
+
+/// What a message is read as, for the content codings it may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coded {
+    /// A request, whose body is never decoded.
+    Request,
+    /// A response to a request whose `Accept-Encoding` named gzip (`true`)
+    /// or identity only (`false`).
+    Response { gzip_requested: bool },
+}
+
+fn is_gzip(coding: &str) -> bool {
+    coding.eq_ignore_ascii_case("gzip") || coding.eq_ignore_ascii_case("x-gzip")
 }
 
 /// The content coding a message declares, where it is one this reader
@@ -331,8 +839,11 @@ fn content_length(headers: &Headers) -> Result<Option<usize>> {
 /// field or across repeated fields: a body this reader did not decode would
 /// be hashed, stored and handed on as if it were the content it claims to be.
 /// `gzip` is removed only where the caller can keep the served bytes beside
-/// the decoded ones, which is a response.
-fn content_coding(headers: &Headers, gzip_allowed: bool) -> Result<Option<&'static str>> {
+/// the decoded ones, which is a response, and only where the request asked
+/// for it. A response in a coding the request did not accept is refused by
+/// that name, so the record says the origin ignored the request rather than
+/// that this edge lacks a decoder.
+fn content_coding(headers: &Headers, reading: Coded) -> Result<Option<&'static str>> {
     let codings: Vec<&str> = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
@@ -340,16 +851,53 @@ fn content_coding(headers: &Headers, gzip_allowed: bool) -> Result<Option<&'stat
         .map(|coding| coding.trim_matches([' ', '\t']))
         .filter(|coding| !coding.is_empty() && !coding.eq_ignore_ascii_case("identity"))
         .collect();
-    match codings.as_slice() {
-        [] => Ok(None),
-        [coding]
-            if gzip_allowed
-                && (coding.eq_ignore_ascii_case("gzip")
-                    || coding.eq_ignore_ascii_case("x-gzip")) =>
-        {
-            Ok(Some("gzip"))
+    let named = |codings: &[&str]| {
+        codings
+            .iter()
+            .map(|coding| coding_named(coding))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let gzip_requested = match reading {
+        Coded::Request if codings.is_empty() => return Ok(None),
+        Coded::Request => {
+            return Err(PeerError::error(
+                format!("unsupported content encoding {}", codings.join(", ")),
+                format!("unsupported content encoding {}", named(&codings)),
+            ));
         }
-        codings => bail!("unsupported content encoding {}", codings.join(", ")),
+        Coded::Response { gzip_requested } => gzip_requested,
+    };
+    let unrequested: Vec<&str> = codings
+        .iter()
+        .copied()
+        .filter(|coding| !(gzip_requested && is_gzip(coding)))
+        .collect();
+    let accepted = if gzip_requested { "gzip" } else { "identity" };
+    match (codings.as_slice(), unrequested.as_slice()) {
+        ([], _) => Ok(None),
+        ([_], []) => Ok(Some("gzip")),
+        (_, []) => Err(PeerError::error(
+            format!(
+                "response content coding {} applies gzip more than once, and this edge removes \
+                 one gzip coding only",
+                codings.join(", ")
+            ),
+            "response content coding applies gzip more than once, and this edge removes one \
+             gzip coding only",
+        )),
+        (_, unrequested) => Err(PeerError::error(
+            format!(
+                "response content coding {} was not requested: the request accepted {accepted} \
+                 only",
+                unrequested.join(", ")
+            ),
+            format!(
+                "response content coding {} was not requested: the request accepted {accepted} \
+                 only",
+                named(unrequested)
+            ),
+        )),
     }
 }
 
@@ -384,7 +932,10 @@ fn read_body(
         if te.eq_ignore_ascii_case("chunked") {
             return read_chunked(reader);
         }
-        bail!("unsupported transfer encoding {te}");
+        return Err(PeerError::error(
+            format!("unsupported transfer encoding {te}"),
+            "unsupported transfer encoding: only chunked is read",
+        ));
     }
     if let Some(len) = declared {
         if len > MAX_BODY_BYTES {
@@ -416,12 +967,20 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>> {
     let mut budget = MAX_HEADER_BYTES;
     loop {
         let size_line = read_line_bounded(reader, &mut budget)?;
-        let size_hex = size_line.split(';').next().unwrap_or("");
-        if size_hex.is_empty() || !size_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            bail!("chunk size {size_line:?} is not hexadecimal");
+        let size_hex = size_line.split(|b| *b == b';').next().unwrap_or_default();
+        if size_hex.is_empty() || !size_hex.iter().all(u8::is_ascii_hexdigit) {
+            return Err(PeerError::error(
+                format!(
+                    "chunk size {:?} is not hexadecimal",
+                    render_opaque(&size_line)
+                ),
+                "a chunk size is not hexadecimal",
+            ));
         }
-        let size = usize::from_str_radix(size_hex, 16)
-            .with_context(|| format!("parse chunk size {size_line:?}"))?;
+        // All hexadecimal digits, so ASCII.
+        let size_hex = String::from_utf8_lossy(size_hex);
+        let size = usize::from_str_radix(&size_hex, 16)
+            .with_context(|| format!("parse chunk size {size_hex:?}"))?;
         // Checked: `size` is attacker-controlled up to usize::MAX, and a
         // wrapping sum would pass the ceiling it exists to enforce.
         let total = body
@@ -462,7 +1021,10 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>> {
 /// not agreed to.
 fn check_version(version: &str) -> Result<()> {
     if version != "HTTP/1.1" && version != "HTTP/1.0" {
-        bail!("unsupported version {version}");
+        return Err(PeerError::error(
+            format!("unsupported version {version}"),
+            "unsupported version: only HTTP/1.1 and HTTP/1.0 are spoken",
+        ));
     }
     Ok(())
 }
@@ -471,13 +1033,13 @@ fn check_version(version: &str) -> Result<()> {
 /// chunked encoding; a request body is never EOF-delimited.
 pub fn read_request(reader: &mut impl BufRead) -> Result<Request> {
     let mut budget = MAX_HEADER_BYTES;
-    let request_line = read_line_bounded(reader, &mut budget)?;
+    let request_line = ascii_line(&read_line_bounded(reader, &mut budget)?, "request line")?;
     let mut parts = request_line.splitn(3, ' ');
     let method = parts.next().context("missing method")?.to_string();
     let target = parts.next().context("missing target")?.to_string();
     check_version(parts.next().context("missing version")?)?;
     let headers = read_headers(reader, &mut budget)?;
-    content_coding(&headers, false)?;
+    content_coding(&headers, Coded::Request)?;
     let body = read_body(reader, &headers, false)?;
     Ok(Request {
         method,
@@ -487,19 +1049,35 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Request> {
     })
 }
 
+/// Read one response to a request that accepted gzip, the coding a request
+/// through [`crate::send`] accepts unless its caller asked for identity.
 pub fn read_response(reader: &mut impl BufRead) -> Result<Response> {
+    read_response_to(reader, true)
+}
+
+/// Read one response, refusing a content coding the request did not accept:
+/// gzip where `gzip_requested`, and otherwise none.
+pub(crate) fn read_response_to(
+    reader: &mut impl BufRead,
+    gzip_requested: bool,
+) -> Result<Response> {
     let mut budget = MAX_HEADER_BYTES;
     let status_line = read_line_bounded(reader, &mut budget)?;
-    let mut parts = status_line.splitn(3, ' ');
-    check_version(parts.next().context("missing version")?)?;
-    let status: u16 = parts
-        .next()
-        .context("missing status")?
+    // The reason phrase may carry obs-text (RFC 9112 §4); it is kept as a
+    // lossless rendering, and the version and status before it are ASCII.
+    let mut parts = status_line.splitn(3, |b| *b == b' ');
+    check_version(&ascii_line(
+        parts.next().context("missing version")?,
+        "status line",
+    )?)?;
+    let status: u16 = ascii_line(parts.next().context("missing status")?, "status line")?
         .parse()
         .context("parse status")?;
-    let reason = parts.next().unwrap_or("").to_string();
+    let reason = parts.next().map_or_else(String::new, |reason| {
+        std::str::from_utf8(reason).map_or_else(|_| render_opaque(reason), str::to_owned)
+    });
     let headers = read_headers(reader, &mut budget)?;
-    let coding = content_coding(&headers, true)?;
+    let coding = content_coding(&headers, Coded::Response { gzip_requested })?;
     let served = if (100..200).contains(&status) || status == 204 || status == 304 {
         Vec::new()
     } else {

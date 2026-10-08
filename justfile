@@ -6,8 +6,8 @@
 # cross targets), tailscale (serve-tailnet), node 22 or later (browser, gates).
 #
 # Recipes never read .env unless the recipe says so; credentials stay in the
-# launching shell (docs/GETTING-STARTED.md §3). Recipes marked "gateway"
-# expect COMMONMEASURE_INFERENCE_ENDPOINT in the environment, e.g.
+# launching shell (docs/OPERATING.md#credentials-when-you-want-provider-search).
+# Recipes marked "gateway" expect COMMONMEASURE_INFERENCE_ENDPOINT in the environment, e.g.
 # http://127.0.0.1:3000/openai/v1/chat/completions after `just gateway-up`.
 #
 # Recipes that depend on `fixtures` replay recorded provider responses or

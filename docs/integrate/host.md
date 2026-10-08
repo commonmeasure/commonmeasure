@@ -16,7 +16,7 @@ either or both. The formats are in
 terms such as crossing, host and edge are in [`docs/GLOSSARY.md`](../GLOSSARY.md).
 
 You need `commonmeasure` 0.4.0 or later on `PATH`
-([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md) §1). The release download and
+([`docs/INSTALL.md`](../INSTALL.md)). The release download and
 `commonmeasure --version` were checked on 0.4.4 on macOS (Apple silicon). The integration commands below were run on 0.4.0
 with loopback servers standing in for the web. Claude Code registration
 and `doctor claude` were rerun on 0.4.6 (29 September 2026), in a scratch
@@ -39,10 +39,15 @@ This writes the five hooks (`SessionStart`, `PostToolUse`,
 `UserPromptSubmit`, `Stop`, `SessionEnd`) into `~/.claude/settings.json` and the MCP
 server at user scope into `~/.claude.json`, each naming the binary by its
 resolved absolute path, because a hook runs outside your login shell's
-`PATH`. Only this product's entries are written; everything else in those
-files is kept. Replacing the binary at that path changes what the next
-session runs, with no reinstall. `commonmeasure uninstall claude` removes
-exactly those entries and leaves `~/.commonmeasure/` alone.
+`PATH`. In the same settings it pre-approves `context_fetch` and
+`context_search` (`mcp__commonmeasure__context_fetch` and
+`mcp__commonmeasure__context_search` in `permissions.allow`), so a session
+does not ask before each fetch or search; `context_enrol` and
+`context_status` still ask. Only this product's entries are written;
+everything else in those files is kept. Replacing the binary at that path
+changes what the next session runs, with no reinstall. `commonmeasure
+uninstall claude` removes exactly those entries, keeps a pre-approval you
+had written yourself, and leaves `~/.commonmeasure/` alone.
 
 The Claude Code plugin in `plugin/` is the other registration route, for
 marketplace and archive installs; it declares the same hooks and carries no
@@ -86,8 +91,8 @@ can be written, whether the policy file loads), the console (whether one
 answers and where its Policy page is), the relay, and then the host: which
 of the five hooks are registered and in which file, whether the MCP server
 is registered and its command, the binary each names and the version that
-binary reports when run, and whether a plugin is installed beside the
-registration. Each finding is marked `✓`, `!` (something to act on), `?`
+binary reports when run, which of the two pre-approvals the settings hold,
+and whether a plugin is installed beside the registration. Each finding is marked `✓`, `!` (something to act on), `?`
 (could not be determined) or `·` (a fact), and the report ends with what
 needs attention. A registration whose binary has gone is reported as not
 found and marked `!`, which is the one state in which every hook exits
@@ -170,8 +175,10 @@ The refused fetch is a tool error, and the page is never requested:
 {"content":[{"type":"text","text":"{\"error\":\"refused before the crossing: The job denies host localhost. (operator policy in <home>/policy.json)\"}"}],"isError":true}
 ```
 
-With no policy file, as in a real home that has none, the edge records
-everything and refuses nothing.
+With no policy file, as in a real home that has none, the mode is `observe`:
+the edge records the operator's own rules and enforces none of them. The
+source's terms still refuse in every mode
+([fail policy](../FAIL-POLICY.md) §6).
 
 ## 3. The mediated tools over Streamable HTTP
 

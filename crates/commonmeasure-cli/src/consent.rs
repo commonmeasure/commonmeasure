@@ -46,8 +46,9 @@ pub fn run(args: Consent) -> Result<(), String> {
             );
             match commonmeasure_harness::relay_config::RelayConfig::load(&home) {
                 Ok(Some(_)) => println!(
-                    "sources whose licence demands reporting are admitted in every scope and \
-                     reported through the receiver in relay.json"
+                    "sources whose licence demands reporting are admitted in every scope \
+                     where the receiver in relay.json is the hub this edge is enrolled with or \
+                     the licence's own endpoint, and reported through it"
                 ),
                 Ok(None) => println!(
                     "no receiver is configured in {}, so sources that demand reporting stay \

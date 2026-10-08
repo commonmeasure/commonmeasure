@@ -1725,6 +1725,7 @@ fn provider_title(name: &str) -> &str {
         "you" => "You.com",
         "nimble" => "Nimble",
         "ozone" => "Ozone Live",
+        "peopleinc" => "People Inc",
         "tinyfish" => "TinyFish",
         "redpine" => "Redpine",
         other => other,
@@ -1742,6 +1743,7 @@ fn provider_description(name: &str) -> &str {
         "tinyfish" => "Web search and fetch",
         "redpine" => "Licensed datasets and real-time signals",
         "ozone" => "Licensed publisher passages and full text",
+        "peopleinc" => "Article search and full markdown from People Inc",
         "tavily" | "linkup" | "search1api" | "serpdive" | "keenable" | "you" | "nimble" => {
             "Web search"
         }
@@ -2541,6 +2543,24 @@ mod tests {
                  "shadowed_in_file": false, "takes_key": false},
             ],
         })
+    }
+
+    #[test]
+    fn peopleinc_catalogue_row_names_the_provider_and_credential() {
+        let mut projection = sources_projection("local");
+        projection["providers"]
+            .as_array_mut()
+            .expect("providers")
+            .push(json!({
+                "name": "peopleinc", "variable": "PEOPLEINC_API_KEY", "origin": "unset",
+                "shadowed_in_file": false, "takes_key": true,
+            }));
+        let page = sources_page(&projection, None);
+        let entry = row(&page, "peopleinc");
+        assert!(entry.contains("People Inc"));
+        assert!(entry.contains("Article search and full markdown from People Inc"));
+        assert!(entry.contains("PEOPLEINC_API_KEY"));
+        assert!(entry.contains("Add key"));
     }
 
     /// The row the page renders for `provider`, from its opening tag to the next row.

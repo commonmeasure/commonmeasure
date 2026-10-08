@@ -153,6 +153,11 @@ pub struct Crossing {
     /// Absent on a body delivered as text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
+    /// True where the type as served held bytes that are not UTF-8, so
+    /// `content_type` is their rendering ([`commonmeasure_http::render_value`])
+    /// and not the text received.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub content_type_rendered: bool,
     /// How a mediated fetch handed a file over, on a crossing that did.
     /// `content_hash` is then the SHA-256 of exactly the bytes handed over,
     /// there is no `delivered` and no `estimated_tokens`, and `grounded` is
@@ -262,6 +267,36 @@ pub struct Crossing {
     /// allowance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance: Option<Value>,
+    /// The sentence the agent read, whole, where a mediated crossing returned
+    /// it an error: every `crossing_refused`, and a `crossing_mediated` that
+    /// delivered nothing (a failed fetch, an answer that was not a page, a
+    /// file this edge does not deliver). The text is this edge's own, built
+    /// from nothing the source chose (`commonmeasure_runtime::agent_text`),
+    /// so a reader can check from the record alone that no value the source
+    /// set (`url`, `declarations`, a licence URL, a header) reached the
+    /// agent. Absent on a delivered page or file, where the result itself is
+    /// what the agent read, and on every record written before the field
+    /// existed. A refused search result carries the reason the agent read
+    /// for that result, with its position in [`Crossing::told_position`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told: Option<String>,
+    /// Where a refused search result stood among the results the supplier
+    /// returned, as the agent read it beside `told`. Present only on a
+    /// refused search result: the agent is told the position and the
+    /// reason, and none of the supplier's text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_position: Option<ToldPosition>,
+}
+
+/// A search result's position as the agent reads it in a refusal: the
+/// `position` and `of` of the `refusals` entry, counted from 1
+/// ([`Crossing::told_position`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToldPosition {
+    /// The result's place in the supplier's answer, from 1.
+    pub position: usize,
+    /// How many results the supplier returned.
+    pub of: usize,
 }
 
 /// The slice of a fetched body one `context_fetch` result carried.

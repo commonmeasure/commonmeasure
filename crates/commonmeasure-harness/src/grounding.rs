@@ -56,7 +56,14 @@ impl ToolKind {
             // after a separator; the mediated server recorded that call
             // already. A third-party tool that happens to share one of the
             // three names is excluded with it, and the exclusion says so.
-            name if ends_with_own_tool(name) => ToolKind::SelfMediated,
+            // Under the `mcp__<server>__<tool>` spelling the server is
+            // named, so only our own prefixes below count: another server's
+            // `context_fetch`, a tool another Claude Code mod registers or a
+            // claude.ai connector carried a crossing this edge never saw,
+            // and is observed like any other MCP result.
+            name if !name.starts_with("mcp__") && ends_with_own_tool(name) => {
+                ToolKind::SelfMediated
+            }
             // Cursor names an MCP tool `MCP:<tool>` in its hook payloads,
             // without the server.
             name if name.starts_with("MCP:") => ToolKind::Mcp,
@@ -596,5 +603,29 @@ mod tests {
             ToolKind::SelfMediated
         );
         assert_eq!(ToolKind::classify("mcp__exa__search"), ToolKind::Mcp);
+    }
+
+    /// A `context_fetch` on a server that is not ours, under Claude Code's
+    /// `mcp__<server>__<tool>` spelling, is somebody else's MCP result and is
+    /// observed like one: another server, a tool another mod registers, a
+    /// claude.ai connector.
+    #[test]
+    fn another_servers_tool_with_our_name_is_not_ours() {
+        for name in [
+            "mcp__acme__context_fetch",
+            "mcp__plugin_othermod_othermod__context_fetch",
+            "mcp__claude_ai_Hosted_Measure__context_search",
+            "mcp__acme__context_status",
+        ] {
+            assert_eq!(ToolKind::classify(name), ToolKind::Mcp, "{name}");
+        }
+        for name in [
+            "mcp__commonmeasure__context_fetch",
+            "mcp__plugin_commonmeasure_commonmeasure__context_search",
+            "mcp__contextops__context_status",
+            "mcp__plugin_contextops_contextops__context_fetch",
+        ] {
+            assert_eq!(ToolKind::classify(name), ToolKind::SelfMediated, "{name}");
+        }
     }
 }

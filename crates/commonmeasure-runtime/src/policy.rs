@@ -9,21 +9,38 @@
 //! `Strict` refuses it, `Prefer` and `Observe` let it through with the breach
 //! recorded. No mode hides it.
 
+use crate::agent_text;
+use crate::agent_text::{AgentText, Given};
 use commonmeasure_types::{
     AccessAction, AcquisitionCharge, ContextEnvelope, ContextJob, Gap, GapReason, LicenceState,
     PolicyMode,
 };
 
 /// The outcome of one policy check.
+///
+/// A breach has two sentences. `reason` is the record's: it names the
+/// source's host, URL and declared values whole. `agent_reason` is the one
+/// the agent reads where the crossing is refused, and it is an
+/// [`AgentText`], which holds nothing a source chose (a supplier's result or
+/// a redirect chooses the host and the licence reference). Every
+/// construction supplies both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ruling {
     /// No constraint applies, or every applicable one is satisfied.
     Allowed,
     /// A constraint was breached and the mode refuses it.
-    Refused { reason: String, gap: Gap },
+    Refused {
+        reason: String,
+        agent_reason: AgentText,
+        gap: Gap,
+    },
     /// A constraint was breached and the mode carries on. The breach is
     /// recorded either way; the difference is whether the content is used.
-    AllowedWithBreach { reason: String, gap: Gap },
+    AllowedWithBreach {
+        reason: String,
+        agent_reason: AgentText,
+        gap: Gap,
+    },
 }
 
 impl Ruling {
@@ -38,6 +55,7 @@ impl Ruling {
         }
     }
 
+    /// The record's sentence, whole.
     pub fn reason(&self) -> Option<&str> {
         match self {
             Ruling::Allowed => None,
@@ -47,14 +65,36 @@ impl Ruling {
         }
     }
 
+    /// The sentence the agent reads where the crossing is refused.
+    pub fn agent_reason(&self) -> Option<&AgentText> {
+        match self {
+            Ruling::Allowed => None,
+            Ruling::Refused { agent_reason, .. }
+            | Ruling::AllowedWithBreach { agent_reason, .. } => Some(agent_reason),
+        }
+    }
+
     /// The single place mode discipline lives: `Strict` refuses a breach,
     /// `Prefer` and `Observe` carry it with the breach recorded. Processors
     /// route their verdicts through here rather than re-implementing the
     /// match.
-    pub(crate) fn breach(mode: PolicyMode, reason: String, gap: Gap) -> Self {
+    pub(crate) fn breach(
+        mode: PolicyMode,
+        reason: String,
+        agent_reason: AgentText,
+        gap: Gap,
+    ) -> Self {
         match mode {
-            PolicyMode::Strict => Ruling::Refused { reason, gap },
-            PolicyMode::Prefer | PolicyMode::Observe => Ruling::AllowedWithBreach { reason, gap },
+            PolicyMode::Strict => Ruling::Refused {
+                reason,
+                agent_reason,
+                gap,
+            },
+            PolicyMode::Prefer | PolicyMode::Observe => Ruling::AllowedWithBreach {
+                reason,
+                agent_reason,
+                gap,
+            },
         }
     }
 }
@@ -66,6 +106,7 @@ pub fn provider_eligibility(job: &ContextJob, provider: &str) -> Ruling {
         return Ruling::breach(
             job.policy_mode,
             format!("The job denies provider {provider}."),
+            agent_text!["The job denies provider ", Given::text(provider), "."],
             Gap::new(
                 GapReason::PolicyRefused,
                 format!("Provider {provider} is on the job's denied list, so no request was sent."),
@@ -77,6 +118,11 @@ pub fn provider_eligibility(job: &ContextJob, provider: &str) -> Ruling {
         return Ruling::breach(
             job.policy_mode,
             format!("The job's allowed-provider list does not include {provider}."),
+            agent_text![
+                "The job's allowed-provider list does not include ",
+                Given::text(provider),
+                "."
+            ],
             Gap::new(
                 GapReason::PolicyRefused,
                 format!(
@@ -124,6 +170,7 @@ pub fn source_admission_from(
     if envelope.text.is_none() {
         return Ruling::Refused {
             reason: "The provider returned no excerpt for this result.".to_owned(),
+            agent_reason: AgentText::fixed("The provider returned no excerpt for this result."),
             gap: Gap::new(
                 GapReason::EvidenceMissing,
                 format!(
@@ -140,6 +187,7 @@ pub fn source_admission_from(
         return Ruling::breach(
             job.policy_mode,
             format!("The job denies host {}.", envelope.host),
+            AgentText::fixed("The job denies this source's host."),
             Gap::new(
                 GapReason::PolicyRefused,
                 format!("{} is on the job's denied-host list.", envelope.source_url),
@@ -152,6 +200,9 @@ pub fn source_admission_from(
         // the file, and the pattern is stated as written so the reader can
         // find the rule without counting.
         let rule = format!("access rule {} ({pattern})", index + 1);
+        // The rule is the operator's: its position and pattern are as the
+        // policy file states them.
+        let rule_given = Given::text(&rule);
         match action {
             AccessAction::Allow | AccessAction::RequireMediation => {
                 host_allowed_by_rule = true;
@@ -160,6 +211,7 @@ pub fn source_admission_from(
                 return Ruling::breach(
                     job.policy_mode,
                     format!("{rule} refuses host {}.", envelope.host),
+                    agent_text![rule_given, " refuses this source's host."],
                     Gap::new(
                         GapReason::PolicyRefused,
                         format!("{} is refused by {rule}.", envelope.source_url),
@@ -178,6 +230,12 @@ pub fn source_admission_from(
                              declared {reference:?}.",
                             envelope.host
                         ),
+                        agent_text![
+                            rule_given,
+                            " requires licence ",
+                            Given::text(&format!("{licence:?}")),
+                            " for this source's host, and the supplier declared another."
+                        ],
                         Gap::new(
                             GapReason::PolicyRefused,
                             format!(
@@ -196,6 +254,12 @@ pub fn source_admission_from(
                              declared one.",
                             envelope.host
                         ),
+                        agent_text![
+                            rule_given,
+                            " requires licence ",
+                            Given::text(&format!("{licence:?}")),
+                            " for this source's host, and no supplier declared one."
+                        ],
                         Gap::new(
                             GapReason::EvidenceMissing,
                             format!(
@@ -245,9 +309,18 @@ pub fn source_admission_from(
                 ),
             )
         };
+        let agent_reason = if envelope.host.is_empty() {
+            AgentText::fixed(
+                "This source has no host, and the job's allowed-host list admits only the \
+                 hosts it names.",
+            )
+        } else {
+            AgentText::fixed("This source's host is outside the job's allowed-host list.")
+        };
         return Ruling::breach(
             job.policy_mode,
             reason,
+            agent_reason,
             Gap::new(GapReason::PolicyRefused, detail),
         );
     }
@@ -260,6 +333,7 @@ pub fn source_admission_from(
                 return Ruling::breach(
                     job.policy_mode,
                     "No supplier declared a licence this job accepts.".to_owned(),
+                    AgentText::fixed("No supplier declared a licence this job accepts."),
                     Gap::new(
                         GapReason::EvidenceMissing,
                         format!(
@@ -328,6 +402,11 @@ pub fn acquisition_cost(job: &ContextJob, charge: &AcquisitionCharge) -> Ruling 
             ),
         };
         return Ruling::AllowedWithBreach {
+            agent_reason: agent_text![
+                "The provider disclosed no charge in a currency comparable to the cap of ",
+                cap,
+                ", so the acquisition cost cap could not be enforced."
+            ],
             reason,
             gap: Gap::new(GapReason::EvidenceMissing, detail),
         };
@@ -342,6 +421,13 @@ pub fn acquisition_cost(job: &ContextJob, charge: &AcquisitionCharge) -> Ruling 
                 cap.as_decimal_string(),
                 cap.currency()
             ),
+            agent_text![
+                "The observed charge ",
+                observed,
+                " exceeds the cap of ",
+                cap,
+                "."
+            ],
             Gap::new(
                 GapReason::BudgetExhausted,
                 "The acquired content was refused admission because its charge exceeded the \
@@ -356,6 +442,13 @@ pub fn acquisition_cost(job: &ContextJob, charge: &AcquisitionCharge) -> Ruling 
                 observed.currency(),
                 cap.currency()
             ),
+            agent_reason: agent_text![
+                "The charge (",
+                observed,
+                ") and the cap (",
+                cap,
+                ") are in different currencies; this runtime holds no rate source."
+            ],
             gap: Gap::new(
                 GapReason::EvidenceMissing,
                 "The acquisition cost cap could not be enforced across currencies.".to_owned(),
@@ -403,6 +496,15 @@ pub fn purchase_decision(
                 cap.as_decimal_string(),
                 cap.currency()
             ),
+            // The supplier's own unit is its text, so the quote is named by
+            // what it is not.
+            agent_text![
+                "The job caps acquisition cost at ",
+                cap,
+                " and the quote is not a price in a currency the cap can be checked against; \
+                 buying at an unverifiable price is declined rather than discovered on the \
+                 receipt."
+            ],
             Gap::new(
                 GapReason::EvidenceMissing,
                 "The quoted price could not be verified against the job's acquisition cost \
@@ -420,6 +522,7 @@ pub fn purchase_decision(
                 cap.as_decimal_string(),
                 cap.currency()
             ),
+            agent_text!["The quoted price ", price, " exceeds the cap of ", cap, "."],
             Gap::new(
                 GapReason::BudgetExhausted,
                 "The quote exceeded the job's acquisition cap, so the purchase was declined \
@@ -435,6 +538,14 @@ pub fn purchase_decision(
                 price.currency(),
                 cap.currency()
             ),
+            agent_text![
+                "The quote (",
+                price,
+                ") and the cap (",
+                cap,
+                ") are in different currencies; this runtime holds no rate source, so the cap \
+                 cannot be checked before purchase."
+            ],
             Gap::new(
                 GapReason::EvidenceMissing,
                 "The quoted price and the acquisition cost cap are in different currencies.",
@@ -458,6 +569,13 @@ pub fn total_latency(job: &ContextJob, observed_ms: u64) -> Ruling {
     Ruling::breach(
         job.policy_mode,
         format!("The plan took {observed_ms} ms against a cap of {cap} ms."),
+        agent_text![
+            "The plan took ",
+            observed_ms,
+            " ms against a cap of ",
+            cap,
+            " ms."
+        ],
         Gap::new(
             GapReason::PolicyRefused,
             format!("The plan exceeded the job's {cap} ms latency limit."),
