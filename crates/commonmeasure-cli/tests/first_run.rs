@@ -1,9 +1,11 @@
 //! The one line the hub's Enrol this machine card prints, run as an operator
-//! runs it: `sh -s -- --connect HUB --token TOKEN` with the installer on
+//! runs it: `sh -s -- --connect HUB --token TOKEN`, or `--connect HUB`
+//! alone for the hub's device-code flow, with the installer on
 //! stdin, as `curl … | sh` feeds it, in a new session with no controlling
 //! terminal. Three loopback origins stand in for the world. The release
 //! answers as `installer.rs`'s does, with this build's binary. The hub
-//! answers the routes the first run calls (enrolment exchange and status,
+//! answers the routes the first run calls (enrolment exchange, the
+//! device-code request and poll, enrolment status,
 //! the policy signer, the desired policy as a 404 or an envelope signed with
 //! a real Ed25519 key, telemetry events) in the shapes `connect_e2e.rs`
 //! copies from the hub's handlers. The publisher serves a page whose RSL
@@ -12,12 +14,22 @@
 //!
 //! Every run clears the environment and gives the installer and the binary
 //! scratch `HOME`, `COMMONMEASURE_HOME`, `CLAUDE_CONFIG_DIR` and
-//! `CODEX_HOME`. The debug build's two first-run variables point the fetch
-//! at the fixture page and give its session a host word, which a release
-//! build has none of (`first_run::session_host`); everything else is the
+//! `CODEX_HOME`. The debug build's first-run page variable points the fetch
+//! at the fixture page, which a release build cannot do; the session's host
+//! word is the one a release build records (`first_run::session_host`), with
+//! no override set. Everything else is the
 //! production path: the installer, the binary it places, the registration
 //! `install <host>` writes, the enrolment `connect --managed` makes, the
 //! server `commonmeasure mcp` runs and the relay `commonmeasure relay` runs.
+//!
+//! The background relay is either a lock held as a running loop holds it
+//! ([`Machine::background_relay`]) or, where a test gives the machine
+//! LaunchAgents ([`Machine::with_launch_agents`]), the service the first run
+//! installs: a debug build then takes the LaunchAgent path on any platform,
+//! and a stand-in `launchctl` on `PATH` starts the program the written plist
+//! names, so the loop that holds the home is this build's own `relay
+//! --every`. That establishes the step order and the ruling with a real
+//! loop holding the home, not launchd's behaviour.
 
 #![cfg(unix)]
 
@@ -178,6 +190,11 @@ impl Signer {
     }
 }
 
+/// The device code the loopback hub issues. It reads as a marker: no line
+/// of output and no file a run leaves may hold it.
+const DEVICE_CODE: &str = "dc_DEVICEMARKER_7e2a41";
+const USER_CODE: &str = "BCDF-GHJK";
+
 /// What the loopback hub saw.
 #[derive(Default)]
 struct Hub {
@@ -186,6 +203,9 @@ struct Hub {
     /// Telemetry batches delivered, as posted.
     batches: Vec<Value>,
     key_id: String,
+    /// When set, the device-code answer states this lifetime in seconds and
+    /// every poll is answered pending, as for a code nobody approves.
+    unapproved_lifetime: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,31 +270,38 @@ fn hub_with_failure(
                         let detail = json!({"detail": format!("enrolment token {token} is unknown")});
                         return Response::json(401, &detail.to_string());
                     }
-                    let x = body["public_key"]["x"].as_str().unwrap();
-                    let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
-                    let key_id = URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()));
-                    state.key_id = key_id.clone();
-                    let mut answer = json!({
-                        "organization": {"id": ORGANISATION, "name": "Org A Media"},
-                        "name": "laptop-7",
-                        "key_id": key_id,
-                        "identity": {
-                            "origin": "https://hub.example",
-                            "bot_page": "https://hub.example/bot",
-                            "contact": "mailto:bot@hub.example",
-                        },
-                        "api_key_id": "22222222-2222-2222-2222-222222222222",
-                        "api_key": API_KEY,
-                        "telemetry_path": "/api/v1/telemetry",
-                    });
-                    if failure == Some(EchoFailure::Proof) {
-                        answer["directory_proof"] = json!({
-                            "authority": "hub.example",
-                            "lifetime_secs": 604_800,
-                            "expires_at": null,
-                        });
+                    enrolled(&mut state, &body, failure)
+                }
+                // The device-code route, approved by the time of the first
+                // poll unless the hub was told otherwise, at the interval the
+                // edge waits in these tests.
+                ("POST", "/connect/device") => Response::json(
+                    200,
+                    &json!({
+                        "device_code": DEVICE_CODE,
+                        "user_code": USER_CODE,
+                        "verification_uri": "https://hub.example/connect",
+                        "verification_uri_complete": format!("https://hub.example/connect?code={USER_CODE}"),
+                        "expires_in": state.unapproved_lifetime.unwrap_or(900),
+                        "interval": 1,
+                    })
+                    .to_string(),
+                ),
+                ("POST", "/api/v1/enrolment/device/token") => {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    if body["device_code"] != json!(DEVICE_CODE) {
+                        return Response::json(
+                            400,
+                            r#"{"error":"invalid_grant","error_description":"unknown device code"}"#,
+                        );
                     }
-                    Response::json(201, &answer.to_string())
+                    if state.unapproved_lifetime.is_some() {
+                        return Response::json(
+                            400,
+                            r#"{"error":"authorization_pending","error_description":"the code is not yet approved"}"#,
+                        );
+                    }
+                    enrolled(&mut state, &body, failure)
                 }
                 ("GET", "/api/v1/enrolment/status") if keyed => Response::json(
                     200,
@@ -321,6 +348,36 @@ fn hub_with_failure(
     (handle, state)
 }
 
+/// The hub's `201` to an exchange or an approved poll, for the key `body`
+/// presents.
+fn enrolled(state: &mut Hub, body: &Value, failure: Option<EchoFailure>) -> Response {
+    let x = body["public_key"]["x"].as_str().unwrap();
+    let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
+    let key_id = URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()));
+    state.key_id = key_id.clone();
+    let mut answer = json!({
+        "organization": {"id": ORGANISATION, "name": "Org A Media"},
+        "name": "laptop-7",
+        "key_id": key_id,
+        "identity": {
+            "origin": "https://hub.example",
+            "bot_page": "https://hub.example/bot",
+            "contact": "mailto:bot@hub.example",
+        },
+        "api_key_id": "22222222-2222-2222-2222-222222222222",
+        "api_key": API_KEY,
+        "telemetry_path": "/api/v1/telemetry",
+    });
+    if failure == Some(EchoFailure::Proof) {
+        answer["directory_proof"] = json!({
+            "authority": "hub.example",
+            "lifetime_secs": 604_800,
+            "expires_at": null,
+        });
+    }
+    Response::json(201, &answer.to_string())
+}
+
 /// The first-run page's publisher, and how often the page itself was
 /// requested (its `robots.txt` and licence are not counted).
 fn publisher() -> (ServerHandle, Arc<AtomicUsize>) {
@@ -354,15 +411,148 @@ fn scratch() -> &'static Path {
 /// exist only for the hosts a test says are present.
 struct Machine {
     root: tempfile::TempDir,
+    /// Set by [`Machine::with_launch_agents`].
+    launch_agents: bool,
 }
+
+/// A stand-in for launchd that knows no service, loads every plist, and on
+/// `kickstart` starts the program the loaded plist names, detached, as
+/// launchd starts a RunAtLoad agent. Its state is kept beside it: `plist`,
+/// `pid` and the loop's `relay.log`.
+const LAUNCHCTL: &str = r#"#!/bin/sh
+state=$(dirname "$0")
+case "$1" in
+  print)
+    echo "Could not find service "$2" in domain for user gui: 501" >&2
+    exit 113 ;;
+  bootstrap)
+    echo "$3" >"$state/plist"
+    exit 0 ;;
+  kickstart)
+    set -- $(sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/s/.*<string>\(.*\)<\/string>.*/\1/p' "$(cat "$state/plist")")
+    "$@" </dev/null >>"$state/relay.log" 2>&1 &
+    echo $! >"$state/pid"
+    exit 0 ;;
+esac
+echo "launchctl stand-in: $* is not answered" >&2
+exit 1
+"#;
+
+/// A stand-in for launchd whose `bootstrap` fails, as launchd's does for a
+/// plist it will not load.
+const LAUNCHCTL_REFUSING: &str = r#"#!/bin/sh
+case "$1" in
+  print)
+    echo "Could not find service "$2" in domain for user gui: 501" >&2
+    exit 113 ;;
+  bootstrap)
+    echo "Bootstrap failed: 5: Input/output error" >&2
+    exit 5 ;;
+esac
+echo "launchctl stand-in: $* is not answered" >&2
+exit 1
+"#;
 
 impl Machine {
     fn new() -> Self {
         let machine = Self {
             root: tempfile::tempdir_in(scratch()).expect("tempdir"),
+            launch_agents: false,
         };
         std::fs::create_dir_all(machine.project()).unwrap();
+        machine.install_opener();
         machine
+    }
+
+    /// Stand-ins for the desktop's openers, first on every run's `PATH`, so
+    /// no test opens a browser. Each records the URL it was given in
+    /// `opened` beside it and returns.
+    fn install_opener(&self) {
+        self.write_opener("#!/bin/sh\necho \"$1\" >>\"$(dirname \"$0\")/opened\"\n");
+    }
+
+    /// Openers that, having recorded the URL, stay in the foreground until
+    /// `release` appears beside them, as `xdg-open` may for as long as the
+    /// browser it started stays open. Each records `returned` as it exits,
+    /// and gives up after a minute so that no test leaves one behind.
+    fn with_held_opener(self) -> Self {
+        self.write_opener(
+            r#"#!/bin/sh
+dir="$(dirname "$0")"
+echo "$1" >>"$dir/opened"
+i=0
+while [ ! -e "$dir/release" ] && [ "$i" -lt 600 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+echo "$1" >>"$dir/returned"
+"#,
+        );
+        self
+    }
+
+    fn write_opener(&self, opener: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::create_dir_all(self.opener()).unwrap();
+        for name in ["open", "xdg-open"] {
+            let script = self.opener().join(name);
+            std::fs::write(&script, opener).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    fn opener(&self) -> PathBuf {
+        self.root.path().join("opener")
+    }
+
+    /// Whether a held opener was started and has not returned.
+    fn opener_held(&self) -> bool {
+        self.opener().join("opened").exists() && !self.opener().join("returned").exists()
+    }
+
+    /// Let a held opener return, and wait until it has.
+    fn release_opener(&self) {
+        std::fs::write(self.opener().join("release"), "").unwrap();
+        let started = Instant::now();
+        while !self.opener().join("returned").exists() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the held opener did not return"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The URLs the desktop's opener was given, in order.
+    fn opened(&self) -> Vec<String> {
+        std::fs::read_to_string(self.opener().join("opened"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The machine runs services as LaunchAgents, managed by `launchctl`, a
+    /// script on the front of its `PATH`.
+    fn with_launch_agents(mut self, launchctl: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::create_dir_all(self.launchd()).unwrap();
+        let script = self.launchd().join("launchctl");
+        std::fs::write(&script, launchctl).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        self.launch_agents = true;
+        self
+    }
+
+    fn launchd(&self) -> PathBuf {
+        self.root.path().join("launchd")
+    }
+
+    /// The relay service's plist, under the scratch label the environment
+    /// sets.
+    fn relay_plist(&self) -> PathBuf {
+        self.home()
+            .join("Library/LaunchAgents/ai.commonmeasure.test.first-run.relay.plist")
     }
 
     fn home(&self) -> PathBuf {
@@ -416,7 +606,7 @@ impl Machine {
     fn environment(&self, command: &mut Command) {
         command
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env("PATH", format!("{}:/usr/bin:/bin", self.opener().display()))
             .env("TMPDIR", scratch())
             .env("HOME", self.home())
             .env("COMMONMEASURE_HOME", self.edge())
@@ -426,6 +616,18 @@ impl Machine {
                 "COMMONMEASURE_SERVICE_LABEL",
                 "ai.commonmeasure.test.first-run",
             );
+        if self.launch_agents {
+            command
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}:/usr/bin:/bin",
+                        self.opener().display(),
+                        self.launchd().display()
+                    ),
+                )
+                .env("COMMONMEASURE_TEST_LAUNCH_AGENTS", "1");
+        }
     }
 
     /// The installed binary, run in this machine's environment.
@@ -439,6 +641,31 @@ impl Machine {
     /// Every file under the scratch machine, by path, with its bytes.
     fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
         files_under(self.root.path())
+    }
+}
+
+/// A relay loop the stand-in `launchctl` started outlives the run; it is
+/// stopped with the machine, as `bootout` stops it.
+impl Drop for Machine {
+    fn drop(&mut self) {
+        // A held opener a failing test left running returns too.
+        let _ = std::fs::write(self.opener().join("release"), "");
+        let Some(pid) = std::fs::read_to_string(self.launchd().join("pid"))
+            .ok()
+            .and_then(|pid| pid.trim().parse::<libc::pid_t>().ok())
+        else {
+            return;
+        };
+        // SAFETY: kill only sends a signal to the process the stand-in
+        // started; it touches no memory of ours.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // SAFETY: as above; signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // SAFETY: as above.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 }
 
@@ -587,8 +814,7 @@ impl World {
                 "COMMONMEASURE_TEST_HOSTS",
                 format!("{PUBLIC_NAME}=127.0.0.1"),
             )
-            .env("COMMONMEASURE_TEST_FIRST_RUN_PAGE", self.page())
-            .env("COMMONMEASURE_TEST_FIRST_RUN_HOST", "codex");
+            .env("COMMONMEASURE_TEST_FIRST_RUN_PAGE", self.page());
         // SAFETY: setsid is async-signal-safe and changes only the child's
         // session, between fork and exec.
         unsafe {
@@ -642,9 +868,48 @@ fn crossings(machine: &Machine) -> Vec<Value> {
         .collect()
 }
 
+/// The host word the first run's own session is recorded under
+/// (`docs/contracts/session-evidence.md` §Client identity).
+const INSTALLER_WORD: &str = "commonmeasure-first-run";
+
+/// Every record of the run's session, each crossing among them, names the
+/// installer's word as its host, and the session's client is the first run
+/// itself: no record names a registered host.
+fn assert_recorded_under_the_installers_word(machine: &Machine) {
+    let records = session_records(machine);
+    let hosts: Vec<&Value> = records
+        .iter()
+        // A resolved manifest's `host` is the source's network host.
+        .filter(|record| record["event"] != "manifest_resolved")
+        .filter_map(|record| record["payload"].get("host"))
+        .collect();
+    assert!(!hosts.is_empty(), "{records:?}");
+    assert!(
+        hosts.iter().all(|host| *host == INSTALLER_WORD),
+        "{hosts:?}"
+    );
+    let identified: Vec<&Value> = records
+        .iter()
+        .filter(|record| record["event"] == "client_identified")
+        .collect();
+    assert_eq!(identified.len(), 1, "{records:?}");
+    assert_eq!(
+        identified[0]["payload"]["client"]["name"], INSTALLER_WORD,
+        "{}",
+        identified[0]
+    );
+    for crossing in crossings(machine) {
+        assert_eq!(crossing["payload"]["host"], INSTALLER_WORD, "{crossing}");
+        assert_eq!(
+            crossing["payload"]["client"]["name"], INSTALLER_WORD,
+            "{crossing}"
+        );
+    }
+}
+
 /// The steps' lines, in the order the step table gives them.
-const STEPS: [&str; 7] = [
-    "hosts", "connect", "enrol", "fetch", "relay", "evidence", "console",
+const STEPS: [&str; 8] = [
+    "hosts", "connect", "enrol", "service", "fetch", "relay", "evidence", "console",
 ];
 
 fn assert_steps_in_order(run: &Run, steps: &[&str]) {
@@ -692,6 +957,10 @@ fn the_line_takes_a_consenting_machine_to_a_delivered_first_crossing() {
             project.display()
         )
     );
+    assert_eq!(
+        run.line("service"),
+        "service: a background relay holds this edge home"
+    );
 
     let crossings = crossings(&machine);
     assert_eq!(crossings.len(), 1, "{crossings:?}");
@@ -703,6 +972,7 @@ fn the_line_takes_a_consenting_machine_to_a_delivered_first_crossing() {
     assert_eq!(world.page_hits.load(Ordering::SeqCst), 1);
     let log = commonmeasure_harness::SessionLog::list(&machine.edge()).unwrap();
     assert_eq!(log.len(), 1, "the first run's own session: {log:?}");
+    assert_recorded_under_the_installers_word(&machine);
     assert_eq!(
         run.line("fetch"),
         format!(
@@ -715,6 +985,19 @@ fn the_line_takes_a_consenting_machine_to_a_delivered_first_crossing() {
 
     let batches = world.batches();
     assert_eq!(batches.len(), 1, "one delivery: {batches:?}");
+    // The hub receives the crossing under the installer's word, never as a
+    // registered host's session.
+    let host_tools: Vec<&Value> = batches[0]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["data"].get("contextops-host-tool"))
+        .collect();
+    assert!(!host_tools.is_empty(), "{batches:?}");
+    assert!(
+        host_tools.iter().all(|word| *word == INSTALLER_WORD),
+        "{host_tools:?}"
+    );
     let events = batches[0]["events"].as_array().unwrap().len();
     assert_eq!(
         run.line("relay"),
@@ -739,6 +1022,165 @@ fn the_line_takes_a_consenting_machine_to_a_delivered_first_crossing() {
     );
 }
 
+/// Without `--token` the line connects by the hub's device-code flow. The
+/// connect step prints the approval page and the code, hands the page with
+/// the code filled in to the desktop's opener, and enrols once the hub
+/// answers the poll with the enrolment; the rest of the run is the token
+/// route's. The device code is in no output and no file.
+#[test]
+fn without_a_token_the_line_connects_by_a_code_approved_in_the_hub() {
+    let world = World::new(true);
+    let machine = Machine::new().with_claude_and_codex();
+    let _relay = machine.background_relay();
+    let bin = machine.bin();
+    let hub = world.hub.url();
+    let run = world.install(
+        &machine,
+        &machine.project(),
+        &[
+            "--dir",
+            bin.to_str().unwrap(),
+            "--connect",
+            &hub,
+            "--agree-reporting",
+        ],
+    );
+    assert!(run.status.success(), "{}", run.both());
+    let connect: Vec<&str> = run
+        .stdout
+        .lines()
+        .filter(|line| line.starts_with("connect: "))
+        .collect();
+    assert_eq!(
+        connect,
+        [
+            format!(
+                "connect: approve this machine at https://hub.example/connect with the code \
+                 {USER_CODE}"
+            ),
+            format!(
+                "connect: enrolled with {hub} in Org A Media as laptop-7; managed, policy \
+                 revision 1 in force"
+            ),
+        ],
+        "{}",
+        run.both()
+    );
+    assert_eq!(
+        machine.opened(),
+        [format!("https://hub.example/connect?code={USER_CODE}")]
+    );
+    let routes = world.hub_seen.lock().unwrap().routes.clone();
+    assert_eq!(
+        routes[..2],
+        [
+            "POST /connect/device",
+            "POST /api/v1/enrolment/device/token"
+        ],
+        "{routes:?}"
+    );
+    assert!(!routes.contains(&"POST /api/v1/enrolment/exchange".to_owned()));
+    assert!(machine.edge().join("enrolment.json").exists());
+    assert_eq!(world.batches().len(), 1, "{}", run.both());
+    assert!(!run.stdout.contains(DEVICE_CODE) && !run.stderr.contains(DEVICE_CODE));
+    for (path, bytes) in machine.files() {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(DEVICE_CODE),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+/// An opener that stays in the foreground for as long as the browser it
+/// started, as `xdg-open` may, does not hold the first run's connect step:
+/// the hub is polled and the approval stored while the opener runs, and the
+/// run goes on to its end.
+#[test]
+fn an_opener_that_stays_open_does_not_hold_the_first_run_s_polls() {
+    let world = World::new(true);
+    let machine = Machine::new().with_claude_and_codex().with_held_opener();
+    let _relay = machine.background_relay();
+    let bin = machine.bin();
+    let hub = world.hub.url();
+    let run = world.install(
+        &machine,
+        &machine.project(),
+        &[
+            "--dir",
+            bin.to_str().unwrap(),
+            "--connect",
+            &hub,
+            "--agree-reporting",
+        ],
+    );
+    assert!(run.status.success(), "{}", run.both());
+    let connect: Vec<&str> = run
+        .stdout
+        .lines()
+        .filter(|line| line.starts_with("connect: "))
+        .collect();
+    assert_eq!(
+        connect,
+        [
+            format!(
+                "connect: approve this machine at https://hub.example/connect with the code \
+                 {USER_CODE}"
+            ),
+            format!(
+                "connect: enrolled with {hub} in Org A Media as laptop-7; managed, policy \
+                 revision 1 in force"
+            ),
+        ],
+        "{}",
+        run.both()
+    );
+    assert!(machine.opener_held(), "the run waited for the opener");
+    assert!(machine.edge().join("enrolment.json").exists());
+    assert_eq!(world.batches().len(), 1, "{}", run.both());
+    machine.release_opener();
+}
+
+/// With the opener still running, a code nobody approves expires on the
+/// hub's lifetime, counted from the hub's answer: the run stops at connect
+/// with the expiry and the retry, and nothing is enrolled.
+#[test]
+fn an_opener_that_stays_open_does_not_hold_the_first_run_s_expiry() {
+    let world = World::new(true);
+    world.hub_seen.lock().unwrap().unapproved_lifetime = Some(2);
+    let machine = Machine::new().with_claude_and_codex().with_held_opener();
+    let bin = machine.bin();
+    let hub = world.hub.url();
+    let started = Instant::now();
+    let run = world.install(
+        &machine,
+        &machine.project(),
+        &["--dir", bin.to_str().unwrap(), "--connect", &hub],
+    );
+    let elapsed = started.elapsed();
+    assert_eq!(run.status.code(), Some(3), "{}", run.both());
+    assert!(
+        run.stderr.contains(&format!(
+            "commonmeasure: connect: the code {USER_CODE} expired before it was approved. \
+             Nothing was written; run the line again for a new code. Nothing after it ran"
+        )),
+        "{}",
+        run.both()
+    );
+    assert!(machine.opener_held(), "the run waited for the opener");
+    assert!(!machine.edge().join("enrolment.json").exists());
+    let routes = world.hub_seen.lock().unwrap().routes.clone();
+    assert_eq!(
+        routes,
+        [
+            "POST /connect/device",
+            "POST /api/v1/enrolment/device/token"
+        ]
+    );
+    assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+    machine.release_opener();
+}
+
 /// Each argument error of `--connect` and `--token` exits 2 with the
 /// reason, before anything is downloaded: the release records no request,
 /// and nothing is placed or written.
@@ -747,7 +1189,6 @@ fn each_argument_error_exits_2_before_any_download() {
     let world = World::new(true);
     let hub = world.hub.url();
     let cases: Vec<(Vec<&str>, &str)> = vec![
-        (vec!["--connect", &hub], "connect to http://127.0.0.1"),
         (vec!["--token", TOKEN], "use --token without --connect"),
         (
             vec!["--connect", &hub, "--token", TOKEN, "--update"],
@@ -878,6 +1319,7 @@ fn without_consent_the_fetch_names_the_consent_command_and_the_rest_completes() 
     let crossings = crossings(&machine);
     assert_eq!(crossings.len(), 1);
     assert_eq!(crossings[0]["event"], "crossing_refused");
+    assert_recorded_under_the_installers_word(&machine);
     assert!(run.line("relay").starts_with("relay: "), "{}", run.both());
     assert!(
         run.stdout.contains(
@@ -955,27 +1397,34 @@ fn a_directory_enrolled_before_the_run_is_reported_awaiting_approval() {
     );
 }
 
-/// The page refuses: here because no background relay holds the home and
-/// the first run's session has no session end, so the licence's reporting
-/// demand cannot be met by itself, as `https://commonmeasure.ai/` refuses a
-/// Claude-Code-only machine. One line in the edge's words, the page never
-/// requested and nothing retried, the run goes on; exit 0.
+/// The page refuses: here because the platform has no LaunchAgent, so the
+/// first run installs no background relay, nothing else holds the home, and
+/// the first run's session, under the installer's word, has no session end,
+/// so the licence's reporting demand cannot be met, as
+/// `https://commonmeasure.ai/` refuses a fresh machine. The service line
+/// names the command to run under the platform's service manager. One line
+/// in the edge's words, the page never requested and nothing retried, the
+/// run goes on; exit 0. On macOS the first run installs the service; see
+/// [`the_relay_installed_first_carries_the_first_run_s_fetch`].
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_refused_page_is_one_line_with_no_retry_and_the_run_goes_on() {
     let world = World::new(true);
     let machine = Machine::new().with_claude_and_codex();
     let run = world.first_run(&machine, &machine.project(), TOKEN, &["--agree-reporting"]);
     assert!(run.status.success(), "{}", run.both());
-    assert_steps_in_order(
-        &run,
-        &[
-            "hosts", "connect", "enrol", "fetch", "relay", "relay", "evidence", "console",
-        ],
+    assert_steps_in_order(&run, &STEPS);
+    assert_eq!(
+        run.line("service"),
+        "service: no background relay holds this edge home; run one under your service \
+         manager: commonmeasure relay --every 300"
     );
     let fetch = run.line("fetch");
     assert!(
         fetch.starts_with(&format!("fetch: {} refused: ", world.page()))
-            && fetch.contains("no automatic delivery")
+            && fetch.contains(&format!(
+                "no automatic delivery; this host ({INSTALLER_WORD}) sends no session-end event"
+            ))
             && !fetch.contains("consent agree"),
         "{}",
         run.both()
@@ -984,17 +1433,126 @@ fn a_refused_page_is_one_line_with_no_retry_and_the_run_goes_on() {
     assert_eq!(crossings.len(), 1, "no retry: {crossings:?}");
     assert_eq!(crossings[0]["event"], "crossing_refused");
     assert_eq!(world.page_hits.load(Ordering::SeqCst), 0);
-    // Codex sends no session end and no background relay holds the home, so
-    // the relay step also prints the service-manager line on Linux.
-    if cfg!(target_os = "linux") {
-        assert!(
-            run.stdout.lines().any(|line| line
-                == "relay: codex send no session-end event; run the background relay under \
-                    your service manager: commonmeasure relay --every 300"),
-            "{}",
-            run.both()
-        );
-    }
+    assert_recorded_under_the_installers_word(&machine);
+}
+
+/// EDG-198. A consenting machine whose platform has LaunchAgents and no
+/// relay yet: the first run installs the background relay service before
+/// the fetch and waits until its loop holds the edge home, so the page's
+/// reporting demand is met. One admitted crossing, one page request, and
+/// the hub receives the crossing under the installer's word. The loop
+/// started at once may deliver part of it before the relay step does, so
+/// the delivery is read across every batch.
+#[test]
+fn the_relay_installed_first_carries_the_first_run_s_fetch() {
+    let world = World::new(true);
+    let machine = Machine::new()
+        .with_claude_and_codex()
+        .with_launch_agents(LAUNCHCTL);
+    let run = world.first_run(&machine, &machine.project(), TOKEN, &["--agree-reporting"]);
+    assert!(run.status.success(), "{}", run.both());
+    assert_steps_in_order(&run, &STEPS);
+    assert_eq!(
+        run.line("service"),
+        "service: background relay service installed; it relays this edge home every 300 s"
+    );
+    let plist = std::fs::read_to_string(machine.relay_plist()).unwrap();
+    assert!(
+        plist.contains(&format!(
+            "<string>{}</string>\n\t\t<string>relay</string>\n\t\t<string>--every</string>\n\t\t<string>300</string>",
+            machine.bin().join("commonmeasure").display()
+        )),
+        "{plist}"
+    );
+    // The loop the plist names still holds the home: the ruling read it.
+    assert!(
+        commonmeasure_harness::delivery::relay_loop_running(&machine.edge()),
+        "{}",
+        std::fs::read_to_string(machine.launchd().join("relay.log")).unwrap_or_default()
+    );
+
+    let crossings = crossings(&machine);
+    assert_eq!(crossings.len(), 1, "{crossings:?}");
+    let crossing = &crossings[0];
+    assert_eq!(crossing["event"], "crossing_mediated", "{crossing}");
+    let reporting = &crossing["payload"]["declarations"]["reporting"];
+    assert_eq!(reporting["met"], true, "{reporting}");
+    assert_eq!(reporting["route"], "hub", "{reporting}");
+    assert_eq!(world.page_hits.load(Ordering::SeqCst), 1);
+    assert_recorded_under_the_installers_word(&machine);
+    assert!(
+        run.line("fetch").starts_with(&format!(
+            "fetch: {} delivered, mediated; licence ",
+            world.page()
+        )),
+        "{}",
+        run.both()
+    );
+
+    let batches = world.batches();
+    let events: Vec<&Value> = batches
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap())
+        .collect();
+    let host_tools: Vec<&Value> = events
+        .iter()
+        .filter_map(|event| event["data"].get("contextops-host-tool"))
+        .collect();
+    assert!(!host_tools.is_empty(), "{batches:?}");
+    assert!(
+        host_tools.iter().all(|word| *word == INSTALLER_WORD),
+        "{host_tools:?}"
+    );
+    let source = world.page();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.to_string().contains(&source)),
+        "the crossing's page is among the events delivered: {batches:?}"
+    );
+    assert!(
+        run.line("relay").starts_with("relay: delivered "),
+        "{}",
+        run.both()
+    );
+}
+
+/// EDG-198. Where the relay service cannot be installed, here because
+/// launchd refuses to load it, the service line names the failure and the
+/// command that retries it, and the fetch is refused as on a machine with
+/// no relay: one refused crossing, no page request, no retry, and the run
+/// goes on; exit 0.
+#[test]
+fn a_relay_service_that_cannot_be_installed_leaves_the_fetch_refused() {
+    let world = World::new(true);
+    let machine = Machine::new()
+        .with_claude_and_codex()
+        .with_launch_agents(LAUNCHCTL_REFUSING);
+    let run = world.first_run(&machine, &machine.project(), TOKEN, &["--agree-reporting"]);
+    assert!(run.status.success(), "{}", run.both());
+    assert_steps_in_order(&run, &STEPS);
+    let service = run.line("service");
+    assert!(
+        service.starts_with("service: installing the background relay service failed: ")
+            && service.contains("Bootstrap failed: 5: Input/output error")
+            && service.ends_with("Retry with `commonmeasure service install relay`"),
+        "{}",
+        run.both()
+    );
+    let fetch = run.line("fetch");
+    assert!(
+        fetch.starts_with(&format!("fetch: {} refused: ", world.page()))
+            && fetch.contains(&format!(
+                "no automatic delivery; this host ({INSTALLER_WORD}) sends no session-end event"
+            )),
+        "{}",
+        run.both()
+    );
+    let crossings = crossings(&machine);
+    assert_eq!(crossings.len(), 1, "no retry: {crossings:?}");
+    assert_eq!(crossings[0]["event"], "crossing_refused");
+    assert_eq!(world.page_hits.load(Ordering::SeqCst), 0);
+    assert_recorded_under_the_installers_word(&machine);
 }
 
 /// Run from the home directory, as a line pasted into a fresh terminal is:
@@ -1171,7 +1729,7 @@ fn echoing_hub_failures_leave_no_token_in_output_or_files() {
 }
 
 #[test]
-fn first_run_help_discloses_the_release_limits() {
+fn first_run_help_names_the_relay_the_fetch_and_its_host_word() {
     let machine = Machine::new();
     let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
     machine.environment(&mut command);
@@ -1180,8 +1738,13 @@ fn first_run_help_discloses_the_release_limits() {
     assert!(run.status.success(), "{}", run.both());
     assert!(run.stdout.contains("--include-history"), "{}", run.both());
     assert!(run.stdout.contains("unenrolled"), "{}", run.both());
-    assert!(run.stdout.contains("not made"), "{}", run.both());
-    assert!(run.stdout.contains("no host word"), "{}", run.both());
+    assert!(run.stdout.contains(INSTALLER_WORD), "{}", run.both());
+    assert!(!run.stdout.contains("not made"), "{}", run.both());
+    assert!(
+        run.stdout.contains("install the background relay"),
+        "{}",
+        run.both()
+    );
 }
 
 #[test]
@@ -1307,42 +1870,25 @@ fn an_unusable_credentials_file_stops_the_run_at_the_fetch_and_names_it() {
     assert!(world.batches().is_empty());
 }
 
-/// With no host word for the first run's session, which is how a release
-/// build runs, the fetch is reported as not made and names the gap; nothing
-/// is fetched or recorded, and the run completes.
+/// The installer's word is not a registered host's: the mediated server a
+/// registration starts refuses it under `--host`, before it records
+/// anything, so no host's session can be recorded as installer traffic.
 #[test]
-fn without_a_host_word_the_fetch_is_reported_as_not_made_and_the_run_completes() {
-    let world = World::new(true);
-    let machine = Machine::new().with_claude_and_codex();
-    let _relay = machine.background_relay();
-    let hub = world.hub.url();
-    let bin = machine.bin();
-    let mut command = world.installer(&machine, &machine.project());
+fn the_installers_word_is_refused_as_a_registered_host() {
+    let machine = Machine::new();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    machine.environment(&mut command);
     command
-        .env_remove("COMMONMEASURE_TEST_FIRST_RUN_HOST")
-        .arg(repo_root().join("install.sh"))
-        .args([
-            "--dir",
-            bin.to_str().unwrap(),
-            "--connect",
-            &hub,
-            "--token",
-            TOKEN,
-        ])
-        .arg("--agree-reporting")
+        .args(["mcp", "--host", INSTALLER_WORD])
+        .current_dir(machine.project())
         .stdin(Stdio::null());
     let run = Run::of(&mut command, None);
-    assert!(run.status.success(), "{}", run.both());
-    assert_steps_in_order(&run, &STEPS);
-    assert_eq!(
-        run.line("fetch"),
-        format!(
-            "fetch: not made: the session record has no host word for a fetch the installer \
-             makes, and each word it has names a host this is not, so {} was not fetched",
-            world.page()
-        )
+    assert_eq!(run.status.code(), Some(2), "{}", run.both());
+    assert!(
+        run.stderr
+            .contains(&format!("invalid value '{INSTALLER_WORD}'")),
+        "{}",
+        run.both()
     );
-    assert!(session_records(&machine).is_empty());
-    assert_eq!(world.page_hits.load(Ordering::SeqCst), 0);
-    assert!(world.batches().is_empty());
+    assert!(!machine.edge().join("sessions").exists(), "{}", run.both());
 }

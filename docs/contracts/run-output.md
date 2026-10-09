@@ -31,6 +31,30 @@ cargo run -p commonmeasure-cli -- inspect /tmp/commonmeasure-empty
 Every plan of that run is `unavailable`, each with a gap naming what is
 missing ([`docs/GETTING-STARTED.md`](../GETTING-STARTED.md)).
 
+Except in replay, `commonmeasure run` resolves the home’s source policy for
+its current working directory and authenticated operating-system principal.
+A local home uses `policy.json`; absence means observe, as for mediated tools.
+A malformed policy or an unresolved home/directory stops the command. A live
+run refreshes managed policy before resolving it, with the same three-second
+budget as session start. An unavailable, rejected or expired refresh never
+relaxes the policy in force ([policy envelope](policy-envelope.md#cadence-and-staleness)).
+An offline run reads that policy without contacting management.
+
+Home and suite constraints are checked independently: a suite’s provider or
+host allow-list, provider-source exemption or access rule cannot override the
+home’s restrictions. The stricter mode governs both declarations (`strict`,
+then `prefer`, then `observe`), including allowance and injection checks; the
+smaller declared context budget applies. Provider eligibility is checked before
+supplier dispatch, and a named fetch target is checked against host rules
+before retrieval. Licence and excerpt checks apply to the returned evidence
+before inference. Acquisition cost and latency constraints apply at their
+existing measurement points; quoted purchases are checked before settlement.
+
+Replay resolves no operator policy, synchronises no management and consults no
+allowance ledger: admission uses the sealed suite alone. Runtime callers that
+supply no standing-policy input also use suite-only admission; this is not the
+CLI’s ordinary standalone mode.
+
 `inspect` prints the run dossier: one document computed from the artefacts on
 every invocation, never stored, in which every claim ends with a citation
 (`s:`/`e:`/`r:`/`m:` plus a JSON pointer or seq) resolving to the record it
@@ -172,6 +196,11 @@ the suite declares the judge; `output_provenance` is the operator's
 training-and-data-mining declaration for the run's own outputs
 ([`docs/contracts/processor.md`](processor.md) §`output-provenance`).
 
+Manifest keys present only with a standing-policy input: `source_policy`.
+It is present when the caller holds a resolved standing policy and is sealed
+with the manifest, so a different home resolution is a different experiment. Suite-only and replay manifests
+retain their existing shape.
+
 What the rest hold: `manifest_version` is this manifest's own shape;
 `suite_version` and `label` identify the experiment, `label` being the name a
 reader sees, so editing it publishes a different experiment under a different
@@ -213,6 +242,29 @@ what `cache_control` records.
 
 Summary keys: `evidence_log`, `job`, `model_plan`, `plans`, `run`,
 `schema_version`, `selection`, `suite_version`.
+
+Summary keys present only with a standing-policy input: `source_policy`.
+It is identical to the manifest’s `source_policy` and the `run_started`
+evidence payload’s record. It carries:
+
+- `identity` and `canonical`: the effective policy identity and its
+  recomputable pre-image ([fleet status](fleet-status.md#policy-identity));
+- `document_revision`: the loader’s token over the policy file bytes, or its
+  explicit absent token where no policy file exists;
+- `management`: deployment `mode`, `desired` state, `applied_revision`,
+  `applied_digest`, `applied_edited`, `applied_expires_at`, `stale_since` and
+  the current invocation’s `sync` result, without its endpoint URL (`null`
+  when no refresh was made).
+
+An applied revision is the last accepted managed envelope, not proof that the
+file still matches it: `applied_edited` records drift and `identity` names the
+policy actually resolved. Unavailable revision evidence stays `null`.
+Standing-policy runs’ home/suite eligibility, admission and cap decisions
+carry `policy_basis`, either
+`source_policy` or `suite`; their identifiers and source references remain in
+the plan and its `plan_completed` evidence record. A source refused admission
+may leave its plan `unavailable` because no context remained; the refusal is
+still a `refuse` decision naming that source, never an admitted result.
 
 `run` carries `id`, `mode` (`live`, `no-external-acquisition` or `replay`),
 `started_at`, `manifest_hash`, `fairness`, `token_basis` and

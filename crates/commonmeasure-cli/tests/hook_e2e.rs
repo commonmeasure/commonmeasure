@@ -716,7 +716,7 @@ fn a_session_start_emits_the_mediation_nudge_and_records_the_issuance() {
     assert_eq!(recorded[0]["event"], "nudge_issued");
     assert_eq!(recorded[1]["event"], "host_process");
     let payload = &recorded[0]["payload"];
-    assert_eq!(payload["nudge"], "mediation-nudge/5");
+    assert_eq!(payload["nudge"], "mediation-nudge/6");
     assert_eq!(payload["source"], "startup");
     assert_eq!(payload["host"], "claude-code");
     assert!(

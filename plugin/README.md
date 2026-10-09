@@ -238,6 +238,12 @@ served over stdio. These run *before* the crossing, so policy can refuse.
   named in `record_internal_prefixes` (`docs/contracts/source-policy.md`
   §Recording) — without that consent
   the agent still gets its result and the record is withheld.
+- Each `context_fetch` and `context_search` answer opens with one
+  provenance line per recorded crossing, built from the record: host, terms
+  read, ruling and policy mode (or the supplier), price or `unknown`, grade,
+  whether a usage report is owed, and the hash prefix
+  (`docs/contracts/host-integration.md` §The provenance line). The router
+  passes the lines on to the model ahead of a routed answer.
 - `context_status` reports the session, where its evidence is written, the
   policy in force and which providers are configured.
 - `context_enrol` shows or sets the enrolment of the directory the server
@@ -337,7 +343,8 @@ resumes, and the rebuilds after `/clear` and compaction. It asks the agent to
 prefer `context_fetch` and `context_search` over `WebFetch` and `WebSearch`,
 to treat an unavailable mediated tool and a policy refusal as different
 answers, and to respect a refusal rather than retrying it with a built-in
-tool. The wording is versioned (`mediation-nudge/5`,
+tool, and to cite the provenance line each mediated result opens with, not
+the page, when it reports sources. The wording is versioned (`mediation-nudge/6`,
 `crates/commonmeasure-harness/src/nudge.rs`), and each emission is recorded in the
 session log as `nudge_issued` (`docs/contracts/session-evidence.md`), so a
 later review can distinguish sessions that were asked from sessions that were

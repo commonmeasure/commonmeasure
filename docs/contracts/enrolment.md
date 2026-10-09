@@ -17,9 +17,16 @@ This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
   verifies the key proof and the directory proof by an independent rule
   (`crates/commonmeasure-cli/tests/connect_e2e.rs`), and in the hub's own
   suite against a real database. An ignored test in the same file drives the
-  binary against a running hub; no recorded run of it is kept here.
+  binary against a running hub; no recorded run of it is kept here. The
+  device-code route is `fixture-tested` on the edge against the same
+  loopback hub, whose answers copy the hub's device-code handlers; no run
+  against a running hub is recorded yet.
 
-Enrolment joins one edge home to one organisation on one hub. The edge proves
+Enrolment joins one edge home to one organisation on one hub, by either of
+two routes to the same enrolment: a code the person approves in the hub,
+signed in ([the device-code route](#the-device-code-route)), or a token an
+owner minted there ([the exchange](#the-exchange)), which is how an owner
+enrols another person's machine. The edge proves
 it holds a new Ed25519 key, the hub lists that key as `CommonMeasureBot`
 ([bot identity](bot-identity.md)) and issues an ingest key for telemetry
 ([telemetry projection](telemetry-projection.md)). Directory reporting consent
@@ -113,6 +120,86 @@ in `edge.hub`, or `null` where the stored URL has none.
 `disconnect` does not ask the hub, says so and why, removes the local
 enrolment, and names the edge key and the ingest key to revoke on the hub's
 API keys page; then re-run `connect` with an https hub, by its address alone.
+
+## The device-code route
+
+```sh
+commonmeasure connect https://hub.example --managed
+commonmeasure connect https://hub.example --managed --name laptop-7
+```
+
+Without `--token`, `connect` follows RFC 8628's device authorisation grant.
+It applies the hub URL rule and the refusal over a standing enrolment
+first, as the exchange does, and then asks for a code under the edge's
+name: `--name`, or else the machine's host name up to its first dot. With
+neither, it refuses and sends nothing. The name is 1 to 100 characters.
+
+```
+POST <hub>/connect/device
+{"name": "laptop-7"}
+```
+
+This is a route of the hub's web layer, not its API, because the hub limits
+it per client address. The hub answers `200` with `device_code`,
+`user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`
+and `interval` (RFC 8628 §3.2), or refuses with `{"message"}`: `400` for a
+bad name, `429` with `Retry-After` at the limit. The edge refuses a user
+code that is not letters, digits and hyphens (16 at most) and an approval
+page that is not `https`, or `http` to a loopback origin, or that carries
+credentials. It then generates its Ed25519 key, prints one line, and hands
+`verification_uri_complete` (or `verification_uri`) to the desktop's opener:
+`open` on macOS, `xdg-open` on other Unix systems. A missing or failing
+opener is not reported. The edge does not wait for the opener, which may
+run for as long as the browser it started stays open: polling and the
+code's lifetime go on while it runs.
+
+```
+approve this machine at https://hub.example/connect with the code BCDF-GHJK
+```
+
+That line is the only output before the approval. The device code is a
+credential, since a holder of an approved code can claim its enrolment: it
+is never printed, and the hub's answers are held to it as `install.sh
+--connect` holds them to a token, so a refusal that quotes it is stored
+and shown with `<token>` in its place.
+
+The edge polls after each interval, `interval` seconds as the hub stated it,
+or 5 where it stated none:
+
+```
+POST <hub>/api/v1/enrolment/device/token
+{"device_code": "dc_…",
+ "public_key": {"kty": "OKP", "crv": "Ed25519", "x": "<base64url>"},
+ "proof": "<base64url>"}
+```
+
+The body is the exchange's with the device code in the token's place, the
+proof being the key's signature over the device code's bytes, trimmed. The
+key and the proof are the same on every poll. A `201` holds exactly the
+exchange's answer, and the edge continues as after an exchange from
+[what the edge writes](#what-the-edge-writes) on. A refusal is `400` with
+`{"error", "error_description"}`:
+
+| `error` | The edge |
+|---|---|
+| `authorization_pending` | polls again after the interval |
+| `slow_down` | adds 5 seconds to the interval, for this and every later poll |
+| `access_denied` | ends: the code was refused in the hub |
+| `expired_token` | ends: the code expired before it was approved |
+| any other, or any other status | ends, naming the hub's error and its description, or the status and detail |
+
+The edge also ends when the next poll would fall after `expires_in`,
+counted from the hub's answer. Each
+ending, and a hub that cannot be reached for the code or during the polls,
+exits non-zero with the reason, says nothing was written and names the
+command that starts again with a new code; `install.sh --connect` without
+a token names its line instead. Nothing is written under the home, which is
+not even created, before the `201`; an interrupt while the code waits leaves
+it as it was.
+
+After the `201` the output names the organisation the edge joined, as
+after an exchange. A person whose code someone else approved sees which
+organisation that was (RFC 8628 §5.4).
 
 ## What the edge writes
 
@@ -412,6 +499,7 @@ file cannot be removed.
 | Step | What the edge does |
 |---|---|
 | the exchange | fails naming the hub; nothing is written but the home directory |
+| the device-code request or a poll | fails naming the hub and the command that starts again; nothing is written, not even the home directory |
 | directory proof, first relay run, after a `201` | the enrolment stands; the failure is recorded or printed |
 | policy sync | the last accepted policy keeps governing, and the outcome is `unreachable` ([policy envelope](policy-envelope.md)) |
 | `connect --managed`, first sync | the enrolment stands; exit non-zero |
@@ -439,6 +527,12 @@ on an enrolled edge the hub. Origins are compared by scheme, host and port.
 states the same for the relay.
 
 ## Known gaps
+
+- On the device-code route, the hub registers the key in the transaction
+  that answers the approved poll. An edge stopped after that answer and
+  before `edge-key.json` is written leaves the hub holding a key the edge
+  does not; an owner revokes it on the hub's API keys page. The exchange
+  has the same window.
 
 - `disconnect` compares the deployment's `policy_url` with the enrolled hub
   URL by string prefix, not by origin. A hub enrolled under an internal

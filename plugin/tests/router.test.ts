@@ -496,3 +496,64 @@ test('other tools are not touched', async ($, on) => {
   expect(reached).toEqual(['native'])
   expect(out).toEqual({ result: 'native tool ran' })
 })
+
+const LINE = 'Common Measure · host example.org · terms unknown · ruling delivered (observe) · cost unknown · grade mediated · receipt none · sha256:aaaaaaaa…'
+
+function withLines(answer, lines) {
+  answer.value.content.unshift({ type: 'text', text: lines.join('\n') })
+  return answer
+}
+
+test('a routed WebFetch passes the edge\'s provenance line to the model first', async ($, on) => {
+  const reached: string[] = []
+  connected(on, reached)
+  const refusedLine = LINE.replace('delivered', 'refused')
+  let refuse = false
+  on('mcp.call', () =>
+    refuse
+      ? withLines(edgeErrors('refused before the crossing: denied host.'), [refusedLine])
+      : withLines(edgeAnswers(fetched()), [LINE]),
+  )
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'Twelve.', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+
+  const out = await $.tool.call({ tool: 'WebFetch', url: 'https://example.org/page', prompt: 'p', tool_use_id: 'line-1' })
+  expect(reached).toEqual([])
+  expect(out.context[0]).toBe(LINE)
+  expect(out.context[1]).toContain("Fetched through Common Measure's context_fetch")
+
+  refuse = true
+  const refused = await $.tool.call({ tool: 'WebFetch', url: 'https://example.org/page', prompt: 'p', tool_use_id: 'line-2' })
+  expect(refused.deny.split('\n')[0]).toBe(refusedLine)
+  expect(refused.deny).toContain('refused before the crossing: denied host.')
+})
+
+test('a routed WebSearch keeps the lines of the results it shows', async ($, on) => {
+  const reached: string[] = []
+  connected(on, reached)
+  const shown = 'Common Measure · host a.example · terms unknown · supplier tavily · cost unknown · grade mediated · receipt unknown · sha256 unknown'
+  const blocked = shown.replace('a.example', 'blocked.example')
+  on('mcp.call', ($, e) => {
+    if (e.tool === 'context_status') return edgeAnswers({ providers: [{ provider: 'tavily', configured: true, source: 'environment' }] })
+    return withLines(
+      edgeAnswers({
+        provider: 'tavily',
+        results: [
+          { url: 'https://a.example/one', title: 'One', text: 'x', content_hash: 'sha256:1', licence: null, declared_date: null },
+          { url: 'https://blocked.example/two', title: 'Two', text: 'y', content_hash: 'sha256:2', licence: null, declared_date: null },
+        ],
+        received: 2,
+        refused: 0,
+        refusals: [],
+        recorded_in: '/home/op/.commonmeasure/sessions/local-1.ndjson',
+      }),
+      [shown, blocked],
+    )
+  })
+
+  const out = await $.tool.call({ tool: 'WebSearch', query: 'q', blocked_domains: ['blocked.example'], tool_use_id: 'line-3' })
+
+  expect(reached).toEqual([])
+  const commentary = out.result.results[1]
+  expect(commentary.startsWith(shown)).toBe(true)
+  expect(commentary).not.toContain('blocked.example')
+})

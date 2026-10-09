@@ -336,8 +336,7 @@ fn text(response: &Response) -> String {
 /// The tool result's payload, which the server delivers as JSON text.
 fn payload(response: &Response) -> Value {
     let body = body(response);
-    let text = body["result"]["content"][0]["text"]
-        .as_str()
+    let text = commonmeasure_harness::provenance::payload_text(&body["result"])
         .unwrap_or_else(|| panic!("a tool result: {body}"));
     serde_json::from_str(text).expect("the payload is JSON")
 }
@@ -1669,7 +1668,10 @@ fn one_pace_per_host_is_shared_between_tenants_and_the_refusal_names_no_time() {
     );
     let detail = text(&refused);
     assert!(detail.contains("Crawl-delay of 60s"), "{detail}");
-    assert!(!detail.contains("127.0.0.1"), "{detail}");
+    // The provenance line names the host the agent asked for; the refusal
+    // itself names none.
+    let told = payload(&refused);
+    assert!(!told.to_string().contains("127.0.0.1"), "{told}");
     assert!(
         !detail.contains("may be sent"),
         "the refusal names another tenant's fetch time: {detail}"
@@ -2529,7 +2531,7 @@ fn fetch_pdf_hosted_with(
 /// The resource block's blob, decoded.
 fn blob_of(response: &Response) -> Vec<u8> {
     let body = body(response);
-    let resource = &body["result"]["content"][1];
+    let resource = &body["result"]["content"][2];
     assert_eq!(resource["type"], "resource", "{body}");
     base64::engine::general_purpose::STANDARD
         .decode(resource["resource"]["blob"].as_str().expect("a blob"))
@@ -2551,7 +2553,7 @@ fn a_hosted_pdf_is_an_embedded_resource_whose_blob_is_the_fixture_bytes() {
     assert_eq!(answer["result"]["isError"], false, "{answer}");
     assert_names_no_home(home.path(), &fetched);
 
-    let resource = &answer["result"]["content"][1]["resource"];
+    let resource = &answer["result"]["content"][2]["resource"];
     assert_eq!(resource["uri"], url.as_str());
     assert_eq!(resource["mimeType"], "application/pdf");
     assert_eq!(blob_of(&fetched), bytes);
@@ -2620,7 +2622,11 @@ fn a_hosted_edge_refuses_a_pdf_under_strict_with_no_resource_and_nothing_saved()
         assert_eq!(crossing["payload"]["content_type"], "application/pdf");
         if refused {
             assert_eq!(answer["result"]["isError"], true, "{policy}: {answer}");
-            assert_eq!(content.len(), 1, "{policy}: {answer}");
+            assert_eq!(
+                content.len(),
+                2,
+                "the line and the refusal: {policy}: {answer}"
+            );
             assert!(
                 content.iter().all(|block| block["type"] != "resource"),
                 "{policy}: {answer}"
@@ -2766,7 +2772,7 @@ fn a_blob_whose_base64_contains_the_home_is_served_unchanged_and_still_hashes() 
         "{}",
         text(&fetched)
     );
-    let served = body(&fetched)["result"]["content"][1]["resource"]["blob"]
+    let served = body(&fetched)["result"]["content"][2]["resource"]["blob"]
         .as_str()
         .expect("a blob")
         .to_owned();

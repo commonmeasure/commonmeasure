@@ -365,13 +365,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Enrol this edge with a Common Measure Hub in one command. Exchanges
-    /// the owner's short-lived token for an org-scoped ingest key, mints
-    /// the edge's signing key (the private half never leaves
-    /// ~/.commonmeasure/), registers the public half under the organisation,
-    /// writes the relay configuration, and makes a first relay run through
-    /// the real delivery path. There is no default hub: with nothing named
-    /// this refuses. Enrolment does not change policy mode.
+    /// Enrol this edge with a Common Measure Hub in one command. Without
+    /// --token it prints a code and the hub page to approve it on, opens the
+    /// page where the desktop has an opener, and waits until the code is
+    /// approved, refused or expired in the hub; nothing is written before
+    /// the approval. With --token it exchanges an owner's short-lived token
+    /// instead, the route for an owner enrolling another person's machine.
+    /// Either way it obtains an org-scoped ingest key, mints the edge's
+    /// signing key (the private half never leaves ~/.commonmeasure/),
+    /// registers the public half under the organisation, writes the relay
+    /// configuration, and makes a first relay run through the real delivery
+    /// path. There is no default hub: with none named this refuses.
+    /// Enrolment does not change policy mode.
     Connect {
         /// The hub's base URL, e.g. `https://hub.example`.
         hub: Option<String>,
@@ -379,6 +384,11 @@ enum Command {
         /// short-lived.
         #[arg(long)]
         token: Option<String>,
+        /// The name the hub shows for this edge on its approval page and its
+        /// API keys page. Defaults to this machine's host name. A token
+        /// carries the name its owner gave it, so this needs no token.
+        #[arg(long, conflicts_with = "token")]
+        name: Option<String>,
         /// Also take the organisation's policy from this hub: read the hub's
         /// policy signer under the new ingest key, pin it in
         /// ~/.commonmeasure/deployment.json as `managed`, and make a first
@@ -390,19 +400,23 @@ enum Command {
         #[arg(long)]
         no_relay_offer: bool,
     },
-    /// The steps `install.sh --connect <hub> --token <token>` runs once the
-    /// binary is in place, one line each: register every host present on
-    /// this machine as `install <host>` does, `connect <hub> --token
-    /// <token> --managed`, check the working directory's hub reporting,
-    /// relay, and print the hub's Fleet evidence address and the console's.
+    /// The steps `install.sh --connect <hub> [--token <token>]` runs once
+    /// the binary is in place, one line each: register every host present
+    /// on this machine as `install <host>` does, `connect <hub> --managed`
+    /// (by a code approved in the hub, or with the token), check the working directory's hub reporting,
+    /// install the background relay as `service install relay` does (on
+    /// macOS, where no relay holds the edge home), make one governed fetch
+    /// of https://commonmeasure.ai/ in a session recorded under the host
+    /// word `commonmeasure-first-run`, relay, and print the hub's Fleet
+    /// evidence address and the console's. The page's licence demands
+    /// reporting, so the fetch is refused without reporting consent and
+    /// without a background relay holding the edge home.
     /// A fresh directory stays unenrolled until you confirm history with
     /// `enrol --name NAME --reporting hub --include-history`; the home
-    /// directory and `/` are never enrolled. In this release the fetch of
-    /// https://commonmeasure.ai/ is reported as not made: the session record
-    /// has no host word for installer traffic.
+    /// directory and `/` are never enrolled.
     /// A step that fails stops the run and exits non-zero; a refused page,
-    /// missing consent and a hub waiting for a revision or an approval are
-    /// reported and the run goes on.
+    /// missing consent, a relay that cannot be installed and a hub waiting
+    /// for a revision or an approval are reported and the run goes on.
     FirstRun(first_run::FirstRun),
     /// Register, renew, close and read a working instance at the hub this
     /// edge is enrolled with (docs/contracts/session-evidence.md §Instance
@@ -663,9 +677,16 @@ fn main() -> ExitCode {
         Command::Connect {
             hub,
             token,
+            name,
             managed,
             no_relay_offer,
-        } => connect(hub.as_deref(), token.as_deref(), managed, no_relay_offer),
+        } => connect(
+            hub.as_deref(),
+            token.as_deref(),
+            name.as_deref(),
+            managed,
+            no_relay_offer,
+        ),
         Command::FirstRun(args) => first_run::run(args),
         Command::Instance { command } => instance::run(command),
         Command::Disconnect => disconnect(),
@@ -699,35 +720,54 @@ fn main() -> ExitCode {
     }
 }
 
-/// The principal's allowance for a live-capable run: the same home, policy
-/// document and principal resolution every harness command uses, so the run
-/// path cannot acquire a second identity scheme. A principal that declares
-/// no allowance still gets a context, so the quote record can say "declares
-/// no allowance" rather than the weaker "no context was held"; `None` is
-/// only a machine with no resolvable home. A policy file that exists but
-/// does not parse is an error, because running as if it declared nothing
-/// would enforce less than the operator wrote. Replay runs never get here:
-/// no money moves, so the allowance ledger is not consulted
-/// (`crates/commonmeasure-runtime/src/replay.rs`).
-fn resolved_allowance() -> Result<Option<commonmeasure_runtime::allowance::AllowanceContext>, String>
-{
-    let Ok(home) = commonmeasure_harness::home_dir() else {
-        return Ok(None);
-    };
-    let policy = commonmeasure_harness::policy::SessionPolicy::load(
+/// Resolve one standing policy and allowance before batch acquisition. Live
+/// runs refresh management with the session-start budget; every failure keeps
+/// the policy in force. Offline runs read it without a management request,
+/// and replay deliberately uses only its sealed suite.
+fn resolve_run_policy(options: &mut RunOptions) -> Result<(), String> {
+    use commonmeasure_harness::policy::PolicyDocument;
+    let home = home_dir().map_err(|error| error.to_string())?;
+    let mut sync = options
+        .allow_external_acquisition
+        .then(|| sync_managed_policy(&home, commonmeasure_harness::managed::SESSION_START_BUDGET))
+        .flatten();
+    // A configured management URL may carry credentials. The run needs the
+    // refresh outcome and revision only.
+    if let Some(record) = sync.as_mut().and_then(serde_json::Value::as_object_mut) {
+        record.remove("policy_url");
+    }
+    std::fs::create_dir_all(&home)
+        .map_err(|error| format!("cannot create run home {}: {error}", home.display()))?;
+    // Bind the revision and management record to the same bytes as admission,
+    // even if another process activates a policy while this run starts.
+    let _lock = PolicyDocument::lock(&home).map_err(|error| error.to_string())?;
+    let document = PolicyDocument::read(&home)?;
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("cannot resolve run directory: {error}"))?;
+    let cwd = cwd
+        .to_str()
+        .ok_or("cannot resolve a non-UTF-8 run directory")?;
+    let policy = document.resolve(Some(cwd));
+    let management = commonmeasure_harness::managed::management(&home, chrono::Utc::now());
+    let mut resolved = policy.run_policy();
+    resolved.record["document_revision"] = serde_json::json!(document.revision());
+    resolved.record["management"] = serde_json::json!({
+        "mode": management.mode,
+        "desired": management.desired,
+        "applied_revision": management.applied_revision,
+        "applied_digest": management.applied_digest,
+        "applied_edited": management.applied_edited,
+        "applied_expires_at": management.applied_expires_at,
+        "stale_since": management.stale_since,
+        "sync": sync,
+    });
+    options.allowance = Some(commonmeasure_runtime::allowance::AllowanceContext::new(
         &home,
-        std::env::current_dir()
-            .ok()
-            .and_then(|cwd| cwd.to_str().map(str::to_owned))
-            .as_deref(),
-    )?;
-    Ok(Some(
-        commonmeasure_runtime::allowance::AllowanceContext::new(
-            &home,
-            policy.principal().to_owned(),
-            policy.allowances().to_vec(),
-        ),
-    ))
+        policy.principal().to_owned(),
+        policy.allowances().to_vec(),
+    ));
+    options.source_policy = Some(resolved);
+    Ok(())
 }
 
 fn run(
@@ -747,7 +787,7 @@ fn run(
         }
         None => {
             let mut options = RunOptions::from_environment(output, live);
-            options.allowance = resolved_allowance()?;
+            resolve_run_policy(&mut options)?;
             commonmeasure_runtime::execute(&suite, &options)
         }
     }
@@ -1954,28 +1994,54 @@ fn relay_report_text(report: &commonmeasure_relay::RelayReport) -> String {
     out
 }
 
-/// Enrol with a hub. Both the hub and the token must be named: there is no
-/// default hub and no ambient token, and the refusal says which is missing.
+/// Enrol with a hub. The hub must be named: there is no default hub. With
+/// a token the hub exchanges it; without one the hub's device-code flow
+/// runs, and the person approves the code in the hub.
 fn connect(
     hub: Option<&str>,
     token: Option<&str>,
+    name: Option<&str>,
     managed: bool,
     no_relay_offer: bool,
 ) -> Result<(), String> {
-    let (Some(hub), Some(token)) = (hub, token) else {
-        let missing = match (hub, token) {
-            (None, None) => "no hub URL and no --token",
-            (None, Some(_)) => "no hub URL",
-            (Some(_), None) => "no --token",
-            (Some(_), Some(_)) => unreachable!("both present"),
-        };
-        return Err(format!(
-            "{missing}: run `commonmeasure connect <hub-url> --token <token>` with the token an \
-             owner minted in the hub; there is no default hub and nothing was sent"
-        ));
+    let Some(hub) = hub else {
+        return Err(
+            "no hub URL: run `commonmeasure connect <hub-url>` and approve the code it shows in              the hub, or add --token <token> with a token an owner minted there; there is no \
+             default hub and nothing was sent"
+                .to_owned(),
+        );
     };
     let home = home_dir().map_err(|error| error.to_string())?;
-    let connected = enrol_edge(&home, hub, token, managed)?;
+    let connected = match token {
+        Some(token) => enrol_edge(&home, hub, Route::Token(token), managed)?,
+        None => {
+            let name = match name {
+                Some(name) => name.to_owned(),
+                None => host_name().ok_or(
+                    "this machine's host name cannot be read; name the edge with --name and \
+                     nothing was sent",
+                )?,
+            };
+            let retry = format!(
+                "run `commonmeasure connect {}{}` for a new code",
+                hub.trim().trim_end_matches('/'),
+                if managed { " --managed" } else { "" }
+            );
+            enrol_edge(
+                &home,
+                hub,
+                Route::Device {
+                    name: &name,
+                    retry: &retry,
+                    show: &mut |code| {
+                        let _ = write_stdout(&format!("{}\n", approval_line(code)));
+                        open_approval_page(code);
+                    },
+                },
+                managed,
+            )?
+        }
+    };
     let report = &connected.report;
     let mut out = format!(
         "enrolled with {} in {} as {}\n  key id   {}\n  receiver {}\n  written  {}, {} and {}\n",
@@ -2065,17 +2131,83 @@ pub(crate) struct Connected {
     pub(crate) failure: Option<String>,
 }
 
+/// How an edge obtains its enrolment from the hub.
+pub(crate) enum Route<'a> {
+    /// Exchange a token an owner minted in the hub.
+    Token(&'a str),
+    /// Ask the hub for a device code under `name`, hand it to `show`, and
+    /// wait for the person to approve it in the hub. `retry` says how to
+    /// start again after a refusal, an expiry or an unreachable hub, as
+    /// "run `…` for a new code".
+    Device {
+        name: &'a str,
+        retry: &'a str,
+        show: &'a mut dyn FnMut(&commonmeasure_relay::DeviceCode),
+    },
+}
+
+/// The one line printed before a device code is approved: the page and the
+/// code, and nothing that is a credential.
+pub(crate) fn approval_line(code: &commonmeasure_relay::DeviceCode) -> String {
+    format!(
+        "approve this machine at {} with the code {}",
+        code.verification_uri, code.user_code
+    )
+}
+
+/// Open the approval page with the desktop's opener, the page with the code
+/// filled in where the hub gave one. A machine with no opener, such as one
+/// reached over SSH, has the printed line, so a failure is not reported:
+/// nothing but the page and the code is printed before the approval. The
+/// opener is not waited for: polling and the code's expiry go on while the
+/// browser it started stays open.
+pub(crate) fn open_approval_page(code: &commonmeasure_relay::DeviceCode) {
+    let page = code
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&code.verification_uri);
+    let _ = console::launch_in_browser(page);
+}
+
+/// This machine's host name up to its first dot, the name a device-code
+/// enrolment gives the hub when none is named. `None` where the system
+/// gives no name in UTF-8.
+pub(crate) fn host_name() -> Option<String> {
+    #[cfg(unix)]
+    let name = {
+        let mut buffer = [0u8; 256];
+        // SAFETY: the buffer is writable for its whole length, which is the
+        // length passed.
+        let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+        if status != 0 {
+            return None;
+        }
+        // A name the buffer truncated carries no terminator and is refused.
+        let end = buffer.iter().position(|&byte| byte == 0)?;
+        String::from_utf8(buffer[..end].to_vec()).ok()?
+    };
+    #[cfg(not(unix))]
+    let name = std::env::var("COMPUTERNAME").ok()?;
+    let label = name.trim().split('.').next().unwrap_or_default().trim();
+    (!label.is_empty()).then(|| label.to_owned())
+}
+
 /// Enrol this edge with `hub` and, with `managed`, make the first policy
 /// synchronisation. `connect` prints the whole of it; the first run prints
 /// one line.
 pub(crate) fn enrol_edge(
     home: &Path,
     hub: &str,
-    token: &str,
+    route: Route<'_>,
     managed: bool,
 ) -> Result<Connected, String> {
-    let report = commonmeasure_relay::connect(home, hub, token, managed)
-        .map_err(|error| format!("{error:#}"))?;
+    let report = match route {
+        Route::Token(token) => commonmeasure_relay::connect(home, hub, token, managed),
+        Route::Device { name, retry, show } => {
+            commonmeasure_relay::connect_by_device(home, hub, name, managed, retry, show)
+        }
+    }
+    .map_err(|error| format!("{error:#}"))?;
     let mut failure = None;
     let sync = match &report.managed {
         None => None,

@@ -72,6 +72,7 @@ fn actual_adapters_separate_gold_from_answers_and_preserve_grader_evidence() {
             backend: Some(Box::new(TensorZeroBackend::new(gateway.url()).unwrap())),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing: SigningIdentity::Unconfigured,
         }
     })
@@ -148,6 +149,7 @@ fn refusal_and_malformed_judge_stay_distinct_and_no_supplier_is_called() {
         backend: Some(Box::new(TensorZeroBackend::new(gateway.url()).unwrap())),
         replay: None,
         allowance: None,
+        source_policy: None,
         provenance_signing: SigningIdentity::Unconfigured,
     })
     .unwrap();
@@ -181,6 +183,7 @@ fn interrupted_case_does_not_dispatch_later_cases_or_publish_success() {
             backend: None,
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing: SigningIdentity::Unconfigured,
         }
     });

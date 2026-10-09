@@ -15,8 +15,10 @@ are governed by this setup.
 
 Show the existing edge, organisation, applied policy revision and reporting
 status. Reuse enrolment and keys. If disconnected, guide
-`commonmeasure connect <named-hub> --token <token> --managed` using the user's
-named hub and existing secure token flow; never print or request keys in chat.
+the user to run `commonmeasure connect <named-hub> --managed` in their own
+terminal: it prints a code to approve in the hub and waits for the approval.
+`--token <token>` is for a token an owner minted for this machine; never print
+or request codes, tokens or keys in chat.
 
 Ask for the project name and local recording versus hub reporting only when
 not already specified. Before hub reporting, explain that coverage is the

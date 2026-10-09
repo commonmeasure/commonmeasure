@@ -11,8 +11,10 @@
 //! The background relay (`commonmeasure relay --every`) is how a host that
 //! sends no session-end event, such as Claude Desktop, gets automatic
 //! delivery. Installing it is the operator's act, because it sends to the
-//! receiver in `relay.json` with nobody running a command; nothing installs
-//! it on the operator's behalf.
+//! receiver in `relay.json` with nobody running a command: `service install
+//! relay`, a yes to the offer after `connect --managed`, or the hub's
+//! one-command line (`install.sh --connect`), whose first run installs it
+//! before its governed fetch. Nothing else installs it.
 //!
 //! A console started by hand and forgotten is the failure this exists for,
 //! so `status` reports what holds the port whether or not it is the service,
@@ -257,7 +259,7 @@ pub fn run(command: ServiceCommand) -> Result<(), String> {
             _ => {}
         }
     }
-    if !cfg!(target_os = "macos") {
+    if !launch_agents() {
         return Err(unsupported(&command));
     }
     let text = match command {
@@ -301,6 +303,18 @@ pub fn run(command: ServiceCommand) -> Result<(), String> {
     };
     print!("{text}");
     Ok(())
+}
+
+/// Whether this platform runs a service as a LaunchAgent: macOS. A debug
+/// build also takes a non-empty `COMMONMEASURE_TEST_LAUNCH_AGENTS`, so that a
+/// test on another platform runs the LaunchAgent path against the
+/// `launchctl` its `PATH` names; a release build reads no variable.
+pub(crate) fn launch_agents() -> bool {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("COMMONMEASURE_TEST_LAUNCH_AGENTS").is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
+    cfg!(target_os = "macos")
 }
 
 /// The refusal on a platform without a LaunchAgent, naming what to run

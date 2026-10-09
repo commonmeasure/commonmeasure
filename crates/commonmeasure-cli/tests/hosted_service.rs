@@ -513,8 +513,7 @@ fn text(response: &Response) -> String {
 /// The tool result's payload, which the server delivers as JSON text.
 fn payload(response: &Response) -> Value {
     let body = body(response);
-    let text = body["result"]["content"][0]["text"]
-        .as_str()
+    let text = commonmeasure_harness::provenance::payload_text(&body["result"])
         .unwrap_or_else(|| panic!("a tool result: {body}"));
     serde_json::from_str(text).expect("the payload is JSON")
 }
@@ -809,7 +808,7 @@ fn the_service_holds_the_private_address_floor_whatever_the_managed_policy_says(
         assert_eq!(refused.status, 200, "{}", text(&refused));
         let result = body(&refused)["result"].clone();
         assert_eq!(result["isError"], true, "{url}: {result}");
-        let detail = result["content"][0]["text"].as_str().unwrap_or_default();
+        let detail = commonmeasure_harness::provenance::payload_text(&result).unwrap_or_default();
         assert!(
             detail.contains("does not mediate local or private addresses")
                 && detail.contains("service mode"),

@@ -176,6 +176,7 @@ impl QuotedRun {
             )),
             replay: None,
             allowance,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };

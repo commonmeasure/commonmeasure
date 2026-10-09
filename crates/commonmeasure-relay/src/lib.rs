@@ -32,9 +32,9 @@ use spool::{Spool, SpoolEntry};
 use state::RelayState;
 
 pub use enrolment::{
-    ConnectReport, DisconnectReport, EnrolmentCheck, ManagedPin, PolicySigner, ProofAction,
-    ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, disconnect,
-    refresh_directory_proof, refresh_directory_proof_if_due,
+    ConnectReport, DeviceCode, DisconnectReport, EnrolmentCheck, ManagedPin, PolicySigner,
+    ProofAction, ProofRefresh, SIGNER_PATH, Standing, check_standing, connect, connect_by_device,
+    disconnect, refresh_directory_proof, refresh_directory_proof_if_due,
 };
 pub use state::{egress_findings, egress_report, enrolment_error_line};
 

@@ -234,6 +234,257 @@ fn mediated_fetch_refused(home: &Path, url: &str) -> bool {
     response["result"]["isError"] == json!(true)
 }
 
+/// Batch fixture: real policy sync and corpus acquisition, with all inherited
+/// credentials and inference configuration removed. It proves admission and
+/// its evidence, not live supplier or Hub integration.
+fn batch(home: &Path, cwd: &Path, constraints: Value, providers: Value, live: bool) -> Value {
+    let suite = json!({
+        "suite_version": "managed-batch-fixture/v1",
+        "label": "Batch policy fixture",
+        "job": {
+            "id": "3d8beea4-eb91-4f2d-9426-2fa2f06fef8b", "kind": "research.answer",
+            "prompt": "policy fixture", "policy_mode": "observe",
+            "objective": {"kind": "maximise_quality"},
+            "constraints": constraints, "evidence_requirements": [],
+        },
+        "model_plan": {"name": "fixture", "version": "1", "model": "unconfigured"},
+        "result_limit": 3, "providers": providers,
+    });
+    std::fs::write(cwd.join("suite.json"), suite.to_string()).expect("suite");
+    let corpus = cwd.join("corpus");
+    std::fs::create_dir_all(&corpus).expect("corpus");
+    std::fs::write(
+        corpus.join("corpus.json"),
+        r#"{"name":"fixture","licence":{"state":"declared","reference":"operator-owned"}}"#,
+    )
+    .expect("corpus declaration");
+    std::fs::write(
+        corpus.join("fixture.md"),
+        "The policy fixture supplies recorded evidence.",
+    )
+    .expect("corpus document");
+    let output = cwd.join(if live { "live-run" } else { "offline-run" });
+    if output.exists() {
+        std::fs::remove_dir_all(&output).expect("previous fixture output");
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+    command
+        .env_clear()
+        .env("COMMONMEASURE_HOME", home)
+        .env("COMMONMEASURE_INTERNAL_CORPUS", &corpus)
+        .current_dir(cwd)
+        .args(["run", "suite.json", "--output"])
+        .arg(&output);
+    if live {
+        command.arg("--live");
+    }
+    let result = command.output().expect("batch command");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(output.join("summary.json")).unwrap()).unwrap();
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        summary["source_policy"],
+        manifest["manifest"]["source_policy"]
+    );
+    assert_eq!(canonical_digest(&manifest["manifest"]), manifest["hash"]);
+    let evidence = std::fs::read_to_string(output.join("evidence.ndjson")).unwrap();
+    let records: Vec<Value> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let started = records
+        .iter()
+        .find(|record| record["event"] == "run_started")
+        .unwrap();
+    assert_eq!(
+        started["payload"]["source_policy"],
+        summary["source_policy"]
+    );
+    for plan in summary["plans"].as_array().unwrap() {
+        if !plan["policy_decisions"].as_array().unwrap().is_empty() {
+            assert!(!plan["policy_decisions"].as_array().unwrap().is_empty());
+            assert!(records.iter().any(|record| record["payload"]["policy_decisions"] == plan["policy_decisions"]));
+        }
+    }
+    summary
+}
+
+fn batch_plan<'a>(summary: &'a Value, provider: &str) -> &'a Value {
+    summary["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plan| plan["provider"] == provider)
+        .unwrap()
+}
+
+#[test]
+fn batch_refreshes_managed_policy_and_a_suite_cannot_relax_it_even_offline() {
+    let signer = Signer::new("hub-batch-1");
+    let directory = Arc::new(Mutex::new(webbotauth::Directory::default()));
+    let policy = json!({"policy_mode":"strict", "constraints":[
+        {"kind":"allowed_provider","provider":"internal"},
+        {"kind":"allowed_source_host","host":"allowed.example"},
+    ]});
+    let hub = endpoint(signer.envelope(7, policy), Arc::clone(&directory));
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    webbotauth::enrol(
+        home.path(),
+        &hub.handle.url(),
+        "https://hub.example",
+        &mut directory.lock().unwrap(),
+    );
+    write_deployment(
+        home.path(),
+        &signer,
+        &format!("{}/api/v1/policy/desired", hub.handle.url()),
+    );
+    // No manual policy sync: batch itself must activate revision 7.
+    std::fs::write(
+        home.path().join("policy.json"),
+        r#"{"policy_mode":"observe"}"#,
+    )
+    .unwrap();
+    let relaxing = json!([
+        {"kind":"allowed_provider","provider":"internal"},
+        {"kind":"allowed_provider","provider":"tavily"},
+        {"kind":"allowed_source_provider","provider":"internal"},
+        {"kind":"access_rule","host":"*","action":"allow"},
+    ]);
+    let summary = batch(
+        home.path(),
+        cwd.path(),
+        relaxing.clone(),
+        json!(["internal", "tavily"]),
+        true,
+    );
+    assert_eq!(hub.requests.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        summary["source_policy"]["management"]["applied_revision"],
+        7
+    );
+    assert_eq!(
+        summary["source_policy"]["management"]["sync"]["outcome"],
+        "accepted"
+    );
+    // Catches: the management endpoint published in the run record.
+    assert!(
+        summary["source_policy"]["management"]["sync"]
+            .get("policy_url")
+            .is_none()
+    );
+    let published = summary["source_policy"].to_string();
+    assert!(!published.contains("/api/v1/policy/desired"), "{published}");
+    assert_eq!(summary["source_policy"]["canonical"]["mode"], "strict");
+    assert_eq!(
+        summary["source_policy"]["identity"]["digest"],
+        canonical_digest(&summary["source_policy"]["canonical"])
+    );
+    let provider = batch_plan(&summary, "tavily");
+    assert_eq!(provider["status"], "refused");
+    assert!(
+        provider["acquisition"].is_null(),
+        "provider denied before dispatch"
+    );
+    assert_eq!(
+        provider["policy_decisions"][0]["policy_basis"],
+        "source_policy"
+    );
+    let source = batch_plan(&summary, "internal");
+    assert_eq!(source["status"], "unavailable");
+    assert_eq!(source["policy_decisions"][0]["decision"], "refuse");
+    assert_eq!(
+        source["source_count"], 0,
+        "suite exemption cannot widen the home's host list"
+    );
+    assert!(
+        !source["acquisition"].is_null(),
+        "the real corpus supplied the refused source"
+    );
+    assert!(!source["sources"][0]["admitted"].as_bool().unwrap());
+
+    drop(hub);
+    let failed_sync = batch(
+        home.path(),
+        cwd.path(),
+        relaxing.clone(),
+        json!(["internal", "tavily"]),
+        true,
+    );
+    assert_eq!(
+        failed_sync["source_policy"]["management"]["sync"]["outcome"],
+        "unreachable"
+    );
+    assert_eq!(
+        failed_sync["source_policy"]["management"]["applied_revision"],
+        7
+    );
+    assert_eq!(
+        failed_sync["source_policy"]["identity"],
+        summary["source_policy"]["identity"]
+    );
+    assert_eq!(batch_plan(&failed_sync, "tavily")["status"], "refused");
+    assert_eq!(batch_plan(&failed_sync, "internal")["source_count"], 0);
+    let offline = batch(
+        home.path(),
+        cwd.path(),
+        relaxing,
+        json!(["internal"]),
+        false,
+    );
+    assert!(offline["source_policy"]["management"]["sync"].is_null());
+    assert_eq!(batch_plan(&offline, "internal")["source_count"], 0);
+}
+
+#[test]
+fn batch_standalone_resolution_keeps_scope_authority_and_suite_narrowing() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let absent = batch(
+        home.path(),
+        cwd.path(),
+        json!([]),
+        json!(["internal"]),
+        false,
+    );
+    assert_eq!(absent["source_policy"]["management"]["mode"], "local");
+    assert_eq!(absent["source_policy"]["canonical"]["mode"], "observe");
+    assert_eq!(batch_plan(&absent, "internal")["source_count"], 1);
+    std::fs::write(home.path().join("policy.json"), json!({
+        "policy_mode":"observe", "scopes":[{"match":cwd.path().to_str().unwrap(),
+            "policy_mode":"strict", "constraints":[{"kind":"allowed_provider","provider":"internal"}]}]
+    }).to_string()).unwrap();
+    let narrowed = batch(
+        home.path(),
+        cwd.path(),
+        json!([{"kind":"denied_provider","provider":"internal"}]),
+        json!(["internal"]),
+        false,
+    );
+    assert_eq!(batch_plan(&narrowed, "internal")["status"], "refused");
+    assert_eq!(
+        batch_plan(&narrowed, "internal")["policy_decisions"][0]["policy_basis"],
+        "suite"
+    );
+    std::fs::write(home.path().join("policy.json"), r#"{"policy_mode":"observe","principals":[{"principal":"someone-else","subject":"fixture-subject"}]}"#).unwrap();
+    let unbound = batch(
+        home.path(),
+        cwd.path(),
+        json!([]),
+        json!(["internal"]),
+        false,
+    );
+    assert_eq!(batch_plan(&unbound, "internal")["status"], "refused");
+    assert!(batch_plan(&unbound, "internal")["acquisition"].is_null());
+}
+
 const STRICT: &str = r#"{"policy_mode":"strict","allow_private_hosts":true,
     "constraints":[{"kind":"allowed_source_host","host":"www.gov.uk"}]}"#;
 

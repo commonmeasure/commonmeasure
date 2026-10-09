@@ -385,6 +385,7 @@ impl ReplaySupply {
             // A replayed purchase moves no money, so it must not enter the
             // real spend ledger; the quote record states the absence.
             allowance: None,
+            source_policy: None,
             provenance_signing: crate::processor::provenance::SigningIdentity::Unconfigured,
         }
     }

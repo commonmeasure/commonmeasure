@@ -1215,6 +1215,7 @@ fn plan_over(envelopes: Vec<ContextEnvelope>, constraints: Vec<Constraint>) -> V
             backend: None,
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         },

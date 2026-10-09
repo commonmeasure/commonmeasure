@@ -266,6 +266,13 @@ pub struct McpServer {
     /// `/etc/hosts` change.
     resolve: Resolve,
     evidence_error: Option<String>,
+    /// The provenance line of each crossing the current tool call recorded,
+    /// in record order ([`crate::provenance`]). Emptied at the start of each
+    /// call, and handed to the agent ahead of the call's result.
+    provenance: Vec<String>,
+    /// The host of the URL the current `context_fetch` asked for, which
+    /// the agent wrote and a provenance line may therefore name.
+    asked_host: Option<String>,
     /// How far this session's log is known to read as the relay reads it,
     /// so each reporting ruling reads only what was appended since
     /// ([`Self::unreadable_session_log`]).
@@ -377,6 +384,8 @@ impl McpServer {
             hub_authorities,
             resolve: Box::new(system_resolve),
             evidence_error: None,
+            provenance: Vec::new(),
+            asked_host: None,
             delivery_check: std::sync::Mutex::default(),
         }
     }
@@ -793,6 +802,11 @@ impl McpServer {
                 self.served.tools.join(", ")
             ))
         };
+        self.provenance.clear();
+        self.asked_host = (name == "context_fetch")
+            .then(|| arguments.get("url").and_then(Value::as_str))
+            .flatten()
+            .map(grounding::host_of);
         let result = match name.as_str() {
             tool if !self.served.tools.contains(&tool) => unknown(),
             "context_fetch" => self.fetch_answer(&arguments),
@@ -803,13 +817,22 @@ impl McpServer {
         };
         // A tool failure is a tool result, not a protocol error: the host's
         // model needs to read it and decide what to do.
-        match result {
+        let mut answer = match result {
             Ok((value, None)) => tool_result(id, &value, false),
             Ok((value, Some(resource))) => {
                 file_result(id, &value, resource, self.structured_content())
             }
             Err(detail) => tool_result(id, &json!({"error": detail}), true),
+        };
+        // The provenance lines open the result as a text block of their
+        // own, so the payload's block stays JSON for every reader of it.
+        if !self.provenance.is_empty()
+            && let Some(Value::Array(content)) = answer.pointer_mut("/result/content")
+        {
+            let lines = std::mem::take(&mut self.provenance).join("\n");
+            content.insert(0, json!({"type": "text", "text": lines}));
         }
+        answer
     }
 
     /// Whether the negotiated revision carries `structuredContent` on a tool
@@ -3978,8 +4001,14 @@ impl McpServer {
             told: facts.told.map(AgentText::into_string),
             told_position: facts.told_position,
         };
-        if let Err(error) = self.session.record_crossing(&crossing) {
-            self.evidence_error = Some(error.to_string());
+        // A line claims a record, so a crossing whose record failed has none.
+        match self.session.record_crossing(&crossing) {
+            Ok(_) => self.provenance.push(crate::provenance::line(
+                &crossing,
+                self.policy.mode(),
+                self.asked_host.as_deref(),
+            )),
+            Err(error) => self.evidence_error = Some(error.to_string()),
         }
     }
 
@@ -5756,12 +5785,9 @@ mod tests {
             )
             .expect("answered");
         assert_eq!(answer["result"]["isError"], true);
-        let payload: Value = serde_json::from_str(
-            answer["result"]["content"][0]["text"]
-                .as_str()
-                .expect("text"),
-        )
-        .expect("JSON");
+        let payload: Value =
+            serde_json::from_str(crate::provenance::payload_text(&answer["result"]).expect("text"))
+                .expect("JSON");
         assert_eq!(
             payload["error"],
             format!("unknown tool; the tools are {}", TOOLS.join(", ")).as_str()

@@ -129,6 +129,7 @@ impl Harness {
             }),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };
@@ -169,6 +170,7 @@ impl Harness {
             ) as Box<_>),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };
@@ -839,6 +841,7 @@ fn comparison_under(corpus: &Path, live: bool, with_gateway: bool, mode: PolicyM
         }),
         replay: None,
         allowance: None,
+        source_policy: None,
         provenance_signing:
             commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
     };
@@ -1055,6 +1058,7 @@ fn a_plan_that_never_acquired_is_not_a_candidate_and_the_selection_names_it() {
         backend: None,
         replay: None,
         allowance: None,
+        source_policy: None,
         provenance_signing:
             commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
     };

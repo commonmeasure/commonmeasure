@@ -346,7 +346,12 @@ organisation from sign-in to its first delivery, and
 covers enrolling a machine, taking the organisation's policy and enrolling
 a project.
 
-On the edge, `commonmeasure connect <hub-url> --token <token>` writes the
+On the edge, `commonmeasure connect <hub-url>` prints a code and the hub
+page to approve it on, opens the page where the desktop has an opener, and
+waits until the code is approved, refused or expired in the hub; nothing is
+written before the approval. `--name` names the edge on the hub (by default,
+the host name). `commonmeasure connect <hub-url> --token <token>` uses a
+token an owner minted on the hub instead. Either way, `connect` writes the
 receiver and ingest key into `relay.json`, mints the edge's signing key
 (`edge-key.json`, which never leaves the machine) and records the hub's key
 id in `enrolment.json`, then makes a first relay run. With `--managed` it

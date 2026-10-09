@@ -56,10 +56,10 @@ pub fn crossings(home: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// Decode JSON carried in the first MCP text block.
+/// Decode the JSON payload a tool result carries: its first text block
+/// after the provenance lines, where the call recorded a crossing.
 pub fn payload(response: &Value) -> Value {
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
+    let text = commonmeasure_harness::provenance::payload_text(&response["result"])
         .expect("a tool result carries text");
     serde_json::from_str(text).expect("the payload is JSON")
 }

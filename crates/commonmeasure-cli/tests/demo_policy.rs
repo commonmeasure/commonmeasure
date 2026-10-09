@@ -161,8 +161,7 @@ fn the_example_policy_refuses_a_subscription_licence_on_its_payment_term() {
         site.url()
     );
     assert_eq!(responses[0]["result"]["isError"], true);
-    let detail = responses[0]["result"]["content"][0]["text"]
-        .as_str()
+    let detail = commonmeasure_harness::provenance::payload_text(&responses[0]["result"])
         .expect("an error result carries text");
     assert!(detail.contains(expected), "{detail}");
     assert!(!detail.contains("license.xml"), "{detail}");

@@ -258,10 +258,10 @@ pub fn run(args: Console, palette: Palette) -> Result<(), String> {
     }
 }
 
-/// Hand a URL to the desktop's opener: `open` on macOS, `xdg-open` on
-/// other Unix systems, `start` through `cmd` on Windows. The opener's own
-/// output is not ours to print.
-fn open_in_browser(url: &str) -> Result<(), String> {
+/// The desktop's opener for `url`: `open` on macOS, `xdg-open` on other
+/// Unix systems, `start` through `cmd` on Windows, with its program name.
+/// The opener's own output is not ours to print.
+fn opener(url: &str) -> (&'static str, Command) {
     let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
         ("open", vec![url])
     } else if cfg!(windows) {
@@ -269,11 +269,19 @@ fn open_in_browser(url: &str) -> Result<(), String> {
     } else {
         ("xdg-open", vec![url])
     };
-    let status = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    (program, command)
+}
+
+/// Hand a URL to the desktop's opener and wait for it to report.
+pub(crate) fn open_in_browser(url: &str) -> Result<(), String> {
+    let (program, mut command) = opener(url);
+    let status = command
         .status()
         .map_err(|error| format!("cannot run {program} to open {url}: {error}"))?;
     if status.success() {
@@ -281,6 +289,24 @@ fn open_in_browser(url: &str) -> Result<(), String> {
     } else {
         Err(format!("{program} did not open {url} (exit {status})"))
     }
+}
+
+/// Hand a URL to the desktop's opener without waiting for it. An opener
+/// may run for as long as the page stays open (`xdg-open` need not fork the
+/// browser off), so a caller that keeps its own clock cannot wait for one.
+/// A thread reaps the opener whenever it exits; one still running when this
+/// process ends passes to the system, which reaps it. Only a failure to
+/// start the opener is reported.
+pub(crate) fn launch_in_browser(url: &str) -> Result<(), String> {
+    let (program, mut command) = opener(url);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot run {program} to open {url}: {error}"))?;
+    std::thread::Builder::new()
+        .name("opener".into())
+        .spawn(move || child.wait())
+        .map_err(|error| format!("cannot watch {program}: {error}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

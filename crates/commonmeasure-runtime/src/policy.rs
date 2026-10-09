@@ -180,149 +180,15 @@ pub fn source_admission_from(
             ),
         };
     }
-    if job
-        .denied_source_hosts()
-        .any(|denied| normalised_host(denied) == envelope.host)
-    {
-        return Ruling::breach(
-            job.policy_mode,
-            format!("The job denies host {}.", envelope.host),
-            AgentText::fixed("The job denies this source's host."),
-            Gap::new(
-                GapReason::PolicyRefused,
-                format!("{} is on the job's denied-host list.", envelope.source_url),
-            ),
-        );
-    }
-    let mut host_allowed_by_rule = false;
-    if let Some((index, pattern, action)) = job.access_rule_for(&envelope.host) {
-        // Positions are stated one-based, as an operator counts entries in
-        // the file, and the pattern is stated as written so the reader can
-        // find the rule without counting.
-        let rule = format!("access rule {} ({pattern})", index + 1);
-        // The rule is the operator's: its position and pattern are as the
-        // policy file states them.
-        let rule_given = Given::text(&rule);
-        match action {
-            AccessAction::Allow | AccessAction::RequireMediation => {
-                host_allowed_by_rule = true;
-            }
-            AccessAction::Refuse => {
-                return Ruling::breach(
-                    job.policy_mode,
-                    format!("{rule} refuses host {}.", envelope.host),
-                    agent_text![rule_given, " refuses this source's host."],
-                    Gap::new(
-                        GapReason::PolicyRefused,
-                        format!("{} is refused by {rule}.", envelope.source_url),
-                    ),
-                );
-            }
-            AccessAction::RequireLicence { licence } => match &envelope.licence {
-                LicenceState::Declared { reference } if reference == licence => {
-                    host_allowed_by_rule = true;
-                }
-                LicenceState::Declared { reference } => {
-                    return Ruling::breach(
-                        job.policy_mode,
-                        format!(
-                            "{rule} requires licence {licence:?} for host {}, and the supplier \
-                             declared {reference:?}.",
-                            envelope.host
-                        ),
-                        agent_text![
-                            rule_given,
-                            " requires licence ",
-                            Given::text(&format!("{licence:?}")),
-                            " for this source's host, and the supplier declared another."
-                        ],
-                        Gap::new(
-                            GapReason::PolicyRefused,
-                            format!(
-                                "{} was declared under licence {reference:?}, not the \
-                                 {licence:?} that {rule} requires.",
-                                envelope.source_url
-                            ),
-                        ),
-                    );
-                }
-                LicenceState::Unknown => {
-                    return Ruling::breach(
-                        job.policy_mode,
-                        format!(
-                            "{rule} requires licence {licence:?} for host {}, and no supplier \
-                             declared one.",
-                            envelope.host
-                        ),
-                        agent_text![
-                            rule_given,
-                            " requires licence ",
-                            Given::text(&format!("{licence:?}")),
-                            " for this source's host, and no supplier declared one."
-                        ],
-                        Gap::new(
-                            GapReason::EvidenceMissing,
-                            format!(
-                                "{} arrived with no machine-readable licence, and absent licence \
-                                 evidence is unknown rather than the {licence:?} that {rule} \
-                                 requires.",
-                                envelope.source_url
-                            ),
-                        ),
-                    );
-                }
-            },
-        }
-    }
-    let mut allowed = job.allowed_source_hosts().peekable();
-    if !host_allowed_by_rule
-        && !provider.is_some_and(|name| job.allows_provider_sources(name))
-        && allowed.peek().is_some()
-        && !job
-            .allowed_source_hosts()
-            .any(|host| normalised_host(host) == envelope.host)
-    {
-        // An internal-corpus document has no host at all. An allow-list is a
-        // containment control — only the sources it names may be used — and a
-        // source it cannot name is outside it, so the refusal stands and says
-        // which case it is rather than printing an empty host.
-        let (reason, detail) = if envelope.host.is_empty() {
-            (
-                "This source has no host, and the job's allowed-host list admits only the hosts \
-                 it names."
-                    .to_owned(),
-                format!(
-                    "{} has no host to match against the job's allowed-host list, so it is not a \
-                     permitted source under this job's source policy.",
-                    envelope.source_url
-                ),
-            )
-        } else {
-            (
-                format!(
-                    "Host {} is outside the job's allowed-host list.",
-                    envelope.host
-                ),
-                format!(
-                    "{} is not a permitted source under this job's source policy.",
-                    envelope.source_url
-                ),
-            )
-        };
-        let agent_reason = if envelope.host.is_empty() {
-            AgentText::fixed(
-                "This source has no host, and the job's allowed-host list admits only the \
-                 hosts it names.",
-            )
-        } else {
-            AgentText::fixed("This source's host is outside the job's allowed-host list.")
-        };
-        return Ruling::breach(
-            job.policy_mode,
-            reason,
-            agent_reason,
-            Gap::new(GapReason::PolicyRefused, detail),
-        );
+    let host_ruling = source_host_admission(
+        job,
+        &envelope.host,
+        &envelope.source_url,
+        provider,
+        Some(&envelope.licence),
+    );
+    if host_ruling != Ruling::Allowed {
+        return host_ruling;
     }
     let mut required = job.required_licences().peekable();
     if required.peek().is_some() {
@@ -347,6 +213,180 @@ pub fn source_admission_from(
         }
     }
     provider_ruling
+}
+
+/// Check a known fetch target before a supplier request. Rights and excerpt
+/// checks wait for the actual response; only host and provider rules can be
+/// decided from the requested URL.
+pub fn fetch_target_admission(job: &ContextJob, target: &str, provider: &str) -> Ruling {
+    let provider_ruling = provider_eligibility(job, provider);
+    if provider_ruling.is_refusal() {
+        return provider_ruling;
+    }
+    let host = url::Url::parse(target)
+        .ok()
+        .and_then(|url| url.host_str().map(normalised_host))
+        .unwrap_or_default();
+    let ruling = source_host_admission(job, &host, target, Some(provider), None);
+    if ruling != Ruling::Allowed {
+        ruling
+    } else {
+        provider_ruling
+    }
+}
+
+fn source_host_admission(
+    job: &ContextJob,
+    host: &str,
+    source_url: &str,
+    provider: Option<&str>,
+    declared_licence: Option<&LicenceState>,
+) -> Ruling {
+    if job
+        .denied_source_hosts()
+        .any(|denied| normalised_host(denied) == host)
+    {
+        return Ruling::breach(
+            job.policy_mode,
+            format!("The job denies host {}.", host),
+            AgentText::fixed("The job denies this source's host."),
+            Gap::new(
+                GapReason::PolicyRefused,
+                format!("{} is on the job's denied-host list.", source_url),
+            ),
+        );
+    }
+    let mut host_allowed_by_rule = false;
+    if let Some((index, pattern, action)) = job.access_rule_for(host) {
+        // Positions are stated one-based, as an operator counts entries in
+        // the file, and the pattern is stated as written so the reader can
+        // find the rule without counting.
+        let rule = format!("access rule {} ({pattern})", index + 1);
+        // The rule is the operator's: its position and pattern are as the
+        // policy file states them.
+        let rule_given = Given::text(&rule);
+        match action {
+            AccessAction::Allow | AccessAction::RequireMediation => {
+                host_allowed_by_rule = true;
+            }
+            AccessAction::Refuse => {
+                return Ruling::breach(
+                    job.policy_mode,
+                    format!("{rule} refuses host {}.", host),
+                    agent_text![rule_given, " refuses this source's host."],
+                    Gap::new(
+                        GapReason::PolicyRefused,
+                        format!("{} is refused by {rule}.", source_url),
+                    ),
+                );
+            }
+            AccessAction::RequireLicence { licence } => match declared_licence {
+                None => {
+                    host_allowed_by_rule = true;
+                }
+                Some(LicenceState::Declared { reference }) if reference == licence => {
+                    host_allowed_by_rule = true;
+                }
+                Some(LicenceState::Declared { reference }) => {
+                    return Ruling::breach(
+                        job.policy_mode,
+                        format!(
+                            "{rule} requires licence {licence:?} for host {}, and the supplier \
+                             declared {reference:?}.",
+                            host
+                        ),
+                        agent_text![
+                            rule_given,
+                            " requires licence ",
+                            Given::text(&format!("{licence:?}")),
+                            " for this source's host, and the supplier declared another."
+                        ],
+                        Gap::new(
+                            GapReason::PolicyRefused,
+                            format!(
+                                "{} was declared under licence {reference:?}, not the \
+                                 {licence:?} that {rule} requires.",
+                                source_url
+                            ),
+                        ),
+                    );
+                }
+                Some(LicenceState::Unknown) => {
+                    return Ruling::breach(
+                        job.policy_mode,
+                        format!(
+                            "{rule} requires licence {licence:?} for host {}, and no supplier \
+                             declared one.",
+                            host
+                        ),
+                        agent_text![
+                            rule_given,
+                            " requires licence ",
+                            Given::text(&format!("{licence:?}")),
+                            " for this source's host, and no supplier declared one."
+                        ],
+                        Gap::new(
+                            GapReason::EvidenceMissing,
+                            format!(
+                                "{} arrived with no machine-readable licence, and absent licence \
+                                 evidence is unknown rather than the {licence:?} that {rule} \
+                                 requires.",
+                                source_url
+                            ),
+                        ),
+                    );
+                }
+            },
+        }
+    }
+    let mut allowed = job.allowed_source_hosts().peekable();
+    if !host_allowed_by_rule
+        && !provider.is_some_and(|name| job.allows_provider_sources(name))
+        && allowed.peek().is_some()
+        && !job
+            .allowed_source_hosts()
+            .any(|allowed| normalised_host(allowed) == host)
+    {
+        // An internal-corpus document has no host at all. An allow-list is a
+        // containment control — only the sources it names may be used — and a
+        // source it cannot name is outside it, so the refusal stands and says
+        // which case it is rather than printing an empty host.
+        let (reason, detail) = if host.is_empty() {
+            (
+                "This source has no host, and the job's allowed-host list admits only the hosts \
+                 it names."
+                    .to_owned(),
+                format!(
+                    "{} has no host to match against the job's allowed-host list, so it is not a \
+                     permitted source under this job's source policy.",
+                    source_url
+                ),
+            )
+        } else {
+            (
+                format!("Host {} is outside the job's allowed-host list.", host),
+                format!(
+                    "{} is not a permitted source under this job's source policy.",
+                    source_url
+                ),
+            )
+        };
+        let agent_reason = if host.is_empty() {
+            AgentText::fixed(
+                "This source has no host, and the job's allowed-host list admits only the \
+                 hosts it names.",
+            )
+        } else {
+            AgentText::fixed("This source's host is outside the job's allowed-host list.")
+        };
+        return Ruling::breach(
+            job.policy_mode,
+            reason,
+            agent_reason,
+            Gap::new(GapReason::PolicyRefused, detail),
+        );
+    }
+    Ruling::Allowed
 }
 
 /// The one host normaliser, defined beside the vocabulary so a pattern and a

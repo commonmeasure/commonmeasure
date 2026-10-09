@@ -45,6 +45,7 @@ pub mod mcp;
 pub mod nudge;
 pub mod policy;
 pub mod prompt;
+pub mod provenance;
 pub mod registration;
 pub mod relay_config;
 pub mod session;

@@ -2507,7 +2507,7 @@ and records that it did:
 ```json
 {
   "session_id": "…", "host": "claude-code",
-  "timestamp": "…", "nudge": "mediation-nudge/5", "source": "startup",
+  "timestamp": "…", "nudge": "mediation-nudge/6", "source": "startup",
   "basis": "emitted on the SessionStart hook's stdout for the host to add to the session's context; injection is the host's act and is not witnessed"
 }
 ```
@@ -2843,8 +2843,9 @@ edge was tampered with.
 
 `host` on every record is the word the registration passed to
 `commonmeasure mcp --host`: `claude-code`, `codex`, `pi`, `claude-desktop`,
-`cursor`, `copilot-cli` or `vscode`. The server refuses any other value at
-start, but `--host` defaults to `claude-code`, so a registration that passes
+`cursor`, `copilot-cli` or `vscode`; the first run's own session carries
+the installer's word instead (§The installer's word). The server refuses
+any other value at start, but `--host` defaults to `claude-code`, so a registration that passes
 no `--host` (Goose's hand-written extension, for one) is recorded as
 `claude-code` whatever the client is; the `client` field below is what tells
 them apart, and the reporting ruling reads it (§Source declarations).
@@ -2905,6 +2906,32 @@ CLI at 0.154.x and the ChatGPT desktop app at 0.153.x, told apart by
 Desktop's two clients), `cursor-vscode` (Cursor). The relay projects
 neither the record nor the field; what a receiver learns about the host is
 `contextops-host-tool`.
+
+### The installer's word
+
+One word is recorded without a registration: `commonmeasure-first-run`, for
+the installer's own program. `commonmeasure first-run`, which `install.sh
+--connect` runs, makes its one governed fetch in a session of its own,
+served in its own process. Every record of that session carries the word as
+`host`, and the session's `client` is the same word, the name the first run
+gives itself in `initialize`:
+
+```json
+{
+  "session_id": "first-run-…", "host": "commonmeasure-first-run", "timestamp": "…",
+  "client": {"name": "commonmeasure-first-run", "version": "…"},
+  "protocol_version": "2025-11-25", "negotiated_protocol_version": "2025-11-25"
+}
+```
+
+There is one such word, and it is distinct from every registered host's.
+`--host` does not accept it, so no registration can be recorded under it,
+and installer traffic is never recorded or delivered as a host's session.
+The session sends no session-end event, so a licence's reporting demand is
+met in it only where a background relay or a hosted service holds the home
+(§Source declarations). The relay projects the word as it projects any host
+word, in `contextops-host-tool` ([telemetry
+projection](telemetry-projection.md)).
 
 ## Credential provenance
 

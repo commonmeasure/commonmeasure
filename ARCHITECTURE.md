@@ -127,8 +127,8 @@ invoke_skill(candidate, input, constraints) -> result envelope
 
 A provider may implement only a subset, and an adapter declares only what it
 implements, never what its vendor documents. `crates/commonmeasure-supply` holds
-seventeen provider adapters (`docs/contracts/provider.md`): `search` for
-the twelve open-web providers, six of which also declare `fetch` (a named
+eighteen provider adapters (`docs/contracts/provider.md`): `search` for
+the thirteen open-web providers, seven of which also declare `fetch` (a named
 URL, dispatched only when a job declares a `fetch_target`); `query` for the
 operator's own internal corpus; `search` and `quote` for Redpine, a licensed
 supplier bought by quote then confirm; `search` and `fetch` for Ozone

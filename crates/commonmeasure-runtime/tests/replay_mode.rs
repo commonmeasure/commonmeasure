@@ -466,6 +466,7 @@ fn acquisition_mode_is_sealed_as_part_of_experiment_identity() {
             backend: None,
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };
@@ -745,6 +746,7 @@ fn execute_refuses_a_replay_run_whose_context_misses_a_provider() {
             served: std::collections::BTreeMap::new(),
         }),
         allowance: None,
+        source_policy: None,
         provenance_signing:
             commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
     };

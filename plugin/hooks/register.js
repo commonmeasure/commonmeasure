@@ -38,6 +38,12 @@ const EDGE_SERVERS = ['plugin_commonmeasure_commonmeasure', 'commonmeasure']
 // refuses the rest before anything is delivered.
 const REASONS = { 200: 'OK', 203: 'Non-Authoritative Information', 206: 'Partial Content' }
 
+// How the edge's provenance lines start. A `context_fetch` or `context_search`
+// answer that recorded a crossing opens with them, one per crossing, in a text
+// block before the JSON payload (`docs/contracts/host-integration.md` §1).
+// They are built from the edge's record, and the model is shown them first.
+const PROVENANCE = 'Common Measure · '
+
 // How much of one search result's text the model is shown. The edge
 // recorded the whole envelope; this is display.
 const SEARCH_TEXT_CHARS = 1000
@@ -82,7 +88,7 @@ async function routeFetch($, e, next) {
   const started = Date.now()
   const reply = read(await $.mcp.call(server, 'context_fetch', { url: e.url }))
   answered.add(e.tool_use_id)
-  if (reply.error) return { deny: explain(reply.error, 'WebFetch') }
+  if (reply.error) return { deny: [...reply.provenance, explain(reply.error, 'WebFetch')].join('\n') }
 
   const value = reply.value
   if (typeof value.content !== 'string' && !value.path) {
@@ -96,6 +102,7 @@ async function routeFetch($, e, next) {
     }
   }
   const context = [
+    ...reply.provenance,
     `Fetched through Common Measure's context_fetch, not WebFetch. ${value.policy} Recorded in ${value.recorded_in}.`,
   ]
   if (value.breach) context.push(`Breach: ${value.breach}`)
@@ -147,12 +154,19 @@ async function routeSearch($, e, next) {
   const started = Date.now()
   const reply = read(await $.mcp.call(server, 'context_search', { query: e.query, provider }))
   answered.add(e.tool_use_id)
-  if (reply.error) return { deny: explain(reply.error, 'WebSearch') }
+  if (reply.error) return { deny: [...reply.provenance, explain(reply.error, 'WebSearch')].join('\n') }
 
   const value = reply.value
   const all = Array.isArray(value.results) ? value.results : []
   const hits = all.filter((hit) => domainPermitted(hit.url, e.allowed_domains, e.blocked_domains))
+  // A result outside the call's domains is not shown, so neither is the
+  // host its line names. A line that names no host is kept.
+  const provenance = reply.provenance.filter((line) => {
+    const host = /· host (\S+) ·/.exec(line)?.[1]
+    return !host || host === 'withheld' || host === 'unknown' || domainPermitted(`https://${host}/`, e.allowed_domains, e.blocked_domains)
+  })
   const lines = [
+    ...provenance,
     `Searched through Common Measure's context_search (provider ${value.provider}), not WebSearch. Recorded in ${value.recorded_in}.`,
   ]
   if (value.refused > 0) lines.push(`${value.refused} result(s) were refused by source policy and withheld.`)
@@ -238,14 +252,14 @@ async function applyPrompt($, prompt, text) {
   return { text: reply.text, isApplied: true }
 }
 
-// The edge's answer: its JSON, or the error it reported in its own words, and
-// whether it carried an embedded resource beside the JSON.
+// The edge's answer: its JSON, or the error it reported in its own words,
+// whether it carried an embedded resource beside the JSON, and the
+// provenance lines it opened with.
 function read(reply) {
   const blocks = reply.content ?? []
-  const text = blocks
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('')
+  const texts = blocks.filter((block) => block.type === 'text').map((block) => block.text)
+  const provenance = texts.filter((text) => text.startsWith(PROVENANCE)).flatMap((text) => text.split('\n'))
+  const text = texts.filter((text) => !text.startsWith(PROVENANCE)).join('')
   let value = null
   try {
     value = JSON.parse(text)
@@ -254,12 +268,12 @@ function read(reply) {
   }
   if (reply.isError) {
     const error = value && typeof value.error === 'string' ? value.error : text
-    return { error: error || 'the edge reported an error without a reason' }
+    return { error: error || 'the edge reported an error without a reason', provenance }
   }
   if (value === null || typeof value !== 'object') {
-    return { error: `the edge answered with text that is not JSON: ${text.slice(0, 200)}` }
+    return { error: `the edge answered with text that is not JSON: ${text.slice(0, 200)}`, provenance }
   }
-  return { value, embedded: blocks.some((block) => block.type === 'resource') }
+  return { value, embedded: blocks.some((block) => block.type === 'resource'), provenance }
 }
 
 // The edge's refusal or unavailability, then what it means for a call the

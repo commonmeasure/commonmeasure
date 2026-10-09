@@ -372,8 +372,7 @@ fn the_host_argument_records_the_named_host_and_refuses_an_unknown_one_with_the_
 }
 
 fn error_text(response: &Value) -> String {
-    response["result"]["content"][0]["text"]
-        .as_str()
+    commonmeasure_harness::provenance::payload_text(&response["result"])
         .expect("an error result carries text")
         .to_owned()
 }
@@ -3101,9 +3100,8 @@ mod discovery_probes {
         for response in &responses {
             assert_eq!(response["result"]["isError"], true, "{response}");
         }
-        let said = responses[1]["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap();
+        let said =
+            commonmeasure_harness::provenance::payload_text(&responses[1]["result"]).unwrap();
         assert!(said.contains("withheld from context"), "{said}");
         let names = taken(&log);
         let second = names
@@ -3649,7 +3647,7 @@ mod discovery_probes {
         let port = site.addr().port();
         let (home, response) = observe_fetch(port, "self.localhost");
         assert_eq!(response["result"]["isError"], true, "{response}");
-        let said = response["result"]["content"][0]["text"].as_str().unwrap();
+        let said = commonmeasure_harness::provenance::payload_text(&response["result"]).unwrap();
         assert!(!said.contains("refused by policy"), "{said}");
         assert_eq!(
             taken(&log),
@@ -6790,9 +6788,8 @@ mod reporting_demand {
             );
             assert!(!requested, "{mode}: refused before the request");
             assert_eq!(crossing["event"], "crossing_refused", "{mode}");
-            let told = responses[0]["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap();
+            let told =
+                commonmeasure_harness::provenance::payload_text(&responses[0]["result"]).unwrap();
             assert!(
                 told.contains(&format!(
                     "The operator's agreement with the source ({AGREEMENT}) requires reporting \
@@ -6828,9 +6825,8 @@ mod reporting_demand {
             let (responses, crossing, requested) =
                 fetch_demanding_page(home.path(), &cleared, &site, &hits);
             assert!(!requested, "{mode}: refused before the request");
-            let told = responses[0]["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap();
+            let told =
+                commonmeasure_harness::provenance::payload_text(&responses[0]["result"]).unwrap();
             let route = "is not the hub this edge is enrolled with, and the agreement names no \
                          endpoint, so only the hub this edge is enrolled with is a route; this \
                          edge is not enrolled with a hub";
@@ -9077,8 +9073,8 @@ fn a_later_part_whose_page_now_screens_as_injection_is_refused() {
     );
     assert_eq!(
         responses[1]["result"]["content"].as_array().map(Vec::len),
-        Some(1),
-        "the error is the only content block: {}",
+        Some(2),
+        "the provenance line and the error are the only content blocks: {}",
         responses[1]
     );
 

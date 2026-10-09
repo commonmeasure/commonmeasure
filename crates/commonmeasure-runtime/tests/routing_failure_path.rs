@@ -52,6 +52,7 @@ fn a_holdout_job_whose_frozen_route_is_unavailable_publishes_the_outcome() {
             backend: None,
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         },

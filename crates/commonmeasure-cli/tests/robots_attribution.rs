@@ -138,8 +138,7 @@ fn fetch(url: &str) -> Value {
 }
 
 fn error_text(response: &Value) -> String {
-    response["result"]["content"][0]["text"]
-        .as_str()
+    commonmeasure_harness::provenance::payload_text(&response["result"])
         .expect("an error result carries text")
         .to_owned()
 }

@@ -930,8 +930,7 @@ fn fetch(server: &mut McpServer, url: &str) -> (bool, String) {
         .expect("an answer");
     (
         answer["result"]["isError"] == json!(true),
-        answer["result"]["content"][0]["text"]
-            .as_str()
+        commonmeasure_harness::provenance::payload_text(&answer["result"])
             .unwrap_or_default()
             .to_owned(),
     )

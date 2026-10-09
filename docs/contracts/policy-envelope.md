@@ -53,7 +53,7 @@ Absent means `local`, which is the state of a fresh checkout.
   because an operator who wrote `managed` must not quietly stop taking
   policy.
 - Nothing an envelope carries can change this file. Synchronisation never
-  writes it. `commonmeasure connect <hub> --token <token> --managed` writes
+  writes it. `commonmeasure connect <hub> --managed` writes
   it once, at enrolment, from the signer the hub publishes (§The hub side),
   says what file it replaced if one was there, and makes a first
   synchronisation; it exits non-zero when the signer could not be read (the
@@ -265,6 +265,11 @@ runs the same synchronisation on demand:
   outcome is written to the session log as a `policy_sync` record
   ([`docs/contracts/session-evidence.md`](session-evidence.md) §Policy
   synchronisation) and nothing is said to the agent.
+- **Before live batch acquisition.** `commonmeasure run --live` refreshes
+  under the same three-second budget before resolving the home’s policy.
+  Its source record, summary and sealed manifest carry the outcome and the
+  policy identity/revision in force ([run output](run-output.md)). Offline
+  batch runs read the policy without a refresh; replay uses the suite alone.
 - **Before relay.** `commonmeasure relay` runs it before it reads the
   clearances, so egress is decided under the policy the hub desires now.
   It prints one line naming the outcome, except when the desired revision

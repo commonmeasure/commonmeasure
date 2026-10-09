@@ -142,6 +142,10 @@ fn a_hosted_service_holding_the_home_needs_no_relay_offer() {
 }
 
 const TOKEN: &str = "et_0123456789abcdef";
+/// The device code the hub issues. It reads as a marker: no output and no
+/// file may hold it.
+const DEVICE_CODE: &str = "dc_DEVICEMARKER_0f3b";
+const USER_CODE: &str = "BCDF-GHJK";
 const API_KEY: &str = "ak_hub_issued_secret";
 /// The origin this hub says it publishes the enrolled key under. The edge
 /// stores it and names it in `Signature-Agent` on every signed request; it
@@ -206,6 +210,20 @@ struct HubState {
     /// When set, the exchange answers this `telemetry_path` in place of
     /// `/api/v1/telemetry`.
     telemetry_path: Option<&'static str>,
+    /// Device-code requests, verbatim.
+    device_requests: Vec<Value>,
+    /// When set, the device-code request is refused with this status and
+    /// message, and a `Retry-After` of 600 seconds on a 429.
+    refuse_device: Option<(u16, &'static str)>,
+    /// The interval and lifetime the device-code answer states; 1 and 900
+    /// seconds when unset.
+    device_interval: Option<u64>,
+    device_expires_in: Option<u64>,
+    /// The answers to successive polls, in order: an RFC 8628 error code, or
+    /// `approve` for the enrolment. Once spent, polls are pending.
+    device_answers: std::collections::VecDeque<&'static str>,
+    /// When each poll arrived, with its body.
+    device_polls: Vec<(std::time::Instant, Value)>,
 }
 
 /// The lifetime this hub states and accepts, seconds.
@@ -279,6 +297,45 @@ fn thumbprint(x: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))
 }
 
+/// The hub's `201` to an exchange or an approved poll: the key `body`
+/// presents is registered once its proof over `credential` verifies.
+fn enrolment_answer(state: &mut HubState, body: &Value, credential: &str) -> Response {
+    let x = body["public_key"]["x"].as_str().unwrap();
+    let raw: [u8; 32] = URL_SAFE_NO_PAD.decode(x).unwrap().try_into().unwrap();
+    let key = VerifyingKey::from_bytes(&raw).unwrap();
+    let proof: [u8; 64] = URL_SAFE_NO_PAD
+        .decode(body["proof"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    if key
+        .verify(credential.as_bytes(), &Signature::from_bytes(&proof))
+        .is_err()
+    {
+        return Response::json(400, r#"{"detail":"proof does not verify"}"#);
+    }
+    let key_id = thumbprint(x);
+    state.key_id = Some(key_id.clone());
+    state.x = Some(x.to_owned());
+    let mut answer = json!({
+        "organization": {"id": "11111111-1111-1111-1111-111111111111", "name": "Org A Media"},
+        "name": "laptop-7",
+        "key_id": key_id,
+        "identity": {
+            "origin": ORIGIN,
+            "bot_page": "https://hub.example/bot",
+            "contact": "mailto:bot@hub.example",
+        },
+        "api_key_id": "22222222-2222-2222-2222-222222222222",
+        "api_key": API_KEY,
+        "telemetry_path": state.telemetry_path.unwrap_or("/api/v1/telemetry"),
+    });
+    if let Some(statement) = state.statement() {
+        answer["directory_proof"] = statement;
+    }
+    Response::json(201, &answer.to_string())
+}
+
 fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
     Server::bind("127.0.0.1:0")
         .unwrap()
@@ -293,40 +350,65 @@ fn hub(state: Arc<Mutex<HubState>>) -> ServerHandle {
                     if body["token"] != json!(TOKEN) {
                         return Response::json(401, r#"{"detail":"enrolment token is unknown"}"#);
                     }
-                    let x = body["public_key"]["x"].as_str().unwrap();
-                    let raw: [u8; 32] = URL_SAFE_NO_PAD.decode(x).unwrap().try_into().unwrap();
-                    let key = VerifyingKey::from_bytes(&raw).unwrap();
-                    let proof: [u8; 64] = URL_SAFE_NO_PAD
-                        .decode(body["proof"].as_str().unwrap())
-                        .unwrap()
-                        .try_into()
-                        .unwrap();
-                    if key
-                        .verify(TOKEN.as_bytes(), &Signature::from_bytes(&proof))
-                        .is_err()
-                    {
-                        return Response::json(400, r#"{"detail":"proof does not verify"}"#);
+                    enrolment_answer(&mut state, &body, TOKEN)
+                }
+                // The device-code request and poll, in the shapes of the hub's
+                // `/connect/device` and `device_codes::poll` (RFC 8628 §3.2,
+                // §3.5).
+                ("POST", "/connect/device") => {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    state.device_requests.push(body);
+                    if let Some((status, message)) = state.refuse_device {
+                        let mut response =
+                            Response::json(status, &json!({"message": message}).to_string());
+                        if status == 429 {
+                            response.headers.set("Retry-After", "600");
+                        }
+                        return response;
                     }
-                    let key_id = thumbprint(x);
-                    state.key_id = Some(key_id.clone());
-                    state.x = Some(x.to_owned());
-                    let mut answer = json!({
-                        "organization": {"id": "11111111-1111-1111-1111-111111111111", "name": "Org A Media"},
-                        "name": "laptop-7",
-                        "key_id": key_id,
-                        "identity": {
-                            "origin": ORIGIN,
-                            "bot_page": "https://hub.example/bot",
-                            "contact": "mailto:bot@hub.example",
-                        },
-                        "api_key_id": "22222222-2222-2222-2222-222222222222",
-                        "api_key": API_KEY,
-                        "telemetry_path": state.telemetry_path.unwrap_or("/api/v1/telemetry"),
-                    });
-                    if let Some(statement) = state.statement() {
-                        answer["directory_proof"] = statement;
+                    Response::json(
+                        200,
+                        &json!({
+                            "device_code": DEVICE_CODE,
+                            "user_code": USER_CODE,
+                            "verification_uri": "https://hub.example/connect",
+                            "verification_uri_complete": format!("https://hub.example/connect?code={USER_CODE}"),
+                            "expires_in": state.device_expires_in.unwrap_or(900),
+                            "interval": state.device_interval.unwrap_or(1),
+                        })
+                        .to_string(),
+                    )
+                }
+                ("POST", "/api/v1/enrolment/device/token") => {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    state
+                        .device_polls
+                        .push((std::time::Instant::now(), body.clone()));
+                    let refusal = |error: &str, description: &str| {
+                        Response::json(
+                            400,
+                            &json!({"error": error, "error_description": description}).to_string(),
+                        )
+                    };
+                    if body["device_code"] != json!(DEVICE_CODE) {
+                        return refusal("invalid_grant", "unknown device code");
                     }
-                    Response::json(201, &answer.to_string())
+                    match state.device_answers.pop_front() {
+                        Some("approve") => enrolment_answer(&mut state, &body, DEVICE_CODE),
+                        Some("slow_down") => refusal(
+                            "slow_down",
+                            "polled again within 4 seconds; wait 5 seconds between polls",
+                        ),
+                        Some("access_denied") => refusal("access_denied", "the code was denied in the hub"),
+                        Some("expired_token") => refusal(
+                            "expired_token",
+                            "the code expired before it was approved; run connect again",
+                        ),
+                        Some("authorization_pending") | None => {
+                            refusal("authorization_pending", "the code is not yet approved")
+                        }
+                        Some(other) => panic!("no such answer {other}"),
+                    }
                 }
                 // The upload, checked by the per-key rule a verifier applies
                 // to the directory it will be served in, not by the edge's
@@ -628,18 +710,459 @@ impl Drop for Console {
 #[test]
 fn connect_with_nothing_named_refuses_and_names_what_is_missing() {
     let home = tempfile::tempdir().unwrap();
-    let output = commonmeasure(home.path(), &["connect"]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no hub URL and no --token"), "{stderr}");
-    assert!(stderr.contains("no default hub"), "{stderr}");
-    assert!(!home.path().join("relay.json").exists());
-    assert!(!home.path().join("edge-key.json").exists());
+    for args in [&["connect"][..], &["connect", "--token", TOKEN]] {
+        let output = commonmeasure(home.path(), args);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("no hub URL"), "{stderr}");
+        assert!(stderr.contains("no default hub"), "{stderr}");
+        assert!(!home.path().join("relay.json").exists());
+        assert!(!home.path().join("edge-key.json").exists());
+    }
+}
 
-    let output = commonmeasure(home.path(), &["connect", "https://hub.example"]);
+/// `connect <hub>` with no token, as a person runs it on their own machine:
+/// a home under `HOME` that does not exist yet, desktop openers that record
+/// the page they are given, and the hub's device-code routes.
+#[cfg(unix)]
+struct DeviceConnect {
+    root: tempfile::TempDir,
+}
+
+/// A desktop opener that records the page it is given and returns at once.
+#[cfg(unix)]
+const OPENER: &str = "#!/bin/sh\necho \"$1\" >>\"$(dirname \"$0\")/opened\"\n";
+
+/// A desktop opener that records the page, then stays in the foreground
+/// until `release` appears beside it, as `xdg-open` may for as long as the
+/// browser it started stays open. It records `returned` as it exits, and
+/// gives up after a minute so that no test leaves it behind.
+#[cfg(unix)]
+const HELD_OPENER: &str = r#"#!/bin/sh
+dir="$(dirname "$0")"
+echo "$1" >>"$dir/opened"
+i=0
+while [ ! -e "$dir/release" ] && [ "$i" -lt 600 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+echo "$1" >>"$dir/returned"
+"#;
+
+/// A held opener a failing test left running returns once the root goes.
+#[cfg(unix)]
+impl Drop for DeviceConnect {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.opener().join("release"), "");
+    }
+}
+
+#[cfg(unix)]
+impl DeviceConnect {
+    fn new() -> Self {
+        Self::with_opener(OPENER)
+    }
+
+    /// With [`HELD_OPENER`] as the desktop's opener.
+    fn held() -> Self {
+        Self::with_opener(HELD_OPENER)
+    }
+
+    fn with_opener(opener: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt as _;
+        let connect = Self {
+            root: tempfile::tempdir().unwrap(),
+        };
+        std::fs::create_dir(connect.opener()).unwrap();
+        for name in ["open", "xdg-open"] {
+            let script = connect.opener().join(name);
+            std::fs::write(&script, opener).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        connect
+    }
+
+    fn opener(&self) -> std::path::PathBuf {
+        self.root.path().join("opener")
+    }
+
+    /// Whether a held opener was started and has not returned.
+    fn opener_held(&self) -> bool {
+        self.opener().join("opened").exists() && !self.opener().join("returned").exists()
+    }
+
+    /// Let a held opener return, and wait until it has.
+    fn release_opener(&self) {
+        std::fs::write(self.opener().join("release"), "").unwrap();
+        let started = std::time::Instant::now();
+        while !self.opener().join("returned").exists() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the held opener did not return"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    fn opened(&self) -> Vec<String> {
+        std::fs::read_to_string(self.opener().join("opened"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The edge home, which nothing creates before an approval.
+    fn edge(&self) -> std::path::PathBuf {
+        self.root.path().join("edge")
+    }
+
+    fn command(&self, hub: &str, extra: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
+        command
+            .arg("connect")
+            .arg(hub)
+            .args(extra)
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", self.opener().display()))
+            .env("HOME", self.root.path())
+            .env("COMMONMEASURE_HOME", self.edge())
+            .env("CLAUDE_CONFIG_DIR", self.root.path().join("claude"))
+            .env("CODEX_HOME", self.root.path().join("codex"))
+            .stdin(Stdio::null());
+        command
+    }
+
+    fn run(&self, hub: &str, extra: &[&str]) -> Output {
+        self.command(hub, extra).output().unwrap()
+    }
+
+    /// Every file under the scratch root, as text.
+    fn files(&self) -> Vec<(std::path::PathBuf, String)> {
+        fn walk(dir: &Path, into: &mut Vec<(std::path::PathBuf, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, into);
+                } else {
+                    let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+                    into.push((path, text));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(self.root.path(), &mut files);
+        files
+    }
+}
+
+/// Without a token, `connect` asks the hub for a code under the edge's
+/// name, prints the approval page and the code and nothing else, hands the
+/// page with the code filled in to the desktop's opener, and polls at the
+/// hub's interval. Once the hub answers the poll with the enrolment the
+/// edge stores it as a token's: key, record, relay configuration, the
+/// signer pin and the first policy sync. The device code is in no output
+/// and no file.
+#[test]
+#[cfg(unix)]
+fn connect_without_a_token_enrols_once_the_code_is_approved_in_the_hub() {
+    let state = Arc::new(Mutex::new(HubState {
+        device_answers: ["authorization_pending", "authorization_pending", "approve"].into(),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::new();
+    let output = connect.run(
+        &server.url(),
+        &["--managed", "--name", "laptop-7", "--no-relay-offer"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no --token"), "{stderr}");
-    assert!(!home.path().join("edge-key.json").exists());
+    let mut lines = stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            format!(
+                "approve this machine at https://hub.example/connect with the code {USER_CODE}"
+            )
+            .as_str()
+        ),
+        "{stdout}{stderr}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(format!("enrolled with {} in Org A Media as laptop-7", server.url()).as_str()),
+        "{stdout}{stderr}"
+    );
+    // The organisation has published no revision, which a managed
+    // enrolment reports and exits 0 on.
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert_eq!(
+        connect.opened(),
+        [format!("https://hub.example/connect?code={USER_CODE}")]
+    );
+    for file in [
+        "edge-key.json",
+        "enrolment.json",
+        "relay.json",
+        "deployment.json",
+    ] {
+        assert!(connect.edge().join(file).exists(), "{file}");
+    }
+    let state = state.lock().unwrap();
+    assert_eq!(state.device_requests, [json!({"name": "laptop-7"})]);
+    assert!(state.exchange_bodies.is_empty());
+    // Each poll waits the stated interval; the key and its proof are the
+    // same on every poll.
+    assert_eq!(state.device_polls.len(), 3);
+    for pair in state.device_polls.windows(2) {
+        assert!(pair[1].0 - pair[0].0 >= std::time::Duration::from_secs(1));
+        assert_eq!(pair[0].1, pair[1].1);
+    }
+    let record: Value =
+        serde_json::from_slice(&std::fs::read(connect.edge().join("enrolment.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["key_id"], json!(state.key_id));
+    assert!(!stdout.contains(DEVICE_CODE) && !stderr.contains(DEVICE_CODE));
+    for (path, text) in connect.files() {
+        assert!(!text.contains(DEVICE_CODE), "{}", path.display());
+    }
+    drop(state);
+    server.stop();
+}
+
+/// Without `--name`, the edge is named by this machine's host name up to
+/// its first dot.
+#[test]
+#[cfg(unix)]
+fn a_device_code_is_asked_for_under_the_host_name() {
+    let state = Arc::new(Mutex::new(HubState {
+        device_answers: ["access_denied"].into(),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::new();
+    connect.run(&server.url(), &[]);
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is writable for the length passed.
+    assert_eq!(
+        unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) },
+        0
+    );
+    let end = buffer.iter().position(|&byte| byte == 0).unwrap();
+    let host = String::from_utf8(buffer[..end].to_vec()).unwrap();
+    let label = host.split('.').next().unwrap();
+    assert_eq!(
+        state.lock().unwrap().device_requests,
+        [json!({"name": label})]
+    );
+    server.stop();
+}
+
+/// A `slow_down` answer adds five seconds to the interval, as RFC 8628
+/// §3.5 has a client do.
+#[test]
+#[cfg(unix)]
+fn a_slow_down_answer_lengthens_the_wait_before_the_next_poll() {
+    let state = Arc::new(Mutex::new(HubState {
+        device_answers: ["slow_down", "approve"].into(),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::new();
+    let output = connect.run(&server.url(), &["--name", "laptop-7"]);
+    assert!(output.status.success(), "{output:?}");
+    let state = state.lock().unwrap();
+    assert_eq!(state.device_polls.len(), 2);
+    let wait = state.device_polls[1].0 - state.device_polls[0].0;
+    assert!(wait >= std::time::Duration::from_secs(6), "{wait:?}");
+    drop(state);
+    server.stop();
+}
+
+/// A code refused in the hub, one the hub says expired, one that runs out
+/// of time while the hub still waits, a refused request for a code and an
+/// unreachable hub each end the command non-zero with the reason and the
+/// command that starts again, and nothing is written: the edge home does
+/// not exist.
+#[test]
+#[cfg(unix)]
+fn each_ending_before_approval_names_the_reason_and_the_retry_and_writes_nothing() {
+    let cases: Vec<(HubState, &str)> = vec![
+        (
+            HubState {
+                device_answers: ["access_denied"].into(),
+                ..HubState::default()
+            },
+            "the code BCDF-GHJK was refused in the hub",
+        ),
+        (
+            HubState {
+                device_answers: ["authorization_pending", "expired_token"].into(),
+                ..HubState::default()
+            },
+            "the code BCDF-GHJK expired before it was approved",
+        ),
+        (
+            HubState {
+                device_expires_in: Some(2),
+                ..HubState::default()
+            },
+            "the code BCDF-GHJK expired before it was approved",
+        ),
+        (
+            HubState {
+                refuse_device: Some((429, "too many codes from this address; try again later")),
+                ..HubState::default()
+            },
+            "refused a code (429): too many codes from this address; try again later (the hub \
+             asks for 600 seconds first)",
+        ),
+    ];
+    for (initial, reason) in cases {
+        let mut server = hub(Arc::new(Mutex::new(initial)));
+        let connect = DeviceConnect::new();
+        let output = connect.run(&server.url(), &["--managed", "--name", "laptop-7"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{reason}: {stderr}");
+        assert!(stderr.contains(reason), "{reason}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "Nothing was written; run `commonmeasure connect {} --managed` for a new code",
+                server.url()
+            )),
+            "{stderr}"
+        );
+        assert!(!connect.edge().exists(), "{reason}: the home was created");
+        server.stop();
+    }
+
+    let mut server = hub(Arc::default());
+    let url = server.url();
+    server.stop();
+    let connect = DeviceConnect::new();
+    let output = connect.run(&url, &["--name", "laptop-7"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(&format!("cannot reach {url} for a code")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "Nothing was written; run `commonmeasure connect {url}` for a new code"
+        )),
+        "{stderr}"
+    );
+    assert!(!connect.edge().exists());
+}
+
+/// An opener that stays in the foreground for as long as the browser it
+/// started, as `xdg-open` may, holds neither the polls nor the expiry: the
+/// first poll comes one interval after the code is shown, the approval is
+/// stored, and the command ends while the opener is still running.
+#[test]
+#[cfg(unix)]
+fn an_opener_that_stays_open_does_not_hold_the_polls() {
+    let state = Arc::new(Mutex::new(HubState {
+        device_answers: ["authorization_pending", "approve"].into(),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::held();
+    let started = std::time::Instant::now();
+    let output = connect.run(&server.url(), &["--managed", "--name", "laptop-7"]);
+    let elapsed = started.elapsed();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.starts_with(&format!(
+            "approve this machine at https://hub.example/connect with the code {USER_CODE}\n\
+             enrolled with {} in Org A Media as laptop-7",
+            server.url()
+        )),
+        "{stdout}{stderr}"
+    );
+    assert!(connect.opener_held(), "the command waited for the opener");
+    assert_eq!(
+        connect.opened(),
+        [format!("https://hub.example/connect?code={USER_CODE}")]
+    );
+    assert!(connect.edge().join("enrolment.json").exists());
+    assert_eq!(state.lock().unwrap().device_polls.len(), 2);
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    connect.release_opener();
+    server.stop();
+}
+
+/// With the opener still running, a code nobody approves expires on the
+/// hub's lifetime, counted from the hub's answer: the command ends with
+/// the expiry and the retry, and writes nothing.
+#[test]
+#[cfg(unix)]
+fn an_opener_that_stays_open_does_not_hold_the_expiry() {
+    let state = Arc::new(Mutex::new(HubState {
+        device_expires_in: Some(2),
+        ..HubState::default()
+    }));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::held();
+    let started = std::time::Instant::now();
+    let output = connect.run(&server.url(), &["--name", "laptop-7"]);
+    let elapsed = started.elapsed();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "the code {USER_CODE} expired before it was approved. Nothing was written; run \
+             `commonmeasure connect {}` for a new code",
+            server.url()
+        )),
+        "{stderr}"
+    );
+    assert!(connect.opener_held(), "the command waited for the opener");
+    assert_eq!(state.lock().unwrap().device_polls.len(), 1);
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+    assert!(!connect.edge().exists(), "the home was created");
+    connect.release_opener();
+    server.stop();
+}
+
+/// Ctrl-C while the code waits for approval ends the command and leaves no
+/// enrolment: the edge home does not exist, and the hub saw no key it could
+/// enrol.
+#[test]
+#[cfg(unix)]
+fn an_interrupt_while_waiting_for_approval_leaves_nothing() {
+    let state = Arc::new(Mutex::new(HubState::default()));
+    let mut server = hub(state.clone());
+    let connect = DeviceConnect::new();
+    let mut child = connect
+        .command(&server.url(), &["--managed", "--name", "laptop-7"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert!(line.starts_with("approve this machine at "), "{line}");
+    let started = std::time::Instant::now();
+    while state.lock().unwrap().device_polls.len() < 2 {
+        assert!(started.elapsed() < std::time::Duration::from_secs(15));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // SAFETY: the pid is the child's, which has not been waited for.
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
+        0
+    );
+    let status = child.wait().unwrap();
+    assert!(!status.success());
+    assert!(!connect.edge().exists(), "the home was created");
+    assert!(state.lock().unwrap().key_id.is_none());
+    server.stop();
 }
 
 /// The whole life of an enrolment: connect, sessions naming the key id, a

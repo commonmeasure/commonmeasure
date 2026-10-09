@@ -26,8 +26,8 @@ pub use evidence::{EvidenceLog, RunDirectory};
 pub use freshness::AsOf;
 pub use replay::{ReplayContext, ReplayError, ReplaySupply};
 pub use run::{
-    EvidenceOutcome, RunError, RunOptions, RunReport, SCHEMA_VERSION, Suite, execute, finalise_log,
-    load_suite,
+    EvidenceOutcome, ResolvedSourcePolicy, RunError, RunOptions, RunReport, SCHEMA_VERSION, Suite,
+    execute, finalise_log, load_suite,
 };
 pub use selection::{Candidate, MeasuredCoverage, Selection};
 

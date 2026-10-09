@@ -138,7 +138,10 @@ fn fetch(body: &[u8], content_type: &str, gzip: bool, refuse: bool) -> Fetched {
     let result = if refuse {
         Value::Null
     } else {
-        serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+        serde_json::from_str(
+            commonmeasure_harness::provenance::payload_text(&response["result"]).unwrap(),
+        )
+        .unwrap()
     };
     let record = std::fs::read_to_string(home.path().join("sessions/embedded.ndjson")).unwrap();
     let records: Vec<Value> = record

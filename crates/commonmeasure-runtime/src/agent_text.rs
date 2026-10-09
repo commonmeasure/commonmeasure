@@ -810,7 +810,7 @@ mod tests {
             // in the source policy).
             ("commonmeasure-harness/src/mcp.rs", 11),
             // The principal-authority reason, this edge's own.
-            ("commonmeasure-harness/src/policy.rs", 2),
+            ("commonmeasure-harness/src/policy.rs", 1),
             // The principal.
             ("commonmeasure-runtime/src/allowance.rs", 3),
             // A provider name, an access rule and a licence identifier

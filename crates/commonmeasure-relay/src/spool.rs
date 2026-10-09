@@ -275,13 +275,20 @@ const JOURNAL_VERSION: u32 = 1;
 /// A read-only view retries when a compaction completes underneath it.
 const LOAD_ATTEMPTS: usize = 8;
 
+/// The lock a relay run or requeue holds on `home`'s spool while it runs
+/// ([`Spool::open`]). Another run that finds it held exits without sending.
+pub fn lock_path(home: &Path) -> PathBuf {
+    home.join("relay").join("spool").join("delivery.lock")
+}
+
 impl Spool {
     /// Open the spool under `<home>/relay/spool`, creating it if absent. An
     /// interrupted enqueue, journal append or compaction is repaired here.
     pub fn open(home: &Path) -> Result<Spool> {
-        let dir = home.join("relay").join("spool");
-        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let lock = commonmeasure_harness::declaration::open_lock(&dir.join("delivery.lock"))?;
+        let lock_path = lock_path(home);
+        let dir = lock_path.parent().expect("the spool lock has a directory");
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let lock = commonmeasure_harness::declaration::open_lock(&lock_path)?;
         lock.try_lock()
             .context("another relay or requeue owns the spool")?;
         let mut spool = Self::read_only(home);

@@ -75,6 +75,43 @@ aside. The router takes the edge's server only under its two names,
 `context_fetch` on any other server is never used. Once the edge's server
 has answered in a session, its later absence refuses the call.
 
+### The provenance line
+
+A `context_fetch` or `context_search` answer that recorded a crossing opens
+with one line per crossing, in record order, as a text block of its own
+before the JSON payload (`crates/commonmeasure-harness/src/provenance.rs`).
+A call that recorded none, such as `context_status` or a fetch refused for a
+missing `url`, has no line. The payload block is unchanged, so a reader of
+the payload takes the first text block that does not start with
+`Common Measure · ` (`provenance::payload_text`).
+
+```text
+Common Measure · host example.org · terms RSL: ai-input, use, report · ruling delivered (strict) · cost unknown · grade mediated · receipt owed · sha256:3f9a5b6c…
+```
+
+Each field is built from the crossing record the call wrote, never from the
+page, and a field the record does not hold reads `unknown`, never blank or
+zero (`docs/FAIL-POLICY.md` §7):
+
+| Field | Value |
+|---|---|
+| `host` | the crossing's host, cut as agent-facing text cuts one (§Text from the source in a result). A refused or failed crossing at a host other than the one the agent asked for, which a redirect chose, and a refused search result read `withheld`; a URL with no host reads `unknown`. |
+| `terms` | the governing RSL licence as `RSL: ` with its AI-input grant (`ai-input`, `no ai-input`), its payment type as RSL 1.0 §3.7 names it (`payment` for any other) and `report` where it demands reporting; else `operator agreement` (with `, report`); else the AI-input preference and the mechanism that stated it (`Content-Signal: ai-input`); for a search result, `declared by supplier` where the supplier declared a licence. |
+| `ruling` | `delivered`, `refused` or `failed`, with the policy mode. A search result names `supplier <adapter>` in its place; a refused one keeps the ruling too. |
+| `cost` | a price the governing licence quoted, as `<decimal> <currency> quoted` (no rail pays it here); `free` where the licence states the free payment type; else `unknown`. A search result's share of a search's charge is not recorded, so it reads `unknown`. |
+| `grade` | `mediated`. |
+| `receipt` | `owed` where a reporting demand was met and the content delivered; `unmet` where a demand refused the crossing; `none` where the declarations were read whole and carried none, or nothing was delivered; `unknown` where a demand could not have been read. |
+| hash | `sha256:` and the first eight hex digits of the recorded `content_hash`; `sha256 unknown` where there is none, or where a supplier's hash is in another form. |
+
+A refusal's text in the payload is unchanged (§Text from the source in a
+result); the line adds the fields above. The line names no header text and
+no URL path.
+
+The line's own text, every byte but the host name's, is held under 160
+bytes for the fetches the tests make (`crates/commonmeasure-cli/tests/provenance_line.rs`);
+whole lines measured 156 to 172 bytes with a 14-character host. Each ` · `
+separator is four bytes of UTF-8, and a host name adds up to 64 characters.
+
 ### The parts of a fetch
 
 `context_fetch` takes `url` and two optional arguments, both non-negative

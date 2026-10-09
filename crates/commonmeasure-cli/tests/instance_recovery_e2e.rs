@@ -119,8 +119,7 @@ fn result_member(result: &Value, member: &str) -> Value {
     if !result["structuredContent"][member].is_null() {
         return result["structuredContent"][member].clone();
     }
-    result["content"][0]["text"]
-        .as_str()
+    commonmeasure_harness::provenance::payload_text(result)
         .and_then(|text| serde_json::from_str::<Value>(text).ok())
         .map_or(Value::Null, |body| body[member].clone())
 }
@@ -176,8 +175,7 @@ fn identifier(label: &str) -> String {
 }
 
 fn tool_text(result: &Value) -> String {
-    result["content"][0]["text"]
-        .as_str()
+    commonmeasure_harness::provenance::payload_text(result)
         .unwrap_or_default()
         .to_owned()
 }

@@ -160,8 +160,7 @@ fn fetch(home: &Path, url: &str) -> Value {
 }
 
 fn text_of(response: &Value) -> String {
-    response["result"]["content"][0]["text"]
-        .as_str()
+    commonmeasure_harness::provenance::payload_text(&response["result"])
         .expect("a tool result carries text")
         .to_owned()
 }

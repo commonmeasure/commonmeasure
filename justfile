@@ -38,7 +38,7 @@ clippy:
 
 # The browser extension's parser tests (browser/README.md)
 browser:
-    node --test browser/test/
+    node --test "browser/test/**/*.test.js"
 
 # Publish the no-credential run to a scratch directory and print its account
 run-empty out="/tmp/commonmeasure-empty":

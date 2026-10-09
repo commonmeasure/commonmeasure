@@ -126,6 +126,7 @@ impl Harness {
             )),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };

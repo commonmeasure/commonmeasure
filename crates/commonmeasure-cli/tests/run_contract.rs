@@ -51,7 +51,8 @@ fn commonmeasure(output: &Path) -> Command {
         .env_remove("TAVILY_API_KEY")
         .env_remove("FIRECRAWL_API_KEY")
         .env_remove("TOLLBIT_API_KEY")
-        .env_remove("COMMONMEASURE_INFERENCE_ENDPOINT");
+        .env_remove("COMMONMEASURE_INFERENCE_ENDPOINT")
+        .env("COMMONMEASURE_HOME", output.parent().unwrap().join("home"));
     command
 }
 
@@ -104,10 +105,20 @@ impl Run {
 #[test]
 fn the_published_artefacts_carry_exactly_the_documented_keys() {
     let run = Run::execute();
+    let mut summary_keys = documented_keys("Summary keys:");
+    summary_keys.extend(documented_keys(
+        "Summary keys present only with a standing-policy input:",
+    ));
+    summary_keys.sort();
+    let mut manifest_keys = documented_keys("Manifest keys:");
+    manifest_keys.extend(documented_keys(
+        "Manifest keys present only with a standing-policy input:",
+    ));
+    manifest_keys.sort();
 
     assert_eq!(
         keys_of(&run.summary),
-        documented_keys("Summary keys:"),
+        summary_keys,
         "summary.json's top-level keys and the contract's enumeration disagree"
     );
     assert_eq!(
@@ -117,7 +128,7 @@ fn the_published_artefacts_carry_exactly_the_documented_keys() {
     );
     assert_eq!(
         keys_of(&run.manifest()),
-        documented_keys("Manifest keys:"),
+        manifest_keys,
         "the sealed manifest and the contract's enumeration disagree"
     );
     for conditional in documented_keys("Manifest keys present only where the suite declares them:")
@@ -291,12 +302,12 @@ fn rerunning_into_one_directory_replaces_rather_than_accumulates() {
     );
     // Staging and set-aside directories carry a per-run identifier, so the
     // check is that nothing beside the published run remains, not that two
-    // fixed names are absent.
+    // fixed names are absent. Exclude the fixture's declared Edge home.
     let leftovers: Vec<String> = std::fs::read_dir(directory.path())
         .expect("the output's parent is readable")
         .filter_map(Result::ok)
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "latest")
+        .filter(|name| name != "latest" && name != "home")
         .collect();
     assert!(
         leftovers.is_empty(),

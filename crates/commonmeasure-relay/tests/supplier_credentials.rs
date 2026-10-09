@@ -1334,7 +1334,10 @@ fn status_of(server: &mut McpServer) -> Value {
             .to_string(),
         )
         .unwrap();
-    serde_json::from_str(answer["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    serde_json::from_str(
+        commonmeasure_harness::provenance::payload_text(&answer["result"]).unwrap(),
+    )
+    .unwrap()
 }
 
 /// A mediated call that writes the session's opening records and crosses

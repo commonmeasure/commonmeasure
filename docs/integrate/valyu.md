@@ -5,7 +5,7 @@ audience: integrator
 section: reference
 ---
 
-# Valyu
+# Valyu configuration and limitations
 
 Set `VALYU_API_KEY` in the environment or the operator's credentials file
 (`commonmeasure credentials` names the variable). The adapter sends it only

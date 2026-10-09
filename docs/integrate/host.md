@@ -184,7 +184,7 @@ source's terms still refuse in every mode
 
 For a host that reaches MCP servers only from its vendor's cloud. This path
 needs an edge enrolled with Common Measure Hub (`commonmeasure connect
-<hub-url> --token <token>`), because the hub is the issuer whose OAuth
+<hub-url>`), because the hub is the issuer whose OAuth
 tokens it accepts. The exchange below ran on loopback against an enrolment
 record written the way the test suite writes one, not against a hub; a
 deployed edge sits behind TLS at its public origin and runs as

@@ -17,36 +17,55 @@ are defined in the [glossary](GLOSSARY.md).
 
 With a Common Measure Hub organisation, one line installs the binary,
 registers it with every agent host on the machine, connects the machine to
-the hub and relays its first evidence. Copy the line from the hub's Enrol
-this machine card, which mints the token, and run it in the project
-directory whose sessions the hub should see:
+the hub and relays its first evidence. Put your hub's address in the line
+below and run it in the project directory whose sessions the hub should
+see:
 
 ```sh
 cd ~/code/your-project
-curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh -s -- --connect HUB --token TOKEN
+curl -fsSL https://github.com/commonmeasure/commonmeasure/releases/latest/download/install.sh | sh -s -- --connect HUB
 ```
+
+The connect step prints a code and the hub page to approve it on, and opens
+the page where the desktop has an opener. Approve the code there, signed in,
+and the run goes on. To enrol someone else's machine, an owner mints a token
+on the hub's Enrol this machine card and adds `--token TOKEN` to the line.
 
 After the install and the [reporting consent](INSTALL.md#reporting-consent)
 question, it prints one line per step:
 
 - `hosts:` the hosts found and registered, each as `commonmeasure install
   <host>` registers it, and those not found, for which nothing is written.
-- `connect:` the hub, the organisation and the policy revision in force, or
-  `waiting for revision` while the organisation has published none.
+- `connect:` first the page and the code to approve, unless the line has a
+  token; then the hub, the organisation and the policy revision in force, or
+  `waiting for revision` while the organisation has published none. A code
+  refused in the hub, one that expires and an unreachable hub stop the run
+  here; run the line again for a new code.
 - `enrol:` hub reporting for the directory. The line does not confirm the
   directory's existing history for you; it prints the `commonmeasure enrol
   … --include-history` command that does. Run from your home directory or
   `/`, nothing is enrolled. A directory enrolled earlier is reported as it
   stands, such as `awaiting approval` until an owner approves it on the
   hub's Project reporting page.
-- `fetch:` one governed fetch of `https://commonmeasure.ai/`. This release
-  reports it as not made: the source record has no host word for a fetch
-  the installer makes. Without reporting consent the line names
-  `commonmeasure consent agree`.
-- `relay:` what was delivered to the hub. For a host that sends no
-  session-end event (Codex, Pi, Claude Desktop, Cursor, Copilot CLI, VS
-  Code), macOS gets the background relay service and Linux the line to run
-  under your service manager.
+- `service:` the background relay, which delivers reports for the first
+  run's own session and for every host that sends no session-end event
+  (Codex, Pi, Claude Desktop, Cursor, Copilot CLI, VS Code). Where no relay
+  or hosted service holds the edge home, macOS gets the background relay
+  service, installed as `commonmeasure service install relay` installs it,
+  and the step waits until it runs. A relay service that already serves
+  another home is left in place, and the line names the command that moves
+  it. On Linux the line names the command to run under your service
+  manager, `commonmeasure relay --every 300`. If the service cannot be
+  installed, the line gives the reason and the run goes on.
+- `fetch:` one governed fetch of `https://commonmeasure.ai/`, in a session
+  of the installer's own: the source record names its host as
+  `commonmeasure-first-run`, never one of your agent hosts. The page's
+  licence demands reporting, so without reporting consent it is refused and
+  the line names `commonmeasure consent agree`; it is also refused unless a
+  background relay or hosted service holds the edge home, which on Linux
+  means one you started before the line. A refusal is reported once and not
+  retried.
+- `relay:` what was delivered to the hub.
 - `evidence:` the hub's Fleet evidence address, then `console:` the local
   console's.
 
@@ -54,7 +73,7 @@ A step that fails stops the run, names the remedy and exits 3; the binary
 stays installed. The token goes to the hub and is printed or stored nowhere,
 including in a hub refusal. A successful hub response that echoes it is
 refused before being accepted or saved.
-`--connect` needs `--token`; empty or whitespace-only values are refused
+`--token` needs `--connect`; empty or whitespace-only values are refused
 before any download, and neither combines with `--update`.
 
 Without a hub, or to do it step by step: steps 01 and 02 of [Install Common
@@ -216,8 +235,20 @@ During the pilot, Common Measure Hub is open by invitation: ask your
 organisation's owner for one, or join the [waiting list](https://commonmeasure.ai/waitlist/?source=edge)
 for a new organisation. Follow [Start here](https://commonmeasure.ai/docs/hub/start-here/) for a new
 organisation, or [Connect a Common Measure edge](https://commonmeasure.ai/docs/hub/connect-commonmeasure/)
-for an existing one. [Edge enrolment](OPERATING.md#joining-common-measure-hub)
-explains the local keys, managed policy and disconnection.
+for an existing one. To connect a machine that is already installed, run
+this on it and approve the code it prints in the hub, signed in:
+
+```sh
+commonmeasure connect https://hub.example --managed
+```
+
+Nothing is written before the approval. A refused or expired code, or an
+unreachable hub, ends the command with the reason and the command to run
+again. To enrol another person's machine, an owner mints a token on the
+hub's Enrol this machine card and that machine runs `commonmeasure connect
+https://hub.example --managed --token TOKEN`.
+[Edge enrolment](OPERATING.md#joining-common-measure-hub) explains the local
+keys, managed policy and disconnection.
 
 ## 8. If you build from source
 

@@ -131,6 +131,7 @@ fn run_exa_against(
         backend: None,
         replay: None,
         allowance: Some(day_usd(home, micros)),
+        source_policy: None,
         provenance_signing:
             commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
     };
@@ -255,6 +256,7 @@ fn an_unpriced_provider_is_refused_only_once_the_allowance_is_exhausted() {
             backend: None,
             replay: None,
             allowance: Some(day_usd(home.path(), 5_000)),
+            source_policy: None,
             provenance_signing:
                 commonmeasure_runtime::processor::provenance::SigningIdentity::Unconfigured,
         };

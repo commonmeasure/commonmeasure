@@ -22,7 +22,7 @@ use commonmeasure_supply::{
 };
 use commonmeasure_types::canonical::canonical_digest;
 use commonmeasure_types::{
-    AssuranceBasis, ContextJob, Decision, DecisionRecord, Gap, GapReason, ModelPlan,
+    AssuranceBasis, ContextJob, Decision, DecisionRecord, Gap, GapReason, ModelPlan, PolicyMode,
     ProviderCapability, SupplyPlan, SupplyStep,
 };
 use serde::{Deserialize, Serialize};
@@ -208,6 +208,18 @@ impl From<std::io::Error> for RunError {
 pub type SupplyResolver =
     Box<dyn Fn(&str) -> Result<Box<dyn SupplyAdapter>, SupplyError> + Send + Sync>;
 
+/// A standing source policy resolved by the caller, independently of the suite.
+///
+/// The job carries the existing constraint vocabulary; `authority` carries
+/// any principal-resolution refusal. `record` identifies the exact resolution
+/// and applied revision and is sealed with the run. The runtime does not read
+/// an operator home or synchronise management itself.
+pub struct ResolvedSourcePolicy {
+    pub job: ContextJob,
+    pub authority: Ruling,
+    pub record: Value,
+}
+
 /// Everything a run needs from outside itself.
 pub struct RunOptions {
     /// Whether external provider calls are authorised. Off by default: an
@@ -230,6 +242,10 @@ pub struct RunOptions {
     /// quoted purchase, never treated as an unlimited allowance that happens
     /// to be missing.
     pub allowance: Option<crate::allowance::AllowanceContext>,
+    /// Standing policy applied in addition to the suite. Checks stay separate:
+    /// concatenating allow-lists or ordered access rules would widen access.
+    /// `None` explicitly means suite-only admission (including replay).
+    pub source_policy: Option<ResolvedSourcePolicy>,
     /// The operator's signing certificate and key for output provenance
     /// labels, when the environment names them. `Unconfigured` is recorded
     /// as an explicit gap on every plan a suite asks to label.
@@ -247,6 +263,7 @@ impl RunOptions {
             backend: backend_from_environment(),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing: SigningIdentity::from_environment(),
         }
     }
@@ -324,11 +341,11 @@ pub fn execute(suite: &Suite, options: &RunOptions) -> Result<RunReport, RunErro
         "manifest.json",
         &json!({"hash": manifest_hash, "manifest": manifest}),
     )?;
-    record(
-        &mut log,
-        "run_started",
-        json!({"run_id": run_id, "manifest_hash": manifest_hash}),
-    );
+    let mut started = json!({"run_id": run_id, "manifest_hash": manifest_hash});
+    if let Some(policy) = &options.source_policy {
+        started["source_policy"] = policy.record.clone();
+    }
+    record(&mut log, "run_started", started);
 
     let mut run = Execution {
         suite,
@@ -398,6 +415,9 @@ pub fn execute(suite: &Suite, options: &RunOptions) -> Result<RunReport, RunErro
             "unavailable_inputs": selection.unavailable_inputs,
         },
     });
+    if let Some(policy) = &options.source_policy {
+        summary["source_policy"] = policy.record.clone();
+    }
     if let Some(replay) = &options.replay {
         summary["run"]["replay_manifest"] = json!(replay.manifest_path);
     }
@@ -436,6 +456,76 @@ struct Execution<'a> {
 }
 
 impl Execution<'_> {
+    fn enforcement_mode(&self) -> PolicyMode {
+        let home = self
+            .options
+            .source_policy
+            .as_ref()
+            .map(|policy| policy.job.policy_mode);
+        match (self.suite.job.policy_mode, home) {
+            (PolicyMode::Strict, _) | (_, Some(PolicyMode::Strict)) => PolicyMode::Strict,
+            (PolicyMode::Prefer, _) | (_, Some(PolicyMode::Prefer)) => PolicyMode::Prefer,
+            _ => PolicyMode::Observe,
+        }
+    }
+
+    fn context_budget(&self) -> Option<u64> {
+        [
+            self.suite.job.maximum_context_tokens(),
+            self.options
+                .source_policy
+                .as_ref()
+                .and_then(|policy| policy.job.maximum_context_tokens()),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// Both declarations must admit a crossing. Keep their allow-lists and
+    /// ordered rules independent, and record each breach against its basis.
+    fn check_policy(
+        &self,
+        plan: &mut PlanUnderConstruction,
+        source: Option<&str>,
+        check: impl Fn(&ContextJob) -> Ruling,
+    ) -> Ruling {
+        let mut result = Ruling::Allowed;
+        if let Some(policy) = &self.options.source_policy {
+            let mut job = policy.job.clone();
+            job.policy_mode = self.enforcement_mode();
+            let ruling = if policy.authority.is_refusal() {
+                policy.authority.clone()
+            } else {
+                check(&job)
+            };
+            let before = plan.decisions.len();
+            plan.apply(&ruling, self.run_id, &self.suite.job, source);
+            for decision in &mut plan.decisions[before..] {
+                decision["policy_basis"] = json!("source_policy");
+            }
+            if ruling.is_refusal() {
+                return ruling;
+            }
+            result = ruling;
+        }
+        let mut job = self.suite.job.clone();
+        job.policy_mode = self.enforcement_mode();
+        let ruling = check(&job);
+        let before = plan.decisions.len();
+        plan.apply(&ruling, self.run_id, &self.suite.job, source);
+        if self.options.source_policy.is_some() {
+            for decision in &mut plan.decisions[before..] {
+                decision["policy_basis"] = json!("suite");
+            }
+        }
+        if ruling != Ruling::Allowed {
+            ruling
+        } else {
+            result
+        }
+    }
+
     /// The controlled baseline: the same question with no external supply.
     ///
     /// It is the only honest answer to "did the context help?", so it runs
@@ -475,11 +565,25 @@ impl Execution<'_> {
         let provider = step.provider.name.clone();
         let mut plan = PlanUnderConstruction::new(&supply_plan.name, &provider, Some(step));
 
-        let eligibility = policy::provider_eligibility(&self.suite.job, &provider);
-        plan.apply(&eligibility, self.run_id, &self.suite.job, None);
+        let eligibility = self.check_policy(&mut plan, None, |job| {
+            policy::provider_eligibility(job, &provider)
+        });
         if eligibility.is_refusal() {
             let value = plan.finish("refused", Value::Null, Vec::new(), None, Value::Null);
             return Ok(self.record_plan(value, None));
+        }
+
+        if self.options.source_policy.is_some()
+            && step.capability == ProviderCapability::Fetch
+            && let Some(target) = &self.suite.fetch_target
+        {
+            let admission = self.check_policy(&mut plan, Some(target), |job| {
+                policy::fetch_target_admission(job, target, &provider)
+            });
+            if admission.is_refusal() {
+                let value = plan.finish("refused", Value::Null, Vec::new(), None, Value::Null);
+                return Ok(self.record_plan(value, None));
+            }
         }
 
         // The --live gate is about money leaving the operator or code
@@ -589,7 +693,7 @@ impl Execution<'_> {
                             Some(allowance) => {
                                 let decision = allowance.pre_dispatch(
                                     supplier.published_price(step.capability).as_ref(),
-                                    self.suite.job.policy_mode,
+                                    self.enforcement_mode(),
                                     Utc::now(),
                                     &format!("run {}", self.run_id),
                                 );
@@ -643,12 +747,27 @@ impl Execution<'_> {
                             capped_search = supplier
                                 .maximum_search_results()
                                 .filter(|cap| *cap < step.limit);
-                            let include_hosts: Vec<&str> =
+                            let home_hosts: Vec<&str> = self
+                                .options
+                                .source_policy
+                                .as_ref()
+                                .filter(|policy| !policy.job.allows_provider_sources(&provider))
+                                .map(|policy| policy.job.allowed_source_hosts().collect())
+                                .unwrap_or_default();
+                            let suite_hosts: Vec<&str> =
                                 if self.suite.job.allows_provider_sources(&provider) {
                                     Vec::new()
                                 } else {
                                     self.suite.job.allowed_source_hosts().collect()
                                 };
+                            // Domain filters are an optimisation, not authority.
+                            // Never replace a home's filter with a suite exemption.
+                            // Separate admission checks still apply to every result.
+                            let include_hosts = if home_hosts.is_empty() {
+                                suite_hosts
+                            } else {
+                                home_hosts
+                            };
                             supplier.search(&self.suite.job.prompt, step.limit, &include_hosts)
                         }
                     }
@@ -844,11 +963,9 @@ impl Execution<'_> {
         // charge it reported after the fact — the only point that exists.
         let cost = match &quote {
             Some((_, _, ruling)) => ruling.clone(),
-            None => {
-                let cost = policy::acquisition_cost(&self.suite.job, &acquisition.charge);
-                plan.apply(&cost, self.run_id, &self.suite.job, None);
-                cost
-            }
+            None => self.check_policy(&mut plan, None, |job| {
+                policy::acquisition_cost(job, &acquisition.charge)
+            }),
         };
         // The supply leg's wall clock is every request that ran: the quote
         // legs where the plan quoted, then the settlement.
@@ -866,7 +983,9 @@ impl Execution<'_> {
             .envelopes
             .iter()
             .map(|envelope| {
-                policy::source_admission_from(&self.suite.job, envelope, Some(&provider))
+                self.check_policy(&mut plan, Some(&envelope.source_url), |job| {
+                    policy::source_admission_from(job, envelope, Some(&provider))
+                })
             })
             .collect();
 
@@ -902,7 +1021,7 @@ impl Execution<'_> {
             });
             let injection_ruling = screenable.map(|text| {
                 let (invocation, ruling) = processor::injection::invoke(
-                    self.suite.job.policy_mode,
+                    self.enforcement_mode(),
                     &envelope.source_url,
                     &envelope.source_url,
                     text,
@@ -956,7 +1075,7 @@ impl Execution<'_> {
         let mut fitted = fit_context_budget(
             kept.iter()
                 .map(|source| (source.envelope.source_url.as_str(), source.tokens_out)),
-            self.suite.job.maximum_context_tokens(),
+            self.context_budget(),
         )
         .into_iter();
         let mut kept_iter = kept.iter();
@@ -974,12 +1093,6 @@ impl Execution<'_> {
         for (index, (envelope, admission)) in
             acquisition.envelopes.iter().zip(&admissions).enumerate()
         {
-            plan.apply(
-                admission,
-                self.run_id,
-                &self.suite.job,
-                Some(&envelope.source_url),
-            );
             let pii = pii_rulings[index].as_ref();
             let injection = injection_rulings[index].as_ref();
             let original_tokens = envelope
@@ -1153,8 +1266,9 @@ impl Execution<'_> {
             Some(inference_ms) => supply_latency_ms.saturating_add(inference_ms),
             None => supply_latency_ms,
         };
-        let latency = policy::total_latency(&self.suite.job, total_latency);
-        plan.apply(&latency, self.run_id, &self.suite.job, None);
+        let latency = self.check_policy(&mut plan, None, |job| {
+            policy::total_latency(job, total_latency)
+        });
         if latency.is_refusal() {
             status = "refused";
         }
@@ -1248,8 +1362,9 @@ impl Execution<'_> {
             });
         }
 
-        let ruling = policy::purchase_decision(&self.suite.job, &quote.charge, trial_covered);
-        plan.apply(&ruling, self.run_id, &self.suite.job, None);
+        let ruling = self.check_policy(plan, None, |job| {
+            policy::purchase_decision(job, &quote.charge, trial_covered)
+        });
         let reason = match (&ruling, trial_covered) {
             (Ruling::Allowed, true) => {
                 "The supplier states the purchase is covered by the trial; no charge applies \
@@ -1389,7 +1504,7 @@ impl Execution<'_> {
                 None => "no price at all".to_owned(),
             };
             let ruling = Ruling::breach(
-                self.suite.job.policy_mode,
+                self.enforcement_mode(),
                 format!(
                     "Principal {:?} holds a cumulative allowance and the quote is {quoted_as}, \
                      which a monetary allowance cannot be checked against; buying at an \
@@ -1418,7 +1533,7 @@ impl Execution<'_> {
             return (record, None, Some(ruling));
         };
         let decision =
-            allowance.reserve_decision(price, self.suite.job.policy_mode, Utc::now(), context);
+            allowance.reserve_decision(price, self.enforcement_mode(), Utc::now(), context);
         (decision.record, decision.reservation, decision.ruling)
     }
 
@@ -2148,6 +2263,9 @@ fn manifest(
                           returned source \"cached\" and Firecrawl cacheState \"hit\" during \
                           reconnaissance on 1 August 2026.",
     });
+    if let Some(policy) = &options.source_policy {
+        manifest["source_policy"] = policy.record.clone();
+    }
     if let (Value::Object(manifest), Value::Object(extra)) = (&mut manifest, extra) {
         manifest.extend(extra);
     }

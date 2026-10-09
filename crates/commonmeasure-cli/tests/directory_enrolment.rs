@@ -55,7 +55,8 @@ fn call(id: u64, args: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"context_enrol","arguments":args}})
 }
 fn answer(value: &Value) -> Value {
-    serde_json::from_str(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    serde_json::from_str(commonmeasure_harness::provenance::payload_text(&value["result"]).unwrap())
+        .unwrap()
 }
 
 #[test]

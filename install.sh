@@ -3,7 +3,7 @@
 # release of the product repository, github.com/commonmeasure/commonmeasure:
 #
 #   sh install.sh [--tag v0.3.1] [--dir DIR] [--plugin DIR] [--update]
-#                 [--agree-reporting] [--connect HUB --token TOKEN]
+#                 [--agree-reporting] [--connect HUB [--token TOKEN]]
 #
 # A release holds one binary per supported platform, the plugin archive and
 # SHA256SUMS over every asset. The installer picks the binary for this
@@ -16,22 +16,24 @@
 # the first-install next steps and the consent question; `commonmeasure
 # update` runs this script, as embedded in the binary, with it.
 #
-# --connect HUB --token TOKEN uses the token the hub's Enrol this machine
-# card mints: after the install and the consent question it runs
-# `commonmeasure first-run HUB --token TOKEN`, which registers every host
-# found on this machine as `commonmeasure install <host>` does, connects to
-# the hub under its managed policy, checks the directory's hub reporting,
-# relays, and prints the hub's Fleet evidence
+# --connect HUB runs `commonmeasure first-run HUB` after the install and the
+# consent question. It registers every host found on this machine as
+# `commonmeasure install <host>` does, connects to the hub under its managed
+# policy, checks the directory's hub reporting, installs the background relay
+# service on macOS where no relay holds the edge home, makes one governed
+# fetch of https://commonmeasure.ai/ in a session recorded under the host
+# word commonmeasure-first-run, relays, and prints the hub's Fleet evidence
 # address and the local console's, one line per step. Run it in the project
 # directory whose sessions the hub should see. A fresh directory remains
-# unenrolled until you confirm history with `commonmeasure enrol --name
-# NAME --reporting hub --include-history`; the home directory and / are
-# never enrolled. In this release the first-run fetch of
-# https://commonmeasure.ai/ is reported as not made: the session record has
-# no host word for installer traffic. HUB and TOKEN are checked
-# before anything is downloaded: each needs the other, and --connect cannot
-# be combined with --update. The token is passed to the binary and printed
-# nowhere.
+# unenrolled until you confirm history with `commonmeasure enrol --name NAME
+# --reporting hub --include-history`; the home directory and / are never
+# enrolled. To connect, the binary prints a code and the hub page to approve
+# it on, opens the page where the desktop has an opener, and waits for the
+# approval. --token TOKEN connects with the token the hub's Enrol this
+# machine card mints instead, which is how an owner enrols someone else's
+# machine. HUB and TOKEN are checked before anything is downloaded: --token
+# needs --connect, and --connect cannot be combined with --update. The token
+# is passed to the binary and printed nowhere.
 #
 # Reporting consent: some sources license their content only if each use is
 # reported, and they are refused until the operator agrees to report to
@@ -79,7 +81,7 @@ token_given=""
 [ "${COMMONMEASURE_REPORTING_CONSENT:-}" = agree ] && agree_reporting=1
 
 usage() {
-  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update] [--agree-reporting] [--connect HUB --token TOKEN]"
+  echo "usage: sh install.sh [--tag vX.Y.Z] [--dir DIR] [--plugin DIR] [--update] [--agree-reporting] [--connect HUB [--token TOKEN]]"
 }
 
 while [ $# -gt 0 ]; do
@@ -108,10 +110,11 @@ cannot() { echo "commonmeasure installer: cannot $1" >&2; exit 2; }
 # fragment, as `commonmeasure connect` requires; the binary checks it again.
 if [ -n "$connect_given" ] || [ -n "$token_given" ]; then
   [ -n "$connect_given" ] || cannot "use --token without --connect: pass the hub's address as --connect HUB"
-  [ -n "$token_given" ] || cannot "connect to $connect without a token: copy the whole line from the hub's Enrol this machine card, which mints one, or add --token TOKEN"
   # POSIX character classes cover tabs and newlines as well as spaces.
   case "$connect" in *[![:space:]]*) ;; *) cannot "use --connect with an empty or whitespace-only value" ;; esac
-  case "$token" in *[![:space:]]*) ;; *) cannot "use --token with an empty or whitespace-only value" ;; esac
+  if [ -n "$token_given" ]; then
+    case "$token" in *[![:space:]]*) ;; *) cannot "use --token with an empty or whitespace-only value" ;; esac
+  fi
   [ -z "$update" ] || cannot "combine --connect with --update: an update changes the binary only"
   case "$connect" in
     *@*|*\?*|*#*|*" "*) cannot "connect to $connect: a hub address carries no credentials, query, fragment or space" ;;
@@ -277,7 +280,12 @@ esac
 # place whatever they say. Its stdin is not the script's, which `curl | sh`
 # feeds through the same pipe.
 if [ -n "$connect" ]; then
-  "$target" first-run "$connect" --token "$token" </dev/null || {
+  if [ -n "$token_given" ]; then
+    set -- first-run "$connect" --token "$token"
+  else
+    set -- first-run "$connect"
+  fi
+  "$target" "$@" </dev/null || {
     echo "commonmeasure installer: $target is installed; the first run stopped at the step named above" >&2
     exit 3
   }

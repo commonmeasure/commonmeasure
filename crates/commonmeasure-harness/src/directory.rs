@@ -387,7 +387,7 @@ fn hub_request(
     budget: std::time::Duration,
 ) -> Result<Value, String> {
     let edge = EnrolmentRecord::load(home)?
-        .ok_or("not connected: run commonmeasure connect <named-hub> --token <token> --managed")?;
+        .ok_or("not connected: run commonmeasure connect <named-hub> --managed")?;
     if edge.is_revoked() {
         return Err("edge enrolment is revoked".into());
     }
@@ -557,7 +557,7 @@ pub fn status(home: &Path, root: &Path) -> Result<Value, String> {
         "reporting": reporting, "receiver": receiver, "relay_config_error": relay_config_error, "approvals": approvals,
         "historical_evidence": "reporting includes existing eligible witnessed evidence under this root; previously delivered evidence is not recalled",
         "first_evidence": {"state": if witnessed == 0 { "no_witnessed_crossing" } else { "witnessed_locally" }, "witnessed_crossings": witnessed, "delivery": "run commonmeasure relay --dry-run, then commonmeasure relay; delivery totals distinguish eligible and accepted events"},
-        "connect": if enrolment.is_none() { Some("commonmeasure connect <named-hub> --token <token> --managed") } else { None },
+        "connect": if enrolment.is_none() { Some("commonmeasure connect <named-hub> --managed") } else { None },
     }))
 }
 

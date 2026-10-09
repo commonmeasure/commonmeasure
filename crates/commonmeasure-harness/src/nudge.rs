@@ -23,9 +23,9 @@
 //! which is why [`BASIS`] says exactly that on every issuance record.
 
 /// Versioned like an evaluator identity: a `nudge_issued` record naming
-/// `mediation-nudge/5` states exactly which wording was in force in that
+/// `mediation-nudge/6` states exactly which wording was in force in that
 /// session. Change [`TEXT`], bump this.
-pub const IDENTITY: &str = "mediation-nudge/5";
+pub const IDENTITY: &str = "mediation-nudge/6";
 
 /// What every session is asked. One short paragraph, deliberately: the cost
 /// of a standing instruction is paid into every session's context, so the
@@ -45,6 +45,10 @@ pub const IDENTITY: &str = "mediation-nudge/5";
 /// establishes that the refusal was about who asked; a bare 403 is equally a
 /// paywall or a block, and an agent guessing between them states something
 /// about a third party that nothing supports.
+///
+/// The agent is asked to cite the provenance line each mediated result opens
+/// with ([`crate::provenance`]) when it reports sources, because that line
+/// is built from the record and the page is built by the source.
 pub const TEXT: &str = "Common Measure standing instruction, from its SessionStart hook: for \
 external web content, prefer this session's mediated tools — call context_fetch instead of \
 WebFetch, and context_search instead of WebSearch — so operator policy can rule on each crossing \
@@ -55,8 +59,9 @@ mediated tool reports unavailable (for example an unconfigured search provider),
 that runs natively is the fallback; if policy refuses a crossing, respect the refusal rather than \
 retrying it with a built-in tool; if a site refuses the request itself, report what the tool said \
 and no more, because a built-in tool that runs natively fetches as something other than the \
-declared fetcher and is recorded as your decision. This is a nudge, not enforcement: it blocks \
-nothing itself.\n";
+declared fetcher and is recorded as your decision. When reporting sources, cite the Common \
+Measure line opening each mediated result, not the page. This is a nudge, not enforcement: it \
+blocks nothing itself.\n";
 
 /// The claim an issuance record can honestly make.
 pub const BASIS: &str = "emitted on the SessionStart hook's stdout for the host to add to the \
@@ -82,6 +87,7 @@ mod tests {
             "refuses the request itself",
             "and no more",
             "your decision",
+            "cite the Common Measure line",
         ] {
             assert!(TEXT.contains(phrase), "the nudge must mention {phrase:?}");
         }
@@ -103,7 +109,7 @@ mod tests {
     /// refusals would contradict.
     #[test]
     fn the_nudge_names_the_condition_the_model_can_see() {
-        assert_eq!(IDENTITY, "mediation-nudge/5");
+        assert_eq!(IDENTITY, "mediation-nudge/6");
         assert!(TEXT.contains("says it went through Common Measure"));
         assert!(TEXT.contains("has no native fallback"));
         for claim in [
@@ -121,11 +127,13 @@ mod tests {
     /// cost. This bound is the reviewable budget: it holds the three
     /// conditions and their reasons plus the one sentence on the router, and
     /// raising it is a decision, not drift (950 bytes held nudge/3; nudge/4
-    /// added the router sentence; nudge/5 rewrote it within the same bound).
+    /// added the router sentence; nudge/5 rewrote it within the same bound;
+    /// nudge/6 added the sentence on citing the provenance line, which
+    /// EDG-164 asks for, and 100 bytes for it).
     #[test]
     fn the_nudge_stays_one_short_paragraph() {
         assert!(
-            TEXT.len() <= 1050,
+            TEXT.len() <= 1150,
             "{} bytes is no longer a nudge",
             TEXT.len()
         );

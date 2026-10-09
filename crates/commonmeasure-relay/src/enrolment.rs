@@ -28,6 +28,7 @@
 //! and removes the three files either way.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
@@ -48,6 +49,12 @@ use crate::config::{RelayConfig, receiver_endpoint, receiver_origin};
 pub const EXCHANGE_PATH: &str = "/api/v1/enrolment/exchange";
 pub const STATUS_PATH: &str = "/api/v1/enrolment/status";
 pub const DISCONNECT_PATH: &str = "/api/v1/enrolment/disconnect";
+/// Where the edge asks for a device code. A route of the hub's web layer,
+/// not its API, because only the web layer reads the client address the
+/// hub limits these requests by.
+pub const DEVICE_PATH: &str = "/connect/device";
+/// Where the edge polls for the enrolment a device code was approved for.
+pub const DEVICE_TOKEN_PATH: &str = "/api/v1/enrolment/device/token";
 /// Where the edge uploads the proof that its key agrees to be listed in the
 /// hub's key directory.
 pub const DIRECTORY_PROOF_PATH: &str = "/api/v1/enrolment/directory-proof";
@@ -275,6 +282,25 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
     if token.is_empty() {
         bail!("the enrolment token is empty");
     }
+    refuse_standing_enrolment(home)?;
+    std::fs::create_dir_all(home).with_context(|| format!("create {}", home.display()))?;
+
+    let key = EdgeKey::generate().map_err(|error| anyhow::anyhow!(error))?;
+    let response = post_json(&hub, EXCHANGE_PATH, &key_proof(&key, "token", token))
+        .with_context(|| format!("reach {hub}"))?;
+    if response.status != 201 {
+        bail!(
+            "{hub} refused the enrolment ({}): {}",
+            response.status,
+            detail_of(&response.body)
+        );
+    }
+    store_enrolment(home, hub, key, &response.body, managed)
+}
+
+/// `connect` enrols over a key that stands only after `disconnect`; there
+/// is no override.
+fn refuse_standing_enrolment(home: &Path) -> Result<()> {
     if let Some(existing) = EnrolmentRecord::load(home).map_err(|error| anyhow::anyhow!(error))?
         && !existing.is_revoked()
     {
@@ -284,32 +310,41 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
             existing.key_id
         );
     }
-    std::fs::create_dir_all(home).with_context(|| format!("create {}", home.display()))?;
+    Ok(())
+}
 
-    let key = EdgeKey::generate().map_err(|error| anyhow::anyhow!(error))?;
-    let body = json!({
-        "token": token,
+/// The body both routes to an enrolment take: the single-use `credential`
+/// under `member`, the new public key, and the key's signature over the
+/// credential's bytes as the proof of possession.
+fn key_proof(key: &EdgeKey, member: &str, credential: &str) -> Value {
+    json!({
+        member: credential,
         "public_key": { "kty": "OKP", "crv": "Ed25519", "x": key.jwk_x() },
-        "proof": key.sign(token.as_bytes()),
-    });
-    let mut request = commonmeasure_http::Request::post(
-        EXCHANGE_PATH,
-        serde_json::to_vec(&body)?,
-        "application/json",
-    );
+        "proof": key.sign(credential.as_bytes()),
+    })
+}
+
+fn post_json(hub: &str, path: &str, body: &Value) -> Result<commonmeasure_http::Response> {
+    let mut request =
+        commonmeasure_http::Request::post(path, serde_json::to_vec(body)?, "application/json");
     request.headers.set("User-Agent", USER_AGENT);
-    let response = commonmeasure_http::send(&format!("{hub}{EXCHANGE_PATH}"), request)
-        .with_context(|| format!("reach {hub}"))?;
-    if response.status != 201 {
-        bail!(
-            "{hub} refused the enrolment ({}): {}",
-            response.status,
-            detail_of(&response.body)
-        );
-    }
-    let enrolled: Enrolled = serde_json::from_slice(&response.body)
+    commonmeasure_http::send(&format!("{hub}{path}"), request)
+}
+
+/// Store the enrolment the hub answered `201` with, by either route, and
+/// make the steps that follow it: the signer pin, the directory proof and
+/// the first relay run. The home is created here at the latest, so a
+/// device-code enrolment that never gets an approval writes nothing.
+fn store_enrolment(
+    home: &Path,
+    hub: String,
+    key: EdgeKey,
+    answer: &[u8],
+    managed: bool,
+) -> Result<ConnectReport> {
+    let enrolled: Enrolled = serde_json::from_slice(answer)
         .with_context(|| format!("{hub} answered 201 but not with an enrolment"))?;
-    let answer: Value = serde_json::from_slice(&response.body)
+    let answer: Value = serde_json::from_slice(answer)
         .with_context(|| format!("{hub} answered 201 but not with an enrolment"))?;
     if enrolled.key_id != key.thumbprint() {
         bail!(
@@ -334,6 +369,7 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
         api_key: Some(enrolled.api_key.clone()),
     };
     let receiver = relay_config.receiver.clone();
+    std::fs::create_dir_all(home).with_context(|| format!("create {}", home.display()))?;
 
     // The private key first: an enrolment record without its key is a
     // worse state than a key without its record. Both under the policy
@@ -402,6 +438,222 @@ pub fn connect(home: &Path, hub: &str, token: &str, managed: bool) -> Result<Con
         directory_proof,
         relay,
         managed,
+    })
+}
+
+/// What the person approving this edge needs, from the hub's answer to the
+/// device-code request: the code to compare and the page to approve it on.
+/// The device code itself stays inside [`connect_by_device`]: whoever holds
+/// it after an approval can claim the enrolment.
+#[derive(Debug, Clone)]
+pub struct DeviceCode {
+    /// The short code the hub's approval page asks for, as `BCDF-GHJK`.
+    pub user_code: String,
+    /// The approval page.
+    pub verification_uri: String,
+    /// The approval page with the code filled in, where the hub gave one:
+    /// for a browser this machine opens, never for printing.
+    pub verification_uri_complete: Option<String>,
+    /// How long the codes last, from the hub's answer.
+    pub expires_in: Duration,
+}
+
+/// The hub's answer to the device-code request (RFC 8628 §3.2).
+#[derive(Deserialize)]
+struct DeviceAuthorization {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    #[serde(default)]
+    interval: Option<u64>,
+}
+
+/// A refusal on the poll route (RFC 8628 §3.5).
+#[derive(Deserialize)]
+struct DeviceRefusal {
+    error: String,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
+/// The interval RFC 8628 §3.2 has a client use when the hub states none.
+const DEVICE_INTERVAL_DEFAULT: Duration = Duration::from_secs(5);
+/// What RFC 8628 §3.5 has a client add to its interval at each `slow_down`.
+const DEVICE_SLOW_DOWN: Duration = Duration::from_secs(5);
+/// The hub names edges in 1 to 100 characters.
+const EDGE_NAME_MAX: usize = 100;
+
+/// Enrol this edge with `hub` by its device-code flow: ask the hub for a
+/// code under `name`, hand it to `show`, and poll at the hub's interval
+/// until the person approves or refuses it in the hub or it expires. On
+/// approval the enrolment is stored exactly as a token's is.
+///
+/// `show` must return promptly: polling starts once it returns, and the
+/// codes' lifetime is counted from the hub's answer, before it is called.
+///
+/// Nothing is written under `home` before the approval: a refusal, an
+/// expiry, an unreachable hub or an interrupted command leaves the home as
+/// it was. `retry` tells the operator how to start again, as "run `…` for a
+/// new code"; each of those endings ends with it.
+pub fn connect_by_device(
+    home: &Path,
+    hub: &str,
+    name: &str,
+    managed: bool,
+    retry: &str,
+    show: &mut dyn FnMut(&DeviceCode),
+) -> Result<ConnectReport> {
+    let hub = normalise_hub(hub)?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > EDGE_NAME_MAX {
+        bail!(
+            "the edge's name must be 1 to {EDGE_NAME_MAX} characters; give one with --name. \
+             Nothing was sent"
+        );
+    }
+    refuse_standing_enrolment(home)?;
+
+    let ended = |reason: String| anyhow::anyhow!("{reason}. Nothing was written; {retry}");
+    let response = post_json(&hub, DEVICE_PATH, &json!({ "name": name }))
+        .map_err(|error| ended(format!("cannot reach {hub} for a code: {error:#}")))?;
+    if response.status != 200 {
+        let wait = response
+            .headers
+            .get("Retry-After")
+            .map(|seconds| format!(" (the hub asks for {} seconds first)", seconds.trim()))
+            .unwrap_or_default();
+        return Err(ended(format!(
+            "{hub} refused a code ({}): {}{wait}",
+            response.status,
+            detail_of(&response.body)
+        )));
+    }
+    let authorization: DeviceAuthorization = serde_json::from_slice(&response.body)
+        .map_err(|error| ended(format!("{hub} answered without a device code: {error}")))?;
+    let code = shown_code(&hub, &authorization).map_err(ended)?;
+    // The codes' lifetime runs from the hub's answer. The deadline is fixed
+    // here, before `show`, so however long showing the code takes is spent
+    // from the lifetime rather than added to it.
+    let deadline = Instant::now() + code.expires_in;
+    // The hub trims the device code before it checks the proof over it.
+    let device_code = authorization.device_code.trim();
+    // A hub that quotes the device code back in a refusal must not get it
+    // into the terminal or a stored refusal while it can still be claimed.
+    let _protection = commonmeasure_http::EphemeralCredentialGuard::new(&hub, device_code)
+        .map_err(|error| ended(format!("cannot protect the device code: {error:#}")))?;
+
+    let key = EdgeKey::generate().map_err(|error| anyhow::anyhow!(error))?;
+    let poll = key_proof(&key, "device_code", device_code);
+    show(&code);
+
+    let mut interval = authorization
+        .interval
+        .map(Duration::from_secs)
+        .unwrap_or(DEVICE_INTERVAL_DEFAULT);
+    loop {
+        if Instant::now() + interval > deadline {
+            return Err(ended(format!(
+                "the code {} expired before it was approved",
+                code.user_code
+            )));
+        }
+        std::thread::sleep(interval);
+        let response = post_json(&hub, DEVICE_TOKEN_PATH, &poll).map_err(|error| {
+            ended(format!(
+                "cannot reach {hub} while waiting for approval: {error:#}"
+            ))
+        })?;
+        if response.status == 201 {
+            return store_enrolment(home, hub, key, &response.body, managed);
+        }
+        let refusal = serde_json::from_slice::<DeviceRefusal>(&response.body).ok();
+        let described = |refusal: &DeviceRefusal| {
+            refusal
+                .error_description
+                .as_deref()
+                .map(|text| format!(": {text}"))
+                .unwrap_or_default()
+        };
+        match (response.status, refusal) {
+            (400, Some(refusal)) if refusal.error == "authorization_pending" => {}
+            (400, Some(refusal)) if refusal.error == "slow_down" => interval += DEVICE_SLOW_DOWN,
+            (400, Some(refusal)) if refusal.error == "access_denied" => {
+                return Err(ended(format!(
+                    "the code {} was refused in the hub",
+                    code.user_code
+                )));
+            }
+            (400, Some(refusal)) if refusal.error == "expired_token" => {
+                return Err(ended(format!(
+                    "the code {} expired before it was approved",
+                    code.user_code
+                )));
+            }
+            (400, Some(refusal)) => {
+                return Err(ended(format!(
+                    "{hub} refused the enrolment ({}){}",
+                    refusal.error,
+                    described(&refusal)
+                )));
+            }
+            (status, _) => {
+                return Err(ended(format!(
+                    "{hub} refused the enrolment ({status}): {}",
+                    detail_of(&response.body)
+                )));
+            }
+        }
+    }
+}
+
+/// What may be shown of the hub's device-code answer. The user code is
+/// printed to a terminal, so it is held to the characters a code is made
+/// of; the approval pages may be handed to the desktop's opener, so they
+/// are held to the hub URL's transport rule.
+fn shown_code(
+    hub: &str,
+    authorization: &DeviceAuthorization,
+) -> std::result::Result<DeviceCode, String> {
+    let user_code = authorization.user_code.trim();
+    if user_code.is_empty()
+        || user_code.len() > 16
+        || !user_code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(format!(
+            "{hub} answered a user code this edge will not print"
+        ));
+    }
+    if authorization.device_code.trim().is_empty() {
+        return Err(format!("{hub} answered an empty device code"));
+    }
+    let page = |uri: &str| -> std::result::Result<String, String> {
+        let parsed = url::Url::parse(uri)
+            .map_err(|_| format!("{hub} answered an approval page that is not a URL"))?;
+        if policy_url_accepted(uri).is_err()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(format!(
+                "{hub} answered an approval page that is not https, or that carries \
+                 credentials"
+            ));
+        }
+        Ok(uri.to_owned())
+    };
+    Ok(DeviceCode {
+        user_code: user_code.to_owned(),
+        verification_uri: page(&authorization.verification_uri)?,
+        verification_uri_complete: authorization
+            .verification_uri_complete
+            .as_deref()
+            .map(page)
+            .transpose()?,
+        expires_in: Duration::from_secs(authorization.expires_in),
     })
 }
 
@@ -1381,6 +1633,55 @@ pub fn disconnect(home: &Path) -> Result<DisconnectReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authorization(user_code: &str, page: &str) -> DeviceAuthorization {
+        DeviceAuthorization {
+            device_code: "dc_0f".to_owned(),
+            user_code: user_code.to_owned(),
+            verification_uri: page.to_owned(),
+            verification_uri_complete: Some(format!("{page}?code={user_code}")),
+            expires_in: 900,
+            interval: Some(5),
+        }
+    }
+
+    /// The hub's device-code answer reaches a terminal and the desktop's
+    /// opener, so a user code with anything but letters, digits and hyphens
+    /// is not printed, and an approval page that is not https (or http to
+    /// loopback), or that carries credentials, is not opened.
+    #[test]
+    fn only_a_plain_code_and_an_https_page_are_shown() {
+        let hub = "https://hub.example";
+        let code = shown_code(
+            hub,
+            &authorization("BCDF-GHJK", "https://hub.example/connect"),
+        )
+        .expect("a plain code and page");
+        assert_eq!(code.user_code, "BCDF-GHJK");
+        assert_eq!(code.verification_uri, "https://hub.example/connect");
+        assert_eq!(
+            code.verification_uri_complete.as_deref(),
+            Some("https://hub.example/connect?code=BCDF-GHJK")
+        );
+        assert!(shown_code(hub, &authorization("BCDF", "http://127.0.0.1:8080/connect")).is_ok());
+        for user_code in ["", "BCDF\u{1b}[2J", "BCDF GHJK", "BCDFGHJKBCDFGHJKB"] {
+            let refused = shown_code(
+                hub,
+                &authorization(user_code, "https://hub.example/connect"),
+            )
+            .expect_err(user_code);
+            assert!(refused.contains("will not print"), "{refused}");
+        }
+        for page in [
+            "http://hub.example/connect",
+            "file:///etc/passwd",
+            "https://user:pass@hub.example/connect",
+            "not a url",
+        ] {
+            let refused = shown_code(hub, &authorization("BCDF-GHJK", page)).expect_err(page);
+            assert!(refused.contains("approval page"), "{page}: {refused}");
+        }
+    }
 
     /// The telemetry path is appended to the hub URL as a string, which
     /// keeps a hub URL's base path; against the ordinary portless hub URL a

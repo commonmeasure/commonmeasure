@@ -155,6 +155,7 @@ impl Run {
             )),
             replay: None,
             allowance: None,
+            source_policy: None,
             provenance_signing: signing,
         };
         let summary = execute(suite, &options)
@@ -611,6 +612,7 @@ fn a_constrained_entry_without_terms_is_refused_before_the_run_starts() {
         backend: None,
         replay: None,
         allowance: None,
+        source_policy: None,
         provenance_signing: SigningIdentity::Unconfigured,
     };
     let error = execute(&suite, &options).err().expect("refused");

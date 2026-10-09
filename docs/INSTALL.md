@@ -53,21 +53,27 @@ With a terminal, the installer also asks for reporting consent between the
 
 ### Connect during installation
 
-The Hub's **Enrol this machine** card supplies `--connect HUB --token TOKEN`
-for the installer. After installing, it runs `commonmeasure first-run`,
+`--connect HUB` connects the machine to Common Measure Hub during the
+install. After installing, it runs `commonmeasure first-run`,
 registers detected hosts, connects under managed policy, checks directory
-reporting, relays and prints the evidence addresses. The token is single-use
-and short-lived; it is not printed or stored.
+reporting, installs the background relay on macOS
+([below](#relay-without-a-session-end)), makes one governed fetch, relays
+and prints the evidence addresses. To connect, it prints a code and the hub
+page to approve it on, opens the page where the desktop has an opener, and
+waits until you approve the code signed in to the hub. `--token TOKEN`, from
+the Hub's **Enrol this machine** card, connects with a token instead, which
+is how an owner enrols someone else's machine. The token is single-use and
+short-lived; it is not printed or stored.
 
 Run the line in the project directory. A fresh directory remains unenrolled
 until you confirm history with `commonmeasure enrol --name NAME --reporting
-hub --include-history`. The home directory and `/` are never enrolled. In
-this release the first-run fetch is reported as not made: the session record
-has no host word for installer traffic. See [Getting started](GETTING-STARTED.md)
-for the steps and remedies.
+hub --include-history`. The home directory and `/` are never enrolled. See
+[Getting started](GETTING-STARTED.md) for the steps and remedies.
 
-Both arguments must be present and non-empty; whitespace-only values and
-`--connect` with `--update` are refused before any download (exit 2). If a
+`--token` needs `--connect`, neither may be empty or whitespace-only, and
+`--connect` with `--update` is refused, all before any download (exit 2). A
+code refused in the hub, one that expires and an unreachable hub stop the
+connect step with the reason. If a
 first-run step fails, the installer exits 3 with the binary still installed
 and names the failed step. Steps already completed stand; later steps do not
 run. Reporting consent remains the operator's choice, as below.
@@ -424,6 +430,15 @@ With any non-empty `CI` value, non-terminal stdin or stdout, or
 installing. Other platforms print `commonmeasure relay --every 300` for your
 service manager. If an accepted installation fails, enrolment still succeeds
 and the finding names the failure and the command to retry.
+
+The Hub's one-command line ([Connect during
+installation](#connect-during-installation)) asks nothing: on macOS its
+first run installs the relay before its governed fetch, where none is
+installed for this Edge home and neither a relay loop nor a hosted service
+holds it, because the first run's own session also sends no session-end
+event. A relay installed for another home is left in place. If the
+installation fails, the first run names the failure and the command to
+retry, goes on, and the fetch is refused.
 
 `install relay` writes `~/Library/LaunchAgents/ai.commonmeasure.relay.plist`,
 which runs `commonmeasure relay --every 300` at login, logging to

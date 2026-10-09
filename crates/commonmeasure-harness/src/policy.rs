@@ -1409,6 +1409,35 @@ impl SessionPolicy {
         &self.source
     }
 
+    /// The standing policy input for a batch run. The caller adds document
+    /// revision and management state to the record under the same policy lock.
+    pub fn run_policy(&self) -> commonmeasure_runtime::ResolvedSourcePolicy {
+        commonmeasure_runtime::ResolvedSourcePolicy {
+            job: crate::mcp::policy_job(self),
+            authority: self.authority_ruling().unwrap_or(Ruling::Allowed),
+            record: json!({
+                "identity": self.identity().to_value(),
+                "canonical": self.canonical(),
+            }),
+        }
+    }
+
+    fn authority_ruling(&self) -> Option<Ruling> {
+        let reason = self.fail_closed.as_ref()?;
+        Some(Ruling::Refused {
+            reason: format!("Principal authority refused: {reason}."),
+            agent_reason: commonmeasure_runtime::agent_text![
+                "Principal authority refused: ",
+                commonmeasure_runtime::agent_text::Given::text(reason),
+                "."
+            ],
+            gap: commonmeasure_types::Gap::new(
+                commonmeasure_types::GapReason::PolicyRefused,
+                "No authenticated principal policy authorised this crossing.",
+            ),
+        })
+    }
+
     /// Check one already-normalised source against the standing policy.
     pub fn admit(&self, envelope: &ContextEnvelope) -> Ruling {
         self.admit_from_provider(envelope, None)
@@ -1421,40 +1450,16 @@ impl SessionPolicy {
         envelope: &ContextEnvelope,
         provider: Option<&str>,
     ) -> Ruling {
-        if let Some(reason) = &self.fail_closed {
-            return Ruling::Refused {
-                reason: format!("Principal authority refused: {reason}."),
-                // The reason is this edge's own reading of the operator's
-                // policy and principal, never a source's.
-                agent_reason: commonmeasure_runtime::agent_text![
-                    "Principal authority refused: ",
-                    commonmeasure_runtime::agent_text::Given::text(reason),
-                    "."
-                ],
-                gap: commonmeasure_types::Gap::new(
-                    commonmeasure_types::GapReason::PolicyRefused,
-                    "No authenticated principal policy authorised this crossing.",
-                ),
-            };
+        if let Some(ruling) = self.authority_ruling() {
+            return ruling;
         }
         policy::source_admission_from(&crate::mcp::policy_job(self), envelope, provider)
     }
 
     /// Check principal authority and provider policy before disclosing a query.
     pub fn permits_provider(&self, provider: &str) -> Ruling {
-        if let Some(reason) = &self.fail_closed {
-            return Ruling::Refused {
-                reason: format!("Principal authority refused: {reason}."),
-                agent_reason: commonmeasure_runtime::agent_text![
-                    "Principal authority refused: ",
-                    commonmeasure_runtime::agent_text::Given::text(reason),
-                    "."
-                ],
-                gap: commonmeasure_types::Gap::new(
-                    commonmeasure_types::GapReason::PolicyRefused,
-                    "No authenticated principal policy authorised this crossing.",
-                ),
-            };
+        if let Some(ruling) = self.authority_ruling() {
+            return ruling;
         }
         policy::provider_eligibility(&crate::mcp::policy_job(self), provider)
     }

@@ -381,7 +381,7 @@ policy revision; the hub adds no limit of its own.
 
   | Label | Suppliers | Why |
   |---|---|---|
-  | `observed` | Dataville, Exa, Firecrawl, Parallel, Redpine | The response or receipt reports the charge; Firecrawl in credits, Parallel in billing units, never converted to currency |
+  | `observed` | Dataville, Exa, Firecrawl, Parallel, Redpine, Valyu | The response or receipt reports the charge; Firecrawl in credits, Parallel in billing units, never converted to currency |
   | `quote-bound` | Linkup, Nimble, Search1API, SERPdive, Tavily, TinyFish, You.com | No charge is reported; the charge is quoted from the published price |
   | `unknown` | Keenable, Ozone Live, People Inc, TollBit | No charge is reported and no price is supplied to quote |
 

@@ -182,8 +182,8 @@ fn a_pdf_is_saved_under_the_session_and_its_path_hash_and_size_returned() {
     assert_eq!(responses[0]["result"]["isError"], false, "{}", responses[0]);
     assert_eq!(
         responses[0]["result"]["content"].as_array().unwrap().len(),
-        1,
-        "a local edge hands over a path, not the bytes"
+        2,
+        "the provenance line and the payload: a local edge hands over a path, not the bytes"
     );
     let result = payload(&responses[0]);
     let hex = sha256_digest(&bytes)["sha256:".len()..].to_owned();
@@ -553,7 +553,8 @@ fn strict_refuses_a_pdf_the_screens_cannot_read_and_keeps_nothing() {
                 && detail.contains("Nothing of it was kept"),
             "{detail}"
         );
-        assert!(response["result"]["content"].as_array().unwrap().len() == 1);
+        // The provenance line and the refusal: no resource block.
+        assert!(response["result"]["content"].as_array().unwrap().len() == 2);
     }
     assert!(saved_files(home.path()).is_empty());
     assert!(!files_directory(home.path()).exists());
@@ -700,7 +701,8 @@ fn a_text_page_is_delivered_as_text_with_the_same_fields() {
     assert_eq!(responses[0]["result"]["isError"], false);
     assert_eq!(
         responses[0]["result"]["content"].as_array().unwrap().len(),
-        1
+        2,
+        "the provenance line and the payload"
     );
     assert!(responses[0]["result"].get("structuredContent").is_none());
     let result = payload(&responses[0]);
