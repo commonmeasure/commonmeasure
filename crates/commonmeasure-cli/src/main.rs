@@ -186,6 +186,13 @@ enum Command {
         /// one is generated when neither is set.
         #[arg(long)]
         session: Option<String>,
+        /// Opt the session into host observations before its first
+        /// crossing, so each admitted fetch returns an acquisition handle.
+        /// For a host whose hooks submit context entry and citation from
+        /// the transcript (Claude Code's plugin), since the host itself sends
+        /// no `commonmeasure/observe` request.
+        #[arg(long)]
+        host_observations: bool,
     },
     /// The hosted edge: the same mediated tools served over Streamable HTTP
     /// to hosts that reach MCP servers from their vendor's cloud, one
@@ -273,10 +280,15 @@ enum Command {
     Session {
         /// Session id, or the most recent session when omitted.
         session: Option<String>,
-        /// Print the session's reporting standing and torn lines as a JSON
+        /// Print the session's counts, its sources in the provenance line's
+        /// vocabulary, its reporting standing and torn lines as a JSON
         /// document rather than the report.
         #[arg(long)]
         json: bool,
+        /// Count only the records written at or after this time (RFC 3339),
+        /// in this log and the logs joined to it: one turn's crossings, say.
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Print this edge's fleet-status document: the identity of the policy
     /// in force for this directory and principal, the declared policy's
@@ -616,7 +628,11 @@ fn main() -> ExitCode {
         } => run(&suite, output, live, replay.as_deref()),
         Command::Inspect { run } => inspect::inspect(&run),
         Command::Hook { event, host } => return hook(&event, &host),
-        Command::Mcp { host, session } => serve_mcp(&host, session.as_deref()),
+        Command::Mcp {
+            host,
+            session,
+            host_observations,
+        } => serve_mcp(&host, session.as_deref(), host_observations),
         Command::Hosted { command } => run_hosted(command),
         Command::NativeHost { origin: _ } => return native_host(),
         Command::Credentials => credentials_report(palette),
@@ -628,7 +644,11 @@ fn main() -> ExitCode {
             json,
         } => doctor::run(host.as_deref(), resolve.as_deref(), json, palette),
         Command::Import { since, dry_run } => import(since.as_deref(), dry_run),
-        Command::Session { session, json } => show_session(session.as_deref(), json),
+        Command::Session {
+            session,
+            json,
+            since,
+        } => show_session(session.as_deref(), json, since.as_deref()),
         Command::Status { json } => show_status(json, palette),
         Command::Policy { action } => match action {
             PolicyAction::Identity => show_policy_identity(),
@@ -1094,33 +1114,74 @@ fn hook(event: &str, host: &str) -> ExitCode {
         let scan = commonmeasure_harness::prompt::scan(prompt);
         let _ = log.record_prompt_sources(surface.id(), &scan);
     }
+    // Claude Code runs Stop before the turn's final answer reaches its
+    // transcript (EDG-207), so the transcript is read only once it holds that
+    // answer. A bounded wait that ends without it reads nothing: the turn's
+    // generations stay owed to a later Stop, and the boundary names the gap.
+    let transcript = input
+        .transcript_path
+        .as_deref()
+        .filter(|_| {
+            input.hook_event_name.as_deref() == Some("Stop") && surface == HostSurface::ClaudeCode
+        })
+        .map(|transcript| {
+            commonmeasure_harness::turn_observations::await_answer(
+                std::path::Path::new(transcript),
+                input.last_assistant_message.as_deref(),
+                commonmeasure_harness::turn_observations::ANSWER_WAIT,
+            )
+            .map(|()| transcript)
+        });
     if let Some(boundary) = match input.hook_event_name.as_deref() {
         Some("UserPromptSubmit") => Some("turn_started"),
         Some("Stop") => Some("turn_completed"),
         _ => None,
     } {
+        let mut detail = serde_json::json!({"cwd": input.cwd, "transcript": input.transcript_path});
+        if let Some(Err(gap)) = &transcript {
+            detail["answer_unavailable"] = serde_json::json!(gap);
+        }
         let _ = log.record_turn(
             boundary,
             surface.id(),
             input.turn_id(),
-            serde_json::json!({"cwd": input.cwd, "transcript": input.transcript_path}),
+            detail,
             &commonmeasure_harness::boundary_policy(policy.as_ref()),
         );
     }
+    let transcript = transcript.and_then(Result::ok);
     // Stop is the stable boundary for a context-budget snapshot: the host has
-    // just finished a turn, so its transcript's last model call is what the
-    // model was sent this turn. The reader is Claude Code's transcript shape,
-    // so only that surface claims the basis; best-effort like everything else
-    // here — an unreadable transcript is a missing snapshot, not an error.
-    if input.hook_event_name.as_deref() == Some("Stop")
-        && surface == HostSurface::ClaudeCode
-        && let Some(transcript) = input.transcript_path.as_deref()
+    // finished a turn and its transcript holds the answer, so its last model
+    // call is what the model was sent this turn. The reader is Claude Code's
+    // transcript shape, so only that surface claims the basis; best-effort
+    // like everything else here — an unreadable transcript is a missing
+    // snapshot, not an error.
+    if let Some(transcript) = transcript
         && let Some(snapshot) = commonmeasure_harness::snapshot::from_claude_transcript(
             std::path::Path::new(transcript),
         )
     {
         let _ =
             log.record_context_snapshot(snapshot.to_payload(&session_id, surface.id(), transcript));
+    }
+    // Claude Code sends no observation of its own: at the end of a turn its
+    // transcript says which edge results each model call carried and which
+    // its answer cited, and those go to the MCP log the same host process
+    // started, through the ingress's own validation. Best-effort like every
+    // hook record: a log that never opted in is owed nothing.
+    if let Some(transcript) = transcript
+        && let Ok(process) = commonmeasure_harness::host_process::find().host_process
+    {
+        let identity = policy.as_ref().ok().map(|policy| policy.identity());
+        let _ = commonmeasure_harness::turn_observations::record_claude_turn(
+            &home,
+            &process,
+            std::path::Path::new(transcript),
+            &session_id,
+            surface.id(),
+            input.cwd.as_deref(),
+            identity.as_ref(),
+        );
     }
     ExitCode::SUCCESS
 }
@@ -1273,7 +1334,7 @@ fn write_native_message(
     out.flush()
 }
 
-fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
+fn serve_mcp(host: &str, session: Option<&str>, host_observations: bool) -> Result<(), String> {
     let home = home_dir().map_err(|error| error.to_string())?;
     // Provider credentials from the operator home, applied here — at process
     // start, before any thread exists — so the mediated tools work whatever
@@ -1307,6 +1368,9 @@ fn serve_mcp(host: &str, session: Option<&str>) -> Result<(), String> {
         credentials,
         mcp_session::Transport::STDIO,
     )?;
+    if host_observations {
+        server = server.host_observations();
+    }
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     server
@@ -2385,8 +2449,15 @@ fn crossing_outcome(payload: &serde_json::Value) -> &'static str {
     }
 }
 
-fn show_session(session: Option<&str>, json: bool) -> Result<(), String> {
+fn show_session(session: Option<&str>, json: bool, since: Option<&str>) -> Result<(), String> {
     use commonmeasure_harness::TornTail;
+    let since = since
+        .map(|since| {
+            chrono::DateTime::parse_from_rfc3339(since)
+                .map(|since| since.with_timezone(&chrono::Utc))
+                .map_err(|error| format!("--since {since} is not an RFC 3339 time: {error}"))
+        })
+        .transpose()?;
     let home = home_dir().map_err(|error| error.to_string())?;
     let path = match session {
         Some(id) => home.join("sessions").join(format!("{id}.ndjson")),
@@ -2442,11 +2513,38 @@ fn show_session(session: Option<&str>, json: bool) -> Result<(), String> {
         records.extend(joined);
         torn.extend(tears.into_iter().map(|tear| (other.clone(), tear)));
     }
+    if let Some(since) = since {
+        // A record whose time does not read is kept: dropping it would
+        // undercount the window, and the counts below must not claim less
+        // than the logs hold.
+        records.retain(|record| {
+            record["timestamp"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .is_none_or(|time| time >= since)
+        });
+    }
     if json {
+        records.sort_by(|a, b| a["timestamp"].as_str().cmp(&b["timestamp"].as_str()));
+        let summary = commonmeasure_harness::summarise(&records);
         let document = serde_json::json!({
             "session": id,
             "path": path.display().to_string(),
+            "joined": join.others.iter().map(|other| other.display().to_string()).collect::<Vec<_>>(),
+            "since": since.map(|since| since.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
             "records": records.len(),
+            "summary": {
+                "observed": summary.observed,
+                "mediated": summary.mediated,
+                "refused": summary.refused,
+                "reconstructed": summary.reconstructed,
+                "grounded_witnessed": summary.grounded_witnessed,
+                "grounded_reconstructed": summary.grounded_reconstructed,
+                "named_not_read": summary.named_not_read(),
+                "delivered_files": summary.delivered_files,
+                "host_observed": summary.host_observed.to_value(),
+            },
+            "sources": commonmeasure_harness::provenance::sources(&records),
             "tears": torn.iter().map(|(log, tear)| serde_json::json!({
                 "path": log.display().to_string(),
                 "line": tear.line,

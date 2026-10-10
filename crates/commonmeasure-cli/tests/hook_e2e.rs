@@ -411,7 +411,7 @@ fn a_stop_with_a_transcript_records_a_context_snapshot_with_its_basis() {
             "\n",
             r#"{"type":"user","message":{"role":"user","content":"read the cap page"}}"#,
             "\n",
-            r#"{"type":"assistant","timestamp":"2026-08-06T09:00:00.000Z","message":{"model":"claude-fable-5","usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":50,"output_tokens":40}}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-06T09:00:00.000Z","message":{"id":"msg_1","model":"claude-fable-5","content":[{"type":"text","text":"Reading it."}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":50,"output_tokens":40}}}"#,
             "\n",
         ),
     )
@@ -435,7 +435,8 @@ fn a_stop_with_a_transcript_records_a_context_snapshot_with_its_basis() {
         json!({
             "session_id": "s-8",
             "hook_event_name": "Stop",
-            "transcript_path": transcript.display().to_string()
+            "transcript_path": transcript.display().to_string(),
+            "last_assistant_message": "Reading it."
         }),
     );
     // A second turn: the transcript has grown, and the boundary observes it.
@@ -448,7 +449,7 @@ fn a_stop_with_a_transcript_records_a_context_snapshot_with_its_basis() {
             "\n",
             r#"{"type":"user","message":{"role":"user","content":"read the cap page"}}"#,
             "\n",
-            r#"{"type":"assistant","timestamp":"2026-08-06T09:00:00.000Z","message":{"model":"claude-fable-5","usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":50,"output_tokens":40}}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-06T09:00:00.000Z","message":{"id":"msg_1","model":"claude-fable-5","content":[{"type":"text","text":"Reading it."}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":50,"output_tokens":40}}}"#,
             "\n",
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"WebFetch","input":{"url":"https://www.ofgem.gov.uk/cap"}}]}}"#,
             "\n",
@@ -456,7 +457,7 @@ fn a_stop_with_a_transcript_records_a_context_snapshot_with_its_basis() {
             "\n",
             r#"{"type":"attachment","attachment":{"type":"deferred_tools_record","entries":[{"name":"WebFetch","description":"Fetches a URL"}]}}"#,
             "\n",
-            r#"{"type":"assistant","timestamp":"2026-08-06T09:05:00.000Z","message":{"model":"claude-fable-5","usage":{"input_tokens":3,"cache_read_input_tokens":1200,"cache_creation_input_tokens":60,"output_tokens":80}}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-06T09:05:00.000Z","message":{"id":"msg_2","model":"claude-fable-5","content":[{"type":"text","text":"The cap is set quarterly."}],"usage":{"input_tokens":3,"cache_read_input_tokens":1200,"cache_creation_input_tokens":60,"output_tokens":80}}}"#,
             "\n",
         ),
     )
@@ -467,7 +468,8 @@ fn a_stop_with_a_transcript_records_a_context_snapshot_with_its_basis() {
         json!({
             "session_id": "s-8",
             "hook_event_name": "Stop",
-            "transcript_path": transcript.display().to_string()
+            "transcript_path": transcript.display().to_string(),
+            "last_assistant_message": "The cap is set quarterly."
         }),
     );
 
@@ -716,7 +718,7 @@ fn a_session_start_emits_the_mediation_nudge_and_records_the_issuance() {
     assert_eq!(recorded[0]["event"], "nudge_issued");
     assert_eq!(recorded[1]["event"], "host_process");
     let payload = &recorded[0]["payload"];
-    assert_eq!(payload["nudge"], "mediation-nudge/6");
+    assert_eq!(payload["nudge"], "mediation-nudge/7");
     assert_eq!(payload["source"], "startup");
     assert_eq!(payload["host"], "claude-code");
     assert!(

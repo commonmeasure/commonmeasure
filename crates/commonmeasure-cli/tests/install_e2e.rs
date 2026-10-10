@@ -113,7 +113,7 @@ fn claude_registration_round_trip_touches_only_this_products_entries() {
     );
     assert_eq!(
         state_written["mcpServers"]["commonmeasure"],
-        json!({"type": "stdio", "command": binary.to_string_lossy(), "args": ["mcp", "--host", "claude-code"]})
+        json!({"type": "stdio", "command": binary.to_string_lossy(), "args": ["mcp", "--host", "claude-code", "--host-observations"]})
     );
 
     // A second install replaces rather than duplicates.

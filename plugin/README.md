@@ -276,7 +276,12 @@ the same files and the built-in tools stay observed.
   the path the edge saved it under, with no model call; one the edge did not
   save, and returned as an embedded resource, is refused with the gap named,
   since a `WebFetch` result carries text only, and the model is told to call
-  `context_fetch` for it directly. A refusal or an
+  `context_fetch` for it directly. The call to `context_fetch` names
+  the `WebFetch`'s `tool_use_id` as `host_call_id`, which the edge records
+  on the acquisition; the `Stop` hook reads the transcript and, through that
+  record, records which model calls carried the page and which answers
+  cited it
+  ([host integration](../docs/contracts/host-integration.md#context-entry-and-citation-on-claude-code)). A refusal or an
   unavailable answer from the edge refuses the `WebFetch` in the edge's own
   words, and says that there is no unmediated fallback in this session.
 - **`WebSearch`** calls `context_search` on the first configured provider
@@ -296,7 +301,11 @@ the same files and the built-in tools stay observed.
   registration's (`commonmeasure`), and takes no other: a `context_fetch`
   on any other server, a tool another mod registers or a claude.ai
   connector is never used for a routed call. Once the edge's server has
-  answered in a session, its later absence refuses the call.
+  answered in a session, its later absence refuses the call. Standing
+  aside needs a mode that permits it: in `strict` mode a `WebFetch` is held
+  with a question instead (below), and where the source policy cannot be
+  read the `WebFetch` is refused with the gap named, since the policy it
+  could not read may be strict.
 - **With the server connected and unable to carry a call**, including a
   hook that throws or overruns its budget, the call is refused with the gap
   named. A native fetch in its place would be the weaker mode the operator
@@ -320,16 +329,83 @@ the same files and the built-in tools stay observed.
   model reads is derived from that text inside Claude Code, as the native
   tool derives its summary from the page.
 - **What the module reaches.** `claude plugin validate plugin` lists it:
-  `$.tool.list` to find the server, `$.mcp.call` to call it,
-  `$.model.complete` to apply the prompt, `$.ui.log` for the one line per
-  gap. It fetches nothing itself, reads no file and starts no process. A
+  `$.tool.list` to find the server, `$.mcp.call` and `$.mcp.connect` to
+  call it, `$.model.complete` to apply the prompt, `$.process.run` for the
+  `commonmeasure` binary through `bin/commonmeasure-launch`, `$.fs.write`
+  for the answer `/cm keep` saves, `$.command.register`, and `$.ui` and
+  `$.session` to draw and to name the session. It makes no network request
+  itself: no `$.http.fetch`, and nothing it shows leaves the machine. A
   mod runs with the user's permissions and is not a sandbox; the user can
   disable it (`/plugin`, `--safe-mode`, `disableAllHooks`), so it is
   mediation, not enforcement. Deny rules for `WebFetch` and `WebSearch` in
   managed settings hold for the calls the router stands aside from; a routed
   call never reaches them, and source policy rules on it instead.
-- **Tests.** `claude plugin test plugin` runs `tests/router.test.ts`
-  against stubs for Claude Code and the edge: no model, network or process.
+- **Tests.** `claude plugin test plugin` runs `tests/router.test.ts` and
+  `tests/mod.test.ts` against stubs for Claude Code, the edge and the
+  binary: no model, network or process.
+
+### Shown — `hooks/register.js`
+
+The same module shows the record to the person. None of it reaches the
+model except `/cm`'s output, which a command's output always does, and
+none of it costs model tokens.
+
+- **The row.** A routed `WebFetch` or `WebSearch`, and the model's own
+  `context_fetch` or `context_search`, draws the edge's provenance facts
+  dim under the call's row once the call has answered: host, terms,
+  ruling and mode, cost or unknown, grade, receipt, hash prefix. They are
+  the lines the edge opened its answer with (`docs/contracts/host-integration.md`
+  §1), taken from no other text. A refusal also raises a toast. The facts
+  are kept in the module for the last 500 calls; a row older than that, or
+  drawn after the module reloads, shows as Claude Code draws it.
+- **The sources line.** Under each main-loop answer, one line from the
+  record of the crossings made since the turn started:
+  `Common Measure · 4 sources · 3 mediated · 1 observed · 1 refused · cost unknown · 1 receipt owed · 2 cited`.
+  It is `commonmeasure session <session> --since <turn start> --json`, so
+  its counts are that command's. Sources are the carried crossings,
+  mediated and observed; the observed count is always shown, since it is
+  the part source policy did not rule on. Cost covers carried crossings and
+  is `unknown` when any one is (`docs/FAIL-POLICY.md` §7). `cited` counts
+  the carried crossings whose URL the answer names. A turn that crossed
+  nothing gets no line, a subagent's turn none, and the transcript's record
+  of the answer is not changed. Where the record cannot be read the line is
+  replaced, once per session, by a dim note saying so.
+- **`/cm keep [file]`.** Binds the named file, or the last answer saved as
+  `.commonmeasure/kept/answer-<time>.md`, to this session with
+  `commonmeasure artifact` (`docs/contracts/artifact-association.md`): a
+  store under `.commonmeasure/artifacts/`, one operator declaration per log
+  of the session (the hooks' and the edge's joined to it) with that log's
+  bytes as evidence, a snapshot, and the bundle exported beside the file as
+  `<file>.commonmeasure.json`. It prints the ingredients list (each source's
+  host, terms, ruling, cost, grounding and receipt), the bundle's path and
+  the `commonmeasure artifact verify` line. The bundle is unsigned: it binds
+  the bytes, and the declaration's namespace, issuer and Edge
+  (`urn:commonmeasure:local:*`, `local`) are local labels, not
+  authenticated identities.
+- **`/cm session`.** The session's counts and one line per source, from the
+  same JSON. Hosts are shown as the edge cuts them and a refused crossing's
+  host is withheld; no URL from the record is printed, because the model
+  reads a command's output.
+- **The strict-mode question.** In `strict` mode only, read from
+  `commonmeasure policy identity` for the session's directory, a `WebFetch`
+  the router cannot carry because the edge's server is not connected is
+  held and the person is asked: route through Common Measure (the module
+  connects the plugin's server and carries the call), allow once (the
+  native tool runs and is recorded after the fact as observed), or refuse.
+  A dismissed question, an answer typed under Other and a `claude -p` run,
+  which has nobody to ask, refuse. It is never asked in `observe` or
+  `prefer`; then the module stands aside as above. When the mode cannot be
+  read (the launcher does not start or overruns its timeout, the command
+  exits non-zero, or its answer is not JSON or names no known mode), the
+  `WebFetch` is refused with the gap named and nothing is asked: a native
+  fetch needs a resolved `observe` or `prefer`, or the question's allow
+  once. `WebSearch` is not held.
+- **Where nothing draws.** A `claude -p` run or an SDK host draws no rows:
+  each call's facts and the sources line are written as dim log lines
+  there instead (`ui_log` to the SDK). A hook that fails is skipped by
+  Claude Code and leaves the call, row or answer as it was.
+- **No status line.** A plugin's `settings.json` takes only `agent` and
+  `subagentStatusLine`, so the plugin ships no `statusLine` default.
 
 ## The standing nudge
 
@@ -343,8 +419,12 @@ resumes, and the rebuilds after `/clear` and compaction. It asks the agent to
 prefer `context_fetch` and `context_search` over `WebFetch` and `WebSearch`,
 to treat an unavailable mediated tool and a policy refusal as different
 answers, and to respect a refusal rather than retrying it with a built-in
-tool, and to cite the provenance line each mediated result opens with, not
-the page, when it reports sources. The wording is versioned (`mediation-nudge/6`,
+tool, to cite a mediated result in an answer by the `url` the result names,
+which is how the `Stop` hook matches a citation
+(`docs/contracts/host-integration.md` §Context entry and citation on Claude
+Code), and to cite the provenance line each mediated result opens with,
+not the page, when it reports where a source came from. The wording is
+versioned (`mediation-nudge/7`,
 `crates/commonmeasure-harness/src/nudge.rs`), and each emission is recorded in the
 session log as `nudge_issued` (`docs/contracts/session-evidence.md`), so a
 later review can distinguish sessions that were asked from sessions that were

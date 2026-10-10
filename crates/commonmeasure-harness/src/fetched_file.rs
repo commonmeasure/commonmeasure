@@ -113,6 +113,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .unwrap_or_default()
 }
 
+/// Where [`save`] puts bytes whose bare hex SHA-256 is `hex`.
+pub fn saved_at(directory: &Path, hex: &str) -> PathBuf {
+    directory.join(format!("{hex}.pdf"))
+}
+
 /// Save `bytes` as `<directory>/<sha256>.pdf`, the directory owner-only
 /// (0700) and the file owner-only (0600) whatever the umask, and return the
 /// file's path. A file already there whose bytes hash to its name is
@@ -120,7 +125,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// bytes do not is replaced.
 pub fn save(directory: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
     private_directory(directory)?;
-    let path = directory.join(format!("{}.pdf", sha256_hex(bytes)));
+    let path = saved_at(directory, &sha256_hex(bytes));
     if let Ok(metadata) = std::fs::symlink_metadata(&path)
         && metadata.file_type().is_file()
         && std::fs::read(&path).is_ok_and(|held| held == bytes)

@@ -178,8 +178,23 @@ fn mechanism(source: StatementSource) -> &'static str {
 /// search result's share of a search's charge is not recorded, so it is
 /// unknown too.
 fn cost(declarations: Option<&Declarations>) -> String {
+    match quoted_cost(declarations) {
+        Cost::Quoted(price) => format!("{} quoted", money_text(&price)),
+        Cost::Free => "free".to_owned(),
+        Cost::Unknown => "unknown".to_owned(),
+    }
+}
+
+/// A crossing's cost as the record holds it.
+enum Cost {
+    Unknown,
+    Free,
+    Quoted(commonmeasure_types::Money),
+}
+
+fn quoted_cost(declarations: Option<&Declarations>) -> Cost {
     let Some(declarations) = declarations else {
-        return "unknown".to_owned();
+        return Cost::Unknown;
     };
     let licences = declarations.governing_licences();
     let payments = || {
@@ -198,21 +213,24 @@ fn cost(declarations: Option<&Declarations>) -> String {
             amount.decimal.trim(),
         );
         return match price {
-            Some(price) if code => {
-                let decimal = price.as_decimal_string();
-                let decimal = decimal.trim_end_matches('0').trim_end_matches('.');
-                format!("{decimal} {} quoted", price.currency())
-            }
-            _ => "unknown".to_owned(),
+            Some(price) if code => Cost::Quoted(price),
+            _ => Cost::Unknown,
         };
     }
     if payments().any(|payment| payment.needs_settlement()) {
-        return "unknown".to_owned();
+        return Cost::Unknown;
     }
     if payments().any(|payment| payment.kind.as_deref() == Some("free")) {
-        return "free".to_owned();
+        return Cost::Free;
     }
-    "unknown".to_owned()
+    Cost::Unknown
+}
+
+/// `0.015 USD`: the amount with trailing zeros cut, then the currency code.
+fn money_text(price: &commonmeasure_types::Money) -> String {
+    let decimal = price.as_decimal_string();
+    let decimal = decimal.trim_end_matches('0').trim_end_matches('.');
+    format!("{decimal} {}", price.currency())
 }
 
 fn grade(mode: CrossingMode) -> &'static str {
@@ -273,6 +291,119 @@ fn hash(content_hash: Option<&str>) -> String {
     }
 }
 
+/// What a run of session records says about the sources it crossed, in
+/// the line's vocabulary: one entry per crossing record, in record order,
+/// with the totals the Claude Code mod's sources line shows
+/// (`commonmeasure session --json`, `docs/contracts/host-integration.md` §6).
+///
+/// Each entry's fields follow the line's rules: a host is shown, cut and
+/// quoted, where the crossing was delivered or the agent's own tool made it
+/// (observed, reconstructed), and reads `withheld` for a refused or failed
+/// one; a crossing the edge did not rule on (observed, reconstructed) reads
+/// `ruling not ruled`. `url` is the record's own, for matching an answer's
+/// citations; it is not agent-facing text.
+///
+/// The total `cost` covers carried crossings only, since a refused one
+/// delivered nothing. It is `unknown` when any carried crossing's cost is
+/// unknown, because a sum that left one out would understate it
+/// (`docs/FAIL-POLICY.md` §7); else the quoted prices summed per currency,
+/// or `free`; `none` when nothing was carried.
+pub fn sources<'a>(records: impl IntoIterator<Item = &'a serde_json::Value>) -> serde_json::Value {
+    let mut entries = Vec::new();
+    let mut owed = 0u64;
+    let mut carried = Vec::new();
+    for record in records {
+        let grade = match record["event"].as_str() {
+            Some("crossing_observed") => "observed",
+            Some("crossing_mediated") => "mediated",
+            Some("crossing_refused") => "refused",
+            Some("crossing_reconstructed") => "reconstructed",
+            _ => continue,
+        };
+        let Ok(crossing) = serde_json::from_value::<Crossing>(record["payload"].clone()) else {
+            entries.push(serde_json::json!({"grade": grade, "unreadable": true}));
+            if grade != "refused" {
+                carried.push(Cost::Unknown);
+            }
+            continue;
+        };
+        let ruled = crossing.mode == CrossingMode::Mediated;
+        let delivered = crossing.refusal.is_none()
+            && crossing.failure.is_none()
+            && (!ruled || crossing.delivered.is_some() || crossing.delivered_file.is_some());
+        let ruling = if crossing.refusal.is_some() {
+            "refused"
+        } else if !ruled {
+            "not ruled"
+        } else if delivered {
+            "delivered"
+        } else {
+            "failed"
+        };
+        let receipt = receipt(&crossing, delivered);
+        if receipt == "owed" {
+            owed += 1;
+        }
+        if crossing.refusal.is_none() {
+            carried.push(quoted_cost(crossing.declarations.as_ref()));
+        }
+        // A delivered crossing whose context entry waits on the host has no
+        // grounding answer yet; the summariser keeps it apart the same way.
+        let grounded = (record["payload"]["context_observation"] != "host_required")
+            .then_some(crossing.grounded);
+        entries.push(serde_json::json!({
+            "grade": grade,
+            "url": crossing.url,
+            "host": host(&crossing, delivered, None),
+            "terms": terms(&crossing),
+            "ruling": ruling,
+            "supplier": crossing.supplier,
+            "cost": cost(crossing.declarations.as_ref()),
+            "receipt": receipt,
+            "grounded": grounded,
+            "hash": hash(crossing.content_hash.as_deref()),
+        }));
+    }
+    serde_json::json!({
+        "crossings": entries,
+        "cost": total_cost(&carried),
+        "receipts_owed": owed,
+    })
+}
+
+/// The cost of the carried crossings together: `none` for none, `unknown`
+/// where any one is unknown or the quoted prices of one currency cannot be
+/// summed, else the quoted prices summed per currency, else `free`.
+fn total_cost(carried: &[Cost]) -> String {
+    if carried.is_empty() {
+        return "none".to_owned();
+    }
+    let mut quoted: Vec<commonmeasure_types::Money> = Vec::new();
+    for cost in carried {
+        match cost {
+            Cost::Unknown => return "unknown".to_owned(),
+            Cost::Free => {}
+            Cost::Quoted(price) => {
+                match quoted
+                    .iter_mut()
+                    .find(|total| total.currency() == price.currency())
+                {
+                    Some(total) => match total.try_add(price) {
+                        Some(sum) => *total = sum,
+                        None => return "unknown".to_owned(),
+                    },
+                    None => quoted.push(price.clone()),
+                }
+            }
+        }
+    }
+    if quoted.is_empty() {
+        return "free".to_owned();
+    }
+    let parts: Vec<String> = quoted.iter().map(money_text).collect();
+    format!("{} quoted", parts.join(" + "))
+}
+
 /// The payload text of a tool answer's `result`: its first text block that
 /// is not the provenance lines. Every tool's payload is JSON; the lines,
 /// where the call recorded a crossing, are the block before it.
@@ -298,6 +429,26 @@ pub fn lines(result: &serde_json::Value) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The total is unknown where any carried crossing's cost is, sums
+    /// quoted prices per currency, and reads free or none otherwise.
+    #[test]
+    fn the_cost_total_never_drops_an_unknown() {
+        use commonmeasure_types::Money;
+        let usd = |micros| Cost::Quoted(Money::new("USD", micros));
+        assert_eq!(total_cost(&[]), "none");
+        assert_eq!(total_cost(&[Cost::Free, Cost::Free]), "free");
+        assert_eq!(
+            total_cost(&[usd(15_000), Cost::Free, usd(5_000)]),
+            "0.02 USD quoted"
+        );
+        assert_eq!(
+            total_cost(&[usd(1_000_000), Cost::Quoted(Money::new("GBP", 500_000))]),
+            "1 USD + 0.5 GBP quoted"
+        );
+        assert_eq!(total_cost(&[usd(15_000), Cost::Unknown]), "unknown");
+        assert_eq!(total_cost(&[usd(u64::MAX), usd(1)]), "unknown");
+    }
 
     /// Only a SHA-256 in this edge's form is shown, by prefix; a supplier's
     /// hash in any other form is not echoed.

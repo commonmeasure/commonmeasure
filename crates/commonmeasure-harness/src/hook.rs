@@ -60,6 +60,12 @@ pub struct HookInput {
     /// recorded.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// `Stop` only: the text of the turn's final answer. Claude Code runs
+    /// `Stop` before that answer's line reaches the transcript, so the hook
+    /// reads the transcript only once a line matching this is there
+    /// (`crate::turn_observations::await_answer`); never recorded.
+    #[serde(default)]
+    pub last_assistant_message: Option<String>,
     /// `SessionEnd` only: the host's word for why the session ended
     /// (Claude Code sends `clear`, `logout`, `prompt_input_exit` or
     /// `other`). Recorded as given on `session_ended`.
@@ -218,6 +224,7 @@ impl HookInput {
             source: None,
             prompt: text("prompt"),
             reason: text("reason"),
+            last_assistant_message: None,
         })
     }
 
@@ -269,6 +276,7 @@ impl HookInput {
             source: text("source"),
             prompt: text("prompt"),
             reason: text("reason"),
+            last_assistant_message: None,
         })
     }
 }

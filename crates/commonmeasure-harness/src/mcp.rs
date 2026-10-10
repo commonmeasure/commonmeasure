@@ -201,6 +201,11 @@ pub struct McpServer {
     /// Whether the records a session's first tool call writes before its own
     /// (`credentials_loaded`, `client_identified`) have been written.
     start_recorded: bool,
+    /// Whether the host's integration asked, at launch, for host
+    /// observations on this session (`--host-observations`): Claude Code's
+    /// hooks submit them from the transcript, since the host sends no
+    /// `commonmeasure/observe` request of its own.
+    observe_host: bool,
     /// The directory this server was started in. Stdio carries no cwd, but
     /// the server inherits the harness's, and it is the same directory the
     /// session's policy scope was resolved against.
@@ -273,6 +278,13 @@ pub struct McpServer {
     /// The host of the URL the current `context_fetch` asked for, which
     /// the agent wrote and a provenance line may therefore name.
     asked_host: Option<String>,
+    /// The host's own identifier for the tool call the current
+    /// `context_fetch` answers in its place, which a host's router sends as
+    /// `host_call_id`. Recorded on the acquisition the call admits, so the
+    /// host's later observation of that call is bound to this record rather
+    /// than to anything the result's text says
+    /// (`docs/contracts/session-evidence.md` §Acquisition handles).
+    host_call: Option<String>,
     /// How far this session's log is known to read as the relay reads it,
     /// so each reporting ruling reads only what was appended since
     /// ([`Self::unreadable_session_log`]).
@@ -368,6 +380,7 @@ impl McpServer {
             client_protocol: None,
             negotiated_protocol: None,
             start_recorded: false,
+            observe_host: false,
             cwd,
             credentials,
             released: None,
@@ -386,6 +399,7 @@ impl McpServer {
             evidence_error: None,
             provenance: Vec::new(),
             asked_host: None,
+            host_call: None,
             delivery_check: std::sync::Mutex::default(),
         }
     }
@@ -519,6 +533,14 @@ impl McpServer {
     /// default reads delivery from the host word and the client's name.
     pub fn interval_relay(mut self) -> Self {
         self.interval_relay = true;
+        self
+    }
+
+    /// Opt this session into host observations before its first crossing,
+    /// as an `observations_started` request would
+    /// (`docs/contracts/session-evidence.md` §Acquisition handles).
+    pub fn host_observations(mut self) -> Self {
+        self.observe_host = true;
         self
     }
 
@@ -721,6 +743,26 @@ impl McpServer {
                 self.negotiated_protocol,
             );
         }
+        // Before the first crossing, so every admitted fetch carries a
+        // handle. A log that already holds a crossing cannot opt in, and
+        // keeps the semantics it was recorded under; a failed append fails
+        // the call, and the next one tries again.
+        if self.observe_host && !self.session.observes_host() {
+            match self.session.record_host_observation(
+                json!({"event": "observations_started"}),
+                &self.host,
+                self.cwd.as_deref(),
+            ) {
+                Err(error) if error.kind() != std::io::ErrorKind::InvalidInput => {
+                    return Err(format!(
+                        "unavailable: could not record observations_started to {}: {error}. \
+                         Nothing was fetched.",
+                        self.record_named()
+                    ));
+                }
+                _ => {}
+            }
+        }
         self.start_recorded = true;
         Ok(())
     }
@@ -807,6 +849,7 @@ impl McpServer {
             .then(|| arguments.get("url").and_then(Value::as_str))
             .flatten()
             .map(grounding::host_of);
+        self.host_call = None;
         let result = match name.as_str() {
             tool if !self.served.tools.contains(&tool) => unknown(),
             "context_fetch" => self.fetch_answer(&arguments),
@@ -910,6 +953,7 @@ impl McpServer {
             .and_then(Value::as_str)
             .ok_or_else(|| AgentText::fixed("url is required"))?;
         let window = FetchWindow::from_arguments(arguments)?;
+        self.host_call = host_call_of(arguments)?;
         if !self.policy.mediates_address(url) {
             if self.policy.holds_private_floor() {
                 return Err(AgentText::fixed(
@@ -4002,7 +4046,10 @@ impl McpServer {
             told_position: facts.told_position,
         };
         // A line claims a record, so a crossing whose record failed has none.
-        match self.session.record_crossing(&crossing) {
+        match self
+            .session
+            .record_crossing_for(&crossing, self.host_call.as_deref())
+        {
             Ok(_) => self.provenance.push(crate::provenance::line(
                 &crossing,
                 self.policy.mode(),
@@ -4324,6 +4371,32 @@ fn challenge_of(response: &Response) -> Option<(String, AgentText)> {
 /// still read. The mode governs the operator's own policy only. `reason` is
 /// the record's sentence and `agent_reason` the agent's, which names the
 /// source by position.
+/// The longest `host_call_id` a `context_fetch` accepts. Claude Code's tool
+/// call identifiers are about 30 characters.
+const HOST_CALL_MAX_CHARS: usize = 256;
+
+/// The `host_call_id` a `context_fetch` names: letters, digits, `_` and
+/// `-`, as a host's own tool call identifier is written, and at most
+/// [`HOST_CALL_MAX_CHARS`]. Any other value refuses the call before the
+/// crossing, so the record never holds an identifier the call did not give.
+fn host_call_of(arguments: &Value) -> Result<Option<String>, AgentText> {
+    match arguments.get("host_call_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id))
+            if (1..=HOST_CALL_MAX_CHARS).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') =>
+        {
+            Ok(Some(id.clone()))
+        }
+        Some(_) => Err(AgentText::fixed(
+            "host_call_id must be a host's tool call identifier: 1 to 256 letters, digits, \
+             underscores or hyphens; nothing was fetched",
+        )),
+    }
+}
+
 fn binding_breach(reason: String, agent_reason: AgentText, gap: &str) -> Ruling {
     Ruling::Refused {
         reason,
@@ -5522,7 +5595,8 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "url": {"type": "string"},
                     "offset": {"type": "integer", "minimum": 0},
-                    "max_chars": {"type": "integer", "minimum": 1}
+                    "max_chars": {"type": "integer", "minimum": 1},
+                    "host_call_id": {"type": "string", "description": "Set only by a host that answers its own tool call through this one, naming that call; leave it unset."}
                 },
                 "required": ["url"],
                 "additionalProperties": false
@@ -5774,6 +5848,27 @@ mod tests {
     /// A call to a tool this server does not serve is answered with the
     /// tools it does, quoting nothing the caller sent: a hosted edge would
     /// rewrite a quoted home, and that would confirm a guess (review G2).
+    #[test]
+    fn a_host_call_id_is_a_tool_call_identifier_or_the_call_is_refused() {
+        assert_eq!(host_call_of(&json!({})).unwrap(), None);
+        assert_eq!(
+            host_call_of(&json!({"host_call_id": "toolu_01AbC-9"})).unwrap(),
+            Some("toolu_01AbC-9".to_owned())
+        );
+        for bad in [
+            json!(""),
+            json!("a b"),
+            json!("a\nb"),
+            json!(7),
+            json!("x".repeat(257)),
+        ] {
+            assert!(
+                host_call_of(&json!({"host_call_id": bad})).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_tool_is_answered_without_its_name() {
         let (_home, mut server) = server(r#"{"policy_mode":"observe"}"#);

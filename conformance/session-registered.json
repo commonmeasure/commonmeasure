@@ -6,7 +6,7 @@
       "content_url": "https://publisher.example.org/before-registration",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -23,7 +23,7 @@
       "content_url": "https://publisher.example.org/registered",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -45,7 +45,7 @@
       "content_url": "https://publisher.example.org/registered",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -71,7 +71,7 @@
       "content_url": "https://publisher.example.org/after-renewal",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -93,7 +93,7 @@
       "content_url": "https://publisher.example.org/after-renewal",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"

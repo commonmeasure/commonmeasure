@@ -23,9 +23,9 @@
 //! which is why [`BASIS`] says exactly that on every issuance record.
 
 /// Versioned like an evaluator identity: a `nudge_issued` record naming
-/// `mediation-nudge/6` states exactly which wording was in force in that
+/// `mediation-nudge/7` states exactly which wording was in force in that
 /// session. Change [`TEXT`], bump this.
-pub const IDENTITY: &str = "mediation-nudge/6";
+pub const IDENTITY: &str = "mediation-nudge/7";
 
 /// What every session is asked. One short paragraph, deliberately: the cost
 /// of a standing instruction is paid into every session's context, so the
@@ -46,9 +46,12 @@ pub const IDENTITY: &str = "mediation-nudge/6";
 /// paywall or a block, and an agent guessing between them states something
 /// about a third party that nothing supports.
 ///
-/// The agent is asked to cite the provenance line each mediated result opens
-/// with ([`crate::provenance`]) when it reports sources, because that line
-/// is built from the record and the page is built by the source.
+/// The agent is asked to cite a mediated result by the `url` the result
+/// names, because that is what the Claude Code `Stop` hook matches an answer
+/// against (`crate::turn_observations`): a citation is matched by that URL
+/// or by the acquisition handle, never by meaning. When it reports where a
+/// source came from, it cites the provenance line ([`crate::provenance`]),
+/// which is built from the record, rather than the page's account of itself.
 pub const TEXT: &str = "Common Measure standing instruction, from its SessionStart hook: for \
 external web content, prefer this session's mediated tools — call context_fetch instead of \
 WebFetch, and context_search instead of WebSearch — so operator policy can rule on each crossing \
@@ -59,9 +62,9 @@ mediated tool reports unavailable (for example an unconfigured search provider),
 that runs natively is the fallback; if policy refuses a crossing, respect the refusal rather than \
 retrying it with a built-in tool; if a site refuses the request itself, report what the tool said \
 and no more, because a built-in tool that runs natively fetches as something other than the \
-declared fetcher and is recorded as your decision. When reporting sources, cite the Common \
-Measure line opening each mediated result, not the page. This is a nudge, not enforcement: it \
-blocks nothing itself.\n";
+declared fetcher and is recorded as your decision. Cite a mediated result by the url it names, \
+and its origin by the Common Measure line opening it, not the page. This is a nudge, not \
+enforcement: it blocks nothing itself.\n";
 
 /// The claim an issuance record can honestly make.
 pub const BASIS: &str = "emitted on the SessionStart hook's stdout for the host to add to the \
@@ -87,7 +90,8 @@ mod tests {
             "refuses the request itself",
             "and no more",
             "your decision",
-            "cite the Common Measure line",
+            "by the Common Measure line",
+            "Cite a mediated result by the url it names",
         ] {
             assert!(TEXT.contains(phrase), "the nudge must mention {phrase:?}");
         }
@@ -109,7 +113,7 @@ mod tests {
     /// refusals would contradict.
     #[test]
     fn the_nudge_names_the_condition_the_model_can_see() {
-        assert_eq!(IDENTITY, "mediation-nudge/6");
+        assert_eq!(IDENTITY, "mediation-nudge/7");
         assert!(TEXT.contains("says it went through Common Measure"));
         assert!(TEXT.contains("has no native fallback"));
         for claim in [
@@ -129,11 +133,12 @@ mod tests {
     /// raising it is a decision, not drift (950 bytes held nudge/3; nudge/4
     /// added the router sentence; nudge/5 rewrote it within the same bound;
     /// nudge/6 added the sentence on citing the provenance line, which
-    /// EDG-164 asks for, and 100 bytes for it).
+    /// EDG-164 asks for, and 100 bytes for it; nudge/7 asks for the url
+    /// the Claude Code Stop hook matches a citation by, EDG-203, and 20).
     #[test]
     fn the_nudge_stays_one_short_paragraph() {
         assert!(
-            TEXT.len() <= 1150,
+            TEXT.len() <= 1170,
             "{} bytes is no longer a nudge",
             TEXT.len()
         );

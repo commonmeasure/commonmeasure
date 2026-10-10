@@ -179,15 +179,23 @@ pub fn joined_logs(home: &Path, path: &Path) -> std::io::Result<Join> {
         });
     };
     let own = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let others = crate::session::SessionLog::list(home)?
+    let others = logs_of(home, &process)?
         .into_iter()
         .filter(|other| other.canonicalize().unwrap_or_else(|_| other.clone()) != own)
-        .filter(|other| recorded_in(other).is_some_and(|found| found.same(&process)))
         .collect();
     Ok(Join {
         host_process: Some(process),
         others,
     })
+}
+
+/// Every log under `home` whose `host_process` record names `process`, most
+/// recently modified first.
+pub fn logs_of(home: &Path, process: &HostProcess) -> std::io::Result<Vec<PathBuf>> {
+    Ok(crate::session::SessionLog::list(home)?
+        .into_iter()
+        .filter(|log| recorded_in(log).is_some_and(|found| found.same(process)))
+        .collect())
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

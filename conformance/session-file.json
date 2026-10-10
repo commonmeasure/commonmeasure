@@ -9,7 +9,7 @@
           "content_type": "application/pdf"
         },
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"

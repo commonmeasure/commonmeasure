@@ -702,6 +702,74 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
     )
     .batches;
 
+    // Claude Code fetched two pages with handles, its next model call
+    // carried both, and its answer cited the first: two retrievals, two
+    // turn-scope groundings, one citation and the generation's boundary.
+    let generation = "3b9a3c55-0c1e-4f6a-9d0e-5a1f0c2e7b41";
+    let output = "0b3c8f7e-2d4a-4e59-8c61-7f2a9b0d1e35";
+    let acquisition = |minute: u8, handle: &str, url: &str| {
+        json!({
+            "event": "crossing_mediated",
+            "payload": {
+                "timestamp": format!("2026-10-09T10:{minute:02}:00.500Z"),
+                "mode": "mediated", "host": "claude-code", "url": url,
+                "http_status": 200, "grounded": false,
+                "context_observation": "host_required", "acquisition_id": handle,
+                "observer": "cm", "grade": "mediated",
+                "content_hash":
+                    "sha256:137404ede7bb3670d8e62aaffb9d49aa331692e1bc3cb71f4fa9841408eccb22",
+                "licence": {"state": "unknown"},
+            },
+        })
+    };
+    let observed = |event: &str, payload: Value| {
+        let mut payload = payload;
+        for (key, value) in [
+            ("host", "claude-code"),
+            ("observer", "host"),
+            ("grade", "observed"),
+            ("timestamp", "2026-10-09T10:02:00.500Z"),
+        ] {
+            payload[key] = json!(value);
+        }
+        json!({"event": event, "payload": payload})
+    };
+    let (cited_page, other_page) = (
+        "1f6e3c2a-7b84-4d1e-9a05-6c3b2e1f0a97",
+        "8d2b4a6c-1e3f-4b7a-a9c8-0e5d6f7a8b92",
+    );
+    let entered = |handle: &str, hash: char| {
+        observed(
+            "context_entered",
+            json!({"acquisition_id": handle, "generation_id": generation,
+            "representation_hash": format!("sha256:{}", hash.to_string().repeat(64))}),
+        )
+    };
+    let cited = commonmeasure_relay::project::project_session(
+        None,
+        "golden-session-cited",
+        &[
+            acquisition(0, cited_page, "https://www.example.org/energy-cap"),
+            acquisition(1, other_page, "https://www.example.org/tariffs"),
+            entered(cited_page, 'a'),
+            entered(other_page, 'b'),
+            observed(
+                "output_associated",
+                json!({"generation_id": generation, "output_id": output,
+                "output_hash": format!("sha256:{}", "c".repeat(64)),
+                "acquisition_ids": [cited_page]}),
+            ),
+            observed(
+                "turn_completed",
+                json!({"turn_id": generation, "output_id": output,
+                "privacy_level": "minimal", "detail": {"cwd": "/home/operator/project"}}),
+            ),
+        ],
+        &[],
+        &|_| true,
+    )
+    .batches;
+
     let [turn_batch] = <[_; 1]>::try_from(turns).expect("one turn batch");
     let [session_batch] = <[_; 1]>::try_from(session).expect("one session batch");
     let [run_batch] = <[_; 1]>::try_from(run).expect("one run batch");
@@ -711,6 +779,23 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
     let [paced_batch] = <[_; 1]>::try_from(paced).expect("one paced session batch");
     let [file_batch] = <[_; 1]>::try_from(file).expect("one file session batch");
     let [parts_batch] = <[_; 1]>::try_from(parts).expect("one parts session batch");
+    let [cited_batch] = <[_; 1]>::try_from(cited).expect("one cited session batch");
+    assert_eq!(
+        cited_batch
+            .events
+            .iter()
+            .map(|event| serde_json::to_value(event.kind).unwrap())
+            .collect::<Vec<_>>(),
+        [
+            json!("content_retrieved"),
+            json!("content_grounded"),
+            json!("content_retrieved"),
+            json!("content_grounded"),
+            json!("content_cited"),
+            json!("turn_completed"),
+        ],
+        "both pages entered the generation and its answer cited one"
+    );
     assert_eq!(
         (file_batch.events.len(), file_batch.refused),
         (1, Some(1)),
@@ -742,6 +827,7 @@ fn golden_documents() -> Vec<(&'static str, commonmeasure_relay::wire::WireBatch
         ("session-paced.json", paced_batch),
         ("session-file.json", file_batch),
         ("session-parts.json", parts_batch),
+        ("session-cited.json", cited_batch),
     ]
 }
 
@@ -979,6 +1065,7 @@ fn action_decisions_never_project_as_telemetry() {
         [
             json!("content_retrieved"),
             json!("content_grounded"),
+            json!("content_cited"),
             json!("turn_completed")
         ],
         "the fixture must project, or the absence of action data proves nothing"
@@ -989,7 +1076,7 @@ fn action_decisions_never_project_as_telemetry() {
             .iter()
             .map(|(_, position)| *position)
             .collect::<Vec<_>>(),
-        [0, 0, 3],
+        [0, 0, 0, 3],
         "every event is owned by the acquisition or the boundary, none by the action record"
     );
     let wire = serde_json::to_string(&projected.batches).unwrap();

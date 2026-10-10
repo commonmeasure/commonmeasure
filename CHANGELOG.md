@@ -6,6 +6,30 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.12 (10 October 2026)
+
+A Claude Code session's telemetry now carries `content_cited` events and declares the Content Telemetry `citation` level. If you run your own receiver, it must accept that level, or it refuses the session's batches; Common Measure Hub accepts it. On Claude Code, a `WebFetch` that the plugin cannot route, because the edge's server is not connected, and whose source policy cannot be read is now refused with the gap named; earlier releases let Claude Code fetch it natively. Check that `commonmeasure` is installed where the plugin's launcher can find it.
+
+### Added
+
+- On Claude Code, the source record now says which fetched pages entered each model call and which pages the answer cited. At the end of each turn the plugin's `Stop` hook reads the transcript and records, for each model call, the `context_fetch` results its request carried and the results its answer names by the `url` the result gives or by its acquisition handle. No page text, answer text or quotation is recorded or sent. The relay reports a cited page to your receiver as a Content Telemetry `content_cited` event, once per answer and page, and only where the same model call carried that page. Citations are matched by URL or handle, never by meaning. The plugin and `commonmeasure install claude` start the server with the new `--host-observations` option, which this needs ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#context-entry-and-citation-on-claude-code)).
+
+- On Claude Code, the `Stop` hook waits up to 2 seconds for the turn's final answer to reach the transcript before it reads it, so a single-turn `claude -p` run records its answer's context entries and citations. Only the turn's final model call releases the wait: equal text in an earlier turn's answer, or written before a tool call, does not. Where the answer is not there in time, nothing is recorded from the transcript at that `Stop` and the turn's end names the gap as `answer_unavailable`; a later `Stop` in the same Claude Code process records it ([host integration](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/host-integration.md#context-entry-and-citation-on-claude-code)).
+
+- On Claude Code, the plugin shows the record as you work. The edge's provenance facts appear dim under each routed or direct fetch and search once it has answered, and a refusal raises a notice. Under each answer, one line counts the turn's sources, mediated, observed and refused, with the cost or `unknown`, the receipts owed and the sources the answer cites. `/cm keep [file]` binds a file, or the last answer, to the session and exports an unsigned bundle beside it that `commonmeasure artifact verify` checks. `/cm session` lists the session's sources by host, with no URLs ([plugin](https://github.com/commonmeasure/commonmeasure/blob/main/plugin/README.md)).
+
+- On Claude Code in `strict` mode, a `WebFetch` the plugin cannot route, because the edge's server is not connected, is held with a question: route it through Common Measure, allow it once (it runs natively and is recorded as observed), or refuse it. A dismissed question and a `claude -p` run refuse. It is never asked in `observe` or `prefer` ([plugin](https://github.com/commonmeasure/commonmeasure/blob/main/plugin/README.md)).
+
+- `commonmeasure session <id> --json` names each source and the session's totals, and `--since <time>` keeps only the records written from that time ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#reading-it)).
+
+### Changed
+
+- On Claude Code, a fetched page is reported as grounded once per model call whose request carried it, under the hash of the result as the transcript records it and without a token count, in place of one grounding per fetch. A fetch whose result never reached the model, such as one Claude Code replaced with a note that it was too large, is reported as retrieved only. A PDF the edge saves to a file is reported as grounded only from the model call after Claude Code reads the whole file with `Read` and that read returns the fetched bytes, and as retrieved only until then; a read that returns other bytes, a note or nothing grounds nothing. A transcript line that does not parse ends what is reported for that transcript: the model call being written there and every later one record no context entry and no citation. A `WebFetch` the plugin answers through `context_fetch` is reported as a direct `context_fetch` is: the plugin names the `WebFetch` call to the edge, which records it on the acquisition, so the same model calls and citations are recorded for it; a `WebFetch` Claude Code answers natively records neither, whatever its result says ([telemetry projection](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#grounding-from-host-observations)).
+
+- A session's telemetry events now declare the Content Telemetry `citation` conformance level; a run's events still declare `grounding`. A receiver that accepts only retrieval, grounding and turn events refuses a batch that carries a citation ([telemetry projection](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/telemetry-projection.md#selected-coverage)).
+
+- The standing instruction the `SessionStart` hook prints asks the agent to cite a mediated result by the `url` it names, and to cite the Common Measure line for where a source came from ([plugin](https://github.com/commonmeasure/commonmeasure/blob/main/plugin/README.md)).
+
 ## 0.4.11 (9 October 2026)
 
 ### Added

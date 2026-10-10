@@ -6,7 +6,7 @@
       "content_url": "https://www.legislation.example/ukpga/1954/56",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -23,7 +23,7 @@
       "content_url": "https://www.legislation.example/ukpga/1954/56",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"

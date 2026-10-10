@@ -57,8 +57,10 @@ than by the agent (`plugin/README.md` §Routed). A host that lets a plugin
 run code before a tool call, see the call's arguments and answer it in the
 tool's place can offer it; Claude Code's mods do, and no other host
 integrated here does today. Where the server is not connected the router
-stands aside and the observed path records the native call after the fact;
-where it is connected and cannot carry a call, the call is refused with the
+stands aside and the observed path records the native call after the fact,
+except that a strict source policy holds a `WebFetch` with a question and
+one that cannot be read refuses it with the gap named (`plugin/README.md`
+§Mod); where it is connected and cannot carry a call, the call is refused with the
 gap named, never fetched natively. A `WebSearch` with no configured search
 provider stays native and observed. The routed answer is the edge's text
 summarised by the host's own model against the prompt the call carried, so
@@ -112,10 +114,118 @@ bytes for the fetches the tests make (`crates/commonmeasure-cli/tests/provenance
 whole lines measured 156 to 172 bytes with a 14-character host. Each ` · `
 separator is four bytes of UTF-8, and a host name adds up to 64 characters.
 
+### Context entry and citation on Claude Code
+
+Claude Code sends no `commonmeasure/observe` request of its own, so the
+plugin opts its server in at launch and submits the observations from the
+transcript ([session evidence §Context-entry observations](session-evidence.md#context-entry-observations),
+§Output-association observations). `crates/commonmeasure-harness/src/turn_observations.rs`
+implements it.
+
+- **Opt-in.** The plugin's `.mcp.json` and `install claude` start the server
+  with `mcp --host claude-code --host-observations`. The server records
+  `observations_started` before its first crossing, so each admitted
+  `context_fetch` returns an `acquisition_id` in its payload.
+- **When.** The `Stop` hook reads the transcript at the end of each turn,
+  once the transcript holds the turn's final answer, and submits to every
+  MCP log its host process started that opted in for
+  `claude-code` (§Host process of session evidence is the join). A model
+  call is owed when the transcript recorded it after that log's opt-in and
+  the log holds no completion boundary (`turn_completed`) for it; a second
+  `Stop` over the same transcript adds nothing. Where the output was
+  recorded and its boundary was not, as when the second append failed, the
+  next `Stop` submits the identical output again and the ingress finishes
+  that retry by appending the boundary (§Output-association observations of
+  session evidence).
+- **Final answer.** Claude Code runs `Stop` before the final answer's line
+  reaches the transcript. The hook waits up to 2 seconds for the
+  transcript's last model call to carry the text `Stop` sends as
+  `last_assistant_message` (trimmed: its text blocks joined by newlines, or
+  the last of them), and reads the transcript only then. That call counts
+  only as the turn's final call: no prompt or tool result follows it in the
+  transcript, and it asked for no tool (no `tool_use` block or stop
+  reason). Equal text in an earlier turn's answer, or in text the model
+  wrote before a tool call, does not release the wait. Where the bound
+  passes first, or `Stop` names no answer or one with no text, the hook
+  reads nothing: no context entry, output or snapshot, not even for the
+  calls before the answer, and `turn_completed` names the gap as
+  `answer_unavailable` ([session evidence §Turn boundaries](session-evidence.md#turn-boundaries)).
+  The turn's calls stay owed to the next `Stop` in the same host process.
+  A single-turn `claude -p` run has no next `Stop`, so there the gap is
+  final.
+- **Generation.** One model call: the transcript lines sharing one
+  `message.id`. Its `generation_id` and `output_id` are UUIDs derived from
+  the host's session identifier and that `message.id`. Synthetic messages
+  and subagent lines are not read.
+- **Context entry.** For each call, one `context_entered` per `context_fetch`
+  result of the edge's own server (`mcp__commonmeasure__`,
+  `mcp__plugin_commonmeasure_commonmeasure__`) that preceded the call's
+  first line in the transcript, since the last compaction. The
+  representation hash is SHA-256 over the canonical JSON
+  ([canonical JSON](canonical-json.md)) of the `tool_result` content as the
+  transcript records it. An error result, or a result the host replaced
+  with a note that it was too large, carries no handle and enters nothing.
+- **Delivered file.** A file is entered under the result's `content_hash`,
+  the SHA-256 of the bytes handed over, and only where the transcript shows
+  those bytes in the request. A file embedded in the result as a resource
+  enters from the next call where the resource's bytes hash to
+  `content_hash`. A file the stdio edge saved and named by `path` is not in
+  the request, only its path is: it enters from the call after a
+  successful `Read` of that whole path (no `offset`, `limit` or `pages`)
+  whose result carries the file as a base64 source (a `document` or
+  `image` block) whose bytes hash to `content_hash`. Until then it is
+  retrieved only. A read that returns text, an empty result, a note in
+  place of the file, or other bytes (the file was replaced, or the host
+  re-encoded it) enters nothing; the read's success alone establishes no
+  entry. A read by any other tool is not observed, so it enters nothing.
+- **Citation.** For each call, one `output_associated` whose list names the
+  acquisitions the answer's text blocks name: by the `url` a result's
+  payload carries, compared as a parsed URL without its fragment, and by
+  the `acquisition_id` written out. A URL names every acquisition of it the
+  call carried, or, where it carried none, the latest the transcript holds,
+  which the edge keeps unresolved. An answer that names nothing records an
+  empty list. The output hash is SHA-256 over the canonical JSON of the
+  answer's content blocks. Nothing is matched by meaning. A result
+  recorded after the call is never named by it, so a later `Stop` over a
+  longer transcript names the same acquisitions.
+- **Damage.** Reading stops at the first transcript line that is not a JSON
+  object. The call whose answer was being written there and every later
+  call are not submitted: no context entry, output or citation comes from a
+  request boundary the transcript does not establish. The hook still exits
+  zero.
+- **Routed `WebFetch`.** Where the plugin's router answered a `WebFetch`
+  through `context_fetch` (§1, Mediated, routed), it passed the call's
+  `tool_use_id` as `host_call_id` (§The parts of a fetch), and the edge
+  recorded it on the acquisition's `crossing_mediated` record
+  ([session evidence §Acquisition handles](session-evidence.md#acquisition-handles)).
+  The reader binds a `WebFetch` result only through that record: one
+  `crossing_mediated` naming the result's `tool_use_id`, recorded before
+  the transcript recorded the result. The acquisition, the URL a citation
+  is matched by (the one that answered, after any redirect) and how the
+  bytes were handed over all come from the record, never from the result's
+  text, which is the host model's answer about the page and carries no
+  handle. A text page enters under the hash of the `tool_result` content as
+  the transcript records it. A saved file enters under its `content_hash`
+  only as a direct one does: from the call after a whole `Read` of the path
+  the edge saved it under whose result carries bytes that hash to
+  `content_hash`. A `tool_use_id` that two records name binds neither. A
+  `WebFetch` the native tool answered has no record and enters and names
+  nothing, whatever its result says, including a handle the edge issued for
+  another call; a Claude Code without mods is unchanged.
+- **Convention.** The standing instruction (`mediation-nudge/7`) asks the
+  agent to cite a mediated result by the `url` it names. The provenance line
+  names a host and no URL path, so it is not what a citation is matched by.
+
+The transcript is the host's record of the request, not the bytes on the
+wire: a representation hash shows what the transcript holds, not what the
+provider received. The path is **fixture-tested**
+(`crates/commonmeasure-cli/tests/cited_e2e.rs`, with a transcript in Claude
+Code's recorded shape).
+
 ### The parts of a fetch
 
 `context_fetch` takes `url` and two optional arguments, both non-negative
-integers:
+integers, and a third for a host's router:
 
 - `offset`: the character of the extracted text to start from. Default 0.
 - `max_chars`: the most characters the result carries. Default 60,000,
@@ -124,6 +234,12 @@ integers:
   tool result by default. A value above 200,000 is clamped to 200,000; 0 is
   refused, since a part of no characters would still be a request to the
   site.
+- `host_call_id`: the host's own identifier for a tool call the host
+  answers through this one, such as the `tool_use_id` of a `WebFetch` the
+  plugin's router answered (§Context entry and citation on Claude Code). 1
+  to 256 letters, digits, `_` or `-`; any other value refuses the call
+  before the crossing. In host observation mode the edge records it on the
+  acquisition the call admits; it is not returned and not projected.
 
 Characters are Unicode scalar values, and a part never splits one. The
 result carries `content_range` (`offset`, `chars`, `total_chars`) and
@@ -1085,7 +1201,8 @@ defines and are never collapsed.
 |---|---|---|
 | Claude Code, observed (hooks) | `fixture-tested` | `crates/commonmeasure-cli/tests/hook_e2e.rs` drives the real binary with the host's payload shapes |
 | Claude Code, mediated (MCP over stdio) | `live-verified` (bounded configuration) | Claude Code 2.1.273 on macOS 26.4 admitted the public Common Measure page and refused `example.com` in an interactive session under hosted policy and a signed reporting approval. The host tool response hash matches the source record; the selected session reached the correct Hub organisation and a separate unselected host session stayed local. The trial ran against the hosted Hub; its configuration, limits and redacted records are not published. Loopback refusal and privacy-floor tests remain in `mediated_e2e.rs`. |
-| Claude Code, routed (the mod) | `live-verified` for the refusal branch (bounded configuration); delivery `fixture-tested` | Claude Code 2.1.288, `claude -p` in a container whose egress proxy breaks TLS to the open web, 3 October 2026: the module loaded from `--plugin-dir`, answered the model's `WebFetch` of `https://example.com/` through `context_fetch` on the server named `plugin_commonmeasure_commonmeasure`, the edge recorded `crossing_refused` with `mode: mediated` (an unreachable `robots.txt` is a complete disallow) under its own `local-*` session beside the hooks' records, and the model read the refusal and did not retry; without `--allowedTools` the same run was refused by the host's permission rules and the module refused the `WebFetch` rather than fetching natively. No delivered page or routed `WebSearch` is recorded live. `plugin/tests/router.test.ts`, run by `claude plugin test plugin`, drives the module through Claude Code's own hooks test kit with the edge's result shapes stubbed: a `WebFetch` and a `WebSearch` answered through `context_fetch` and `context_search`, a refusal and an unavailable answer refusing the native call in the edge's words, a failed edge call refused rather than fetched natively, the native tool running where the server is absent or no search provider is configured, a `context_fetch` on another server never taken whether it is listed before the edge or alone, a PDF returned as an embedded resource refused with the gap named, and the observed `PostToolUse` record suppressed for routed calls only |
+| Claude Code, routed (the mod) | `live-verified` for the refusal branch (bounded configuration); delivery `fixture-tested` | Claude Code 2.1.288, `claude -p` in a container whose egress proxy breaks TLS to the open web, 3 October 2026: the module loaded from `--plugin-dir`, answered the model's `WebFetch` of `https://example.com/` through `context_fetch` on the server named `plugin_commonmeasure_commonmeasure`, the edge recorded `crossing_refused` with `mode: mediated` (an unreachable `robots.txt` is a complete disallow) under its own `local-*` session beside the hooks' records, and the model read the refusal and did not retry; without `--allowedTools` the same run was refused by the host's permission rules and the module refused the `WebFetch` rather than fetching natively. Claude Code 2.1.295, `claude -p` with the plugin from `--plugin-dir` and a debug build of this tree, 9 October 2026: a routed `WebFetch` of a loopback page under a public name was delivered through `context_fetch`, and the transcript recorded the tool result as a string, under the call's `tool_use_id`, with the router's other lines in a separate `hook_additional_context` attachment; that run's router opened the result with an acquisition line; the binding by `host_call_id` that replaced it (§Context entry and citation on Claude Code) has not been run live. No routed `WebSearch` is recorded live. `plugin/tests/router.test.ts`, run by `claude plugin test plugin`, drives the module through Claude Code's own hooks test kit with the edge's result shapes stubbed: a `WebFetch` and a `WebSearch` answered through `context_fetch` and `context_search`, a refusal and an unavailable answer refusing the native call in the edge's words, a failed edge call refused rather than fetched natively, the native tool running where the server is absent or no search provider is configured, a `context_fetch` on another server never taken whether it is listed before the edge or alone, a PDF returned as an embedded resource refused with the gap named, and the observed `PostToolUse` record suppressed for routed calls only |
+| Claude Code, the mod's display (row facts, sources line, `/cm keep`, `/cm session`, strict-mode question) | `fixture-tested` | `plugin/tests/mod.test.ts`, run by `claude plugin test plugin` (Claude Code 2.1.295), drives the module through the hooks test kit with Claude Code, the edge and the binary stubbed: the edge's lines drawn under a routed and a direct call's row once answered, a refusal's toast, log lines where nothing draws, the sources line built from `session --since --json` with the observed count kept at zero and no line for a turn that crossed nothing, `/cm keep` associating every joined log with its bytes as evidence and exporting beside the file, `/cm session` printing no URL, and the strict-mode question refusing on refuse and on dismissal, running natively on allow once, connecting and routing on route, and never asked under `observe` or `prefer`, and a policy read that is refused, overruns, exits non-zero, is malformed or names no known mode refusing the `WebFetch` with the gap named and asking nothing. `crates/commonmeasure-cli/tests/session_join.rs` holds the JSON's counts to the report's over joined logs and the `--since` window. `crates/commonmeasure-cli/tests/artifact_cli.rs` runs the `artifact` chain `/cm keep` issues, with its arguments, over a log the real hook wrote, and `artifact verify` accepts the bundle against the file and the printed digest and rejects an edited file. No live session is recorded for the row, the line, `/cm` or the question, and no drawn terminal has been inspected |
 | Claude Code, reconstructed (import) | `fixture-tested` | `crates/commonmeasure-cli/tests/import_e2e.rs` |
 | Claude Code, registration (`install`, `uninstall`, `doctor`) | `live-verified` for installation and use; remaining operations `fixture-tested` | The same trial ran `install claude` into an isolated configuration directory and loaded the generated hooks/MCP files into Claude Code 2.1.273 using its explicit settings/config options, and the interactive session of the mediated Claude Code row ran through them. `install_e2e.rs` still covers removal and diagnosis. |
 | Codex CLI, registration and mediated | `fixture-tested` | `install_e2e.rs` pins the registration and tool approval setting. `recorded_sessions.rs` reads the earlier private `codex exec` capture and the public interactive extract in `crates/commonmeasure-cli/tests/recorded/codex-interactive/` from 29 September 2026: Codex CLI 0.157.1 admitted part of the Common Measure public page and refused Google’s `/search` path under its robots declaration, with matching host-output and source-record hashes. Local relay state shows the paired session delivered; the receiving Hub organisation has not been independently read back. This does not verify an operator denied-host rule or either GUI host. |

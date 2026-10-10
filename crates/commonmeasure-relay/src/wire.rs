@@ -70,6 +70,11 @@ pub struct WireEvent {
     pub content_url: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub turn_id: Option<String>,
+    /// The output a citation belongs to, required on `content_cited`. Derived
+    /// from the session and the output observation's place in the log, so
+    /// the host's own output identifier stays in the source record.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub turn: Option<WireTurn>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,10 +114,11 @@ pub enum TurnPrivacy {
     Minimal,
 }
 
-/// The Grounding-level event types this projection emits. Boundaries,
-/// retrieval and grounding are witnessed; citation, presentation and engagement
-/// have no observed evidence behind them here, so there is no variant to emit
-/// them with.
+/// The event types this projection emits. Boundaries and retrieval are
+/// witnessed; grounding is witnessed or observed by the host; a citation is
+/// a host's observation that an answer named an acquisition. Presentation
+/// and engagement have no observed evidence behind them here, so there is
+/// no variant to emit them with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireEventKind {
@@ -120,6 +126,7 @@ pub enum WireEventKind {
     TurnCompleted,
     ContentRetrieved,
     ContentGrounded,
+    ContentCited,
 }
 
 impl WireBatch {

@@ -779,6 +779,12 @@ impl SessionLog {
         &self.path
     }
 
+    /// Whether this log has opted into host observations, so its admitted
+    /// fetches carry acquisition handles.
+    pub fn observes_host(&self) -> bool {
+        self.host_observations
+    }
+
     /// Append one record, carrying the `instance` reference when a
     /// registration is retained for this session
     /// (`docs/contracts/session-evidence.md` §Where). The retained record is
@@ -803,6 +809,19 @@ impl SessionLog {
     }
 
     pub fn record_crossing(&mut self, crossing: &Crossing) -> std::io::Result<u64> {
+        self.record_crossing_for(crossing, None)
+    }
+
+    /// Record `crossing`, made in answer to the host's tool call `host_call`
+    /// where a host's router answered its own tool through `context_fetch`.
+    /// The identifier is kept only on a crossing that issues an acquisition
+    /// handle: it binds the host's later observation of that call to this
+    /// record (`docs/contracts/session-evidence.md` §Acquisition handles).
+    pub fn record_crossing_for(
+        &mut self,
+        crossing: &Crossing,
+        host_call: Option<&str>,
+    ) -> std::io::Result<u64> {
         let event = match (crossing.mode, crossing.refusal.is_some()) {
             (CrossingMode::Mediated, true) => "crossing_refused",
             (CrossingMode::Mediated, false) => "crossing_mediated",
@@ -837,6 +856,9 @@ impl SessionLog {
             record["crossing_id"] = json!(Uuid::new_v4());
             record["observer"] = json!("cm");
             record["grade"] = json!("mediated");
+            if let Some(host_call) = host_call {
+                record["host_call_id"] = json!(host_call);
+            }
         }
         // Only a mediated crossing met a policy, so only a mediated crossing
         // names the policy it met. The other two grades were captured outside

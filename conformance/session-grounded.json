@@ -6,7 +6,7 @@
       "content_url": "https://www.example.org/report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -24,7 +24,7 @@
       "content_url": "https://www.example.org/report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -46,7 +46,7 @@
       "content_url": "https://news.example.net/story?id=7",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -64,7 +64,7 @@
       "content_url": "https://publisher.example.org/briefing",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -82,7 +82,7 @@
       "content_url": "https://publisher.example.org/briefing",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"

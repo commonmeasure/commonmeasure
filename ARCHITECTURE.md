@@ -573,14 +573,17 @@ operator record and not the optimiser. It supports the reporting some
 licensed suppliers require while the local source record stays the source of
 truth.
 
-The projection emits retrieval, grounding and cleared minimal turn boundaries
-at Grounding level, with selected coverage (`docs/contracts/telemetry-projection.md`),
-as Content Telemetry v1.0
-(`schema/SOURCE.md`, `crates/commonmeasure-relay/tests/conformance.rs`). The relay's
-wire types (`crates/commonmeasure-relay/src/wire.rs`) have no variant for citation,
-display, reproduction or engagement, because the evidence log witnesses
-nothing for them. Evidence-backed reproduction and citation events, drawn
-from the grounding evaluator's verdicts, are planned. The boundary rules
+The projection emits retrieval, grounding, cleared minimal turn boundaries
+and, from a host's output observations, citations, at Citation level for
+sessions and Grounding level for runs, with selected coverage
+(`docs/contracts/telemetry-projection.md`), as Content Telemetry v1.0
+(`schema/SOURCE.md`, `crates/commonmeasure-relay/tests/conformance.rs`). A
+citation is a host's observation that an answer named a source by URL or
+handle; it is not a claim of semantic support. The relay's wire types
+(`crates/commonmeasure-relay/src/wire.rs`) have no variant for display,
+reproduction or engagement, because the evidence log witnesses nothing for
+them. Evidence-backed reproduction events, drawn from the grounding
+evaluator's verdicts, are planned. The boundary rules
 hold for them: the evaluator's verdict vocabulary stays local, and only
 positive claims the sealed evidence supports are projected.
 

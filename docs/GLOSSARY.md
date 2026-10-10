@@ -305,6 +305,20 @@ them: entitlements, CM Attestation and the network they make up.
   reconstructed. Counts of different grades are never totalled together.
 - **Witnessed** — observed or mediated together: a crossing something was
   watching when it happened, as opposed to one reconstructed afterwards.
+- **Retrieved** — fetched and delivered to the host: a crossing the edge
+  admitted. Projected as `content_retrieved`. Retrieval says nothing about
+  whether the model saw the content.
+- **Context entry** — a host's observation that an acquisition's result was
+  in a model call's request (`context_entered`), recorded under the host's
+  representation hash. Projected as a `content_grounded` of `turn` scope.
+  It establishes the request boundary, not that the content informed the
+  answer. A crossing's `grounded` field records the edge's own claim of
+  context entry where no host observes it (EDG-202 renames the field).
+- **Cited** — a host's observation that an answer explicitly named an
+  acquisition, by its URL or handle (`output_associated`). Projected as
+  `content_cited` where the answer's model call also carried the
+  acquisition. It is a marker in the answer, not a measure of semantic
+  support, and nothing is matched by meaning.
 - **Refused count** — the one fact about refused crossings that leaves the
   machine: a session's running total of them, carried as `refused` on every
   batch the relay sends for the session, with no address, reason or hash.

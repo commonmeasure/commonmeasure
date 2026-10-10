@@ -1,0 +1,129 @@
+{
+  "agent_id": "commonmeasure",
+  "document_type": "event_batch",
+  "events": [
+    {
+      "content_url": "https://www.example.org/energy-cap",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "fcd65f01-380a-5126-abc0-3c780b2a6f4a",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:00:00.500Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://www.example.org/energy-cap",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "contextops-host-tool": "claude-code",
+        "scope": "turn"
+      },
+      "id": "3a57f67a-7c8c-5b90-90be-3467ed6d0607",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:02:00.500Z",
+      "turn_id": "3b9a3c55-0c1e-4f6a-9d0e-5a1f0c2e7b41",
+      "type": "content_grounded"
+    },
+    {
+      "content_url": "https://www.example.org/tariffs",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "6fc073b9-a9aa-53af-ac12-8f50dbb268f2",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:01:00.500Z",
+      "type": "content_retrieved"
+    },
+    {
+      "content_url": "https://www.example.org/tariffs",
+      "data": {
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "contextops-host-tool": "claude-code",
+        "scope": "turn"
+      },
+      "id": "83e42fac-d6cc-5570-98dc-9a18e50f5cae",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:02:00.500Z",
+      "turn_id": "3b9a3c55-0c1e-4f6a-9d0e-5a1f0c2e7b41",
+      "type": "content_grounded"
+    },
+    {
+      "content_url": "https://www.example.org/energy-cap",
+      "data": {
+        "citation_type": "unclassified",
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "contextops-host-tool": "claude-code",
+        "position": "unclassified"
+      },
+      "id": "9dcd21dd-ff3a-51b6-ae56-924eb724886c",
+      "output_id": "ac171279-e17d-59b0-9a32-279a1ffb0a16",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:02:00.500Z",
+      "turn_id": "3b9a3c55-0c1e-4f6a-9d0e-5a1f0c2e7b41",
+      "type": "content_cited"
+    },
+    {
+      "data": {
+        "commonmeasure-output-associations": {
+          "count": 1
+        },
+        "commonmeasure-projection": {
+          "conformance_level": "citation",
+          "coverage": {
+            "mode": "selected",
+            "terms_ref": "commonmeasure:telemetry-selection:v1"
+          }
+        },
+        "contextops-host-tool": "claude-code"
+      },
+      "id": "68ca07e5-8222-5b4b-a1a4-f9341b7e7b84",
+      "source_role": "agent",
+      "timestamp": "2026-10-09T10:02:00.500Z",
+      "turn": {
+        "privacy_level": "minimal"
+      },
+      "turn_id": "3b9a3c55-0c1e-4f6a-9d0e-5a1f0c2e7b41",
+      "type": "turn_completed"
+    }
+  ],
+  "refused": 0,
+  "schema_version": "1.0",
+  "session_id": "fe1d7e64-028c-5b3f-9370-28a9a3b497a8",
+  "started_at": "2026-10-09T10:00:00.500Z"
+}

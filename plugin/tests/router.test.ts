@@ -84,7 +84,7 @@ test('a WebFetch is answered through context_fetch with the prompt applied', asy
   const out = await $.tool.call({ tool: 'WebFetch', url: 'https://example.org/page', prompt: 'What does it say?', tool_use_id: 'call-1' })
 
   expect(reached).toEqual([])
-  expect(calls).toEqual([{ server: EDGE, tool: 'context_fetch', args: { url: 'https://example.org/page' } }])
+  expect(calls).toEqual([{ server: EDGE, tool: 'context_fetch', args: { url: 'https://example.org/page', host_call_id: 'call-1' } }])
   expect(out.deny).toBeUndefined()
   expect(out.result).toMatchObject({ bytes: 12, code: 200, codeText: 'OK', result: 'It says twelve.', url: 'https://example.org/page' })
   expect(typeof out.result.durationMs).toBe('number')
@@ -150,6 +150,10 @@ test('a context_fetch on another server, listed alone, leaves the native tools r
   const reached: string[] = []
   const servers: string[] = []
   on('tool.list', () => ({ value: [...FOREIGN, ...TOOLS.filter((tool) => !tool.mcp)] }))
+  // The policy in force is observe; an unreadable one refuses the WebFetch (mod.test.ts).
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: '{"mode":"observe"}\nsha256:00\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   on('ui.log', () => ({ value: undefined }))
   on('tool.call', () => {
     reached.push('native')
@@ -229,6 +233,10 @@ test('without the edge connected the native WebFetch runs, noted once', async ($
   const reached: string[] = []
   const logs: string[] = []
   on('tool.list', () => ({ value: TOOLS.filter((tool) => !tool.mcp) }))
+  // The policy in force is observe, so nothing is asked (strict: mod.test.ts).
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: '{"mode":"observe"}\nsha256:00\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   on('ui.log', ($, e) => {
     logs.push(e.text)
     return { value: undefined }
@@ -556,4 +564,43 @@ test('a routed WebSearch keeps the lines of the results it shows', async ($, on)
   const commentary = out.result.results[1]
   expect(commentary.startsWith(shown)).toBe(true)
   expect(commentary).not.toContain('blocked.example')
+})
+
+// The plugin's Stop hook binds a routed WebFetch's result in the transcript
+// to the edge's record of this call, by the call's identifier
+// (`docs/contracts/host-integration.md` §Context entry and citation on
+// Claude Code); `crates/commonmeasure-cli/tests/cited_e2e.rs` pins the
+// reader's side. The result itself carries no handle.
+const HANDLE = '6c1f3f0e-9b1d-4c52-a7e0-2d4b8f61c204'
+
+test('a routed WebFetch names its call to the edge and its result carries no handle', async ($, on) => {
+  const reached: string[] = []
+  const args: Array<Record<string, unknown>> = []
+  connected(on, reached)
+  let answer = fetched({ acquisition_id: HANDLE })
+  on('mcp.call', ($, e) => {
+    args.push(e.args)
+    return edgeAnswers(answer)
+  })
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'It says twelve.', usage: null } }))
+
+  const out = await $.tool.call({ tool: 'WebFetch', url: 'https://example.org/page', prompt: 'p', tool_use_id: 'toolu_01' })
+  expect(reached).toEqual([])
+  expect(args).toEqual([{ url: 'https://example.org/page', host_call_id: 'toolu_01' }])
+  expect(out.result.result).toBe('It says twelve.')
+
+  // A saved file's result names its path and no handle either.
+  answer = {
+    url: 'https://example.org/paper.pdf',
+    acquisition_id: HANDLE,
+    content_hash: 'sha256:9f',
+    path: '/home/op/.commonmeasure/sessions/local-1.files/9f.pdf',
+    read: 'Common Measure saved this PDF without reading it: read the file at path with your own file tools.',
+    http_status: 200,
+    policy: 'Admitted; no constraint excluded it.',
+    recorded_in: '/home/op/.commonmeasure/sessions/local-1.ndjson',
+  }
+  const file = await $.tool.call({ tool: 'WebFetch', url: 'https://example.org/paper.pdf', prompt: 'p', tool_use_id: 'toolu_02' })
+  expect(args[1]).toEqual({ url: 'https://example.org/paper.pdf', host_call_id: 'toolu_02' })
+  expect(file.result.result).not.toContain(HANDLE)
 })

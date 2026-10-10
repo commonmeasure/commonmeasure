@@ -4079,7 +4079,7 @@ fn selected_coverage_excludes_private_failed_refused_and_reconstructed_activity(
         assert_eq!(
             event["data"]["commonmeasure-projection"],
             json!({
-                "conformance_level": "grounding",
+                "conformance_level": "citation",
                 "coverage": {"mode": "selected", "terms_ref": "commonmeasure:telemetry-selection:v1"},
             })
         );

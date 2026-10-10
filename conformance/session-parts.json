@@ -6,7 +6,7 @@
       "content_url": "https://www.example.org/long-report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -23,7 +23,7 @@
       "content_url": "https://www.example.org/long-report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -44,7 +44,7 @@
       "content_url": "https://www.example.org/long-report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"
@@ -61,7 +61,7 @@
       "content_url": "https://www.example.org/long-report",
       "data": {
         "commonmeasure-projection": {
-          "conformance_level": "grounding",
+          "conformance_level": "citation",
           "coverage": {
             "mode": "selected",
             "terms_ref": "commonmeasure:telemetry-selection:v1"

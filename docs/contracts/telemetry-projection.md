@@ -34,8 +34,9 @@ crossing, engagement, scope and receiver are defined in
 
 ## What is projected
 
-The relay emits Grounding-level events only: `content_retrieved`,
-`content_grounded`, `turn_started` and `turn_completed`. It emits no citation,
+The relay emits `content_retrieved`, `content_grounded`, `content_cited`,
+`turn_started` and `turn_completed`. A citation comes only from a host's
+output observation (§Citation from host observations). It emits no
 presentation, reproduction or engagement claim. The pinned schemas are listed
 in `schema/SOURCE.md`; `crates/commonmeasure-relay/src/project.rs` implements
 the selection, `crates/commonmeasure-relay/src/wire.rs` the wire types, and
@@ -85,6 +86,9 @@ a receiver counts it once.
   observes is grounded by the observation instead, with `data.scope` `turn`
   and the observation's representation hash (§Grounding from host
   observations).
+- **`content_cited`**, for a source a host observed an answer naming by its
+  URL or handle: `output_id`, `turn_id` and `data.citation_type`
+  (§Citation from host observations).
 - **`turn_started`**, **`turn_completed`**: a turn boundary (§Selected
   coverage).
 - **A run** named to the relay projects each admitted source with a URL as a
@@ -124,8 +128,9 @@ hash (§Grounding from host observations). It is distinct from the number
 of `content_grounded` events, and a receiver counts it once per boundary
 event ID. It is absent on boundaries
 without an output observation, so a missing observation never becomes a
-measured zero. It remains a Grounding-level extension: the relay makes no
-standard `content_cited` event and no Citation-conformance claim. The
+measured zero. It counts the boundary's references; the standard events for
+the same references are the `content_cited` events of §Citation from host
+observations, one per distinct source. The
 boundary needs its own clearance and at least one eligible source event, as
 §Selected coverage requires.
 
@@ -138,15 +143,24 @@ informational declaration in the schema's extension container:
 
 ```json
 {"data": {"commonmeasure-projection": {
-  "conformance_level": "grounding",
+  "conformance_level": "citation",
   "coverage": {"mode": "selected", "terms_ref": "commonmeasure:telemetry-selection:v1"}
 }}}
 ```
 
+`conformance_level` is `citation` on a session's events and `grounding` on
+a run's. A session's projection emits `content_cited` with the members
+Content Telemetry v1.0 section 5.7.3 requires (`id`, `output_id`,
+`data.citation_type`, a non-null `content_url`) on top of the Grounding
+events; a run records no answer and cites nothing. The level states what
+the projection emits when a host observes a citation. Coverage stays
+`selected`: a session whose host sends no output observation reports no
+citation, and that absence is not a measured zero.
+
 The extension describes the event's projection. It does not add a standard
 batch field or replace an emitter manifest. An emitter manifest advertising
-this projection uses `telemetry.conformance_level: grounding` and a
-`telemetry.coverage` entry for each of the four event types, with
+this projection uses `telemetry.conformance_level: citation` and a
+`telemetry.coverage` entry for each of the five event types, with
 `mode: selected` and the same `terms_ref`. Manifest publication belongs to the
 participant operating the endpoint; the relay does not publish one.
 
@@ -802,7 +816,43 @@ observation of that acquisition projects no grounding and is not counted in
 hash, so equality ties the host's claim to the delivered bytes; it does not
 show that the file entered the model request, and it says nothing about which
 pages the model read. The grounding remains the host's claim. A page's
-observation grounds under the host's hash, whatever it is.
+observation grounds under the host's hash, whatever it is. On Claude Code
+the edge makes that claim for a file only where the transcript shows the
+file's bytes in the request
+([host integration §Context entry and citation on Claude Code](host-integration.md#context-entry-and-citation-on-claude-code)).
+
+## Citation from host observations
+
+An output observation
+([session evidence §Output-association observations](session-evidence.md#output-association-observations))
+projects one `content_cited` per distinct source among its eligible
+references. A reference is eligible where it names an admitted acquisition
+recorded before the output, cleared and passing the exclusions of §Selected
+coverage, and a context entry of that acquisition in the output's
+generation grounds it (§Grounding from host observations). An unknown
+handle, and a known one the generation's observed context did not carry,
+stays an unresolved reference in the source record. The output must be
+acknowledged: its completion boundary is in the log. Repeating a
+reference, or naming two acquisitions of one URL, is one citation, since
+Content Telemetry counts one occurrence per association between a source
+and an output (section 4.3).
+
+| Member | Value |
+|---|---|
+| `id` | derived from the session, the output observation's log position and the `content_url` |
+| `timestamp` | the output observation's |
+| `content_url`, `license_ref` | the acquisition's, as on its retrieval |
+| `turn_id` | the output's generation, as on an observed grounding |
+| `output_id` | a UUID derived from the session and the output observation's log position; the host's own output identifier stays in the source record |
+| `data.citation_type`, `data.position` | `unclassified`: the host marked an explicit reference or quotation and did not classify it |
+| `data.content_hash` | the context entry's representation hash, where the generation's entries for that source carry one hash; absent where they carry several |
+
+Clearance and the owning engagement are the acquisition's, as for a
+grounding from a host observation; a reporting consent that clears the
+crossing clears its citations too. The output's text, its hash and the
+quotation never enter telemetry: the record holds none of them. A citation
+says the answer named the source by URL or handle. It is not a measure of
+semantic support, and no citation is inferred from meaning.
 
 ## Directory reporting consent
 
@@ -879,6 +929,14 @@ The receiver URL comparison is unit-tested in
 `crates/commonmeasure-relay/tests/conformance.rs` validates the corpus against
 the pinned schemas, including rejection of missing or invalid turn privacy
 levels. A receiver must re-pin the changed corpus and run its own replay gate.
+`crates/commonmeasure-cli/tests/cited_e2e.rs` drives Claude Code's path
+through the binary: a server opted into host observations fetches two
+loopback pages, the `Stop` hook reads a transcript fixture in Claude Code's
+recorded shape whose answer cites one, and the relay sends one
+`content_cited`, for that page, with no page or answer text. The receiver
+there records what the relay posts; Common Measure Hub's acceptance of
+`content_cited` is not established: the hub refuses the kind today
+(HUB-101).
 `crates/commonmeasure-relay/tests/paced_retrieval.rs` fetches a page twice
 inside a loopback origin's `Crawl-delay` through the real `context_fetch`,
 pacing store and transport, and projects the waited crossing: its retrieval

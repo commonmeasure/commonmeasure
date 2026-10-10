@@ -130,12 +130,23 @@ fn delivered_file(payload: &Value) -> Option<Value> {
     Some(Value::Object(member))
 }
 
-fn projection_data() -> Map<String, Value> {
+/// The level a session's projection declares. It emits `content_cited`
+/// with the members Content Telemetry v1.0 section 5.7.3 requires (`id`,
+/// `output_id`, `data.citation_type` and a `content_url`) on top of the
+/// Grounding events, and only where a host observed the citation; coverage
+/// stays `selected`, so the level claims what the projection can emit and
+/// not that every citation was reported.
+const SESSION_LEVEL: &str = "citation";
+
+/// A run assembles context and records no answer, so it cites nothing.
+const RUN_LEVEL: &str = "grounding";
+
+fn projection_data(level: &str) -> Map<String, Value> {
     let mut data = Map::new();
     data.insert(
         PROJECTION_FIELD.to_owned(),
         json!({
-            "conformance_level": "grounding",
+            "conformance_level": level,
             "coverage": {"mode": "selected", "terms_ref": SELECTION_TERMS},
         }),
     );
@@ -449,6 +460,85 @@ fn grounds(acquisition: &Value, observation: &Value) -> bool {
     observation["payload"]["representation_hash"] == payload["content_hash"]
 }
 
+/// Whether a record is a host's output observation the projection can read.
+fn observed_output(record: &Value) -> bool {
+    let p = &record["payload"];
+    record["event"] == "output_associated"
+        && p["observer"] == "host"
+        && p["grade"] == "observed"
+        && p["output_hash"]
+            .as_str()
+            .is_some_and(commonmeasure_harness::session::observations::valid_hash)
+        && p["generation_id"]
+            .as_str()
+            .is_some_and(|id| Uuid::parse_str(id).is_ok())
+}
+
+/// The references of the output observation at `output_position` that name
+/// an admitted, cleared acquisition recorded before it whose context entry
+/// in the output's generation grounds it, each as the acquisition's position
+/// and the positions of those context entries. An unknown handle, and a
+/// known one the generation's observed context did not carry, is not
+/// returned: it stays an unresolved reference in the source record.
+fn eligible_references(
+    records: &[Value],
+    output_position: usize,
+    internal_prefixes: &[String],
+    may_project: &dyn Fn(usize) -> bool,
+) -> Vec<(usize, Vec<usize>)> {
+    let output = &records[output_position]["payload"];
+    let Some(handles) = output["acquisition_ids"].as_array() else {
+        return Vec::new();
+    };
+    handles
+        .iter()
+        .filter_map(|handle| {
+            let acquisition =
+                acquisition_position(records, handle, internal_prefixes, may_project)?;
+            if acquisition >= output_position {
+                return None;
+            }
+            let entries: Vec<usize> = (acquisition + 1..output_position)
+                .filter(|&at| {
+                    let record = &records[at];
+                    grounds(&records[acquisition], record)
+                        && record["payload"]["acquisition_id"] == *handle
+                        && record["payload"]["generation_id"] == output["generation_id"]
+                })
+                .collect();
+            (!entries.is_empty()).then_some((acquisition, entries))
+        })
+        .collect()
+}
+
+/// The output observation a host's completion boundary acknowledges.
+fn boundary_output(records: &[Value], boundary_position: usize) -> Option<usize> {
+    let boundary = &records[boundary_position]["payload"];
+    let output_id = boundary["output_id"].as_str()?;
+    records[..boundary_position].iter().position(|record| {
+        let p = &record["payload"];
+        observed_output(record)
+            && p["output_id"] == output_id
+            && p["generation_id"] == boundary["turn_id"]
+            && p["host"] == boundary["host"]
+    })
+}
+
+/// Whether the output observation at `output_position` was acknowledged:
+/// its completion boundary is in the log. An output whose boundary failed
+/// was answered unavailable to the host, and stays unprojected until an
+/// identical retry appends it.
+fn completed(records: &[Value], output_position: usize) -> bool {
+    let output = &records[output_position]["payload"];
+    records[output_position + 1..].iter().any(|record| {
+        let p = &record["payload"];
+        record["event"] == "turn_completed"
+            && p["output_id"] == output["output_id"]
+            && p["turn_id"] == output["generation_id"]
+            && p["host"] == output["host"]
+    })
+}
+
 /// Count explicit output markers separately from context entry. A completion
 /// without an output observation retains unknown use rather than gaining zero.
 fn output_associations(
@@ -457,47 +547,93 @@ fn output_associations(
     internal_prefixes: &[String],
     may_project: &dyn Fn(usize) -> bool,
 ) -> Option<u64> {
-    let boundary = &records[boundary_position]["payload"];
-    let output_id = boundary["output_id"].as_str()?;
-    let (output_position, output) =
-        records[..boundary_position]
+    let output_position = boundary_output(records, boundary_position)?;
+    records[output_position]["payload"]["acquisition_ids"].as_array()?;
+    Some(eligible_references(records, output_position, internal_prefixes, may_project).len() as u64)
+}
+
+/// The `content_cited` events of the output observation at
+/// `output_position`: one per distinct source among its eligible
+/// references, since repeating an association between a source and an
+/// output is not a further citation (Content Telemetry v1.0 section 4.3).
+/// Each takes its clearance, URL and licence from the acquisition, as a
+/// grounding from a host observation does, and carries the representation
+/// hash of the context entry where the generation saw the source under one
+/// hash. The host marked an explicit reference or quotation and did not
+/// classify it, so `citation_type` and `position` are `unclassified`.
+fn citations(
+    session_id: &str,
+    records: &[Value],
+    output_position: usize,
+    internal_prefixes: &[String],
+    may_project: &dyn Fn(usize) -> bool,
+    receiver: Option<&url::Origin>,
+) -> Vec<(WireEvent, usize)> {
+    let record = &records[output_position];
+    let output = &record["payload"];
+    let Some(timestamp) = output["timestamp"].as_str().and_then(normalise_timestamp) else {
+        return Vec::new();
+    };
+    if !observed_output(record) || !completed(records, output_position) {
+        return Vec::new();
+    }
+    let output_id = derived_id(&json!({
+        "kind": "output", "scope": "session", "session": session_id,
+        "position": output_position,
+    }));
+    let mut sources: Vec<(String, usize, Vec<&Value>)> = Vec::new();
+    for (acquisition, entries) in
+        eligible_references(records, output_position, internal_prefixes, may_project)
+    {
+        let content_url = wire_url(
+            records[acquisition]["payload"]["url"]
+                .as_str()
+                .expect("an eligible acquisition has a projectable url"),
+        );
+        let hashes = entries
             .iter()
-            .enumerate()
-            .find(|(_, record)| {
-                let p = &record["payload"];
-                record["event"] == "output_associated"
-                    && p["output_id"] == output_id
-                    && p["generation_id"] == boundary["turn_id"]
-                    && p["host"] == boundary["host"]
-                    && p["observer"] == "host"
-                    && p["grade"] == "observed"
-                    && p["output_hash"]
-                        .as_str()
-                        .is_some_and(commonmeasure_harness::session::observations::valid_hash)
-            })?;
-    let handles = output["payload"]["acquisition_ids"].as_array()?;
-    Some(
-        handles
-            .iter()
-            .filter(|handle| {
-                let Some(acquisition) =
-                    acquisition_position(records, handle, internal_prefixes, may_project)
-                else {
-                    return false;
-                };
-                if acquisition >= output_position {
-                    return false;
-                }
-                records[acquisition + 1..output_position]
-                    .iter()
-                    .any(|record| {
-                        grounds(&records[acquisition], record)
-                            && record["payload"]["acquisition_id"] == **handle
-                            && record["payload"]["generation_id"] == boundary["turn_id"]
-                    })
-            })
-            .count() as u64,
-    )
+            .map(|&at| &records[at]["payload"]["representation_hash"]);
+        match sources.iter_mut().find(|(url, _, _)| *url == content_url) {
+            Some((_, _, known)) => known.extend(hashes),
+            None => sources.push((content_url, acquisition, hashes.collect())),
+        }
+    }
+    sources
+        .into_iter()
+        .map(|(content_url, acquisition, mut hashes)| {
+            let acquired = &records[acquisition]["payload"];
+            let mut data = with_supplier(
+                host_tool_data(output["host"].as_str()),
+                acquired["supplier"].as_str(),
+            );
+            data.insert("citation_type".to_owned(), json!("unclassified"));
+            data.insert("position".to_owned(), json!("unclassified"));
+            hashes.sort_by_key(|hash| hash.as_str());
+            hashes.dedup();
+            if let [hash] = hashes.as_slice() {
+                data.insert("content_hash".to_owned(), (*hash).clone());
+            }
+            let id = derived_id(&json!({
+                "kind": "event", "scope": "session", "session": session_id,
+                "position": output_position, "event": "cited", "content_url": content_url,
+            }));
+            let event = WireEvent {
+                id,
+                kind: WireEventKind::ContentCited,
+                timestamp: timestamp.clone(),
+                source_role: "agent".to_owned(),
+                content_telemetry_id: None,
+                content_url,
+                turn_id: output["generation_id"].as_str().map(str::to_owned),
+                output_id: Some(output_id),
+                turn: None,
+                license_ref: license_ref(acquired),
+                instance: wire_instance(output, receiver),
+                data,
+            };
+            (event, acquisition)
+        })
+        .collect()
 }
 
 /// Project one session evidence log. Returns no batch when nothing in the log
@@ -555,6 +691,23 @@ pub fn project_session(
         .and_then(|record| record["payload"]["host"].as_str())
         .map(str::to_owned);
     for (position, record) in records.iter().enumerate() {
+        // An output observation is not itself cleared: each citation takes
+        // its clearance from the acquisition it names, as a grounding from a
+        // host observation does.
+        if record["event"] == "output_associated" {
+            for (event, acquisition) in citations(
+                session_id,
+                records,
+                position,
+                internal_prefixes,
+                may_project,
+                receiver.as_ref(),
+            ) {
+                event_positions.push((event.id, acquisition));
+                events.push(event);
+            }
+            continue;
+        }
         if !may_project(position) {
             continue;
         }
@@ -596,6 +749,7 @@ pub fn project_session(
                 content_telemetry_id: None,
                 content_url: String::new(),
                 turn_id: payload["turn_id"].as_str().map(str::to_owned),
+                output_id: None,
                 turn: Some(WireTurn {
                     privacy_level: TurnPrivacy::Minimal,
                 }),
@@ -661,6 +815,7 @@ pub fn project_session(
                 .and_then(|id| Uuid::parse_str(id).ok()),
             content_url: content_url.clone(),
             turn_id: None,
+            output_id: None,
             turn: None,
             license_ref: license_ref(payload),
             instance: wire_instance(payload, receiver.as_ref()),
@@ -713,6 +868,7 @@ pub fn project_session(
                     content_telemetry_id: None,
                     content_url: content_url.clone(),
                     turn_id: observed["generation_id"].as_str().map(str::to_owned),
+                    output_id: None,
                     turn: None,
                     license_ref: license_ref(payload),
                     // The observation is this event's source record, and it
@@ -756,6 +912,7 @@ pub fn project_session(
                 content_telemetry_id: None,
                 content_url,
                 turn_id: None,
+                output_id: None,
                 turn: None,
                 license_ref: license_ref(payload),
                 instance: wire_instance(payload, receiver.as_ref()),
@@ -788,7 +945,7 @@ pub fn project_session(
 /// because the fleet view groups by it, and the operator reading that view is
 /// the one who chose the tool.
 fn host_tool_data(host_tool: Option<&str>) -> Map<String, Value> {
-    let mut data = projection_data();
+    let mut data = projection_data(SESSION_LEVEL);
     if let Some(host_tool) = host_tool {
         data.insert(HOST_TOOL_FIELD.to_owned(), json!(host_tool));
     }
@@ -865,13 +1022,14 @@ pub fn project_run(summary: &Value, internal_prefixes: &[String]) -> Result<Vec<
                 content_telemetry_id: None,
                 content_url: content_url.clone(),
                 turn_id: None,
+                output_id: None,
                 turn: None,
                 license_ref: license_ref(source),
                 instance: None,
-                data: with_supplier(projection_data(), supplier),
+                data: with_supplier(projection_data(RUN_LEVEL), supplier),
             });
             if let Some(hash) = source["content_hash"].as_str() {
-                let mut data = with_supplier(projection_data(), supplier);
+                let mut data = with_supplier(projection_data(RUN_LEVEL), supplier);
                 data.insert("scope".to_owned(), json!("session"));
                 data.insert("content_hash".to_owned(), json!(hash));
                 ingestion(&mut data, &source["tokens"], &summary["run"]["token_basis"]);
@@ -886,6 +1044,7 @@ pub fn project_run(summary: &Value, internal_prefixes: &[String]) -> Result<Vec<
                     content_telemetry_id: None,
                     content_url,
                     turn_id: None,
+                    output_id: None,
                     turn: None,
                     license_ref: license_ref(source),
                     instance: None,
@@ -1036,9 +1195,10 @@ mod tests {
         assert_eq!(projected.refused, Some(1));
         let wire = serde_json::to_value(&projected.batches[0]).unwrap();
         let text = wire.to_string();
+        // The wire's `output_id` is derived; the host's own stays home.
         for private in [
             "output_hash",
-            "output_id",
+            "d7d18e30-7dde-45e3-8a1a-e38c0ec98d7c",
             "acquisition_id",
             "/private/project",
             "refused.example",
@@ -1090,6 +1250,101 @@ mod tests {
                 .filter(|e| e.kind == WireEventKind::ContentRetrieved)
                 .count(),
             2
+        );
+    }
+
+    fn cited(projected: &SessionProjection) -> Vec<&WireEvent> {
+        projected
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.events)
+            .filter(|event| event.kind == WireEventKind::ContentCited)
+            .collect()
+    }
+
+    /// The output names the used page twice, a page it never saw and a
+    /// handle the session never issued: one citation, of the used page.
+    #[test]
+    fn an_output_cites_each_source_it_named_and_saw_once() {
+        let records = host_observation_session();
+        let projected = project_session(None, "s", &records, &[], &|_| true);
+        let citations = cited(&projected);
+        assert_eq!(citations.len(), 1);
+        let citation = citations[0];
+        assert_eq!(citation.content_url, "https://publisher.example/used");
+        assert_eq!(
+            citation.turn_id.as_deref(),
+            records[3]["payload"]["generation_id"].as_str()
+        );
+        assert_eq!(citation.data["citation_type"], "unclassified");
+        assert_eq!(citation.data["position"], "unclassified");
+        assert_eq!(
+            citation.data["content_hash"],
+            records[2]["payload"]["representation_hash"]
+        );
+        assert_eq!(
+            citation.data[PROJECTION_FIELD]["conformance_level"],
+            SESSION_LEVEL
+        );
+        let output_id = citation.output_id.expect("a citation names its output");
+        assert_ne!(output_id.to_string(), records[3]["payload"]["output_id"]);
+        // Clearance and engagement are the acquisition's.
+        assert_eq!(
+            projected
+                .event_positions
+                .iter()
+                .find(|(id, _)| *id == citation.id)
+                .unwrap()
+                .1,
+            0
+        );
+        // Stable across projections: a redelivery is the same event.
+        let again = project_session(None, "s", &records, &[], &|_| true);
+        assert_eq!(cited(&again), citations);
+    }
+
+    #[test]
+    fn a_citation_needs_a_cleared_acquisition_a_context_entry_and_a_completed_output() {
+        let records = host_observation_session();
+        // The acquisition is not cleared.
+        let uncleared = project_session(None, "s", &records, &[], &|at| at != 0);
+        assert!(cited(&uncleared).is_empty());
+        // No context entry in the output's generation.
+        let mut unseen = records.clone();
+        unseen[2]["payload"]["generation_id"] = json!(Uuid::new_v4());
+        assert!(cited(&project_session(None, "s", &unseen, &[], &|_| true)).is_empty());
+        // The completion boundary was never written.
+        let unfinished: Vec<Value> = records
+            .iter()
+            .filter(|record| record["event"] != "turn_completed")
+            .cloned()
+            .collect();
+        assert!(cited(&project_session(None, "s", &unfinished, &[], &|_| true)).is_empty());
+        // An output that names nothing cites nothing.
+        let mut silent = records.clone();
+        silent[3]["payload"]["acquisition_ids"] = json!([]);
+        assert!(cited(&project_session(None, "s", &silent, &[], &|_| true)).is_empty());
+    }
+
+    #[test]
+    fn a_run_declares_grounding_and_a_session_citation() {
+        let projected = project_session(None, "s", &host_observation_session(), &[], &|_| true);
+        for event in projected.batches.iter().flat_map(|batch| &batch.events) {
+            assert_eq!(
+                event.data[PROJECTION_FIELD]["conformance_level"],
+                SESSION_LEVEL
+            );
+        }
+        let run = project_run(
+            &json!({"run": {"id": Uuid::new_v4(), "started_at": "2026-09-16T10:00:00Z"},
+                    "plans": [{"id": "p", "sources": [{"admitted": true,
+                    "url": "https://publisher.example/a", "retrieval_rank": 1}]}]}),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            run[0].events[0].data[PROJECTION_FIELD]["conformance_level"],
+            RUN_LEVEL
         );
     }
 
@@ -2174,6 +2429,7 @@ mod tests {
                 (WireEventKind::ContentRetrieved, Some(1)),
                 (WireEventKind::ContentGrounded, Some(2)),
                 (WireEventKind::ContentRetrieved, None),
+                (WireEventKind::ContentCited, None),
                 (WireEventKind::TurnCompleted, None),
             ]
         );

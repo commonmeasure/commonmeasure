@@ -542,3 +542,105 @@ fn concurrent_initialisation_uses_one_complete_identity() {
     }
     assert_eq!(ids.len(), 1);
 }
+
+/// The chain the Claude Code mod's `/cm keep` runs (`plugin/hooks/register.js`
+/// `keep`), with its arguments, over a log the real hook wrote: the exported
+/// bundle verifies against the kept file and the digest the mod prints, and an
+/// edit to the file is caught.
+#[test]
+fn the_chain_cm_keep_runs_verifies_over_a_hook_written_log() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp = scratch();
+    let root = root(&temp);
+    let home = root.join("home");
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["hook", "post-tool-use"])
+        .env("COMMONMEASURE_HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("hook");
+    writeln!(
+        hook.stdin.as_mut().expect("stdin"),
+        "{}",
+        json!({"session_id": "keep-session", "hook_event_name": "PostToolUse",
+            "cwd": root.display().to_string(), "tool_name": "WebFetch",
+            "tool_input": {"url": "https://www.gov.uk/a"}, "tool_response": {"result": "text"}})
+    )
+    .expect("payload");
+    assert!(hook.wait().expect("hook exit").success());
+    let document = success(
+        Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["session", "keep-session", "--json"])
+            .env("COMMONMEASURE_HOME", &home)
+            .output()
+            .expect("session --json"),
+    );
+    let log = document["path"].as_str().expect("log path");
+
+    let file = root.join("answer.md");
+    fs::write(&file, "The page at https://www.gov.uk/a says text.\n").expect("answer");
+    let store = root.join(".commonmeasure/artifacts/answer.md");
+    initialise(&store);
+    let association = success(
+        command()
+            .arg("associate")
+            .arg("--store")
+            .arg(&store)
+            .args([
+                "--namespace",
+                "urn:commonmeasure:local:claude-code",
+                "--session",
+                "keep-session",
+                "--issuer",
+                "urn:commonmeasure:local",
+                "--edge",
+                "local",
+                "--actor",
+                "urn:commonmeasure:local:operator",
+                "--basis",
+                "operator_declaration",
+                "--host",
+                "claude-code",
+            ])
+            .output()
+            .expect("associate"),
+    );
+    let snapshot = success(
+        command()
+            .args(["snapshot", "file"])
+            .arg(&file)
+            .arg("--store")
+            .arg(&store)
+            .arg("--evidence")
+            .arg(format!(
+                "{}={log}",
+                association["record_id"].as_str().expect("record id")
+            ))
+            .output()
+            .expect("snapshot"),
+    );
+    let bundle = root.join("answer.md.commonmeasure.json");
+    let exported = export(&store, &snapshot, &bundle);
+    let digest = exported["snapshot_digest"].as_str().expect("digest");
+    let verify = |file: &Path| {
+        command()
+            .arg("verify")
+            .arg(&bundle)
+            .arg("--file")
+            .arg(file)
+            .args(["--expected-snapshot", digest])
+            .output()
+            .expect("verify")
+    };
+    let verified = success(verify(&file));
+    assert_eq!(verified["valid"], true);
+    assert_eq!(verified["checks"]["evidence"]["valid"], true);
+    assert_eq!(verified["checks"]["content"]["status"], "matched");
+    assert_eq!(verified["signature"], "absent");
+
+    fs::write(&file, "An edited answer.\n").expect("edit");
+    assert!(!verify(&file).status.success());
+}

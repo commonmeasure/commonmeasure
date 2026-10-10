@@ -257,3 +257,101 @@ fn a_log_without_the_record_says_the_join_is_unavailable() {
         "{text}"
     );
 }
+
+fn session_json(home: &Path, args: &[&str]) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["session"])
+        .args(args)
+        .arg("--json")
+        .env("COMMONMEASURE_HOME", home)
+        .output()
+        .expect("the binary should start");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// The JSON document carries the counts the report states, over both logs,
+/// and the sources in the provenance line's vocabulary: the Claude Code
+/// mod's sources line reads these, so its counts are the report's.
+#[test]
+fn the_json_counts_are_the_reports_and_name_each_source() {
+    let home = tempfile::tempdir().expect("tempdir");
+    fixture(home.path());
+    let document = session_json(home.path(), &[HOOK_LOG]);
+    assert_eq!(
+        document["joined"],
+        json!([home
+            .path()
+            .join("sessions")
+            .join(format!("{MCP_LOG}.ndjson"))
+            .display()
+            .to_string()])
+    );
+    let summary = &document["summary"];
+    assert_eq!(
+        (summary["observed"].as_u64(), summary["mediated"].as_u64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(summary["refused"], 0);
+    assert_eq!(summary["grounded_witnessed"], 2);
+    let sources = &document["sources"];
+    let crossings = sources["crossings"].as_array().unwrap();
+    assert_eq!(crossings.len(), 2, "{sources:#}");
+    assert_eq!(crossings[0]["grade"], "observed");
+    assert_eq!(crossings[0]["ruling"], "not ruled");
+    assert_eq!(crossings[0]["host"], "www.example.org");
+    assert_eq!(crossings[0]["url"], "https://www.example.org/observed");
+    assert_eq!(crossings[1]["grade"], "mediated");
+    // The fixture's mediated record carries no delivery, so the edge's own
+    // word for it is the line's: failed, and its host is withheld.
+    assert_eq!(crossings[1]["ruling"], "failed");
+    assert_eq!(crossings[1]["host"], "withheld");
+    // Neither record holds declarations, so neither cost is known, and the
+    // total is unknown rather than zero.
+    assert_eq!(crossings[0]["cost"], "unknown");
+    assert_eq!(sources["cost"], "unknown");
+    assert_eq!(sources["receipts_owed"], 0);
+}
+
+/// `--since` keeps the records at or after the time in every joined log:
+/// the turn the mediated crossing was made in, and nothing before it.
+#[test]
+fn since_keeps_one_window_across_the_joined_logs() {
+    let home = tempfile::tempdir().expect("tempdir");
+    fixture(home.path());
+    let document = session_json(home.path(), &[HOOK_LOG, "--since", "2026-09-17T22:57:30Z"]);
+    assert_eq!(document["since"], "2026-09-17T22:57:30.000Z");
+    assert_eq!(document["summary"]["observed"], 0);
+    assert_eq!(document["summary"]["mediated"], 1);
+    assert_eq!(
+        document["sources"]["crossings"][0]["url"],
+        "https://www.example.org/mediated"
+    );
+    let text = {
+        let output = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+            .args(["session", HOOK_LOG, "--since", "2026-09-17T22:57:30Z"])
+            .env("COMMONMEASURE_HOME", home.path())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert!(
+        text.contains("crossings  0 observed, 1 mediated, 0 refused, 0 reconstructed"),
+        "{text}"
+    );
+    let after = session_json(home.path(), &[HOOK_LOG, "--since", "2026-09-18T00:00:00Z"]);
+    assert_eq!(after["sources"]["cost"], "none");
+    assert_eq!(after["sources"]["crossings"], json!([]));
+
+    let refused = Command::new(env!("CARGO_BIN_EXE_commonmeasure"))
+        .args(["session", HOOK_LOG, "--since", "yesterday"])
+        .env("COMMONMEASURE_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("is not an RFC 3339 time"));
+}

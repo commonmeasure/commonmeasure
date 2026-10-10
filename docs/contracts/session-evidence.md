@@ -568,7 +568,11 @@ projected to Content Telemetry.
 A host opts into explicit host observations before any mediated
 crossing (including a refusal). Earlier observed hook crossings are allowed.
 It opts in by sending the MCP JSON-RPC request `commonmeasure/observe` with
-`{"event":"observations_started"}`. This is a host integration method, outside
+`{"event":"observations_started"}`, or by starting the stdio server with
+`--host-observations`, which records the same request's record before the
+session's first crossing; a log that already holds a crossing stays as it
+was recorded. Claude Code's plugin uses the flag
+([host integration §Context entry and citation on Claude Code](host-integration.md#context-entry-and-citation-on-claude-code)). This is a host integration method, outside
 `tools/list`; it is not a model tool. Its acknowledgement follows the durable
 append. The method accepts only the records below and rejects unknown fields.
 CM supplies the session, host, timestamp and working directory. The caller
@@ -620,7 +624,11 @@ are not stamped `host_required` and cannot receive a context-entry observation.
 In this mode each admitted text fetch, and each delivered file, carries an
 `acquisition_id` (UUID) and a separate `crossing_id` (UUID) on its
 `crossing_mediated` record. `observer` is `cm`, `grade` is `mediated`, and
-`context_observation` is `host_required`. The
+`context_observation` is `host_required`. Where the call named the host's own tool
+call it answers (`host_call_id`, [host integration §The parts of a fetch](host-integration.md#the-parts-of-a-fetch)),
+the record carries it as `host_call_id`, so the host's later observation of
+that call is bound to this acquisition by the edge's record rather than by
+the call's result. It stays in the private source record. The
 fetch response returns the acquisition handle only after its record has been
 fsynced. Failure to record it makes the fetch unavailable. Refusals and failed
 fetches yield no handle. A fetch whose answer this edge could not record
@@ -700,7 +708,9 @@ policy-resolution fields or transcript path. Clearance uses its working
 directory independently of the acquisition. A retry uses the completing
 process's working directory and effective policy identity.
 The projection counts the boundary's associations in a custom field
-([telemetry projection §Custom fields](telemetry-projection.md#custom-fields)).
+([telemetry projection §Custom fields](telemetry-projection.md#custom-fields)),
+and projects each eligible reference as a `content_cited`, one per distinct
+source ([telemetry projection §Citation from host observations](telemetry-projection.md#citation-from-host-observations)).
 The hash, local handles and output ID stay in the private source record. The
 separately appended boundary lets a later output be projected after its
 grounding was already spooled, without changing a previously delivered
@@ -789,7 +799,9 @@ output associations.
 The ingress and the projection of these observations are **fixture-tested**:
 `crates/commonmeasure-harness/src/observations.rs` tests the ingress,
 `crates/commonmeasure-cli/tests/mediated_e2e.rs` drives it through the
-binary, and `crates/commonmeasure-relay/src/project.rs` tests the projection.
+binary, `crates/commonmeasure-cli/tests/cited_e2e.rs` drives Claude Code's
+`Stop` hook path through it, and `crates/commonmeasure-relay/src/project.rs`
+tests the projection.
 The content and model responses are synthetic. Supplier authorisation,
 provider-internal events, independent receiver acceptance and delivery recovery
 are separate evidence requirements.
@@ -2507,7 +2519,7 @@ and records that it did:
 ```json
 {
   "session_id": "…", "host": "claude-code",
-  "timestamp": "…", "nudge": "mediation-nudge/6", "source": "startup",
+  "timestamp": "…", "nudge": "mediation-nudge/7", "source": "startup",
   "basis": "emitted on the SessionStart hook's stdout for the host to add to the session's context; injection is the host's act and is not witnessed"
 }
 ```
@@ -3035,6 +3047,13 @@ boundary:
 The record also carries `policy_identity`, or `policy_unavailable` where
 the hook could not read the policy (§Policy identity).
 
+On Claude Code, `detail` of a `turn_completed` also carries
+`answer_unavailable` where the hook read nothing from the transcript
+because it could not establish that the transcript held the turn's final
+answer: the reason, such as "the transcript did not hold the turn's final
+answer within 2000 ms". That boundary then has no `context_snapshot` and
+submitted no context entry or output ([host integration §Context entry and citation on Claude Code](host-integration.md#context-entry-and-citation-on-claude-code)).
+
 `turn_id` is the host's identifier, absent when the host sends none and
 never invented. An observed crossing in the same turn carries the same
 value, which is what makes a crossing without its turn's question useful: a
@@ -3271,10 +3290,11 @@ crossings, on its own `characters/4` basis) as a lower bound on acquired
 input; it does not claim that sum explains the host's totals, which include
 everything the host assembled.
 
-Two lags are inherent to the basis. The host flushes each assistant message
-to its transcript after the `Stop` hook fires, so each boundary observes the
-turn before it, and a one-turn session records no snapshot. The host also
-does not announce every boundary: `/clear` starts a new conversation and
+The host writes the turn's final answer to its transcript after the `Stop`
+hook fires, so the hook waits, for up to 2 seconds, until the transcript
+holds that answer before it reads (§Turn boundaries). A boundary that
+waited in vain records no snapshot and names the gap. One lag is
+inherent to the basis. The host does not announce every boundary: `/clear` starts a new conversation and
 session, so the old log ends; its final model call may never be observed,
 because no later `Stop` occurs in that session. Compaction keeps the session
 and shrinks the context in place, so it appears as an otherwise-unexplained
@@ -3395,6 +3415,7 @@ quoted the URL whole, and the console withholds a reason that can hold one
 commonmeasure session            # the most recent session
 commonmeasure session <id>       # a named one
 commonmeasure session <id> --json
+commonmeasure session <id> --since 2026-10-09T10:00:00Z --json
 commonmeasure serve              # the session view of the console, on loopback
 ```
 
@@ -3410,12 +3431,33 @@ read fails the command, naming the log and the line, with the words "the relay
 skips it". The standing is taken from this log alone, before any joined log is
 added, because the relay delivers each log on its own.
 
-`--json` prints `session`, `path`, `records` (the joined logs' included),
-`tears` (each `path`, `line`, `bytes`, `marked`) and `reporting`: `standing`
-(`no_witnessed_crossings`, `cleared`, `partly_cleared`, `withheld`, or
-`unknown` with `unavailable` where the policy does not load), `policy`,
-`witnessed`, `cleared`, `held_for_access_context` and `withheld`, the
-directories as the relay records them. A log that does not read prints
+`--since <RFC 3339 time>` keeps only the records written at or after that
+time, in this log and every log joined to it; the counts, the sources and
+the report then describe that window (one turn, for the Claude Code mod's
+sources line). A record whose time does not read is kept rather than
+dropped. The `reporting` standing still covers the whole log.
+
+`--json` prints `session`, `path`, `joined` (the other logs read with it),
+`since` (or null), `records` (the joined logs' included), `summary`,
+`sources`, `tears` (each `path`, `line`, `bytes`, `marked`) and `reporting`:
+`standing` (`no_witnessed_crossings`, `cleared`, `partly_cleared`,
+`withheld`, or `unknown` with `unavailable` where the policy does not load),
+`policy`, `witnessed`, `cleared`, `held_for_access_context` and `withheld`,
+the directories as the relay records them. `summary` is the report's counts
+from the same summariser: `observed`, `mediated`, `refused`, `reconstructed`,
+`grounded_witnessed`, `grounded_reconstructed`, `named_not_read`,
+`delivered_files` and `host_observed`. `sources` names each crossing record
+in the vocabulary of the provenance line
+([host integration §1](host-integration.md#the-provenance-line)): `grade`,
+`url`, `host` (cut and quoted where the crossing was delivered or the agent's
+own tool made it, `withheld` for a refused or failed one), `terms`, `ruling`
+(`delivered`, `refused`, `failed`, or `not ruled` for an observed or
+reconstructed crossing), `supplier`, `cost`, `receipt`, `grounded` (null
+while the context entry waits on the host) and `hash`; a record that does
+not read as a crossing is `{grade, unreadable: true}`. Beside them, `cost` totals
+the carried crossings (`none` for none, `unknown` when any one is unknown,
+else the quoted prices summed per currency, or `free`) and `receipts_owed`
+counts the crossings whose receipt is `owed`. A log that does not read prints
 `session`, `path` and `unreadable` and exits non-zero.
 
 ## Conformance

@@ -1389,7 +1389,9 @@ fn install_claude(binary: &Path, paths: &HostPaths) -> Result<Vec<String>, Strin
     servers[SERVER_NAME] = json!({
         "type": "stdio",
         "command": binary.to_string_lossy(),
-        "args": ["mcp", "--host", "claude-code"],
+        // The Stop hook submits context entry and citation from the
+        // transcript, which needs the session's fetches to carry handles.
+        "args": ["mcp", "--host", "claude-code", "--host-observations"],
     });
     write_json(&paths.claude_state, &state)?;
     // The record before the settings, so no pre-approval is ever in the
@@ -2889,7 +2891,7 @@ mod tests {
         assert_eq!(state["mcpServers"]["other"]["command"], "/usr/bin/other");
         assert_eq!(
             state["mcpServers"][SERVER_NAME]["args"],
-            json!(["mcp", "--host", "claude-code"])
+            json!(["mcp", "--host", "claude-code", "--host-observations"])
         );
 
         uninstall_claude(&paths).expect("uninstalls");
