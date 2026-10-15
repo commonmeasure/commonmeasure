@@ -1,8 +1,7 @@
 ---
 title: Instance registration contract
 domain: network
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Instance registration contract

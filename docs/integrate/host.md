@@ -129,8 +129,8 @@ commonmeasure mcp --host claude-code --session <your session id>
   `initialize`. Send them: they are what tells one host from another under
   the same `--host` word.
 
-It offers `context_fetch`, `context_search`, `context_status` and
-`context_enrol`. To try it without a host, use a throwaway operator home,
+It offers `context_fetch`, `context_search`, `context_status`,
+`context_enrol` and `context_show`. To try it without a host, use a throwaway operator home,
 serve a page on loopback and allow the edge to reach private addresses,
 which it refuses by default
 ([source policy §Recording](../contracts/source-policy.md#recording) says

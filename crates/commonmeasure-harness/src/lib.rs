@@ -29,6 +29,7 @@ pub mod declarations;
 pub mod delivery;
 pub mod directory;
 pub mod discovery;
+pub mod display;
 pub mod egress;
 pub mod enrolment;
 pub mod fetched_file;
@@ -43,6 +44,7 @@ pub mod managed;
 pub mod manifest;
 pub mod mcp;
 pub mod nudge;
+pub mod passes;
 pub mod policy;
 pub mod prompt;
 pub mod provenance;
@@ -55,7 +57,7 @@ pub mod turn_observations;
 
 pub use enrolment::{EnrolmentRecord, enrolled_key_id};
 pub use hook::{HookInput, HostSurface, capture};
-pub use identity::{EdgeKey, Identity, PresentedIdentity};
+pub use identity::{EdgeKey, Identity, PresentedIdentity, PresentedPass};
 pub use import::known_hosts;
 pub use session::{
     Crossing, CrossingMode, DeliveryCheck, SessionLog, SessionSummary, Tear, TornTail,

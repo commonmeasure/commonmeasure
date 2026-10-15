@@ -107,6 +107,34 @@ pub struct TermsDeclaration {
     /// operator as an institution, never a person.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub access_context: Vec<InstitutionIdentifier>,
+    /// The Anchor this source accepts anonymous passes from, under the
+    /// anonymous access profile (product decision "Anonymous access
+    /// profile"). Absent, the edge holds no passes for the host and the
+    /// profile does not apply to it: the profile is a term the operator
+    /// names per host, never ambient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<AnchorTerm>,
+}
+
+/// An Anchor, in the sense of the Anonymous Bot Authentication draft: a
+/// party the source accepts that issues anonymous passes (RFC 9578
+/// publicly verifiable tokens) to an agent it has found meets a policy the
+/// Anchor publishes. A pass says only that; it identifies neither the
+/// operator, the reader nor the session. The requirements are the Anchor's
+/// and are kept outside Common Measure, which may be one Anchor among
+/// several and never the only one (`crate::passes`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorTerm {
+    /// The Anchor's origin, `https://host[:port]` with nothing after it.
+    /// Its issuer directory is read from this origin and its passes are
+    /// held in `<home>/passes/`, one wallet per Anchor.
+    pub origin: String,
+    /// The environment variable holding the credential the edge registered
+    /// under with the Anchor. The variable is named here rather than the
+    /// value because a policy is recorded and printed whole; the value is
+    /// read when passes are refilled and sent to the Anchor alone.
+    pub credential_env: String,
 }
 
 /// One typed institution identifier, in the standard's `access_context`
@@ -1122,9 +1150,60 @@ fn parse(encoded: &[u8], source: &Path) -> Result<PolicyFile, String> {
                     ));
                 }
             }
+            if let Some(anchor) = &declared.anchor {
+                anchor_admissible(anchor, file.allow_private_hosts).map_err(|fault| {
+                    format!(
+                        "{} {owner} terms entry {} for host {host:?} {fault}",
+                        source.display(),
+                        index + 1
+                    )
+                })?;
+            }
         }
     }
     Ok(file)
+}
+
+/// Why an Anchor term cannot be used, as the end of a terms refusal.
+///
+/// The origin must be written as its own serialisation, so the wallet a
+/// term names and the origin the edge sends its credential to are one
+/// spelling. It must be https: the credential and the passes cross this
+/// connection. Cleartext is admitted for a loopback address alone, and only
+/// where the operator has allowed private hosts, which is how a stand-in
+/// Anchor on the operator's own machine is reached.
+fn anchor_admissible(anchor: &AnchorTerm, allow_private_hosts: bool) -> Result<(), String> {
+    let origin = anchor.origin.as_str();
+    let parsed = url::Url::parse(origin)
+        .ok()
+        .filter(|parsed| parsed.origin().is_tuple());
+    let Some(parsed) = parsed.filter(|parsed| parsed.origin().ascii_serialization() == origin)
+    else {
+        return Err(format!(
+            "names anchor {origin:?}, which is not an origin; an anchor is written as \
+             scheme://host[:port] with nothing after it"
+        ));
+    };
+    let loopback = match parsed.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback && allow_private_hosts)
+    {
+        return Err(format!(
+            "names anchor {origin:?}, which is not https; an anchor is reached over https, or \
+             over http at a loopback address where allow_private_hosts is set"
+        ));
+    }
+    if anchor.credential_env.trim().is_empty() {
+        return Err(
+            "names an anchor without credential_env; the anchor issues passes to the \
+             credential the edge registered under"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 impl PolicyDocument {

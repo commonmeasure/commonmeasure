@@ -1,8 +1,7 @@
 ---
 title: Fleet-status contract
 domain: hub
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Fleet-status contract

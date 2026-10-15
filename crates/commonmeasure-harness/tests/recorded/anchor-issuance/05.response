@@ -1,0 +1,9 @@
+HTTP/1.1 429 
+Content-Type: application/json
+Content-Length: 59
+Connection: close
+
+{
+  "error": "ration exhausted",
+  "ration_per_window": 3
+}

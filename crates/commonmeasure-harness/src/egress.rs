@@ -36,6 +36,16 @@ pub fn reported_under_consent(record: &Value) -> bool {
         && reporting["consent"]["state"] == "agreed"
 }
 
+/// Whether a record is a crossing made under the anonymous access profile
+/// (product decision "Anonymous access profile"): its `anonymous` field
+/// names the Anchor the host's operator terms name. Such a crossing stays
+/// on the reader's own record. It is never cleared for egress, in any scope
+/// and under any consent, so nothing of it is projected, and a refusal under
+/// the profile is left out of the refused count.
+pub fn under_anonymous_profile(record: &Value) -> bool {
+    record["payload"]["anonymous"].is_object()
+}
+
 /// Whether the host recorded a turn boundary. Its clearance is resolved from
 /// `payload.detail.cwd`, independently of any neighbouring crossing.
 pub fn is_turn_boundary(record: &Value) -> bool {
@@ -75,7 +85,9 @@ pub enum Cleared {
 /// `allows_telemetry_egress` is false without one, and the loader refuses a
 /// policy that clears egress under no name.
 pub fn clearance(policy: &PolicyDocument, record: &Value) -> Option<Cleared> {
-    if !(is_witnessed(record) || is_refused(record) || is_turn_boundary(record)) {
+    if !(is_witnessed(record) || is_refused(record) || is_turn_boundary(record))
+        || under_anonymous_profile(record)
+    {
         return None;
     }
     let cwd = if is_turn_boundary(record) {
@@ -121,6 +133,21 @@ pub fn access_context_terms(
         .map(|terms| terms.reference.clone())
 }
 
+/// The reference and Anchor origin of the operator terms that put `host`
+/// under the anonymous access profile in the scope `cwd` resolves to, or
+/// `None`. A crossing of such a host is never cleared for egress
+/// ([`under_anonymous_profile`]), so a reporting demand on it cannot be met.
+pub fn anchor_terms(
+    policy: &PolicyDocument,
+    cwd: Option<&str>,
+    host: &str,
+) -> Option<(String, String)> {
+    let resolved = policy.resolve(cwd);
+    let terms = resolved.terms_for(host)?;
+    let anchor = terms.anchor.as_ref()?;
+    Some((terms.reference.clone(), anchor.origin.clone()))
+}
+
 /// The reference of the operator terms that keep `record` home, or `None`:
 /// a witnessed crossing whose host, in the scope its `cwd` resolves to,
 /// falls under terms naming institution identifiers. Such terms require the
@@ -140,4 +167,109 @@ pub fn held_for_access_context(policy: &PolicyDocument, record: &Value) -> Optio
         payload["cwd"].as_str(),
         payload["host_name"].as_str().unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A policy whose one scope clears telemetry egress under a named
+    /// engagement, for crossings made in `/work/acme`.
+    fn clearing_policy() -> PolicyDocument {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            home.path().join("policy.json"),
+            json!({"policy_mode": "observe", "scopes": [
+                {"match": "/work/acme", "engagement": "acme", "allow_telemetry_egress": true}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        PolicyDocument::read(home.path()).expect("valid policy")
+    }
+
+    // Catches: clearing a display for relay egress. A display is the
+    // consumer surface's own record of what a reader was shown; it never
+    // leaves, under any scope, alongside the crossing that fetched the
+    // release it was rendered against.
+    #[test]
+    fn a_rendered_display_is_never_cleared_for_egress() {
+        let policy = clearing_policy();
+        let crossing = json!({"event": "crossing_mediated", "payload": {"cwd": "/work/acme"}});
+        assert_eq!(
+            clearance(&policy, &crossing),
+            Some(Cleared::Scope("acme".to_owned()))
+        );
+        let display = json!({"event": "display_rendered", "payload": {
+            "cwd": "/work/acme",
+            "tool": "context_show",
+            "processor_record": 3,
+            "outcomes": ["quote_shown"],
+            "counts": {"vector": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]},
+        }});
+        assert!(!is_witnessed(&display));
+        assert!(!is_refused(&display));
+        assert!(!is_turn_boundary(&display));
+        assert_eq!(clearance(&policy, &display), None);
+    }
+
+    // Catches: clearing a crossing made under the anonymous access profile.
+    // Neither the scope that clears every crossing in its directory nor the
+    // reporting consent on the record lets it leave, and a refusal under the
+    // profile is not counted either, since the count is taken over cleared
+    // refusals.
+    #[test]
+    fn a_crossing_under_the_anonymous_profile_is_never_cleared() {
+        let policy = clearing_policy();
+        let anonymous = json!({"anchor": "https://anchor.example"});
+        let carried = json!({"event": "crossing_mediated", "payload": {
+            "cwd": "/work/acme",
+            "host_name": "source.example",
+            "anonymous": anonymous,
+            "identity": {"user_agent": "CommonMeasureBot/0", "pass": {
+                "anchor": "https://anchor.example", "truncated_token_key_id": 7}},
+            "declarations": {"reporting": {"met": true, "consent": {"state": "agreed"}}},
+        }});
+        let refused = json!({"event": "crossing_refused", "payload": {
+            "cwd": "/work/acme", "host_name": "source.example", "anonymous": anonymous,
+            "refusal": "refused: no pass",
+        }});
+        for record in [&carried, &refused] {
+            assert!(under_anonymous_profile(record));
+            assert_eq!(clearance(&policy, record), None, "{record}");
+        }
+        let mut signed = carried.clone();
+        signed["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("anonymous");
+        assert!(reported_under_consent(&signed));
+        assert_eq!(
+            clearance(&policy, &signed),
+            Some(Cleared::Scope("acme".to_owned()))
+        );
+    }
+
+    // Catches: clearing a refill of anonymous passes for relay egress. A
+    // refill names the Anchor, the host and the key the edge's passes are
+    // under; it never leaves, under any scope, even one that clears every
+    // crossing in its directory.
+    #[test]
+    fn a_pass_refill_is_never_cleared_for_egress() {
+        let policy = clearing_policy();
+        let refill = json!({"event": "passes_refilled", "payload": {
+            "cwd": "/work/acme",
+            "anchor": "https://anchor.example",
+            "origin_info": ["source.example"],
+            "requested": 5,
+            "obtained": 5,
+            "held": 5,
+            "key_id": "ab".repeat(32),
+            "stopped": null,
+        }});
+        assert!(!is_witnessed(&refill));
+        assert!(!is_refused(&refill));
+        assert!(!is_turn_boundary(&refill));
+        assert_eq!(clearance(&policy, &refill), None);
+    }
 }

@@ -1,8 +1,7 @@
 ---
 title: Host integration contract
 domain: edge
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Host integration contract
@@ -40,9 +39,10 @@ no policy file, and it never breaks the agent: unreadable input yields no
 record and the process exits zero whatever happened (`crates/commonmeasure-cli/src/main.rs`
 `hook`, `crates/commonmeasure-harness/src/hook.rs`).
 
-The mediated path is an MCP server that offers four tools, `context_fetch`,
-`context_search`, `context_status` and `context_enrol` (`crates/commonmeasure-harness/src/mcp.rs`
-`tool_definitions`). An agent that calls them instead of its own tools gives
+The mediated path is an MCP server that offers five tools, `context_fetch`,
+`context_search`, `context_status`, `context_enrol` and `context_show`
+(`crates/commonmeasure-harness/src/mcp.rs` `tool_definitions`).
+`context_status` names them under `tools`. An agent that calls them instead of its own tools gives
 the runtime the crossing before it happens, which is the only point at which
 policy can refuse. Each path appends to the session log named by the
 identifier it holds: on a host that passes its session identifier to the
@@ -261,6 +261,89 @@ counts the part ([session evidence](session-evidence.md#crossing),
 
 The input schema sets `additionalProperties: false`. The server does not
 enforce it: an argument it does not know is ignored.
+
+A signed release's result names it for `context_show` (§Displaying a reply
+against a release) by `content_hash` and, where the host opted into
+observations, by `acquisition_id`, and its `release.display` says whether
+`context_show` can display against it and for how long. The server keeps the
+release's text and sidecar in memory for that, and only once it has
+delivered them (§Displaying a reply against a release, §Releases held for
+display).
+
+### Displaying a reply against a release
+
+`context_show` renders a reply against a signed release this server's
+`context_fetch` delivered, by the release's display rule
+([processor](processor.md) `integrity-checker`), and returns what the reader
+may be shown. Its arguments:
+
+- `release`: the `acquisition_id` or the `content_hash` of the
+  `context_fetch` result that delivered the release. An `acquisition_id`
+  names the release its fetch delivered and no other. A `content_hash`
+  names a release only while one held release has that text; where the
+  server holds several releases with the same text (another sidecar,
+  signature or URL), it is refused as ambiguous, naming their
+  `acquisition_id`s.
+- `items`: the reply, 1 to 64 items in display order, each a string of at
+  most 2,000 characters:
+  `{"kind": "quote", "passage": "<id>"}` with an optional `"sentence": <n>`,
+  the zero-based index of a sentence of that passage;
+  `{"kind": "from_source", "text": "<sentence>", "passages": ["<id>", …]}`
+  for a sentence drawn from the release, `passages` optional; and
+  `{"kind": "own", "text": "<sentence>"}` for the assistant's own. The item
+  vocabulary is the one offered to the open standards bodies
+  ([display counts](display-counts.md)); the argument shape is this
+  edge's.
+
+The result's first text block is the payload as JSON, the second the
+display as plain text: one paragraph per item, opening with its label and
+passages in brackets, then the counts. On revision 2025-06-18 and later the
+payload is also `structuredContent`. The payload carries:
+
+| Field | Meaning |
+|---|---|
+| `release` | `content_hash`, the `acquisition_ids` of the fetches that delivered that release, and `verification` |
+| `display_mode` | `labelled` or `strict`, the mode applied |
+| `blocks` | one per item, in order: `outcome`, `label`, `text` (the words shown, empty for a refused quote), `reason`, and where the words are the release's, `passage` and `span` (byte offsets into the release text); a confirmed sentence carries `sources`, each a `passage` and its `text` |
+| `counts` | `names`, `vector` in [display counts](display-counts.md) order, and `status`, `working_rule` |
+| `recorded_in` | the session record holding the display |
+
+Every block's text is the release's own words, except a sentence of the
+reply the rule shows: `shown_confirmed`, labelled "confirmed from the
+article", and, under `labelled` only, `shown_own` and `shown_unconfirmed`,
+labelled "not from the article". A passage id the reply supplied that the
+release did not sign is not returned. The display carries no title,
+attribution, URL or terms of the release, and no markup.
+
+A `release` that names nothing this server delivered, a delivery that was
+not served as a signed release, a release this server has let go, a
+`content_hash` shared by several held releases and a release whose
+signature failed or is missing are each refused with the reason; a release
+delivered in another session or by another server is not known. The checker's record is appended for a
+release it ruled on, and a rendered display adds a `display_rendered`
+record ([session evidence](session-evidence.md) §Events). A display that
+cannot be recorded is not returned. The tool is served on stdio; the hosted
+edge does not advertise it.
+
+#### Releases held for display
+
+To display against a release, the stdio server keeps the text and sidecar
+of each signed release its `context_fetch` delivered, in the server
+process's memory:
+
+- **Identity.** A release is its text, its sidecar as served, its
+  verification state and its URL. A fetch that delivers the same release
+  again adds its `acquisition_id` to it; a fetch of the same text under any
+  other sidecar, signature or URL holds a second release beside the first.
+  No handle moves from the release its fetch delivered.
+- **Count.** The server holds the last 16 releases by identity. Delivering
+  a 17th lets the oldest go; a display against it is refused until it is
+  fetched again.
+- **Lifetime.** The process's life. Exit clears them, and nothing of them
+  is written to disk or to the source record, which keeps the hashes and
+  the sidecar only ([session evidence](session-evidence.md#crossing)
+  `release`). A restarted server, even with the same home and session id,
+  and any other server or session cannot display against them.
 
 ### Text from the source in a result
 
@@ -637,7 +720,9 @@ and `copilot-cli`, and the three browser surfaces `chatgpt-web`,
 (`crates/commonmeasure-cli/src/main.rs` `HOSTS`); on the MCP server it
 accepts `claude-code`, `codex`, `pi`, `claude-desktop`, `cursor`,
 `copilot-cli` and `vscode` (`MCP_HOSTS`), one for each registration
-`install` writes. An unknown name is rejected by the argument
+`install` writes, and `goose`, which has no registration: goose starts the
+server from its own command line (`goose run --with-extension
+"commonmeasure mcp --host goose"`). An unknown name is rejected by the argument
 parser with the list, never recorded under the default; the hook command
 defaults an unparseable surface to Claude Code. The value is the `host` on
 every record. The program's own name and version, from the `clientInfo` it
@@ -1227,7 +1312,7 @@ defines and are never collapsed.
 | Zed, mediated | `planned` | no `install` for the host; a `context_servers` entry started one server per open project on one operator machine; no session through it is recorded |
 | Cline, mediated | `planned` | no `install` for the host; an entry in `cline_mcp_settings.json` started the server before any account on one operator machine; no session through it is recorded |
 | OpenCode, mediated | `planned` | no `install` for the host; `opencode mcp list` connected to a hand-written entry on one operator machine; the host's own run failed before a call |
-| Goose, mediated | `planned` | no `install` for the host; a session extension started the server and passed `AGENT_SESSION_ID`, which the server takes as the session id when no `--session` is given (`crates/commonmeasure-cli/tests/mediated_e2e.rs`); no session through Goose is recorded |
+| Goose, mediated | `fixture-tested` | no `install` for the host: goose starts the server from its command line, `--with-extension "commonmeasure mcp --host goose"` with `COMMONMEASURE_HOME` in the extension's environment, and passes `AGENT_SESSION_ID`, which the server takes as the session id when no `--session` is given. `crates/commonmeasure-cli/tests/mediated_e2e.rs` starts the binary as goose does and checks the session id and `host: goose` on the crossing. The trusted news demonstration's `tools_mode_paths` test starts the real binary from the extension value a goose stand-in is handed, under `AGENT_SESSION_ID`: offline, the demo's strict source policy refuses a host it does not admit and the crossing is recorded under the goose session (`edge_mode_runs_the_edge_under_gooses_session_with_the_shipped_policy`); with the network, a `context_fetch` of a signed release from a loopback gatekeeper and a `context_show` against it are recorded as `crossing_mediated` and `display_rendered` (`edge_mode_shows_only_the_display_the_edge_recorded`, ignored by default). Offline, with the signed release recorded under `crates/commonmeasure-cli/tests/recorded/signed-release` served from loopback, the demo's launch gives goose and the server none of the provider keys in its own environment, the demo's policy refuses a remote `context_search` with a `provider_policy_ruled` refusal before the supplier is built, and the `context_fetch` and `context_show` are recorded (`edge_mode_gives_the_edge_no_keys_and_refuses_remote_search_before_dispatch`). A goose 1.54.0 session with a local model on one operator machine recorded both events; that session is not published |
 | Google Antigravity, mediated | `planned` | no `install` for the host; an `agy mcp add` entry started the server before sign-in on one operator machine |
 | JetBrains Junie, mediated | `planned` | the server answers `initialize` with the `2025-03-26` Junie's client asks for (`crates/commonmeasure-cli/tests/mediated_e2e.rs`); on one operator machine Junie refused a server that answered `2025-06-18`, and connected to and listed the tools of one that answered `2025-03-26`; no call through Junie is recorded |
 | Devin CLI, Kiro, Amp, mediated | `planned` | registration written with each host's own command; each stops at sign-in before starting a server |

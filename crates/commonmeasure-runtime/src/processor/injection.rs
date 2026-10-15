@@ -217,8 +217,101 @@ pub fn invoke(
 ) -> (Invocation, Ruling) {
     let started_at = Utc::now();
     let findings = scan(text);
+    let ruling = ruling_on(mode, source_ref, basis, &findings);
 
-    let ruling = if findings.is_empty() {
+    let decision = if ruling.is_refusal() {
+        Decision::Refuse
+    } else {
+        Decision::Admit
+    };
+    let invocation = Invocation::new(
+        manifest(),
+        started_at,
+        decision,
+        "one case-folded substring pass of the rules the configuration digest pins",
+        vec![ArtefactRef {
+            reference: source_ref.to_owned(),
+            content_hash: content_hash.map(str::to_owned),
+            tokens: Some(approximate_tokens(text)),
+        }],
+        // The admit stage transforms nothing: the record is the output.
+        Vec::new(),
+        json!({
+            "findings": findings,
+            "rules_matched": rules_matched(&findings),
+            "matched_text_recorded": false,
+        }),
+        ruling.gap().cloned().into_iter().collect(),
+        BLIND_SPOTS.to_vec(),
+    );
+    (invocation, ruling)
+}
+
+/// Screen several named strings of one source, such as the signed fields a
+/// release delivers beside its text, in one invocation under the same rules
+/// and mode discipline as [`invoke`]. Each string is an input named by
+/// `source_ref#field` with its own hash, and each finding names the field
+/// its offsets index.
+pub fn invoke_fields(
+    mode: PolicyMode,
+    source_ref: &str,
+    basis: &str,
+    fields: &[(String, &str)],
+) -> (Invocation, Ruling) {
+    let started_at = Utc::now();
+    let mut findings = Vec::new();
+    let mut located = Vec::new();
+    for (field, text) in fields {
+        for finding in scan(text) {
+            located.push(json!({
+                "field": field,
+                "rule": finding.rule,
+                "start": finding.start,
+                "end": finding.end,
+            }));
+            findings.push(finding);
+        }
+    }
+    let ruling = ruling_on(mode, source_ref, basis, &findings);
+    let decision = if ruling.is_refusal() {
+        Decision::Refuse
+    } else {
+        Decision::Admit
+    };
+    let invocation = Invocation::new(
+        manifest(),
+        started_at,
+        decision,
+        "one case-folded substring pass of the rules the configuration digest pins, over each \
+         named string",
+        fields
+            .iter()
+            .map(|(field, text)| ArtefactRef {
+                reference: format!("{source_ref}#{field}"),
+                content_hash: Some(sha256_digest(text.as_bytes())),
+                tokens: Some(approximate_tokens(text)),
+            })
+            .collect(),
+        Vec::new(),
+        json!({
+            "findings": located,
+            "rules_matched": rules_matched(&findings),
+            "matched_text_recorded": false,
+        }),
+        ruling.gap().cloned().into_iter().collect(),
+        BLIND_SPOTS.to_vec(),
+    );
+    (invocation, ruling)
+}
+
+/// The verdict on a screen's findings, under the shared mode discipline.
+fn ruling_on(
+    mode: PolicyMode,
+    source_ref: &str,
+    basis: &str,
+    findings: &[InjectionFinding],
+) -> Ruling {
+    if findings.is_empty() {
         Ruling::Allowed
     } else {
         let matched: BTreeSet<&'static str> = findings.iter().map(|f| f.rule.label()).collect();
@@ -250,34 +343,7 @@ pub fn invoke(
                 ),
             ),
         )
-    };
-
-    let decision = if ruling.is_refusal() {
-        Decision::Refuse
-    } else {
-        Decision::Admit
-    };
-    let invocation = Invocation::new(
-        manifest(),
-        started_at,
-        decision,
-        "one case-folded substring pass of the rules the configuration digest pins",
-        vec![ArtefactRef {
-            reference: source_ref.to_owned(),
-            content_hash: content_hash.map(str::to_owned),
-            tokens: Some(approximate_tokens(text)),
-        }],
-        // The admit stage transforms nothing: the record is the output.
-        Vec::new(),
-        json!({
-            "findings": findings,
-            "rules_matched": rules_matched(&findings),
-            "matched_text_recorded": false,
-        }),
-        ruling.gap().cloned().into_iter().collect(),
-        BLIND_SPOTS.to_vec(),
-    );
-    (invocation, ruling)
+    }
 }
 
 /// The verdict on a body the edge hands over as a file without reading it:

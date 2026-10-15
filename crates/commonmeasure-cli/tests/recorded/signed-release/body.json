@@ -1,0 +1,58 @@
+{
+  "text": "The harbour bridge reopened to traffic on Monday after eight months of repairs to its deck and cables.\n\nThe council's engineer said: \"The cables were replaced one at a time so that the bridge never had to close to pedestrians.\" The work finished two weeks early.\n\nRepairs cost 4.2 million pounds, of which the regional transport fund paid half.",
+  "sidecar": {
+    "signed": {
+      "source": "Wikipedia, through the stand-in gatekeeper",
+      "title": "Harbour Bridge Repairs",
+      "revid": 1,
+      "url": "https://source.example/wiki/Harbour_Bridge_Repairs",
+      "licence": "CC BY 4.0",
+      "attribution": "\"Harbour Bridge Repairs\" by Wikipedia contributors, revision 1, https://source.example/wiki/Harbour_Bridge_Repairs, CC BY 4.0",
+      "terms": [
+        "Attribute the article by title and URL; the text is CC BY-SA 4.0.",
+        "Show quotations from the signed text by passage id, never from memory.",
+        "Show a kept passage whole with its context or not at all.",
+        "Show a sentence as confirmed only after it has been checked against the signed text; show the rest as the release's display mode says, labelled (marked as not from the article) or strict (the source's own words instead).",
+        "Show the source's own words in place of a sentence that contradicts the signed text, misattributes a quotation or cuts a kept passage.",
+        "Report use as totals through the counting scheme, never per reader."
+      ],
+      "display_mode": "strict",
+      "text_sha256": "0fb59e8a5aa2604ebeea4cc49d6eb8da5a65bc66f20da210e43b2e2d79c208d9",
+      "passages": [
+        {
+          "id": "p0",
+          "start": 0,
+          "end": 102
+        },
+        {
+          "id": "p1",
+          "start": 104,
+          "end": 262
+        },
+        {
+          "id": "p2",
+          "start": 264,
+          "end": 344
+        }
+      ],
+      "markers": [
+        {
+          "start": 0,
+          "end": 102,
+          "label": "lead",
+          "passage": "p0"
+        },
+        {
+          "start": 134,
+          "end": 226,
+          "label": "quotation",
+          "passage": "p1"
+        }
+      ],
+      "released_at": "2026-10-13T10:34:19.637800553+00:00"
+    },
+    "signature": "/zY/f31Nl8t7CqnNluANxnPykvjS2B6Nmzm4P+p7tVWSQcKx0FVqIGFb7HZcFzARpemAYCBuDGdS1WJjPgHDBw==",
+    "signer_public_key": "2QOLIYVBW+vjGsYEoc7KQDRd11GFNni6616a9SBmQrI=",
+    "signature_scheme": "ed25519-over-sha256(text)-and-canonical-signed-json"
+  }
+}

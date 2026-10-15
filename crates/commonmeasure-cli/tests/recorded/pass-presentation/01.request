@@ -1,0 +1,6 @@
+GET /article?title=Harbour+Bridge+Repairs HTTP/1.1
+User-Agent: CommonMeasureBot/0.4.12
+Host: 127.0.0.1:43271
+Connection: close
+Accept-Encoding: gzip
+

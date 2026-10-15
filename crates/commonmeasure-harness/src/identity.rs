@@ -356,7 +356,7 @@ impl Identity {
     pub fn user_agent(&self) -> String {
         match self {
             Self::Signing(signing) => signing.user_agent(),
-            Self::Unsigned { .. } => format!("{PRODUCT_TOKEN}/{}", env!("CARGO_PKG_VERSION")),
+            Self::Unsigned { .. } => product_user_agent(),
         }
     }
 
@@ -368,15 +368,26 @@ impl Identity {
                 key_id: Some(signing.key_id.clone()),
                 signature_agent: Some(signing.origin.clone()),
                 unsigned: None,
+                pass: None,
             },
             Self::Unsigned { reason } => PresentedIdentity {
                 user_agent: self.user_agent(),
                 key_id: None,
                 signature_agent: None,
                 unsigned: Some(reason.clone()),
+                pass: None,
             },
         }
     }
+}
+
+/// The `User-Agent` of a request that carries no signature: the product
+/// token and version, the name the agent card declares, and nothing that
+/// points at a hub, a bot page or a contact. An unenrolled edge sends it,
+/// and so does every request under the anonymous access profile, enrolled
+/// or not, since a bot page or contact would name who is reading.
+pub fn product_user_agent() -> String {
+    format!("{PRODUCT_TOKEN}/{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// An enrolled key that stands, with the public facts a verifier needs.
@@ -848,9 +859,52 @@ pub struct PresentedIdentity {
     /// carried it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature_agent: Option<String>,
-    /// Why the request carried no signature. Absent when it was signed.
+    /// Why the request carried no signature. Absent when it was signed, and
+    /// when it presented a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsigned: Option<String>,
+    /// The anonymous pass the request presented instead of a signature,
+    /// under the anonymous access profile. `key_id` and `signature_agent`
+    /// are absent beside it: the request is not a signed `CommonMeasureBot`
+    /// request, and names no enrolled key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass: Option<PresentedPass>,
+}
+
+impl PresentedIdentity {
+    /// A request under the anonymous access profile that presented no pass:
+    /// the product's user agent alone, and why it went unsigned.
+    pub fn anonymous(reason: String) -> Self {
+        Self {
+            user_agent: product_user_agent(),
+            key_id: None,
+            signature_agent: None,
+            unsigned: Some(reason),
+            pass: None,
+        }
+    }
+
+    /// A request under the anonymous access profile that presented `pass`.
+    pub fn presenting(pass: PresentedPass) -> Self {
+        Self {
+            user_agent: product_user_agent(),
+            key_id: None,
+            signature_agent: None,
+            unsigned: None,
+            pass: Some(pass),
+        }
+    }
+}
+
+/// What the record keeps of a presented pass: the Anchor that issued it, by
+/// origin, and the truncated token key id of RFC 9578 §6.1 (the last byte
+/// of the SHA-256 of the Anchor's token key), which says which of the
+/// Anchor's keys it was issued under. Never the pass itself, its nonce or
+/// its challenge digest, which a source holding the same pass could match.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentedPass {
+    pub anchor: String,
+    pub truncated_token_key_id: u8,
 }
 
 #[cfg(test)]

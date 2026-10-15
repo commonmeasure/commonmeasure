@@ -1,8 +1,7 @@
 ---
 title: Provider capability contract
 domain: extensions
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Provider capability contract

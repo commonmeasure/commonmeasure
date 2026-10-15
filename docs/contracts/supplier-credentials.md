@@ -1,8 +1,7 @@
 ---
 title: Supplier credential custody contract
 domain: network
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Supplier credential custody contract

@@ -1,0 +1,6 @@
+GET /.well-known/private-token-issuer-directory HTTP/1.1
+Accept: application/private-token-issuer-directory
+Host: 127.0.0.1:33763
+Connection: close
+Accept-Encoding: gzip
+

@@ -1,0 +1,17 @@
+HTTP/1.1 401 
+Content-Type: application/json
+WWW-Authenticate: PrivateToken challenge=AAIACTEyNy4wLjAuMQAACTEyNy4wLjAuMQ==, token-key=MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEAxYskq73xrI8_XeF4VNimO829YIR2u3xa8Qum3intpNqIq3qNEN3e1vuSHd058WaY1pESwCUk4UTUlL_C2raF7JMp7ywAv3Ti64YOriK0k-mxknqgeuUF0HmwnRStEK6yAquErEuFruNPAztG8khTYMpI5rewEJZgqdrVtvf9h_vTzGEg4_NlyFMjyyhWwjWKIDDm2dwGuI34M6Ga_K-GWwSi_GNSBnCOVR-xcHQTO3QAEvFQZh-QIGdXhePiMdK1nRVgDJQDGQRp2JPxe2xE4Ag5h_TNnOe0aMD9AMA4SvazJDAii0PYIj_kQc_GkgqdPjG19-iwfzKL7-WmYdAnhQIDAQAB
+Content-Length: 713
+Connection: close
+
+{
+  "error": "a pass is required",
+  "terms": [
+    "Attribute the article by title and URL; the text is CC BY-SA 4.0.",
+    "Show quotations from the signed text by passage id, never from memory.",
+    "Show a kept passage whole with its context or not at all.",
+    "Show a sentence as confirmed only after it has been checked against the signed text; show the rest as the release's display mode says, labelled (marked as not from the article) or strict (the source's own words instead).",
+    "Show the source's own words in place of a sentence that contradicts the signed text, misattributes a quotation or cuts a kept passage.",
+    "Report use as totals through the counting scheme, never per reader."
+  ]
+}

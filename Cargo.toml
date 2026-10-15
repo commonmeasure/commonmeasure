@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.12"
+version = "0.4.14"
 edition = "2024"
 license-file = "LICENSE.md"
 rust-version = "1.97"
@@ -94,6 +94,20 @@ flate2 = "1.1"
 # (`crates/commonmeasure-harness/src/managed.rs`). The same crate rustls
 # already pulls in, so no second cryptography dependency enters the tree.
 ring = "0.17"
+
+# Anonymous passes (`crates/commonmeasure-harness/src/passes.rs`): the
+# client side of RFC 9578 publicly verifiable tokens, from an Anchor the
+# operator names per host. `privacypass` is pinned exactly because it is a
+# pre-release, the same one the trusted news demonstration's stand-in Anchor
+# runs; no features, so its `tokio` stays out. Its client is synchronous and
+# only its issuer and origin stores are async, which the edge does not hold,
+# so no async runtime enters the product. `blind-rsa-signatures` is the
+# crate it signs with, named for the random source a blinded request draws
+# on and for verifying a pass with the Anchor's key alone. `http` is already
+# in the tree through `privacypass`, whose header parsers take its values.
+privacypass = { version = "=0.2.0-pre.3", default-features = false }
+blind-rsa-signatures = "0.17"
+http = "1"
 
 # Bundled so the telemetry index needs no system SQLite: one binary, one file
 # database, no service to install.

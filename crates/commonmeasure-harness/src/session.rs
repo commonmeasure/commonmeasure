@@ -165,6 +165,13 @@ pub struct Crossing {
     /// what the model read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_file: Option<DeliveredFile>,
+    /// The sidecar of a body served as a signed release, with what the
+    /// `release-verifier` established about its signature, on a mediated
+    /// fetch whose body read as one. The sidecar carries the text's hash and
+    /// never the text. Present where the release was delivered and where it
+    /// was refused after reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<commonmeasure_types::release::ReleaseRecord>,
     /// True only for tools whose result put page text into context.
     pub grounded: bool,
     /// `unknown` unless a supplier declared a machine-readable licence. No
@@ -253,6 +260,12 @@ pub struct Crossing {
     /// supplier under its own contract, not by this runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<crate::identity::PresentedIdentity>,
+    /// Set on every mediated crossing of a host whose operator terms name an
+    /// Anchor, the anonymous access profile: refused, failed, challenged or
+    /// carried. Nothing of such a crossing is cleared for relay egress, in
+    /// any scope, its refusal counted nowhere (`crate::egress`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anonymous: Option<AnonymousAccess>,
     /// Set where the origin refused the fetcher rather than the resource: a
     /// challenge, or a status that refuses the request itself. A distinct fact
     /// from `refusal`, which is this operator's policy, and from `failure`,
@@ -333,6 +346,14 @@ pub struct DeliveredFile {
 pub enum FileDelivery {
     LocalFile,
     EmbeddedResource,
+}
+
+/// The anonymous access profile a crossing was made under (product decision
+/// "Anonymous access profile"): the Anchor the host's operator terms name,
+/// by origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnonymousAccess {
+    pub anchor: String,
 }
 
 impl Crossing {
@@ -933,6 +954,29 @@ impl SessionLog {
     /// nothing and takes nothing away.
     pub fn record_processor(&mut self, invocation: Value) -> std::io::Result<u64> {
         self.append("processor_invoked", invocation)
+    }
+
+    /// One display of a reply against a signed release (`context_show`):
+    /// the integrity checker's record by `seq`, each item's outcome and the
+    /// counts. The caller builds it from outcomes alone; no sentence of the
+    /// reply or the release goes in it.
+    pub fn record_display(&mut self, display: Value) -> std::io::Result<u64> {
+        self.append("display_rendered", display)
+    }
+
+    /// One refill of an Anchor's anonymous passes
+    /// ([`crate::passes::Refill::record`]): the Anchor by origin, the counts
+    /// and the key id, and the Anchor's refusal as it stated it. Never a
+    /// pass, a blinded request or the credential.
+    pub fn record_passes_refilled(&mut self, refill: Value) -> std::io::Result<u64> {
+        let mut payload = json!({
+            "session_id": self.session_id,
+            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        });
+        if let (Some(payload), Value::Object(refill)) = (payload.as_object_mut(), refill) {
+            payload.extend(refill);
+        }
+        self.append("passes_refilled", payload)
     }
 
     /// A turn boundary. Cheap, and it is what lets a reader group crossings

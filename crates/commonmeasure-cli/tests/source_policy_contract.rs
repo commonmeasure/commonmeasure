@@ -64,8 +64,9 @@ fn the_committed_schema_is_the_one_the_binary_derives() {
 
 /// The operator's recorded agreement binds its reporting duty in every mode
 /// (owner decision, 30 September 2026) through the `terms` entry operators
-/// already write: the entry's shape is unchanged, and a field it does not
-/// name is still refused.
+/// already write: the entry keeps its fields, gains only the optional
+/// anchor under the anonymous access profile, and a field it does not name
+/// is still refused.
 #[test]
 fn an_operator_terms_entry_keeps_its_shape() {
     let terms = &schema()["$defs"]["TermsDeclaration"];
@@ -76,7 +77,13 @@ fn an_operator_terms_entry_keeps_its_shape() {
         .collect();
     assert_eq!(
         properties,
-        ["host", "reference", "requires_reporting", "access_context"]
+        [
+            "host",
+            "reference",
+            "requires_reporting",
+            "access_context",
+            "anchor"
+        ]
     );
     assert_eq!(terms["additionalProperties"], false);
     assert_eq!(terms["required"], json!(["host", "reference"]));
@@ -84,6 +91,11 @@ fn an_operator_terms_entry_keeps_its_shape() {
         terms["properties"]["requires_reporting"],
         json!({"type": "boolean", "default": false})
     );
+    // The anchor names the variable holding the credential, never the
+    // credential: a policy is recorded and printed whole.
+    let anchor = &schema()["$defs"]["AnchorTerm"];
+    assert_eq!(anchor["additionalProperties"], false);
+    assert_eq!(anchor["required"], json!(["origin", "credential_env"]));
 }
 
 #[test]
@@ -187,6 +199,9 @@ fn every_validation_vector_is_ruled_by_the_binary_as_the_contract_states() {
         "terms_reference_empty",
         "terms_host_duplicate",
         "terms_identifier_incomplete",
+        "terms_anchor_not_origin",
+        "terms_anchor_not_https",
+        "terms_anchor_credential_empty",
     ]
     .into_iter()
     .map(str::to_owned)

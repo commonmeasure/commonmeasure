@@ -1,8 +1,7 @@
 ---
 title: Enrolment contract
 domain: hub
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Enrolment contract

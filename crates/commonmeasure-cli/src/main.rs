@@ -47,10 +47,12 @@ const HOSTS: [&str; 8] = [
     "bing-copilot-search",
 ];
 
-/// The hosts the mediated server accepts under `--host`, one per
-/// registration `install` writes. A value not listed is refused by the
-/// argument parser with this list, never recorded as `claude-code`.
-const MCP_HOSTS: [&str; 7] = [
+/// The hosts the mediated server accepts under `--host`: one per
+/// registration `install` writes, and `goose`, which starts the server from
+/// its own command line (`goose run --with-extension`) and needs no
+/// registration file. A value not listed is refused by the argument parser
+/// with this list, never recorded as `claude-code`.
+const MCP_HOSTS: [&str; 8] = [
     "claude-code",
     "codex",
     "pi",
@@ -58,6 +60,7 @@ const MCP_HOSTS: [&str; 7] = [
     "cursor",
     "copilot-cli",
     "vscode",
+    "goose",
 ];
 
 #[derive(Parser)]
@@ -176,7 +179,7 @@ enum Command {
     /// Serve the mediated context tools over MCP on stdio.
     Mcp {
         /// Which host is calling: `claude-code`, `codex`, `pi`,
-        /// `claude-desktop`, `cursor`, `copilot-cli` or `vscode`. Recorded as
+        /// `claude-desktop`, `cursor`, `copilot-cli`, `vscode` or `goose`. Recorded as
         /// `host` on every record; the client's own name and version from
         /// the protocol's initialize request are recorded beside it.
         #[arg(long, default_value = "claude-code", value_parser = MCP_HOSTS)]
@@ -528,6 +531,33 @@ enum Command {
     /// COMMONMEASURE_RELEASE_URL. Contacts the release location only when
     /// run; --check reports the versions and changes nothing. macOS and Linux.
     Update(update::Update),
+    /// Anonymous passes from the Anchor a host's terms name in the source
+    /// policy (docs/contracts/source-policy.md §Terms). A pass says only
+    /// that the Anchor found the agent meets a policy the Anchor publishes.
+    Passes {
+        #[command(subcommand)]
+        action: PassesAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PassesAction {
+    /// Obtain passes for one host ahead of any fetch and keep them in the
+    /// Anchor's wallet, ~/.commonmeasure/passes/. The Anchor is asked
+    /// without this edge's signature or user agent, presenting the
+    /// credential in the variable the terms name. Records `passes_refilled`
+    /// in the session log, with any refusal as the Anchor stated it.
+    Refill {
+        /// The source host, as its terms entry names it.
+        host: String,
+        /// How many passes to ask for.
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u16).range(1..=100))]
+        count: u16,
+        /// The session whose log records the refill; a new local session
+        /// when none is given.
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -730,6 +760,14 @@ fn main() -> ExitCode {
         } => serve_console(listen, allow_remote),
         Command::Service { command } => service::run(command),
         Command::Update(args) => update::run(args),
+        Command::Passes {
+            action:
+                PassesAction::Refill {
+                    host,
+                    count,
+                    session,
+                },
+        } => refill_passes(&host, usize::from(count), session.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -2889,6 +2927,12 @@ fn standing_text(standing: &commonmeasure_relay::SessionStanding) -> String {
 /// request left the machine, which is every crossing but a mediated one.
 fn presented_identity(payload: &serde_json::Value) -> Option<String> {
     let identity = payload.get("identity")?;
+    if let Some(pass) = identity.get("pass") {
+        return Some(format!(
+            "an anonymous pass from {}",
+            inspect::text(&pass["anchor"])
+        ));
+    }
     match identity["key_id"].as_str() {
         Some(key_id) => Some(format!("signed as {key_id}")),
         None => Some(format!(
@@ -3634,6 +3678,76 @@ fn write_guide(out: &Path) -> Result<(), String> {
         std::fs::write(&path, page.html.as_bytes())
             .map_err(|error| format!("write {}: {error}", path.display()))?;
         println!("wrote {} ({} bytes)", path.display(), page.html.len());
+    }
+    Ok(())
+}
+
+/// Obtain anonymous passes for `host` from the Anchor its terms name, and
+/// record the refill in the session log. Fails where the policy names no
+/// Anchor for the host, where the credential's variable is not set, and
+/// where the Anchor issued nothing; a partial refill keeps what it obtained
+/// and says why it stopped.
+fn refill_passes(host: &str, count: usize, session: Option<&str>) -> Result<(), String> {
+    use commonmeasure_harness::passes;
+    let home = home_dir().map_err(|error| error.to_string())?;
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string());
+    let policy = SessionPolicy::load(&home, cwd.as_deref())?;
+    let anchor = policy
+        .terms_for(host)
+        .and_then(|terms| terms.anchor.as_ref())
+        .ok_or_else(|| {
+            format!(
+                "{} names no anchor for {host}; passes are obtained only from the anchor a \
+                 host's terms entry names",
+                policy.source().display()
+            )
+        })?;
+    let credential = std::env::var(&anchor.credential_env)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{} is not set; it holds the credential this edge registered under with {}",
+                anchor.credential_env, anchor.origin
+            )
+        })?;
+    let session_id = session.map_or_else(uuid_like_session, str::to_owned);
+    let mut log = SessionLog::open(&home, &session_id)
+        .map_err(|error| format!("cannot open the session log for {session_id}: {error}"))?;
+    let challenge = passes::challenge_for(&anchor.origin, host)?;
+    let mut wallet = passes::Wallet::open(&home, &anchor.origin)?;
+    let refill = wallet.refill(credential.trim(), &challenge, count, &mut passes::rng())?;
+    let record = refill.record();
+    log.record_passes_refilled(record.clone())
+        .map_err(|error| {
+            format!(
+                "the refill was not recorded in {}: {error}",
+                log.path().display()
+            )
+        })?;
+    let mut out = String::new();
+    let _ = writeln!(out, "anchor      {}", refill.anchor);
+    let _ = writeln!(out, "host        {}", refill.origin_info.join(", "));
+    let _ = writeln!(
+        out,
+        "obtained    {} of {}",
+        refill.obtained, refill.requested
+    );
+    let _ = writeln!(out, "held        {}", refill.held);
+    let _ = writeln!(out, "key id      {}", refill.key_id);
+    let _ = writeln!(out, "wallet      {}", wallet.path().display());
+    if !record["stopped"].is_null() {
+        let _ = writeln!(out, "stopped     {}", record["stopped"]);
+    }
+    let _ = writeln!(out, "session     {session_id}");
+    write_stdout(&out)?;
+    if refill.obtained == 0 {
+        return Err(format!(
+            "{} issued no passes: {}",
+            refill.anchor, record["stopped"]
+        ));
     }
     Ok(())
 }

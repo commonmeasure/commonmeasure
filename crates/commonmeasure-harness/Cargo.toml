@@ -32,6 +32,10 @@ quick-xml.workspace = true
 psl.workspace = true
 c2pa.workspace = true
 c2pa-text.workspace = true
+# Anonymous passes: the RFC 9578 client and the wallet (`src/passes.rs`).
+privacypass.workspace = true
+blind-rsa-signatures.workspace = true
+http.workspace = true
 # The process table, for the host-process record and the liveness probe
 # (`src/host_process.rs`).
 sysinfo.workspace = true

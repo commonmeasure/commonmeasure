@@ -1704,6 +1704,78 @@ mod tests {
         }
     }
 
+    // Catches: projecting a signed release's sidecar, which is the private
+    // record's: a crossing with `release` projects as the same crossing
+    // without it.
+    #[test]
+    fn a_signed_release_projects_nothing_of_its_sidecar() {
+        let plain = part(
+            "https://publisher.example/article",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let mut released = plain.clone();
+        released["payload"]["release"] = json!({
+            "media_type": "application/x.signed-release+json",
+            "verification": "verified",
+            "sidecar": {"signed": {"attribution": "an attribution", "terms": ["a term"]},
+                        "signer_public_key": "a-signer-key", "signature": "a-signature"},
+        });
+        assert_eq!(only_batch(&[released]), only_batch(&[plain]));
+    }
+
+    // Catches: projecting a display. A `display_rendered` record beside the
+    // crossing that fetched its release adds nothing to the batch, even
+    // where every record is cleared to leave.
+    #[test]
+    fn a_rendered_display_projects_nothing() {
+        let crossing = part(
+            "https://publisher.example/article",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let display = json!({"event": "display_rendered", "seq": 9, "payload": {
+            "session_id": "s",
+            "tool": "context_show",
+            "processor_record": 8,
+            "release": {"content_hash": format!("sha256:{}", "a".repeat(64))},
+            "display_mode": "strict",
+            "outcomes": ["quote_shown", "withheld_unconfirmed"],
+            "counts": {"vector": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1]},
+        }});
+        assert_eq!(
+            only_batch(&[crossing.clone(), display]),
+            only_batch(&[crossing])
+        );
+    }
+
+    // Catches: projecting a refill of anonymous passes. A `passes_refilled`
+    // record beside a crossing of the host it names adds nothing to the
+    // batch, even where every record is cleared to leave.
+    #[test]
+    fn a_pass_refill_projects_nothing() {
+        let crossing = part(
+            "https://publisher.example/article",
+            &format!("sha256:{}", "a".repeat(64)),
+            None,
+        );
+        let refill = json!({"event": "passes_refilled", "seq": 9, "payload": {
+            "session_id": "s",
+            "anchor": "https://anchor.example",
+            "origin_info": ["publisher.example"],
+            "requested": 5,
+            "obtained": 3,
+            "held": 3,
+            "key_id": "ab".repeat(32),
+            "stopped": {"status": 429, "retry_after": "3600",
+                        "stated": {"error": "ration exhausted"}},
+        }});
+        assert_eq!(
+            only_batch(&[crossing.clone(), refill]),
+            only_batch(&[crossing])
+        );
+    }
+
     // Catches: keying on the screens' sentences at the start of `breach`,
     // which a delivered file's `breach` need not have.
     #[test]

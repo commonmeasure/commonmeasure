@@ -175,16 +175,20 @@ produced it; they are kept out of git apart from one stated exception
 explicit gap record, written by the next successful write, and a run is
 published atomically or not at all (`docs/FAIL-POLICY.md`).
 
-Seven add-on processors run in-process (`docs/contracts/processor.md`
-§Status). Four run at the crossings the runtime carries: a PII detector and
-an injection screen at the admit stage, and an HTML text extractor and a
-context optimiser at the transform stage. The
+Nine add-on processors run in-process (`docs/contracts/processor.md`
+§Status). Five run at the crossings the runtime carries: a PII detector, an
+injection screen and a signed-release verifier at the admit stage, and an
+HTML text extractor and a context optimiser at the transform stage. The
 fidelity verifier and judge run after inference and the output provenance
-labeller on the answer. The extractor runs on every
+labeller on the answer. The integrity checker decides how a reply is
+displayed against a verified signed release; the mediated `context_show`
+tool calls it against a release the session's `context_fetch` delivered. The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
 screens rule on the text the agent would read; its record carries the hash
 of the bytes the origin served beside the hash of the extracted text, and
-the crossing carries both. A fetch result may carry only a part of that
+the crossing carries both. A body served as a signed release goes to the
+release verifier instead, which reads the text from it, verifies its
+signature and leaves the sidecar on the crossing. A fetch result may carry only a part of that
 text; the crossing's `delivered` names the part. Each invocation writes its
 own evidence record (processor identity and configuration digest,
 input/output hashes and token counts, decision and method, assurance basis

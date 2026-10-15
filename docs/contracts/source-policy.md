@@ -2,7 +2,7 @@
 title: Source policy contract
 description: The policy file every edge loads — its fields, what a scope and a principal replace, the order admission applies, every check the loader makes, and the schema and vectors a second implementation is held to.
 domain: edge
-audience: integrator
+audience: operator
 section: reference
 ---
 
@@ -208,6 +208,14 @@ mode decides what a breach does: `strict` refuses the crossing before any
 bytes reach the model; `observe` and `prefer` admit it with the breach on
 the record. Nothing is ever left unrecorded because of the mode.
 
+The source's own terms (an RSL licence, a declared AI-use preference, a
+reporting demand) refuse a crossing in every mode, with one exception: a
+fetch of an origin's own `robots.txt`, at exactly `/robots.txt` with no
+query, is not ruled on them, because the file states them; admission above,
+the file's own access rule, the origin's answer and the record apply to it as
+to any page, and a redirect from it to another URL is ruled on that URL's
+terms.
+
 ## Recording
 
 - A **private address** is a `file://` URL, a URL with no host, `localhost`
@@ -312,6 +320,57 @@ host until then. Which agreement permits what, and how an edge proves it,
 is settled by the network design (roadmap NET-14 and NET-15), which these
 fields wait on.
 
+A terms entry may also name the Anchor the source accepts anonymous passes
+from:
+
+```json
+{
+  "terms": [{
+    "host": "news.example",
+    "reference": "agreement-43",
+    "anchor": {"origin": "https://anchor.example", "credential_env": "NEWS_ANCHOR_CREDENTIAL"}
+  }]
+}
+```
+
+This is the anonymous access profile, under the product decision
+"Anonymous access profile". Where a source asks for an anonymous pass, the
+edge may present one instead of its named Web Bot Auth signature
+([bot identity](bot-identity.md)). The pass comes from an Anchor, in the
+sense of the Anonymous Bot Authentication draft, that the source accepts.
+It says only that the Anchor found the agent meets a policy the Anchor
+publishes, such as public interest news requirements (integrity, citation,
+provenance, reporting); it identifies neither the operator, the reader nor
+the session. The requirements are kept outside Common Measure, and Common
+Measure may be one Anchor among several, never the only one. The mechanism
+is an RFC 9578 publicly verifiable token until the draft settles. The
+profile applies only to a host whose entry names an anchor.
+
+`origin` is the Anchor's origin, `https://host[:port]` with nothing after
+it. The edge reads the Anchor's issuer directory there
+(`/.well-known/private-token-issuer-directory`) and sends token requests
+only to a request URI on the same origin. Cleartext `http` is admitted only
+at a loopback IP address and only where `allow_private_hosts` is set, which
+is how a stand-in Anchor on the operator's own machine is reached.
+`credential_env` names the environment variable that holds the credential
+the edge registered under with the Anchor. The policy names the variable
+and never holds the value, because a policy is recorded and printed whole;
+the value is read when passes are refilled and sent to the Anchor alone.
+
+`commonmeasure passes refill <host>` obtains passes for the host ahead of
+any fetch and keeps them in the Anchor's wallet, `<home>/passes/<anchor>.json`,
+owner-only, whose name is the origin without `https://` and with every
+character other than a letter, a digit, `.` or `-` written as `_`. Requests
+to the Anchor carry no Web Bot Auth signature and no `CommonMeasureBot`
+user agent, so the Anchor does not learn the edge key; it learns the
+credential, by which it rations passes. A ration or other refusal is
+recorded as the Anchor stated it, in the `passes_refilled` event
+([session evidence §Events](session-evidence.md#events)). A fetch of the
+host goes under the profile: its requests and probes go unsigned, a
+`PrivateToken` challenge is answered once with a held pass and never with
+one obtained at the time, and the crossing is never cleared for relay
+egress ([bot identity §The anonymous access profile](bot-identity.md#the-anonymous-access-profile)).
+
 ## What the loader refuses
 
 A policy is refused in two stages, and the whole file is refused at the
@@ -352,10 +411,14 @@ it and `<list>` is `the top-level policy`, `scope "<match>"` or
 | `terms_reference_empty` | a terms entry names no reference | `<file> <list> terms entry <N> for host "<host>" names no reference; the reference is what the record and the wire carry` |
 | `terms_host_duplicate` | one list has two entries for one host | `<file> <list> declares terms for host "<host>" twice; one host holds one agreement` |
 | `terms_identifier_incomplete` | an institution identifier lacks a scheme or a value | `<file> <list> terms entry <N> for host "<host>" has an access_context identifier without a scheme or a value` |
+| `terms_anchor_not_origin` | an anchor is not written as its own origin | `<file> <list> terms entry <N> for host "<host>" names anchor "<anchor>", which is not an origin; an anchor is written as scheme://host[:port] with nothing after it` |
+| `terms_anchor_not_https` | an anchor is not https, and is not http at a loopback IP address with `allow_private_hosts` set | `<file> <list> terms entry <N> for host "<host>" names anchor "<anchor>", which is not https; an anchor is reached over https, or over http at a loopback address where allow_private_hosts is set` |
+| `terms_anchor_credential_empty` | an anchor names no credential variable | `<file> <list> terms entry <N> for host "<host>" names an anchor without credential_env; the anchor issues passes to the credential the edge registered under` |
 
 Amounts in `allowance_period_duplicate` are written as the major unit with
 six decimal places (`1.000000`). A value that is only spaces counts as empty
-for the licence, the reference and an identifier's scheme and value.
+for the licence, the reference, an identifier's scheme and value, and an
+anchor's `credential_env`.
 
 With this saved as `refused.json`:
 
@@ -381,7 +444,8 @@ after parsing:
 - a scope always carries `allow_telemetry_egress`, and carries its other
   optional fields only when set; a binding always carries `require_scope`,
   and `allowances` only when not empty; a terms entry always carries
-  `requires_reporting`, and `access_context` only when not empty;
+  `requires_reporting`, `access_context` only when not empty, and `anchor`
+  only when set;
 - a host pattern is written in its compared form and a currency in upper
   case;
 - an unknown member inside a constraint is gone.

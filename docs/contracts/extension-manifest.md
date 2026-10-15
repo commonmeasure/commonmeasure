@@ -1,8 +1,7 @@
 ---
 title: Extension manifest contract
 domain: marketplace
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Extension manifest contract

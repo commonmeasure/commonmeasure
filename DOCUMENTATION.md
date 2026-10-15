@@ -25,7 +25,10 @@ Two tests hold the rules below:
 2. **The audience decides publication.** Under `docs/`, `operator` and
    `integrator` pages are published under `/docs/`; under `docs/guide/`,
    `reader` pages are published under `/guides/`. A `contributor` or
-   `internal` page is not published, so it does not belong under `docs/`.
+   `internal` page is not published, so it does not belong under `docs/`,
+   except the contracts in `docs/contracts/`: those an operator or an
+   integrator reads are published, and the rest are `contributor` and stay
+   in the repository, where the index links the full set.
 3. **The title is the first heading** unless the front matter sets
    `title`. The site renders the title itself and drops a first heading
    that repeats it; readers of the repository keep the heading.

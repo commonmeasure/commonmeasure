@@ -1,8 +1,7 @@
 ---
 title: Policy envelope contract
 domain: hub
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Policy envelope contract

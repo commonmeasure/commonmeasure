@@ -213,8 +213,8 @@ agent.
 
 ### Mediated — `.mcp.json`
 
-`context_fetch`, `context_search`, `context_status` and `context_enrol`,
-served over stdio. These run *before* the crossing, so policy can refuse.
+`context_fetch`, `context_search`, `context_status`, `context_enrol` and
+`context_show`, served over stdio. These run *before* the crossing, so policy can refuse.
 
 - `context_fetch` needs no credentials. It fetches over the real transport,
   checks the operator's source policy first, records the crossing either way,
@@ -248,6 +248,14 @@ served over stdio. These run *before* the crossing, so policy can refuse.
   policy in force and which providers are configured.
 - `context_enrol` shows or sets the enrolment of the directory the server
   started in (§Enrol the current project).
+- `context_show` displays a reply against a signed release that
+  `context_fetch` delivered and verified in the same server process, named
+  by the fetch's `acquisition_id` or `content_hash`. It fetches nothing: it
+  renders the reply's quotes and sentences under the release's display
+  rule and records the outcomes. A page that was not served as a signed
+  release, or whose signature did not verify, is refused
+  (`docs/contracts/host-integration.md` §Displaying a reply against a
+  release).
 
 The host starts the MCP server without a session identifier, so mediated
 crossings are recorded under the server's own `local-*` session id, in a

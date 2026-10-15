@@ -473,6 +473,15 @@ them: entitlements, CM Attestation and the network they make up.
 - **Access context** — the institution identifiers a session carries when
   operator-held terms for a source attribute usage to the operator's
   agreement. Absent unless terms require it; never a person.
+- **Anchor** — a party a source accepts that issues anonymous passes, in
+  the sense of the Anonymous Bot Authentication draft. A pass says only
+  that the Anchor found the agent meets a policy the Anchor publishes; it
+  identifies neither the operator, the reader nor the session. The
+  requirements are kept outside Common Measure, which may be one Anchor
+  among several, never the only one. An operator names a host's Anchor in
+  the host's terms, which puts fetches of that host under the anonymous
+  access profile (`docs/contracts/source-policy.md` §Terms,
+  `docs/contracts/bot-identity.md` §The anonymous access profile).
 
 ## Running a job
 
@@ -532,6 +541,15 @@ them: entitlements, CM Attestation and the network they make up.
   asked the same question over the same window, run only when the job
   declares it; its verdicts are recorded as declared and measured for
   agreement with the verifier's, never as ground truth.
+- **Integrity checker** — the processor that decides how a reply is
+  displayed against a verified signed release: each sentence is checked
+  against the release's text (verbatim, attribution, kept passages), shown
+  as confirmed, shown labelled "not from the article", or replaced by the
+  source's own words. The record keeps every check's raw verdict and no
+  text: sentences by hash, the words shown by byte span.
+- **Display mode** — the release's signed choice of how unconfirmed
+  sentences are shown: `labelled` (shown, marked as not from the source) or
+  `strict` (the source's own words instead).
 - **Selection** — the router's choice among a run's plans, computed only
   from measured terms. Where a needed measurement does not exist, it
   abstains and says what is missing rather than guessing.

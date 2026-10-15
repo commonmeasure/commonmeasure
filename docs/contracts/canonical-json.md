@@ -1,8 +1,7 @@
 ---
 title: Canonical JSON contract
 domain: edge
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Canonical JSON contract

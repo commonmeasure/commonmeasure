@@ -1,8 +1,7 @@
 ---
 title: Comparison results export
 domain: edge
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Comparison results export

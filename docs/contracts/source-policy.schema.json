@@ -465,6 +465,16 @@
           "items": {
             "$ref": "#/$defs/InstitutionIdentifier"
           }
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnchorTerm"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -487,6 +497,22 @@
       "required": [
         "scheme",
         "value"
+      ]
+    },
+    "AnchorTerm": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string"
+        },
+        "credential_env": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "credential_env"
       ]
     }
   }

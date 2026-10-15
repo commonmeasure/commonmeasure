@@ -76,6 +76,18 @@ fn session_dossier(path: &Path) -> Result<String, String> {
                 line + 1,
                 observed.display()
             );
+        } else if record["event"] == "processor_invoked"
+            && p["processor"]["name"] == "integrity-checker"
+        {
+            // The pointer after `#` resolves in the record on that line.
+            let at = format!("{}:{}", path.display(), line + 1);
+            integrity_lines(
+                &mut out,
+                p,
+                &processor_identity(p),
+                vec![at.clone()],
+                |suffix| format!("{at}#/payload{suffix}"),
+            );
         } else if matches!(
             record["event"].as_str(),
             Some("context_entered" | "output_associated" | "observation_unavailable")
@@ -2382,12 +2394,7 @@ fn fidelity_lines(out: &mut String, index: usize, plan: &Value, evidence: Option
         cites.extend(cite_e(
             evidence.and_then(|log| log.processor_seq(invocation)),
         ));
-        let identity = format!(
-            "{} v{} (configuration {})",
-            text(&invocation["processor"]["name"]),
-            text(&invocation["processor"]["version"]),
-            short_hash(&text(&invocation["processor"]["configuration_digest"])),
-        );
+        let identity = processor_identity(invocation);
         let detail = &invocation["detail"];
         match invocation["processor"]["name"].as_str() {
             Some("fidelity-verifier") => {
@@ -2540,6 +2547,7 @@ fn fidelity_lines(out: &mut String, index: usize, plan: &Value, evidence: Option
                     );
                 }
             }
+            Some("integrity-checker") => integrity_lines(out, invocation, &identity, cites, p),
             _ => {
                 entry(
                     out,
@@ -2550,6 +2558,139 @@ fn fidelity_lines(out: &mut String, index: usize, plan: &Value, evidence: Option
                 );
             }
         }
+    }
+}
+
+/// A processor by name, version and configuration digest.
+fn processor_identity(invocation: &Value) -> String {
+    format!(
+        "{} v{} (configuration {})",
+        text(&invocation["processor"]["name"]),
+        text(&invocation["processor"]["version"]),
+        short_hash(&text(&invocation["processor"]["configuration_digest"])),
+    )
+}
+
+/// The integrity checker's display record: the counts vector, then each
+/// reply item's outcome with every stage's raw answer beside it.
+fn integrity_lines(
+    out: &mut String,
+    invocation: &Value,
+    identity: &str,
+    mut cites: Vec<String>,
+    p: impl Fn(&str) -> String,
+) {
+    let detail = &invocation["detail"];
+    if detail["displayed"] == Value::Bool(false) {
+        cites.push(p("/gaps"));
+        entry(
+            out,
+            2,
+            "display",
+            &format!(
+                "{identity} displayed nothing: {}",
+                invocation["gaps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|gap| text(&gap["detail"]))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            &cites,
+        );
+        return;
+    }
+    let names = detail["count_names"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let counts: Vec<String> = names
+        .iter()
+        .zip(detail["counts_vector"].as_array().into_iter().flatten())
+        .map(|(name, count)| format!("{} {}", text(name), text(count)))
+        .collect();
+    let model = match detail["model"].as_object() {
+        Some(model) => format!(
+            "model stage {} at threshold {}",
+            text(&model["manifest"]["name"]),
+            text(&model["threshold"])
+        ),
+        None => "no model stage".to_owned(),
+    };
+    let items = detail["items"].as_array().cloned().unwrap_or_default();
+    cites.push(p("/detail/counts_vector"));
+    entry(
+        out,
+        2,
+        "display",
+        &format!(
+            "{identity} ruled on {} reply item(s) under {} display ({} requested), {model}: {}. \
+             Each verdict below is one stage's own answer; none is combined into a score",
+            items.len(),
+            text(&detail["display_mode"]),
+            text(&detail["display_mode_requested"]),
+            counts.join(", "),
+        ),
+        &cites,
+    );
+    for (position, item) in items.iter().enumerate() {
+        let answers: Vec<String> = item["answers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|answer| {
+                format!(
+                    "{} by {}: {} ({})",
+                    text(&answer["question"]),
+                    text(&answer["basis"]),
+                    text(&answer["label"]),
+                    match &answer["probability"] {
+                        Value::Null => "no probability".to_owned(),
+                        probability => format!("probability {probability}"),
+                    },
+                )
+            })
+            .collect();
+        // The record keeps no text: a sentence is named by its hash, and
+        // the shown words by their span in the release text.
+        let said = if let Some(hash) = item["text_sha256"].as_str() {
+            format!(
+                "sentence {} ({} bytes)",
+                short_hash(hash),
+                text(&item["text_bytes"])
+            )
+        } else if let Some(hash) = item["passage_sha256"].as_str() {
+            format!("an id the release lacks ({})", short_hash(hash))
+        } else {
+            format!("passage {}", text(&item["passage"]))
+        };
+        let shown = match (
+            item["shown_passage"].as_str(),
+            item["shown_span"].as_object(),
+        ) {
+            (Some(passage), Some(span)) => format!(
+                "; shows passage {passage}, bytes {}..{} of the release text",
+                text(&span["start"]),
+                text(&span["end"])
+            ),
+            _ => String::new(),
+        };
+        let mut body = format!(
+            "{} {said} — {}{shown}",
+            text(&item["kind"]),
+            text(&item["reason"])
+        );
+        if !answers.is_empty() {
+            let _ = write!(body, ". Answers: {}", answers.join("; "));
+        }
+        entry(
+            out,
+            4,
+            &format!("#{} {}", position + 1, text(&item["outcome"])),
+            &body,
+            &[p(&format!("/detail/items/{position}"))],
+        );
     }
 }
 
@@ -2682,5 +2823,125 @@ fn selection_block(out: &mut String, summary: &Value) {
     }
     if let Some(fairness) = summary["run"]["fairness"].as_str() {
         entry(out, 0, "fairness", fairness, &[cite_s("/run/fairness")]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use commonmeasure_runtime::processor::{integrity, release};
+    use commonmeasure_types::PolicyMode;
+    use commonmeasure_types::display::{Item, Reply};
+    use commonmeasure_types::release::{
+        KeptSpan, Passage, Release, SCHEME, Sidecar, Signed, signed_message,
+    };
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use serde_json::json;
+    use sha2::Digest as _;
+
+    const URL: &str = "https://source.example/a";
+
+    fn verified(display_mode: &str) -> release::Read {
+        let text = "The council approved the plan on Tuesday after a long debate.".to_owned();
+        let signed = Signed {
+            source: "a source".into(),
+            title: "A title".into(),
+            revid: 1,
+            url: URL.into(),
+            licence: "CC BY-SA 4.0".into(),
+            attribution: "A title, by its authors".into(),
+            terms: Vec::new(),
+            display_mode: display_mode.into(),
+            text_sha256: format!("{:x}", sha2::Sha256::digest(text.as_bytes())),
+            passages: vec![Passage {
+                id: "p0".into(),
+                start: 0,
+                end: text.len(),
+            }],
+            markers: vec![KeptSpan {
+                start: 0,
+                end: 11,
+                label: "lead".into(),
+                passage: "p0".into(),
+            }],
+            released_at: "2026-10-13T00:00:00Z".into(),
+        };
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let engine = base64::engine::general_purpose::STANDARD;
+        let release = Release {
+            text,
+            sidecar: Sidecar {
+                signature: engine.encode(key.sign(&signed_message(&signed)).to_bytes()),
+                signer_public_key: engine.encode(key.verifying_key().as_bytes()),
+                signature_scheme: SCHEME.into(),
+                signed,
+            },
+        };
+        let body = serde_json::to_vec(&release).unwrap();
+        match release::invoke(PolicyMode::Strict, URL, &body, None).1 {
+            release::Outcome::Read(read) => *read,
+            release::Outcome::Unreadable { reason } => panic!("unreadable: {reason}"),
+        }
+    }
+
+    #[test]
+    fn the_integrity_checkers_record_prints_its_counts_and_each_items_answers() {
+        let reply = Reply {
+            items: vec![
+                Item::FromSource {
+                    text: "The council approved the plan on Tuesday.".into(),
+                    passages: vec!["p0".into()],
+                },
+                Item::Own {
+                    text: "An own remark.".into(),
+                },
+            ],
+        };
+        let (invocation, _) = integrity::invoke(&verified("labelled"), URL, &reply);
+        let plan = json!({ "processors": [invocation.to_value()] });
+        let mut out = String::new();
+        fidelity_lines(&mut out, 0, &plan, None);
+        // Entries wrap; the assertions read the words.
+        let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            out.contains("integrity-checker v1")
+                && out.contains("ruled on 2 reply item(s) under labelled display")
+                && out.contains("no model stage")
+                && out.contains("fetch 1, quote_shown 0")
+                && out.contains("shown_confirmed 1, shown_own 1"),
+            "{out}"
+        );
+        assert!(out.contains("#1 shown_confirmed"), "{out}");
+        assert!(
+            out.contains("supported by verbatim-whole/1: yes (probability 1.0)"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "right_person_quoted by attribution-lookup/1: not_applicable (no probability)"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("#2 shown_own"), "{out}");
+        assert!(
+            out.contains("s:/plans/0/processors/0/detail/items/1"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_integrity_record_that_displayed_nothing_says_why() {
+        let mut read = verified("labelled");
+        read.record.verification = commonmeasure_types::release::VerificationState::Failed;
+        let (invocation, _) = integrity::invoke(&read, URL, &Reply { items: Vec::new() });
+        let plan = json!({ "processors": [invocation.to_value()] });
+        let mut out = String::new();
+        fidelity_lines(&mut out, 0, &plan, None);
+        let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            out.contains("displayed nothing") && out.contains("failed signature"),
+            "{out}"
+        );
     }
 }

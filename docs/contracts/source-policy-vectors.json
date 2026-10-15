@@ -322,6 +322,51 @@
       "accepted": false,
       "check": "terms_identifier_incomplete",
       "refusal": "policy.json the top-level policy terms entry 1 for host \"library.example\" has an access_context identifier without a scheme or a value"
+    },
+    {
+      "name": "terms naming the anchor a host accepts passes from",
+      "policy": {"terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "https://anchor.example", "credential_env": "ANCHOR_CREDENTIAL"}}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": [], "terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "https://anchor.example", "credential_env": "ANCHOR_CREDENTIAL"}, "requires_reporting": false}]}
+    },
+    {
+      "name": "a stand-in anchor on loopback where private hosts are allowed",
+      "policy": {"allow_private_hosts": true, "terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "http://127.0.0.1:8443", "credential_env": "ANCHOR_CREDENTIAL"}}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [], "scopes": [], "allow_private_hosts": true, "record_internal_prefixes": [], "terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "http://127.0.0.1:8443", "credential_env": "ANCHOR_CREDENTIAL"}, "requires_reporting": false}]}
+    },
+    {
+      "name": "an anchor holding the credential rather than naming its variable",
+      "policy": {"terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "https://anchor.example", "credential": "a-credential"}}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "an anchor written with a path",
+      "policy": {"terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "https://anchor.example/", "credential_env": "ANCHOR_CREDENTIAL"}}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_anchor_not_origin",
+      "refusal": "policy.json the top-level policy terms entry 1 for host \"news.example\" names anchor \"https://anchor.example/\", which is not an origin; an anchor is written as scheme://host[:port] with nothing after it"
+    },
+    {
+      "name": "a cleartext anchor on loopback where private hosts are not allowed",
+      "policy": {"terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "http://127.0.0.1:8443", "credential_env": "ANCHOR_CREDENTIAL"}}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_anchor_not_https",
+      "refusal": "policy.json the top-level policy terms entry 1 for host \"news.example\" names anchor \"http://127.0.0.1:8443\", which is not https; an anchor is reached over https, or over http at a loopback address where allow_private_hosts is set"
+    },
+    {
+      "name": "an anchor naming no credential variable",
+      "policy": {"terms": [{"host": "news.example", "reference": "firm/news-anonymous", "anchor": {"origin": "https://anchor.example", "credential_env": " "}}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "terms_anchor_credential_empty",
+      "refusal": "policy.json the top-level policy terms entry 1 for host \"news.example\" names an anchor without credential_env; the anchor issues passes to the credential the edge registered under"
     }
   ],
   "ruling_policies": {

@@ -1,8 +1,7 @@
 ---
 title: Processor contract
 domain: extensions
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Processor contract
@@ -117,21 +116,26 @@ processors receive only fields permitted by egress policy.
 ## Status
 
 The in-process implementation exists: `crates/commonmeasure-runtime/src/processor.rs`
-and seven processors behind it, plus the SimpleQA benchmark's
+and nine processors behind it, plus the SimpleQA benchmark's
 `simpleqa-correctness` ([`docs/contracts/simpleqa-benchmark.md`](simpleqa-benchmark.md)).
-Each declares its determinism in its manifest. Four declare `deterministic`:
-the two detectors, the optimiser and the fidelity verifier.
+Each declares its determinism in its manifest. Six declare `deterministic`:
+the two detectors, the release verifier, the optimiser, the fidelity
+verifier and the integrity checker.
 Four declare `non_deterministic`: the HTML text extractor, because credential
 validation depends on the verification time; the output provenance labeller,
 because its signed bytes differ on each run; and the fidelity judge and
 `simpleqa-correctness`, each a model exchange through the configured
 gateway. None declares `seeded`. The two detectors
 run in every batch run and mediated session; the optimiser in every batch
-run; the HTML text extractor on every mediated fetch that received a body;
+run; the HTML text extractor on every mediated fetch that received a body
+other than a signed release; the release verifier on every mediated fetch
+whose body was served as one;
 the fidelity
 verifier runs on every batch answer, the fidelity judge only in batch runs
 whose suite declares `fidelity_judge`, and the output provenance labeller
-only in batch runs whose suite declares `output_provenance`.
+only in batch runs whose suite declares `output_provenance`. The integrity
+checker runs where a caller displays a reply against a verified release;
+no command or tool calls it yet.
 
 - **`pii-detector` (admit).** Pattern rules over a source's text before it can
   reach a model. A finding is recorded in the invocation and carried on the
@@ -151,6 +155,43 @@ only in batch runs whose suite declares `output_provenance`.
   comprehension-grade defence. A source matching no rule is recorded as
   clean under these rules, not as safe. The rules state the most the screen
   can claim, and they are the canonical text the configuration digest covers.
+  On a signed release it rules twice: once on the release text, and once,
+  in a second record, on the source's strings delivered beside it (signer
+  key, text hash, title, URL, licence, attribution, each term, display
+  mode, release time, passage ids, marker labels and the passages they
+  name). That record names each string as an input `<url>#<field>` with
+  its hash, and each finding names its field.
+- **`release-verifier` (admit).** A mediated fetch whose `Content-Type`
+  names `application/x.signed-release+json` is read as a signed release in
+  place of extraction: UTF-8 JSON with the source's `text` and a `sidecar`
+  of passages by id, keep-intact markers, terms, display mode and
+  attribution, signed with Ed25519 over the text's SHA-256 and the RFC 8785
+  canonical JSON of the signed fields. The format and its media type are a
+  working format that the trusted news demo's stand-in gatekeeper defined,
+  not a standard and not Common Measure's to define; it is offered to the
+  open standards bodies as a proposal. The media type takes precedence over
+  the body's first bytes: a body served under it that starts like a PDF
+  goes to this processor, not the file path. A body that does not read as a
+  release (not that JSON, a field outside the format in the signed fields
+  or a passage or marker, a duplicate passage id, a passage or marker
+  outside the text, a marker naming no passage or lying outside the
+  passage it names) is `unavailable` with a `capability_unavailable` gap in
+  every mode, and is never delivered as plain text or as a file. A release
+  that reads is verified under the key its sidecar names, with strict
+  Ed25519 verification (a small-order key or R, or a non-canonical S,
+  fails): `verified`, `failed` (another scheme, the text not matching its
+  hash, a malformed key or signature, a signature that does not verify) or
+  `missing` (no signature or no key). `failed` and `missing` are a breach
+  under the shared mode discipline: `strict` refuses, `observe` and
+  `prefer` record and carry. The record's input is the hash of the bytes
+  received and its output the hash of the release text, which the crossing
+  carries as `retrieved_hash` and `content_hash`; the PII detector and the
+  injection screen then rule on that text. The record carries the state,
+  the signer's key, the text's signed hash and the counts of passages and
+  markers, never the text. Verified means the holder of the named key
+  signed this text and these fields: no key is pinned or looked up for the
+  source, so it does not establish who signed, and it says nothing about
+  the accuracy of the terms or passages.
 - **`html-text-extractor` version 2 (transform).** The readable text of a mediated
   fetch. A response whose content type is `text/html` or
   `application/xhtml+xml` is decoded as UTF-8 and reduced to its text:
@@ -214,6 +255,48 @@ only in batch runs whose suite declares `output_provenance`.
   matrix of judge verdicts under each verifier verdict. The exchange's
   charge in currency is unknown, not zero. No gateway, an empty window or
   an answer with no claims records an abstention with the reason and a gap.
+- **`integrity-checker` (verify).** How a reply is displayed against a
+  signed release the release verifier verified. The reply's items say what
+  they are: `quote` (a passage id, optionally a sentence index),
+  `from_source` (a sentence and the passage ids it cites) or `own` (the
+  assistant's own sentence). Each sentence is put to four deterministic
+  stages over the release text, each answering one question with its own
+  verdict and probability: the fidelity verifier's six-word run
+  (`supported`, recorded as evidence, admits nothing), the whole sentence
+  verbatim (`supported`), an attribution lookup for quotations
+  (`right_person_quoted`) and keep-intact containment
+  (`cuts_kept_passage`). Nothing combines the answers. The display rule
+  labels rather than withholds, with strictness from the release's signed
+  `display_mode`: under `labelled` a sentence whole in the text is shown
+  confirmed with its passages, and an own or unconfirmed sentence is shown
+  labelled "not from the article"; under `strict` (and under any mode value
+  other than `labelled`) only confirmed sentences and the source's words
+  are shown. A sentence that cuts a kept span, or attributes a quotation to
+  someone the text does not, is replaced by the source's words in both
+  modes. A quote is rendered from the signed text, expanded to a kept span
+  it cuts, or refused. The record carries, per item, each stage's raw
+  answer, the outcome and the passage shown, and the eleven-count vector
+  defined in [`display-counts.md`](display-counts.md); its inputs are the
+  release text, the signed sidecar (canonical JSON) and the reply by hash,
+  its output the display by hash. The record holds no text of the reply or
+  the release: a sentence is recorded by its SHA-256 and byte length, the
+  words shown by byte span into the release text, a quotation by its byte
+  span in the sentence and its SHA-256, a speaker by SHA-256, and an
+  identifier the reply supplied that the release does not sign by its
+  SHA-256. Reasons name no sentence, quotation or speaker. Hashes are
+  `sha256:<hex>`, as in the other records. The rendered text is returned
+  to the caller beside the record, never in it. No
+  model stage is installed: a paraphrase is never confirmed and nothing is
+  withheld for contradicting the source, which the record states. A
+  release whose signature failed or is missing is not displayed: the
+  invocation abstains with an `evidence_missing` gap. The record belongs
+  in the local evidence log and is not projected to any receiver;
+  `commonmeasure inspect` prints it from a session file, citing the line
+  and the pointer in that line's record. The mediated `context_show` tool
+  invokes it ([host integration](host-integration.md) §Displaying a reply
+  against a release) and records a `display_rendered` record after it. The
+  checker does not screen the release's strings; the injection screen
+  rules on them at the fetch.
 - **`output-provenance` (attest).** Builds one C2PA manifest per answered
   plan from that plan's sealed window. The default local route signs it with the certificate the
   operator names in `COMMONMEASURE_PROVENANCE_CERTIFICATE` and

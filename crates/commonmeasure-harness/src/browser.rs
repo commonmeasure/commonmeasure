@@ -136,6 +136,7 @@ pub fn capture(
             content_type: None,
             content_type_rendered: false,
             delivered_file: None,
+            release: None,
             grounded: false,
             // No surface reports rights, and being shown a source is not
             // permission.
@@ -155,6 +156,7 @@ pub fn capture(
             content_telemetry_id: None,
             supplier: None,
             identity: None,
+            anonymous: None,
             challenge: None,
             allowance: None,
             told: None,

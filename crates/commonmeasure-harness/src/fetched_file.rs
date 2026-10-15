@@ -140,7 +140,7 @@ pub fn save(directory: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
 /// Create `directory` owner-only, or narrow one that is there to owner-only.
 /// A symbolic link there is refused: the files would land wherever it
 /// points.
-fn private_directory(directory: &Path) -> Result<(), String> {
+pub(crate) fn private_directory(directory: &Path) -> Result<(), String> {
     match std::fs::symlink_metadata(directory) {
         Ok(metadata) if metadata.file_type().is_dir() => owner_only(directory, 0o700),
         Ok(_) => Err(format!(

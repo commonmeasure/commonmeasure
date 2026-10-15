@@ -48,7 +48,8 @@ in an HTTP Message Signatures directory.
 
 ## Signed requests
 
-An enrolled edge signs, with the tag `web-bot-auth`:
+An enrolled edge signs, with the tag `web-bot-auth`, except under the
+anonymous access profile (§The anonymous access profile):
 
 - each mediated page fetch, and each redirect hop, signed again for its own
   authority;
@@ -108,6 +109,79 @@ fails this way refuses the crossing
 The edge refuses every crossing to its hub's own authorities, so an agent
 cannot use the edge's signature to act on the hub
 ([session evidence §Events](session-evidence.md#events)).
+
+## The anonymous access profile
+
+Under the product decision "Anonymous access profile", an edge may present
+an anonymous pass instead of its signature where a source asks for one. The
+pass comes from an Anchor, in the sense of the Anonymous Bot Authentication
+draft, that the source accepts. It says only that the Anchor found the agent
+meets a policy the Anchor publishes, such as the public interest news
+requirements; it identifies neither the operator, the reader nor the
+session. The requirements are kept outside Common Measure, which may be one
+Anchor among several and never the only one. The mechanism is an RFC 9578
+publicly verifiable token until the draft settles.
+
+The profile is a term the operator names per host: an `anchor` in the
+host's terms entry ([source policy §Terms](source-policy.md#terms)). It is
+never ambient. A fetch of a URL whose host has one is under the profile,
+and so is each request it makes:
+
+- The page request, the request carrying the pass and the `robots.txt`,
+  licence and Content Telemetry manifest probes the fetch makes, including
+  those to other hosts, carry no `Signature`, `Signature-Input` or
+  `Signature-Agent` header, enrolled edge or not, and no
+  `Content-Telemetry-ID`. Their `User-Agent` is `CommonMeasureBot/<version>`,
+  the product token the agent card declares and that `robots.txt` groups
+  are matched on, with no bot page and no contact. A probe of a host under
+  the profile goes the same way whatever fetch made it.
+- The first request goes unsigned, so the named identity is not revealed
+  before a pass is offered. A 401 carrying a `PrivateToken` challenge
+  (RFC 9577) is answered once, at the URL that challenged, with
+  `Authorization: PrivateToken token=…` and one pass from the wallet
+  (`<home>/passes/<anchor>.json`). The pass presented is one issued for that
+  challenge and under the key its `token-key` names. A challenge is
+  answered only where it names the host's Anchor as issuer, binds the pass
+  to the host that challenged, and is the challenge passes are obtained for
+  ahead of a fetch: no redemption context, the host as origin information.
+- No pass is obtained during a fetch. An issuance just before the request
+  would let the Anchor, which knows the credential the edge registered
+  under, match it to the request by its time. `commonmeasure passes refill
+  <host>` obtains them beforehand.
+- Without a pass that answers the challenge, the fetch is refused with the
+  gap named: an empty wallet, passes only under a key the challenge does not
+  name, or a challenge the edge does not answer. Nothing is sent without the
+  pass in its place, signed or unsigned. A source that refuses the pass
+  presented is not asked again.
+- A redirect from the URL that challenged is followed without the pass:
+  the pass is for the origin that challenged, and is spent there. A
+  redirect to a host the terms do not put under the same Anchor is not
+  followed, and nor is a redirect that would bring a fetch not under the
+  profile to a host under it, since a signed request before an unsigned one
+  would link the two.
+- The hub is never a pass target: the refusal of the hub's own authorities
+  rules first.
+- A request under the profile is not a `CommonMeasureBot` request in the
+  sense of this contract: it presents no key a verifier can resolve, and
+  the commitments the agent card states are not attested by it. The record
+  says what it presented: `identity.pass` with the Anchor's origin and the
+  truncated token key id, never the pass, and no `key_id` or
+  `signature_agent` ([session evidence §Crossing](session-evidence.md#crossing)).
+  Fetches under the profile stay on the reader's own record and are never
+  cleared for relay egress ([telemetry projection](telemetry-projection.md)).
+
+After the Anchor rotates its key, passes under the old key are not presented
+to a challenge naming the new one, and the next refill drops them
+(`passes_refilled.discarded`).
+
+Unlinkability holds at the application layer. The IP address and the timing
+of the requests still link the probes, the challenged request and the
+request carrying the pass to each other; that is the profile's limit.
+
+State: `replay-tested`. The stand-in gatekeeper's recorded challenge,
+release and refusal of a spent pass are served to the shipped binary from
+loopback (`crates/commonmeasure-cli/tests/pass_presentation.rs`). No
+publisher's or Anchor's own deployment is verified.
 
 ## The key directory
 

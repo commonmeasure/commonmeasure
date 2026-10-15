@@ -1,7 +1,7 @@
 ---
 title: Session evidence contract
 domain: edge
-audience: integrator
+audience: operator
 section: reference
 ---
 
@@ -156,6 +156,8 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `crossing_mediated` | the agent's fetch or search routed through the MCP server | Common Measure carried this, under policy |
 | `crossing_refused` | the same | policy refused this before it could enter the agent's context |
 | `processor_invoked` | the same | one processor invocation ([`docs/contracts/processor.md`](processor.md)), recorded beside the crossing it judged |
+| `display_rendered` | the agent's `context_show` call through the MCP server | a reply was displayed against a signed release this session delivered ([host integration](host-integration.md) §Displaying a reply against a release): `tool`, `processor_record` (the `seq` of the `integrity-checker` record just before it), `release` (`content_hash` and `acquisition_ids`), `display_mode`, `outcomes` (one per item, in order), `counts` (`names`, `vector`, `status`), `session_id`, `host` and `cwd`. No sentence, passage text, reason or reply-supplied identifier. Never a crossing and never projected |
+| `passes_refilled` | nothing; `commonmeasure passes refill <host>` writes it | one refill of anonymous passes from the Anchor the host's terms name, under the product decision "Anonymous access profile" ([source policy §Terms](source-policy.md#terms)): `anchor` (its origin), `origin_info` (the source hosts the passes may be spent at), `requested`, `obtained`, `held` (the passes the wallet holds for that host afterwards), `discarded` (the passes, for any host, dropped because they were issued under a key other than the one the Anchor's directory lists: after a rotation they verify nowhere that follows it, and a source's challenge naming the new key is never answered with one), `key_id` (the lowercase hex SHA-256 of the Anchor's token key, which each pass carries), `stopped` (`null`; or the Anchor's refusal as it stated it, `status`, `retry_after` as sent and `stated`, its body as JSON where it is JSON and otherwise text, cut at 2 KiB, with any echo of the credential replaced by `[credential]`; or `failed` with the reason), `session_id` and `timestamp`. A pass says only that the Anchor found the agent meets a policy the Anchor publishes; it identifies neither the operator, the reader nor the session. The record carries no pass, no blinded request and no credential. The passes are kept in `<home>/passes/<anchor>.json`, owner-only, beside the Anchor's key; a stolen wallet file yields the passes in it, each spendable once at the hosts it names while the Anchor's key stands, and neither an identity nor the credential. Never a crossing, never cleared for egress and never projected |
 | `prompt_sources` | a hook at prompt submission carrying the prompt text (Claude Code: `UserPromptSubmit`) | which URLs the prompt named, as hashes, and the statements pasted material carried; no prompt text |
 | `manifest_resolved` | nothing; the MCP server writes it after a mediated fetch | what Content Telemetry discovery established for the host: the URLs probed, the status, the cache decision, and the manifest's facts or the rejection; never a crossing |
 | `turn_started` | a hook at prompt submission (Claude Code: `UserPromptSubmit`) | a turn boundary, carrying the host's turn identifier, a declared privacy level and the policy identity (§Turn boundaries) |
@@ -449,6 +451,36 @@ carries:
   as for any fetch, and `robots.txt`, a licence or a `Content-Usage`
   statement refuses a PDF before any of it is kept.
 
+`release` appears on a mediated fetch whose body was served as a signed
+release (`application/x.signed-release+json`, a working format that Common
+Measure reads and does not define) and read as one, delivered or refused
+after reading. It holds `media_type`; `verification`, which is `verified`,
+`failed` or `missing` as the `release-verifier` established it ([processor](processor.md#status));
+`reason` where it is not `verified`; and `sidecar`, the release's sidecar
+whole: the signed fields (source, title, revision, URL, licence,
+attribution, terms, display mode, `text_sha256`, passages and markers as
+byte spans of the text, release time), the signature, the signer's public
+key and the scheme. The text itself is never recorded: `content_hash` is
+its hash, `retrieved_hash` the hash of the body served, and `delivered`
+the part handed over. The stdio server that delivered a release keeps its
+text and sidecar in process memory for `context_show` (the last 16, cleared
+at exit, never written; [host integration](host-integration.md)
+§Releases held for display); that is not part of the source record. A `failed` or `missing` state is also a breach:
+`strict` refuses the crossing, and `observe` and `prefer` carry it with
+the sentence in `breach`. A body served under that media type that does
+not read as a release, a body that starts like a PDF among them, is
+refused as `unavailable` with no `content_hash` and no `release`; the
+verifier's record names why, and no file is saved. The release's strings
+delivered beside the text are screened for injection as the text is: a
+match is refused by `strict` and carried by `observe` and `prefer` with
+the sentence in `breach`. The result the agent
+reads carries the release text as `content` and, under `release`, the
+verification state, display mode, terms, attribution, content hash and
+the passages and markers by id with their text: every passage where the
+whole text is delivered, and otherwise the passages that overlap the part,
+each whole. `estimated_tokens` counts that text with the part. The relay
+does not project `release`.
+
 `identity` is the network identity the request presented, and it appears on
 every mediated crossing whose request left the machine and on no other: a
 crossing refused before the request presented nothing, and a search result
@@ -458,7 +490,44 @@ origin whose key directory a verifier resolves it in
 ([bot identity](bot-identity.md)); an edge that is not enrolled, or whose
 key the hub has revoked, carries `unsigned` instead with the reason in it.
 The two are different facts, not a value and its absence: a publisher can
-verify the first and can only take the second on trust.
+verify the first and can only take the second on trust. A request under the
+anonymous access profile (below) carries `user_agent`, the product token and
+version alone, and either `pass` or `unsigned`: `pass` where it presented an
+anonymous pass, with `anchor` (the Anchor's origin) and
+`truncated_token_key_id` (the last byte of the SHA-256 of the Anchor's token
+key, RFC 9578 §6.1, which says which of its keys the pass is under), and
+`unsigned` with the reason where it presented none. `key_id` and
+`signature_agent` are absent under the profile, enrolled edge or not: such a
+request is not a signed `CommonMeasureBot` request
+([bot identity §The anonymous access profile](bot-identity.md#the-anonymous-access-profile)).
+The pass itself, its nonce and its challenge digest are never recorded. The
+pass is presented at the URL that challenged, on one request; a redirect
+from there carries none, and `identity` describes that request.
+
+`anonymous` appears on every mediated crossing of a fetch made under the
+anonymous access profile, refused, failed, challenged or carried: a fetch
+of a URL whose host's operator terms name an Anchor
+([source policy §Terms](source-policy.md#terms)), under the product
+decision "Anonymous access profile". It holds `anchor`, that Anchor's
+origin. A pass says only that the Anchor found the agent meets a policy the
+Anchor publishes; it identifies neither the operator, the reader nor the
+session. Such a crossing stays on this record: it is never cleared for
+relay egress in any scope or under any consent, its refusal is not counted
+in a session's refused count, and a licence's reporting demand on such a
+host is unmet ([telemetry projection](telemetry-projection.md)). Where the
+host answers 401 with a `PrivateToken` challenge, the request is made once
+more with a held pass; where none answers the challenge the crossing is
+`crossing_refused` with the challenge, the status, `identity` and the gap in
+`refusal`: no pass for the host in the wallet, passes only under a key the
+challenge does not name, a challenge from another issuer, one that does not
+bind the pass to the host that challenged, or one that differs from the
+challenge passes are obtained for ahead of a fetch (one carrying its own
+redemption context, for example). No request is sent without the pass in
+its place. A source that refuses the pass presented answers with a new
+challenge; that crossing is `crossing_mediated` with the status, `challenge`
+saying the source did not accept the pass, and `identity.pass`. A redirect
+that leaves the hosts under the fetch's Anchor, or that leads a fetch not
+under the profile to such a host, is refused before it is requested.
 
 `supplier` appears on a mediated search result and on no other record: the
 provider name that served it (`exa`, `ozone`, `internal`, `skill:<name>`),
@@ -469,8 +538,9 @@ withholds it for the operator's own corpus and for skills
 (`crates/commonmeasure-relay/src/project.rs`).
 
 `challenge` appears where the origin refused the fetcher rather than the
-resource — a challenge marker such as `cf-mitigated`, or a status that
-refuses the request itself. It is deliberately distinct from `refusal`,
+resource — a challenge marker such as `cf-mitigated`, a `PrivateToken`
+challenge (RFC 9577), which asks for an anonymous pass and names its issuer,
+or a status that refuses the request itself. It is deliberately distinct from `refusal`,
 which is this operator's policy, and from `failure`, which is the
 transport. All three leave a crossing with no content hash, and a reader has
 to be able to tell whose decision it was: the operator's, the origin's, or
@@ -550,6 +620,12 @@ encoding support or external-manifest retrieval capability and adds a
 `capability_unavailable` gap. Verification is offline; external manifest
 links are recorded without being fetched. `absent` is limited to supported
 text bodies in which no supported credential was found.
+
+A body served as a signed release (`application/x.signed-release+json`)
+does not reach the extractor and gets no embedded-credential reading: the
+`release-verifier` reads it instead, and its record carries the same two
+hashes as input and output ([processor](processor.md#status)). Its
+signature is kept on the crossing under `release`.
 
 The same invocation carries `retrieved_hash` as its input, `content_hash` as
 its output, the transformation's processor name, version and configuration

@@ -1,8 +1,7 @@
 ---
 title: Grant contract
 domain: network
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Grant contract

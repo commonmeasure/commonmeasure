@@ -1,8 +1,7 @@
 ---
 title: Directory enrolment
 domain: hub
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Directory enrolment

@@ -1,0 +1,14 @@
+HTTP/1.1 200 OK
+Content-Type: application/private-token-issuer-directory
+Content-Length: 580
+Connection: close
+
+{
+  "issuer-request-uri": "/token-request",
+  "token-keys": [
+    {
+      "token-type": 2,
+      "token-key": "MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEA2XH7TeVtnZOpUZdTS67rtCxvvGY4KTevq6kQWzTYLunGOzyv7nQ75MKGaut9eTPzun_iGuBZBTn1hCwuuYkb8cCW3ypm5vxL_dnMxkRqVQWuUJbVHi10zNIsQBrYlCLsiCDJMT3fahoJ6ua0HhiqNqxakN6jIGRchTDDsMeCUGwa1DRAYG0DcFFv-slVTg5IVerBiuY-T1A21XgiSD_0T2ZVT3sr2It1mtZ0m9Rr9F52OJYCE66VfidZYI61ZWnmNB0P_3yJFIJ43EZUcLeDgtuIhj2TvHEwz8yLCoomZHAmwrIAbrRo13f6IWnU_4z2af9KnDo229sEze1lCb5c5wIDAQAB"
+    }
+  ]
+}

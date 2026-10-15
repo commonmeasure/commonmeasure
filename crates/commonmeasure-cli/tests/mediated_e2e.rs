@@ -366,6 +366,7 @@ fn the_host_argument_records_the_named_host_and_refuses_an_unknown_one_with_the_
         "cursor",
         "copilot-cli",
         "vscode",
+        "goose",
     ] {
         assert!(stderr.contains(host), "the refusal lists {host}: {stderr}");
     }
@@ -1230,7 +1231,8 @@ fn the_server_completes_the_handshake_and_lists_its_tools() {
             "context_fetch",
             "context_search",
             "context_status",
-            "context_enrol"
+            "context_enrol",
+            "context_show"
         ]
     );
 }
@@ -7754,8 +7756,9 @@ fn a_batch_is_answered_under_2025_03_26_and_refused_under_later_revisions() {
     assert!(holds_only_start_records(home.path()), "no tool was called");
 }
 
-/// The server started without `--session` by a host that sets
-/// `AGENT_SESSION_ID`, as Goose does, records under that id; `--session`
+/// The server started as Goose starts it (`mcp --host goose`, no
+/// `--session`) records under the `AGENT_SESSION_ID` Goose sets, with
+/// `goose` as the host; `--session`
 /// still wins over it; with neither, the server mints an id. An id that is not
 /// a plain name, from either source, fails the start naming its source and
 /// writes nothing.
@@ -7767,7 +7770,7 @@ fn the_session_id_comes_from_the_argument_then_agent_session_id_then_the_server(
     let start = |session: Option<&str>, agent_session: Option<&str>| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_commonmeasure"));
         command
-            .args(["mcp", "--host", "claude-code"])
+            .args(["mcp", "--host", "goose"])
             .env("COMMONMEASURE_HOME", home.path())
             .env_remove("AGENT_SESSION_ID");
         if let Some(session) = session {
@@ -7818,6 +7821,7 @@ fn the_session_id_comes_from_the_argument_then_agent_session_id_then_the_server(
         .find(|record| record["event"] == "crossing_mediated")
         .expect("a crossing");
     assert_eq!(crossing["payload"]["session_id"], "20260914_1");
+    assert_eq!(crossing["payload"]["host"], "goose");
     std::fs::remove_file(&log).expect("fresh");
 
     let output = start(Some("host-given"), Some("20260914_1"));

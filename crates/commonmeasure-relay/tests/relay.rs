@@ -4906,3 +4906,84 @@ fn a_cleared_scope_keeps_its_engagement_and_refused_count_beside_consent() {
         )]
     );
 }
+
+/// Catches: projecting a crossing made under the anonymous access profile,
+/// or counting its refusal. The scope clears every crossing in its
+/// directory; the plain host's crossing and refusal leave, and nothing of
+/// the host under the profile does, its refusal included.
+#[test]
+fn nothing_of_a_crossing_under_the_anonymous_profile_leaves_and_its_refusal_is_not_counted() {
+    let home = tempfile::tempdir().unwrap();
+    let anonymous = |event: &str, path: &str| {
+        let mut line: Value = serde_json::from_str(&crossing_line(
+            event,
+            "s-anonymous",
+            &format!("https://pass.example/{path}"),
+            event == "crossing_mediated",
+        ))
+        .unwrap();
+        let payload = line["payload"].as_object_mut().unwrap();
+        payload.insert("host_name".to_owned(), json!("pass.example"));
+        payload.insert(
+            "anonymous".to_owned(),
+            json!({"anchor": "https://anchor.example"}),
+        );
+        payload.insert(
+            "identity".to_owned(),
+            json!({"user_agent": "CommonMeasureBot/0.4.12",
+                   "pass": {"anchor": "https://anchor.example", "truncated_token_key_id": 72}}),
+        );
+        line.to_string()
+    };
+    write_session(
+        home.path(),
+        "s-anonymous",
+        &[
+            crossing_line(
+                "crossing_mediated",
+                "s-anonymous",
+                "https://host.example/plain",
+                true,
+            ),
+            anonymous("crossing_mediated", "article"),
+            anonymous("crossing_refused", "refused"),
+            crossing_line(
+                "crossing_refused",
+                "s-anonymous",
+                "https://host.example/refused",
+                false,
+            ),
+        ],
+    );
+
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let receiver = accepting_receiver(Arc::clone(&bodies));
+    let report = commonmeasure_relay::relay(
+        home.path(),
+        &commonmeasure_relay::RelayOptions {
+            receiver: Some(receiver.url()),
+            ..Default::default()
+        },
+    )
+    .expect("relay");
+    assert_eq!(report.sessions_projected, 1);
+    let delivered = bodies.lock().unwrap();
+    let text: String = delivered.iter().map(Value::to_string).collect();
+    for absent in ["pass.example", "anchor.example", "truncated_token_key_id"] {
+        assert!(!text.contains(absent), "{absent} left: {text}");
+    }
+    let urls: Vec<&str> = delivered
+        .iter()
+        .flat_map(|body| body["events"].as_array().unwrap())
+        .filter_map(|event| event["content_url"].as_str())
+        .collect();
+    assert!(!urls.is_empty(), "the plain crossing leaves");
+    assert!(
+        urls.iter().all(|url| *url == "https://host.example/plain"),
+        "{urls:?}"
+    );
+    assert!(
+        delivered.iter().any(|body| body["refused"] == json!(1)),
+        "the plain refusal alone is counted: {delivered:?}"
+    );
+}

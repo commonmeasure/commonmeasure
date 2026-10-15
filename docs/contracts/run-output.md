@@ -1,8 +1,7 @@
 ---
 title: Run output contract
 domain: edge
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Run output contract

@@ -8,12 +8,14 @@
 pub mod address;
 mod allowance;
 pub mod canonical;
+pub mod display;
 mod envelope;
 mod evidence;
 pub mod finding;
 mod job;
 mod money;
 mod plan;
+pub mod release;
 
 pub use allowance::{AllowanceDeclaration, AllowancePeriod};
 pub use envelope::{

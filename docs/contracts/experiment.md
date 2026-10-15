@@ -1,8 +1,7 @@
 ---
 title: Experiment contract
 domain: edge
-audience: integrator
-section: reference
+audience: contributor
 ---
 
 # Experiment contract
