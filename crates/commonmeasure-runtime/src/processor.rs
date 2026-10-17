@@ -11,7 +11,8 @@
 //! These implementations run inside this binary. The optional Encypher
 //! provenance route calls its fixed remote service only with a job's explicit
 //! disclosure permission and operator credentials. The generic external
-//! processor protocol and supervised sidecars remain planned.
+//! processor protocol remains limited to the integrity checker's supervised
+//! stdio sidecar (`integrity::sidecar`). Remote processors remain planned.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use commonmeasure_types::{AssuranceBasis, Decision, Gap};
@@ -90,13 +91,21 @@ pub struct Permissions {
 }
 
 /// How the processor is implemented and where its code lives.
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct Implementation {
-    /// `in-process` today, including the Encypher HTTP adapter. The generic
-    /// external processor protocol remains planned (`docs/contracts/processor.md`).
-    pub kind: &'static str,
-    pub crate_name: &'static str,
-    pub crate_version: &'static str,
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind")]
+pub enum Implementation {
+    #[serde(rename = "in-process")]
+    InProcess {
+        crate_name: &'static str,
+        crate_version: &'static str,
+    },
+    #[serde(rename = "sidecar")]
+    Sidecar {
+        artefact_digest: String,
+        manifest_digest: String,
+        runtime: &'static str,
+        confinement: &'static str,
+    },
 }
 
 /// What a processor declares about itself before it is allowed to run.
@@ -137,8 +146,7 @@ impl ProcessorManifest {
     }
 }
 
-const IN_PROCESS: Implementation = Implementation {
-    kind: "in-process",
+const IN_PROCESS: Implementation = Implementation::InProcess {
     crate_name: "commonmeasure-runtime",
     crate_version: env!("CARGO_PKG_VERSION"),
 };
@@ -200,6 +208,7 @@ pub struct Invocation {
     /// findings are observed; a model judge's verdict is the model's
     /// statement about those bytes, so it is declared.
     assurance: AssuranceBasis,
+    configured_manifest: Option<Value>,
 }
 
 impl Invocation {
@@ -227,6 +236,7 @@ impl Invocation {
             gaps,
             blind_spots,
             assurance: AssuranceBasis::Observed,
+            configured_manifest: None,
         }
     }
 
@@ -247,7 +257,7 @@ impl Invocation {
             .max(0);
         json!({
             "record_version": INVOCATION_VERSION,
-            "processor": self.manifest.identity(),
+            "processor": self.configured_manifest.as_ref().cloned().unwrap_or_else(|| self.manifest.identity()),
             "stage": self.manifest.stage,
             "timestamp": stamp(self.finished_at),
             "started_at": stamp(self.started_at),

@@ -11,8 +11,9 @@ use std::path::Path;
 use std::process::Command;
 
 use base64::Engine as _;
+use commonmeasure_harness::display::{Declared, Delivered};
 use commonmeasure_harness::session::SessionLog;
-use commonmeasure_runtime::processor::{integrity, release};
+use commonmeasure_runtime::processor::{integrity, provenance, release};
 use commonmeasure_types::PolicyMode;
 use commonmeasure_types::canonical::sha256_digest;
 use commonmeasure_types::display::{Item, Reply};
@@ -77,6 +78,7 @@ fn signed() -> Release {
         }],
         passages,
         released_at: "2026-10-15T00:00:00Z".into(),
+        usage: None,
     };
     let key = SigningKey::from_bytes(&[7; 32]);
     let engine = base64::engine::general_purpose::STANDARD;
@@ -86,6 +88,7 @@ fn signed() -> Release {
             signature: engine.encode(key.sign(&signed_message(&signed)).to_bytes()),
             signer_public_key: engine.encode(key.verifying_key().as_bytes()),
             signature_scheme: SCHEME.into(),
+            c2pa: None,
             signed,
         },
     }
@@ -134,42 +137,102 @@ fn reply() -> Reply {
     }
 }
 
-/// A session log holding a rendered and an abstained integrity record,
-/// written by the production writer, with the records as written.
-fn session(home: &Path) -> (std::path::PathBuf, Value, Value) {
+/// The committed demonstration signing identity
+/// (`demo/provenance/signer.pem`).
+fn demonstration_signer() -> provenance::SigningIdentity {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/provenance");
+    provenance::SigningIdentity::Configured(provenance::SigningMaterial {
+        certificate_chain: std::fs::read(root.join("signer.pem")).unwrap(),
+        private_key: std::fs::read(root.join("signer-key.pem")).unwrap(),
+        certificate_ref: "demo/provenance/signer.pem".to_owned(),
+        key_ref: "demo/provenance/signer-key.pem".to_owned(),
+    })
+}
+
+/// A session log holding a rendered and an abstained integrity record, then
+/// the rendered one's display: its output-provenance record, signed with
+/// the demonstration identity, and `display_rendered`, written by the
+/// production writer as `context_show` writes them, the manifest store in
+/// the sidecar the record names. Returns the log's path, the two integrity
+/// records as written and the sidecar's path.
+fn session(home: &Path) -> (std::path::PathBuf, Value, Value, std::path::PathBuf) {
     let release = signed();
     let (rendered, display) = integrity::invoke(&read(&release), URL, &reply());
-    assert!(display.is_some());
+    let display = display.expect("rendered");
     let mut tampered = release.clone();
     tampered.text = tampered.text.replace("Sunday", "Monday");
-    let (abstained, display) = integrity::invoke(&read(&tampered), URL, &reply());
-    assert!(display.is_none());
+    let (abstained, nothing) = integrity::invoke(&read(&tampered), URL, &reply());
+    assert!(nothing.is_none());
 
     let mut log = SessionLog::open(home, "integrity").unwrap();
-    log.record_processor(rendered.to_value()).unwrap();
+    let checker = log.record_processor(rendered.to_value()).unwrap();
     log.record_processor(abstained.to_value()).unwrap();
     let path = log.path().to_owned();
+
+    let mut delivered = Delivered::default();
+    let read = read(&release);
+    let hash = read.content_hash.clone();
+    delivered.hold_release(read, URL, Some("acq-1".to_owned()), Declared::default());
+    let held = delivered.release(&hash).unwrap();
+    let text = commonmeasure_harness::display::plain(held, &display);
+    let reference = format!("integrity.displays/{checker}.c2pa");
+    let ingredients = [commonmeasure_harness::display::ingredient(held, None)];
+    let signing = demonstration_signer();
+    let (invocation, store) = provenance::invoke_display(&provenance::DisplayInput {
+        text: &text,
+        display_reference: &format!("integrity.ndjson#processor_invoked/{checker}"),
+        ingredients: &ingredients,
+        signing: &signing,
+        manifest_reference: &reference,
+        trust_anchors: None,
+    });
+    let sidecar = path.parent().unwrap().join(&reference);
+    std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+    std::fs::write(&sidecar, store.expect("signed")).unwrap();
+    let provenance_record = log.record_processor(invocation.to_value()).unwrap();
+    log.record_display(commonmeasure_harness::display::record(
+        held,
+        &display,
+        checker,
+        Some(provenance_record),
+        &provenance::display_text_sha256(&text),
+    ))
+    .unwrap();
+
     let lines: Vec<Value> = std::fs::read_to_string(&path)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines.iter().all(|r| r["event"] == "processor_invoked"));
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines[..3].iter().all(|r| r["event"] == "processor_invoked"));
+    assert_eq!(
+        lines[2]["payload"]["processor"]["name"],
+        "output-provenance"
+    );
+    assert_eq!(lines[2]["payload"]["decision"], "admit");
+    assert_eq!(lines[3]["event"], "display_rendered");
     (
         path,
         lines[0]["payload"].clone(),
         lines[1]["payload"].clone(),
+        sidecar,
     )
 }
 
 #[test]
 fn the_logged_record_keeps_verdicts_outcomes_and_counts_and_no_text() {
     let home = tempfile::tempdir().unwrap();
-    let (path, record, abstained) = session(home.path());
+    let (path, record, abstained, sidecar) = session(home.path());
     let bytes = std::fs::read_to_string(&path).unwrap();
     for words in RECOGNISABLE {
         assert!(!bytes.contains(words), "{words:?} is in the log:\n{bytes}");
+    }
+    // The display's manifest names the text by its hash alone.
+    let store = std::fs::read(&sidecar).unwrap();
+    let store = String::from_utf8_lossy(&store);
+    for words in RECOGNISABLE {
+        assert!(!store.contains(words), "{words:?} is in the sidecar");
     }
 
     let detail = &record["detail"];
@@ -265,7 +328,7 @@ fn dossier(path: &Path) -> String {
 #[test]
 fn inspect_prints_both_session_records_with_resolving_line_citations() {
     let home = tempfile::tempdir().unwrap();
-    let (path, _, _) = session(home.path());
+    let (path, _, _, _) = session(home.path());
     let out = dossier(&path);
     for words in RECOGNISABLE {
         assert!(!out.contains(words), "{words:?} is in the dossier:\n{out}");
@@ -300,6 +363,17 @@ fn inspect_prints_both_session_records_with_resolving_line_citations() {
     );
     assert!(out.contains(&format!("[{at}:1; {at}:1#/payload/detail/counts_vector]")));
     assert!(out.contains(&format!("[{at}:2; {at}:2#/payload/gaps]")));
+    assert!(
+        flat.contains(&format!(
+            "labelled display of release {}",
+            sha256_digest(signed().text.as_bytes())
+        )) && flat.contains(&format!("[{at}:4]"))
+            && flat.contains(&format!("integrity checker record [{at}:1]"))
+            && flat.contains("manifest: integrity.displays/1.c2pa sha256:")
+            && flat.contains("validation valid at write time, binding display text sha256:"),
+        "{out}"
+    );
+    assert!(flat.contains(&format!("[{at}:3]")), "{out}");
 
     // Every citation names a line and, where it has one, a pointer that
     // resolves in the record on that line.

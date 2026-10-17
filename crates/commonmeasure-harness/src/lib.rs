@@ -55,7 +55,7 @@ pub mod snapshot;
 pub mod source_text;
 pub mod turn_observations;
 
-pub use enrolment::{EnrolmentRecord, enrolled_key_id};
+pub use enrolment::{EnrolmentRecord, RefusalObservation, enrolled_key_id};
 pub use hook::{HookInput, HostSurface, capture};
 pub use identity::{EdgeKey, Identity, PresentedIdentity, PresentedPass};
 pub use import::known_hosts;

@@ -9,9 +9,12 @@
 //! Absent means not enrolled.
 //!
 //! What the edge learns about its key's place in the hub's key directory
-//! lives beside it in `<home>/directory-listing.json`, not in the record:
-//! the record keeps the shape every released binary reads, so binaries of
-//! different versions can share one operator home.
+//! lives beside it in `<home>/directory-listing.json`, not in the record,
+//! which binaries of different versions sharing one operator home all read.
+//! The record keeps the shape every released binary reads until a 401
+//! refusal is recorded with a [`EnrolmentRecord::refusal_sequence`]; after
+//! that a binary that does not know the member fails to load it until it is
+//! started again on one that does.
 
 use std::path::{Path, PathBuf};
 
@@ -77,6 +80,32 @@ pub struct EnrolmentRecord {
     pub revocation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation_learnt_at: Option<String>,
+    /// Orders 401 refusals against the status answers that might withdraw
+    /// them ([`Self::withdraw_refusal`]). Each refusal recorded takes the
+    /// next number and nothing lowers it, so a refusal recorded after a
+    /// process read the record carries a higher number than the one it
+    /// read. Absent, and read as 0, on a record that has never held a 401
+    /// refusal recorded with one; a refusal recorded by a binary that does
+    /// not know the member carries none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub refusal_sequence: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// What an asker read about a 401 refusal before sending a status request
+/// ([`EnrolmentRecord::observe_refusal`]), so that the answer withdraws only
+/// a refusal recorded before the request went out
+/// ([`EnrolmentRecord::withdraw_refusal`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusalObservation {
+    /// [`EnrolmentRecord::refusal_sequence`] as read.
+    sequence: u64,
+    /// `revocation_learnt_at` of the 401-only refusal the record held when
+    /// read; `None` when it held none or held a stated revocation.
+    refusal_learnt_at: Option<String>,
 }
 
 /// How long after its creation a held directory proof is replaced on the
@@ -611,6 +640,7 @@ impl EnrolmentRecord {
             }
             record.revocation = Some(format!("hub: {detail}"));
             record.revocation_learnt_at = Some(timestamp(Utc::now()));
+            record.refusal_sequence += 1;
             true
         })?;
         Ok(())
@@ -621,7 +651,9 @@ impl EnrolmentRecord {
     /// an earlier 401; the hub's time and side replace the 401's detail,
     /// because they are what makes the revocation permanent
     /// ([`Self::withdraw_refusal`]). A stated revocation already held stays
-    /// as it is.
+    /// as it is. It takes no [`Self::refusal_sequence`]: no answer withdraws
+    /// it, so it needs no order, and a record the hub revoked gains no
+    /// member.
     pub fn record_revocation(
         &mut self,
         home: &Path,
@@ -642,49 +674,69 @@ impl EnrolmentRecord {
         Ok(())
     }
 
+    /// What this record says about a 401 refusal, taken by an asker before
+    /// it sends the status request whose answer may withdraw one
+    /// ([`Self::withdraw_refusal`]). Take it from the record as read before
+    /// the request, with nothing between.
+    pub fn observe_refusal(&self) -> RefusalObservation {
+        RefusalObservation {
+            sequence: self.refusal_sequence,
+            refusal_learnt_at: self
+                .revocation_learnt_at
+                .clone()
+                .filter(|_| self.revoked_at.is_none()),
+        }
+    }
+
     /// Withdraw a revocation learnt only from a 401, once the hub has
     /// answered for this key with no revocation. The hub never answers `200`
     /// for a revoked key, so that 401 came from something other than a
     /// revocation. A revocation the hub stated (`revoked_at`) is permanent.
     ///
-    /// `asked_at` is when the `200` was requested. Only an answer asked for
-    /// after the refusal was learnt withdraws it: a relay run whose request
-    /// went out before another process recorded a 401 carries an answer
-    /// older than that 401, and must not resume signing on it. The learnt
-    /// time is stored to the millisecond ([`timestamp`]), so the true time
-    /// lies anywhere in that millisecond: the comparison is between whole
-    /// milliseconds, and an answer asked for in the millisecond the refusal
-    /// was learnt keeps it. A learnt time that does not parse is not
-    /// withdrawn. The tests are made against the record as stored, so a
-    /// process that read the record before another recorded the hub's
-    /// revocation cannot clear it. `true` when the record was rewritten.
+    /// `observed` is what the asker read before sending the request the
+    /// `200` answered ([`Self::observe_refusal`]). The answer withdraws
+    /// only a refusal recorded before the request went out: a relay run
+    /// whose request went out before another process recorded a 401
+    /// carries an answer older than that 401, and must not resume signing
+    /// on it. A refusal this binary records is numbered
+    /// ([`Self::refusal_sequence`]) and is withdrawn when its number is at
+    /// or below the one observed. A refusal recorded by a binary that does
+    /// not know the member carries no number and reads as 0, the same as a
+    /// record that never held one, so the number cannot place it; it is
+    /// withdrawn only when the asker saw that refusal, the one learnt at
+    /// the same `revocation_learnt_at`. No clock is compared, so a refusal recorded
+    /// in the same millisecond as the request is ordered like any other.
+    /// The tests are made against the record as stored, so a process that
+    /// read the record before another recorded the hub's revocation cannot
+    /// clear it. `true` when the record was rewritten.
     ///
     /// Every relay run on an enrolled edge whose key stands comes here while
     /// it holds the spool, so the record is read first without
     /// [`Self::lock`], and the lock is taken only when there is a refusal to
     /// withdraw. The record is replaced whole by rename, so the unlocked
-    /// read is a whole record. A refusal recorded after that read was learnt
-    /// after `asked_at`, so this answer would not withdraw it either;
-    /// under the lock the record is read again before anything is written.
+    /// read is a whole record. A refusal recorded after that read fails the
+    /// same test, so this answer would not withdraw it either; under the
+    /// lock the record is read again before anything is written. The
+    /// withdrawal leaves [`Self::refusal_sequence`] as it is.
     pub fn withdraw_refusal(
         &mut self,
         home: &Path,
-        asked_at: DateTime<Utc>,
+        observed: &RefusalObservation,
     ) -> Result<bool, String> {
         match Self::load(home) {
             Ok(Some(stored)) if stored.key_id == self.key_id => {
-                if !stored.refusal_withdrawable(asked_at) {
+                if !stored.refusal_withdrawable(observed) {
                     *self = stored;
                     return Ok(false);
                 }
             }
             // Gone or re-enrolled: `transition` would change `self` alone.
-            Ok(_) if !self.refusal_withdrawable(asked_at) => return Ok(false),
+            Ok(_) if !self.refusal_withdrawable(observed) => return Ok(false),
             // An unreadable record is `transition`'s to report.
             _ => {}
         }
         self.transition(home, |record| {
-            if !record.refusal_withdrawable(asked_at) {
+            if !record.refusal_withdrawable(observed) {
                 return false;
             }
             record.revocation = None;
@@ -693,15 +745,23 @@ impl EnrolmentRecord {
         })
     }
 
-    /// Whether an answer asked for at `asked_at` withdraws this record's
-    /// refusal ([`Self::withdraw_refusal`]).
-    fn refusal_withdrawable(&self, asked_at: DateTime<Utc>) -> bool {
+    /// Whether an answer to a request sent after `observed` was taken
+    /// withdraws this record's refusal ([`Self::withdraw_refusal`]): the
+    /// refusal is the 401's alone and the asker had seen it. A numbered
+    /// refusal is placed by its number. A refusal with no number, written
+    /// by a binary that does not know the member, is placed by identity
+    /// with the refusal the asker saw; an asker that read a clean record
+    /// saw none, so it keeps one recorded after its read even in the same
+    /// millisecond. The learnt time is compared for equality only, never
+    /// ordered.
+    fn refusal_withdrawable(&self, observed: &RefusalObservation) -> bool {
+        let Some(learnt_at) = self.revocation_learnt_at.as_deref() else {
+            return false;
+        };
         self.revoked_at.is_none()
-            && self
-                .revocation_learnt_at
-                .as_deref()
-                .and_then(|learnt| DateTime::parse_from_rfc3339(learnt).ok())
-                .is_some_and(|learnt| learnt.timestamp_millis() < asked_at.timestamp_millis())
+            && self.refusal_sequence <= observed.sequence
+            && (self.refusal_sequence >= 1
+                || observed.refusal_learnt_at.as_deref() == Some(learnt_at))
     }
 
     /// Why this edge sends its enrolled hub nothing: the stored URL fails the
@@ -892,7 +952,30 @@ mod tests {
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         }
+    }
+
+    /// An asker's observation of a record at `sequence` that held no
+    /// refusal when read.
+    fn observed(sequence: u64) -> RefusalObservation {
+        RefusalObservation {
+            sequence,
+            refusal_learnt_at: None,
+        }
+    }
+
+    /// Record a 401 refusal as a binary that does not know the refusal
+    /// sequence writes one: the revocation and the time it was learnt, and no
+    /// `refusal_sequence` member.
+    fn record_unsequenced_refusal(home: &Path, learnt_at: &str) {
+        let path = EnrolmentRecord::path(home);
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(stored.get("refusal_sequence").is_none(), "{stored}");
+        stored["revocation"] = "hub: refused".into();
+        stored["revocation_learnt_at"] = learnt_at.into();
+        std::fs::write(&path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
     }
 
     fn at(text: &str) -> DateTime<Utc> {
@@ -1338,7 +1421,9 @@ mod tests {
                 for _ in 0..20 {
                     for step in [
                         value.record_refusal(home_path, "refused"),
-                        value.withdraw_refusal(home_path, Utc::now()).map(|_| ()),
+                        value
+                            .withdraw_refusal(home_path, &value.observe_refusal())
+                            .map(|_| ()),
                     ] {
                         if let Err(error) = step {
                             bad_writes_ref.lock().unwrap().push(error);
@@ -1431,9 +1516,10 @@ mod tests {
         assert_eq!(stated.revocation.as_deref(), Some("owner"));
         assert_eq!(stated.revocation_learnt_at, learnt.revocation_learnt_at);
 
+        let observed = refused_only.observe_refusal();
         assert!(
             !refused_only
-                .withdraw_refusal(home.path(), Utc::now() + chrono::Duration::seconds(1))
+                .withdraw_refusal(home.path(), &observed)
                 .unwrap()
         );
         assert_eq!(refused_only, stated);
@@ -1442,52 +1528,41 @@ mod tests {
         assert_eq!(EnrolmentRecord::load(home.path()).unwrap().unwrap(), stated);
     }
 
-    /// A clean answer withdraws a 401-only revocation only when it was asked
-    /// for after the 401 was learnt; an older answer, from a run that sent
-    /// its request before another process recorded the 401, does not. The
-    /// learnt time is stored to the millisecond, so an answer asked for in
-    /// that millisecond may be the older one and keeps the refusal.
+    /// A clean answer withdraws a 401-only revocation only when its request
+    /// was sent after the 401 was recorded: by an asker that read the
+    /// record at the refusal's sequence or later. An older answer, from a
+    /// run that read the record before another process recorded the 401,
+    /// does not, and the withdrawal leaves the sequence where it was.
     #[test]
     fn only_an_answer_asked_for_after_the_refusal_withdraws_it() {
         let home = tempfile::tempdir().unwrap();
         let mut refused = record();
         refused.revocation = Some("hub: refused".to_owned());
         refused.revocation_learnt_at = Some(timestamp(at("2026-09-25T08:00:00.000900Z")));
+        refused.refusal_sequence = 2;
         refused.store(home.path()).unwrap();
-        for asked_at in [
-            "2026-09-25T07:59:59Z",
-            "2026-09-25T08:00:00Z",
-            "2026-09-25T08:00:00.000100Z",
-            "2026-09-25T08:00:00.000999999Z",
-        ] {
+        for sequence in [0, 1] {
             assert!(
                 !refused
                     .clone()
-                    .withdraw_refusal(home.path(), at(asked_at))
+                    .withdraw_refusal(home.path(), &observed(sequence))
                     .unwrap(),
-                "{asked_at}"
+                "{sequence}"
             );
         }
         assert_eq!(
             EnrolmentRecord::load(home.path()).unwrap(),
             Some(refused.clone())
         );
-        assert!(
-            refused
-                .withdraw_refusal(home.path(), at("2026-09-25T08:00:00.001Z"))
-                .unwrap()
-        );
-        assert!(
-            !EnrolmentRecord::load(home.path())
-                .unwrap()
-                .unwrap()
-                .is_revoked()
-        );
+        assert!(refused.withdraw_refusal(home.path(), &observed(2)).unwrap());
+        let withdrawn = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+        assert!(!withdrawn.is_revoked());
+        assert_eq!(withdrawn.refusal_sequence, 2);
     }
 
-    /// A 401 learnt after a clean answer was asked for, in the same
-    /// millisecond, keeps refusing: the record keeps it and a signer loaded
-    /// before the refusal was recorded does not sign again.
+    /// A 401 recorded after the asker read the record keeps refusing, in
+    /// the same millisecond as the request or not: the record keeps it and
+    /// a signer loaded before the refusal was recorded does not sign again.
     #[test]
     fn an_answer_asked_for_in_the_millisecond_of_the_refusal_leaves_the_signer_refusing() {
         use crate::identity::{EdgeKey, Identity};
@@ -1501,13 +1576,14 @@ mod tests {
         let signer = identity.signer().expect("an enrolled key signs");
         assert!(signer.directory_proof("hub.example", 1000, 604800).is_ok());
 
-        let asked_at = at("2026-09-25T08:00:00.000100Z");
-        value.revocation = Some("hub: refused".to_owned());
-        value.revocation_learnt_at = Some(timestamp(at("2026-09-25T08:00:00.000900Z")));
-        value.store(home.path()).unwrap();
+        let observed = EnrolmentRecord::load(home.path())
+            .unwrap()
+            .unwrap()
+            .observe_refusal();
+        value.record_refusal(home.path(), "refused").unwrap();
         assert!(signer.directory_proof("hub.example", 1000, 604800).is_err());
 
-        assert!(!value.withdraw_refusal(home.path(), asked_at).unwrap());
+        assert!(!value.withdraw_refusal(home.path(), &observed).unwrap());
         assert!(
             EnrolmentRecord::load(home.path())
                 .unwrap()
@@ -1515,6 +1591,180 @@ mod tests {
                 .is_revoked()
         );
         assert!(signer.directory_proof("hub.example", 1000, 604800).is_err());
+    }
+
+    /// The tie: the refusal was learnt in the millisecond the asker's clock
+    /// read when it sent the request. The answer withdraws it when the
+    /// asker read the record after the refusal was recorded, and keeps it
+    /// when the asker read the record before. Without the sequence the two
+    /// cases carry the same times.
+    #[test]
+    fn a_refusal_learnt_in_the_millisecond_of_the_request_is_ordered_by_what_the_asker_read() {
+        let asked_at = at("2026-09-25T08:00:00.000400Z");
+        let mut refused = record();
+        refused.revocation = Some("hub: refused".to_owned());
+        refused.revocation_learnt_at = Some(timestamp(asked_at));
+        refused.refusal_sequence = 1;
+
+        let home = tempfile::tempdir().unwrap();
+        refused.store(home.path()).unwrap();
+        assert!(
+            !refused
+                .clone()
+                .withdraw_refusal(home.path(), &observed(0))
+                .unwrap()
+        );
+        assert!(
+            EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+        assert!(refused.withdraw_refusal(home.path(), &observed(1)).unwrap());
+        assert!(
+            !EnrolmentRecord::load(home.path())
+                .unwrap()
+                .unwrap()
+                .is_revoked()
+        );
+    }
+
+    /// While two releases share a home, an asker that read a clean record
+    /// keeps a 401 recorded after its read, whichever binary recorded it.
+    /// A binary that does not know `refusal_sequence` writes none, so its
+    /// refusal reads as 0, the number the asker read; it is kept because the asker
+    /// saw no refusal, and a signer loaded before it stays refusing.
+    #[test]
+    fn a_clean_read_keeps_a_refusal_recorded_after_it_with_or_without_a_sequence() {
+        use crate::identity::{EdgeKey, Identity};
+        for unsequenced in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let key = EdgeKey::generate().unwrap();
+            key.store(home.path()).unwrap();
+            let mut value = record();
+            value.key_id = key.thumbprint();
+            value.store(home.path()).unwrap();
+            let identity = Identity::load(home.path()).unwrap();
+            let signer = identity.signer().expect("an enrolled key signs");
+            let mut asker = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+            let observed = asker.observe_refusal();
+            assert_eq!(observed, self::observed(0));
+
+            if unsequenced {
+                record_unsequenced_refusal(home.path(), &timestamp(Utc::now()));
+            } else {
+                value.record_refusal(home.path(), "refused").unwrap();
+            }
+            assert!(
+                signer.directory_proof("hub.example", 1000, 604800).is_err(),
+                "{unsequenced}"
+            );
+
+            assert!(
+                !asker.withdraw_refusal(home.path(), &observed).unwrap(),
+                "{unsequenced}"
+            );
+            let stored = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+            assert!(stored.is_revoked(), "{unsequenced}");
+            assert_eq!(stored.refusal_sequence, u64::from(!unsequenced));
+            assert!(
+                signer.directory_proof("hub.example", 1000, 604800).is_err(),
+                "{unsequenced}"
+            );
+        }
+    }
+
+    /// An unsequenced refusal is not stranded: an asker that read it before
+    /// sending withdraws it on a clean answer, and the signer signs again.
+    /// The record keeps the shape its writer reads.
+    #[test]
+    fn an_asker_that_read_an_unsequenced_refusal_withdraws_it() {
+        use crate::identity::{EdgeKey, Identity};
+        let home = tempfile::tempdir().unwrap();
+        let key = EdgeKey::generate().unwrap();
+        key.store(home.path()).unwrap();
+        let mut value = record();
+        value.key_id = key.thumbprint();
+        value.store(home.path()).unwrap();
+        let identity = Identity::load(home.path()).unwrap();
+        let signer = identity.signer().expect("an enrolled key signs");
+        record_unsequenced_refusal(home.path(), "2026-09-25T08:00:00.000Z");
+        assert!(signer.directory_proof("hub.example", 1000, 604800).is_err());
+
+        let mut asker = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+        let observed = asker.observe_refusal();
+        assert_eq!(observed.sequence, 0);
+        assert!(asker.withdraw_refusal(home.path(), &observed).unwrap());
+        let written = std::fs::read_to_string(EnrolmentRecord::path(home.path())).unwrap();
+        assert!(!written.contains("refusal_sequence"), "{written}");
+        assert!(!written.contains("revocation"), "{written}");
+        assert!(signer.directory_proof("hub.example", 1000, 604800).is_ok());
+    }
+
+    /// An asker that saw one unsequenced refusal does not withdraw a
+    /// different one recorded after its read: that refusal was withdrawn
+    /// by another answer and a new 401 was then recorded without a sequence.
+    #[test]
+    fn an_asker_that_read_one_unsequenced_refusal_keeps_a_later_one() {
+        let home = tempfile::tempdir().unwrap();
+        record().store(home.path()).unwrap();
+        record_unsequenced_refusal(home.path(), "2026-09-25T08:00:00.000Z");
+        let mut asker = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+        let observed = asker.observe_refusal();
+
+        let mut other = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+        assert!(
+            other
+                .withdraw_refusal(home.path(), &other.observe_refusal())
+                .unwrap()
+        );
+        record_unsequenced_refusal(home.path(), "2026-09-25T08:00:00.007Z");
+
+        assert!(!asker.withdraw_refusal(home.path(), &observed).unwrap());
+        let stored = EnrolmentRecord::load(home.path()).unwrap().unwrap();
+        assert_eq!(
+            stored.revocation_learnt_at.as_deref(),
+            Some("2026-09-25T08:00:00.007Z")
+        );
+    }
+
+    /// A stated revocation is permanent, so an asker that read one has seen
+    /// no refusal an answer could withdraw.
+    #[test]
+    fn an_observation_of_a_stated_revocation_carries_no_refusal() {
+        let mut stated = record();
+        stated.revocation_learnt_at = Some("2026-09-25T08:00:00.000Z".to_owned());
+        stated.revoked_at = Some("2026-09-25T09:00:00Z".to_owned());
+        stated.revocation = Some("owner".to_owned());
+        assert_eq!(stated.observe_refusal(), observed(0));
+    }
+
+    /// Each refusal recorded takes the next number, and a withdrawal does
+    /// not lower it, so a refusal recorded after a withdrawal is numbered
+    /// above anything read before it. A record that never held a 401
+    /// refusal is written without the member, as before.
+    #[test]
+    fn the_refusal_sequence_only_rises_and_is_written_only_once_a_refusal_was_held() {
+        let home = tempfile::tempdir().unwrap();
+        let mut value = record();
+        value.store(home.path()).unwrap();
+        let written = std::fs::read_to_string(EnrolmentRecord::path(home.path())).unwrap();
+        assert!(!written.contains("refusal_sequence"), "{written}");
+
+        value.record_refusal(home.path(), "refused").unwrap();
+        assert_eq!(value.refusal_sequence, 1);
+        assert!(value.withdraw_refusal(home.path(), &observed(1)).unwrap());
+        assert_eq!(value.refusal_sequence, 1);
+        value.record_refusal(home.path(), "refused again").unwrap();
+        assert_eq!(value.refusal_sequence, 2);
+        assert!(
+            !value
+                .clone()
+                .withdraw_refusal(home.path(), &observed(1))
+                .unwrap()
+        );
+        let written = std::fs::read_to_string(EnrolmentRecord::path(home.path())).unwrap();
+        assert!(written.contains("\"refusal_sequence\": 2"), "{written}");
     }
 
     /// A copy of an enrolment that was since removed or replaced by another
@@ -1553,6 +1803,7 @@ mod tests {
         let mut refused = record();
         refused.revocation = Some("hub: refused".to_owned());
         refused.revocation_learnt_at = Some("2026-09-25T08:00:00.000Z".to_owned());
+        refused.refusal_sequence = 1;
         refused.store(home.path()).unwrap();
         let before = std::fs::read(EnrolmentRecord::path(home.path())).unwrap();
 
@@ -1560,8 +1811,8 @@ mod tests {
         let path = home.path();
         let (withdrawn, removed) = std::thread::scope(|scope| {
             let mut copy = refused.clone();
-            let asked_at = at("2026-09-25T08:30:00Z");
-            let withdrawing = scope.spawn(move || copy.withdraw_refusal(path, asked_at));
+            let observed = refused.observe_refusal();
+            let withdrawing = scope.spawn(move || copy.withdraw_refusal(path, &observed));
             let removing = scope.spawn(move || EnrolmentRecord::remove(path));
             std::thread::sleep(std::time::Duration::from_millis(300));
             assert_eq!(

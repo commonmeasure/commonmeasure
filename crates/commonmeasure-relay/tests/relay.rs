@@ -3238,6 +3238,7 @@ fn the_standing_check_uses_the_hubs_key_whatever_receiver_is_named() {
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     }
     .store(home.path())
     .unwrap();
@@ -3315,6 +3316,7 @@ fn enrolled_home(hub_url: &str, revocation_learnt_at: Option<&str>) -> tempfile:
         revoked_at: None,
         revocation: revocation_learnt_at.map(|_| "hub: refused".to_owned()),
         revocation_learnt_at: revocation_learnt_at.map(str::to_owned),
+        refusal_sequence: 0,
     }
     .store(home.path())
     .unwrap();
@@ -3456,6 +3458,7 @@ fn a_key_held_for_another_receiver_is_not_sent_to_the_enrolled_hub() {
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     };
     record.store(home.path()).unwrap();
     assert_eq!(record.hub_ingest_key(home.path()).unwrap(), None);

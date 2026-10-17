@@ -23,9 +23,13 @@ c2pa.workspace = true
 c2pa-text.workspace = true
 x509-parser.workspace = true
 unicode-normalization.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+rcgen.workspace = true
 
 # The umask test sets the umask in a child process it spawns.
 [target.'cfg(unix)'.dev-dependencies]

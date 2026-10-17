@@ -220,10 +220,18 @@ API keys page. Otherwise, in this order, under the home (`$COMMONMEASURE_HOME` o
    leaves that time unknown; `revocation_learnt_at` alone also means revoked.
    When the hub states a revocation after a `401` was recorded, `revoked_at`
    and `revocation` take the hub's values and `revocation_learnt_at` keeps
-   the first time.
-   Unknown members are refused; the fields keep their existing shape.
-   A process of another release reading this record signs after a 401
-   revocation; see `ARCHITECTURE.md` §What runs where.
+   the first time. Each `401` recorded also raises `refusal_sequence` by
+   one; it never falls and stays when the refusal is withdrawn. It is
+   absent (read as 0) on a record that has never held a `401`, and on one
+   holding a `401` recorded by a binary that does not know the member.
+   Unknown members are refused. Until a `401` is recorded the record keeps
+   the shape every released binary reads. Once one is, a process of a
+   binary that does not know `refusal_sequence` sharing the home fails to
+   load `enrolment.json` with the error the loader gives for any invalid
+   record (the file, then the category, line and column of the fault, with
+   no member or value named), and reads no standing or enrolled key from
+   it until it is started again on the current binary (`ARCHITECTURE.md`
+   §What runs where).
 3. `relay.json`: `receiver`, the hub URL given plus `telemetry_path`, and
    `api_key`, mode `0600`. Where a `relay.json` existed, `connect` prints the
    receiver it named.
@@ -446,9 +454,25 @@ other key, such as one given with
 the key came from, and changes nothing. A later `200` for the same `key_id`
 with no revocation withdraws a revocation learnt only from a `401`: the hub
 never answers `200` for a revoked key. Only a `200` requested after the
-`401` was learnt counts, so a relay run whose request went out before another
-process recorded the `401` does not withdraw it. A revocation the hub stated
-is permanent. Transport failures, 5xx and other status codes leave the recorded
+`401` was recorded counts: the relay run reads the record before it sends
+the request, and the answer withdraws the `401` only when the record it read
+already held that `401`. A `401` recorded with a `refusal_sequence` is
+placed by it: the answer withdraws it when the sequence read was at least
+the `401`'s. A `401` recorded by a binary that does not know the member
+carries no `refusal_sequence` and reads as 0, as a record with no `401` does, so the
+answer withdraws it only when the record read held that same `401`, the
+one with the same `revocation_learnt_at`; a relay run that read a record
+holding no `401` keeps it. A relay run whose request went out before
+another process recorded the `401` does not withdraw it, whether or not
+the two fall in the same millisecond. Times are compared only for
+equality, never ordered. Two processes of different releases sharing a
+home are ordered this way only while the record has no `refusal_sequence`;
+once it has one, a binary that does not know the member cannot load it
+(§What the edge writes). The one case left unordered is an unsequenced
+`401` withdrawn and then recorded again in the same millisecond, while a relay
+run that read the first one has its request out: that run's answer
+withdraws the second. A process of the other release withdraws by its own
+rule. A revocation the hub stated is permanent. Transport failures, 5xx and other status codes leave the recorded
 standing unchanged.
 
 | Revoked by | Hub effect |

@@ -37,8 +37,7 @@ the number of items. The rule that decides which is the processor's rule
 text, which its configuration digest covers.
 
 The counts say what the display rule did. A `shown_confirmed` count says a
-check passed, not that the sentence was true. Without a model stage,
-count 7 is always 0 and a paraphrase is never counted at 4.
+check passed, not that the sentence was true.
 
 The counts carry outcomes only: no sentence, passage, probability or
 reader. The integrity checker's record holds each question's verdict and

@@ -88,6 +88,8 @@ fn session_dossier(path: &Path) -> Result<String, String> {
                 vec![at.clone()],
                 |suffix| format!("{at}#/payload{suffix}"),
             );
+        } else if record["event"] == "display_rendered" {
+            display_lines(&mut out, path, &records, line, p);
         } else if matches!(
             record["event"].as_str(),
             Some("context_entered" | "output_associated" | "observation_unavailable")
@@ -103,6 +105,126 @@ fn session_dossier(path: &Path) -> Result<String, String> {
         }
     }
     Ok(out)
+}
+
+/// One `display_rendered` record: the release, mode and counts, then the
+/// display's manifest as its output-provenance record states it, each line
+/// cited by `<path>:<line>`. The records name each other by `seq`.
+fn display_lines(out: &mut String, path: &Path, records: &[Value], line: usize, p: &Value) {
+    // The processor record `seq` names. A log written before a record's seq
+    // was its line can hold two under one seq; neither is then read as the
+    // display's.
+    let named = |seq: &Value, processor: &str| -> Result<Option<usize>, Vec<usize>> {
+        let matching: Vec<usize> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                !seq.is_null()
+                    && record["seq"] == *seq
+                    && record["event"] == "processor_invoked"
+                    && record["payload"]["processor"]["name"] == processor
+            })
+            .map(|(at, _)| at)
+            .collect();
+        match matching.as_slice() {
+            [] => Ok(None),
+            [at] => Ok(Some(*at)),
+            _ => Err(matching),
+        }
+    };
+    let ambiguous = |out: &mut String, what: &str, seq: &Value, at: &[usize]| {
+        let cited: Vec<String> = at
+            .iter()
+            .map(|at| format!("{}:{}", path.display(), at + 1))
+            .collect();
+        let _ = writeln!(
+            out,
+            "  {what}: ambiguous, seq {seq} names {} records [{}]",
+            at.len(),
+            cited.join(", ")
+        );
+    };
+    let counts: Vec<String> = p["counts"]["names"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(p["counts"]["vector"].as_array().into_iter().flatten())
+        .filter(|(_, count)| count.as_u64() != Some(0))
+        .map(|(name, count)| format!("{} {count}", text(name)))
+        .collect();
+    let _ = writeln!(
+        out,
+        "display {}: {} display of release {} [{}:{}]\n  counts: {}",
+        text(&records[line]["seq"]),
+        text(&p["display_mode"]),
+        text(&p["release"]["content_hash"]),
+        path.display(),
+        line + 1,
+        if counts.is_empty() {
+            "none".to_owned()
+        } else {
+            counts.join(", ")
+        },
+    );
+    match named(
+        &p["processor_record"],
+        commonmeasure_runtime::processor::integrity::NAME,
+    ) {
+        Ok(Some(checker)) => {
+            let _ = writeln!(
+                out,
+                "  integrity checker record [{}:{}]",
+                path.display(),
+                checker + 1
+            );
+        }
+        Ok(None) => {}
+        Err(at) => ambiguous(out, "integrity checker record", &p["processor_record"], &at),
+    }
+    let index = match named(
+        &p["provenance_record"],
+        commonmeasure_runtime::processor::provenance::NAME,
+    ) {
+        Ok(Some(index)) => index,
+        Ok(None) => {
+            let _ = writeln!(
+                out,
+                "  manifest: none recorded; display text {} [{}:{}]",
+                text(&p["display_text_sha256"]),
+                path.display(),
+                line + 1
+            );
+            return;
+        }
+        Err(at) => {
+            ambiguous(out, "manifest", &p["provenance_record"], &at);
+            return;
+        }
+    };
+    let invocation = &records[index]["payload"];
+    let cite = format!("{}:{}", path.display(), index + 1);
+    match invocation["outputs"][0].as_object() {
+        Some(output) => {
+            let _ = writeln!(
+                out,
+                "  manifest: {} {} ({} bytes), validation {} at write time, binding display \
+                 text {} [{cite}]",
+                text(&output["reference"]),
+                text(&output["content_hash"]),
+                text(&invocation["detail"]["manifest_bytes"]),
+                text(&invocation["detail"]["validation"]["state"]),
+                text(&p["display_text_sha256"]),
+            );
+        }
+        None => {
+            let gap = invocation["gaps"]
+                .as_array()
+                .and_then(|gaps| gaps.last())
+                .map(|gap| text(&gap["detail"]))
+                .unwrap_or_default();
+            let _ = writeln!(out, "  manifest: unavailable: {gap} [{cite}]");
+        }
+    }
 }
 
 /// The published files, each either read or accounted for. Only the summary
@@ -2634,6 +2756,28 @@ fn integrity_lines(
         ),
         &cites,
     );
+    if detail["model"].is_object() {
+        for field in [
+            "manifest",
+            "hello",
+            "calibration",
+            "bye",
+            "outcome",
+            "timings",
+            "gaps",
+            "egress",
+        ] {
+            if let Some(value) = detail["model"].get(field) {
+                entry(
+                    out,
+                    4,
+                    &format!("model {field}"),
+                    &text(value),
+                    &[p(&format!("/detail/model/{field}"))],
+                );
+            }
+        }
+    }
     for (position, item) in items.iter().enumerate() {
         let answers: Vec<String> = item["answers"]
             .as_array()
@@ -2866,6 +3010,7 @@ mod tests {
                 passage: "p0".into(),
             }],
             released_at: "2026-10-13T00:00:00Z".into(),
+            usage: None,
         };
         let key = SigningKey::from_bytes(&[7; 32]);
         let engine = base64::engine::general_purpose::STANDARD;
@@ -2875,6 +3020,7 @@ mod tests {
                 signature: engine.encode(key.sign(&signed_message(&signed)).to_bytes()),
                 signer_public_key: engine.encode(key.verifying_key().as_bytes()),
                 signature_scheme: SCHEME.into(),
+                c2pa: None,
                 signed,
             },
         };

@@ -20,6 +20,12 @@
 //! holder of that key signed this text and these fields; it does not
 //! establish who holds the key. That is a blind spot, stated below and in
 //! every record.
+//!
+//! A sidecar may also carry a C2PA manifest store the source signed with its
+//! own certificate ([`commonmeasure_types::release::Sidecar::c2pa`]). It is
+//! read back offline against the text and its state recorded beside the
+//! verification state; it neither admits nor refuses the release, which
+//! the Ed25519 signature alone does (`docs/contracts/display-provenance.md`).
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -28,7 +34,8 @@ use base64::Engine as _;
 use chrono::Utc;
 use commonmeasure_types::canonical::sha256_digest;
 use commonmeasure_types::release::{
-    MEDIA_TYPE, Release, ReleaseRecord, SCHEME, VerificationState, signed_message,
+    C2paBinding, C2paRecord, C2paState, MEDIA_TYPE, Release, ReleaseRecord, SCHEME,
+    VerificationState, signed_message,
 };
 use commonmeasure_types::{Decision, Gap, GapReason, PolicyMode};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -64,7 +71,15 @@ Ed25519 signature does not verify under that key over text_sha256, a newline and
 8785 canonical JSON of signed; verified otherwise. Verification is strict: a key or a \
 signature R of small order, or a non-canonical S, fails.\n\
 verdicts: verified admits; failed and missing are a breach under the shared mode discipline, \
-strict refuses and observe and prefer record and carry.\n";
+strict refuses and observe and prefer record and carry.\n\
+c2pa: where the sidecar carries c2pa, it is decoded from standard base64 and read with the \
+C2PA SDK reader against the NFC-normalised text, offline, with the configured trust anchors \
+where any are supplied; the state is invalid where it does not decode, parse or verify, \
+untrusted where it verifies and its signer chains to no supplied anchor, trusted where it \
+does. The record carries the state, the store's hash, whether the data hash matches the text \
+and whether that text is the one text_sha256 names, the claim signer, each cawg.identity \
+summarised, the source's cawg.training-mining and the status codes. The state neither \
+admits nor refuses the release.\n";
 
 static MANIFEST: LazyLock<ProcessorManifest> = LazyLock::new(|| ProcessorManifest {
     name: NAME,
@@ -139,6 +154,18 @@ pub fn invoke(
     body: &[u8],
     coded: Option<&[u8]>,
 ) -> (Invocation, Outcome) {
+    invoke_with_trust(mode, reference, body, coded, None)
+}
+
+/// [`invoke`], reading a C2PA store the sidecar carries against
+/// `trust_anchors`, a PEM bundle the operator supplied, where there is one.
+pub fn invoke_with_trust(
+    mode: PolicyMode,
+    reference: &str,
+    body: &[u8],
+    coded: Option<&[u8]>,
+    trust_anchors: Option<&str>,
+) -> (Invocation, Outcome) {
     let started_at = Utc::now();
     let retrieved_hash = sha256_digest(coded.unwrap_or(body));
     let input = ArtefactRef {
@@ -195,6 +222,7 @@ pub fn invoke(
         }
     };
     let content_hash = sha256_digest(release.text.as_bytes());
+    let c2pa = read_c2pa(&release, trust_anchors);
     let decision = if ruling.is_refusal() {
         Decision::Refuse
     } else {
@@ -225,6 +253,7 @@ pub fn invoke(
             "passages": release.sidecar.signed.passages.len(),
             "markers": release.sidecar.signed.markers.len(),
             "display_mode": release.sidecar.signed.display_mode,
+            "c2pa": c2pa.as_ref().map_or_else(|| json!({"state": "absent"}), |c2pa| json!(c2pa)),
             "text_recorded": false,
         }),
         ruling.gap().cloned().into_iter().collect(),
@@ -235,6 +264,7 @@ pub fn invoke(
         verification: state,
         reason: failure.map(str::to_owned),
         sidecar: release.sidecar.clone(),
+        c2pa,
     };
     (
         invocation,
@@ -253,6 +283,70 @@ fn state_named(state: VerificationState) -> &'static str {
         VerificationState::Failed => "failed",
         VerificationState::Missing => "missing",
     }
+}
+
+/// Read the sidecar's C2PA store, where it carries one, against the text.
+fn read_c2pa(release: &Release, trust_anchors: Option<&str>) -> Option<C2paRecord> {
+    let encoded = release.sidecar.c2pa.as_deref()?;
+    let mut record = C2paRecord {
+        state: C2paState::Invalid,
+        reason: None,
+        manifest_sha256: None,
+        manifest_label: None,
+        binding: None,
+        signer: None,
+        identities: Vec::new(),
+        training_mining: None,
+        statuses: Vec::new(),
+        verifier: format!("c2pa-rs {}", c2pa::VERSION),
+    };
+    let Ok(store) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+        record.reason = Some("the store is not standard base64".to_owned());
+        return Some(record);
+    };
+    record.manifest_sha256 = Some(sha256_digest(&store));
+    let reading =
+        match super::provenance::read_store_with_trust(&store, &release.text, trust_anchors) {
+            Ok(reading) => reading,
+            Err(error) => {
+                record.reason = Some(error.to_string());
+                return Some(record);
+            }
+        };
+    record.statuses = reading.status_codes();
+    record.state = match reading.validation["state"].as_str() {
+        Some("trusted") => C2paState::Trusted,
+        Some("valid") => C2paState::Untrusted,
+        _ => C2paState::Invalid,
+    };
+    if record.state == C2paState::Invalid {
+        record.reason = Some("the manifest does not verify against the release text".to_owned());
+    }
+    let normalised: String =
+        unicode_normalization::UnicodeNormalization::nfc(release.text.as_str()).collect();
+    record.binding = Some(C2paBinding {
+        matches: !record.statuses.iter().any(|code| {
+            code.starts_with("assertion.dataHash") || code == "claim.hardBindings.missing"
+        }),
+        same_text_as_signed: format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(normalised.as_bytes())
+        ) == release.sidecar.signed.text_sha256,
+    });
+    record.manifest_label = Some(reading.manifest_label.clone());
+    record.signer = Some(json!({
+        "common_name": reading.signature["common_name"],
+        "issuer": reading.signature["issuer"],
+        "alg": reading.signature["alg"],
+    }));
+    record.identities = reading
+        .assertions("cawg.identity")
+        .iter()
+        .map(|identity| super::provenance::identity_summary(identity, &reading.signature))
+        .collect();
+    record.training_mining = Some(reading.assertion(super::provenance::TRAINING_MINING_LABEL))
+        .filter(|value| !value.is_null());
+    Some(record)
 }
 
 /// Parse the body and check its structure against the text.
@@ -385,6 +479,7 @@ mod tests {
                 passage: "p1".into(),
             }],
             released_at: "2026-10-13T00:00:00Z".into(),
+            usage: None,
         };
         let key = SigningKey::from_bytes(&[7; 32]);
         let engine = base64::engine::general_purpose::STANDARD;
@@ -394,6 +489,7 @@ mod tests {
                 signature: engine.encode(key.sign(&signed_message(&signed)).to_bytes()),
                 signer_public_key: engine.encode(key.verifying_key().as_bytes()),
                 signature_scheme: SCHEME.into(),
+                c2pa: None,
                 signed,
             },
         }
@@ -427,6 +523,132 @@ mod tests {
         assert!(
             !kept.contains("The mayor said"),
             "the text never enters a record"
+        );
+    }
+
+    /// `release` re-signed after its signed fields were changed.
+    fn resigned(mut release: Release) -> Release {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        release.sidecar.signature = base64::engine::general_purpose::STANDARD.encode(
+            key.sign(&signed_message(&release.sidecar.signed))
+                .to_bytes(),
+        );
+        release
+    }
+
+    #[test]
+    fn a_usage_block_is_signed_and_a_release_without_one_is_unchanged() {
+        use commonmeasure_types::release::{Usage, UsageReporting, UsageTerm};
+        let plain = signed_release();
+        assert!(
+            !String::from_utf8(signed_message(&plain.sidecar.signed))
+                .unwrap()
+                .contains("usage")
+        );
+        let mut release = plain.clone();
+        release.sidecar.signed.usage = Some(Usage {
+            ai_input: UsageTerm::Allow,
+            onward_commercial_product: UsageTerm::Disallow,
+            reporting: Some(UsageReporting {
+                required: true,
+                destination: Some("https://source.example/report".into()),
+            }),
+        });
+        let release = resigned(release);
+        let (_, read) = read_outcome(PolicyMode::Strict, &release);
+        assert_eq!(read.record.verification, VerificationState::Verified);
+        let mut changed = release.clone();
+        changed
+            .sidecar
+            .signed
+            .usage
+            .as_mut()
+            .unwrap()
+            .onward_commercial_product = UsageTerm::Allow;
+        let (_, read) = read_outcome(PolicyMode::Observe, &changed);
+        assert_eq!(read.record.verification, VerificationState::Failed);
+    }
+
+    /// `release` with a C2PA store signed by `material` over `text`.
+    fn with_store(
+        mut release: Release,
+        text: &str,
+        material: &super::super::provenance::SigningMaterial,
+    ) -> Release {
+        let store = super::super::provenance::sign_source_store(
+            &release.sidecar.signed.url,
+            text,
+            None,
+            material,
+        )
+        .unwrap();
+        release.sidecar.c2pa = Some(base64::engine::general_purpose::STANDARD.encode(store));
+        release
+    }
+
+    fn c2pa_of(release: &Release, anchors: Option<&str>) -> (serde_json::Value, Box<Read>) {
+        match invoke_with_trust(
+            PolicyMode::Strict,
+            "https://source.example/a",
+            &body(release),
+            None,
+            anchors,
+        ) {
+            (invocation, Outcome::Read(read)) => {
+                (invocation.to_value()["detail"]["c2pa"].clone(), read)
+            }
+            (_, Outcome::Unreadable { reason }) => panic!("unreadable: {reason}"),
+        }
+    }
+
+    #[test]
+    fn a_release_s_own_c2pa_store_is_read_and_its_state_recorded() {
+        let (publisher, root) = super::super::provenance::test_publisher();
+        let plain = signed_release();
+
+        let (detail, read) = c2pa_of(&plain, None);
+        assert_eq!(detail, json!({"state": "absent"}));
+        assert!(read.record.c2pa.is_none());
+
+        let release = with_store(plain.clone(), &plain.text, &publisher);
+        let (detail, read) = c2pa_of(&release, None);
+        assert_eq!(read.record.verification, VerificationState::Verified);
+        let c2pa = read.record.c2pa.clone().unwrap();
+        assert_eq!(c2pa.state, C2paState::Untrusted, "{detail}");
+        assert_eq!(
+            c2pa.binding,
+            Some(C2paBinding {
+                matches: true,
+                same_text_as_signed: true
+            })
+        );
+        assert_eq!(c2pa.identities.len(), 1);
+        assert_eq!(c2pa.identities[0]["subject"], "Stand-in publisher, test");
+        assert_eq!(c2pa.identities[0]["roles"], json!(["cawg.publisher"]));
+        assert_eq!(detail["state"], "untrusted");
+        assert!(!detail.to_string().contains("The mayor said"), "no text");
+
+        let (_, read) = c2pa_of(&release, Some(&root));
+        assert_eq!(read.record.c2pa.unwrap().state, C2paState::Trusted);
+
+        // A store bound to another text is invalid; the release still
+        // verifies, because its Ed25519 signature is what admits it.
+        let mismatched = with_store(plain.clone(), "Another text altogether.", &publisher);
+        let (detail, read) = c2pa_of(&mismatched, None);
+        assert_eq!(read.record.verification, VerificationState::Verified);
+        assert_eq!(read.ruling, Ruling::Allowed);
+        let c2pa = read.record.c2pa.unwrap();
+        assert_eq!(c2pa.state, C2paState::Invalid, "{detail}");
+        assert!(!c2pa.binding.unwrap().matches);
+
+        let mut garbled = plain;
+        garbled.sidecar.c2pa = Some("not base64!".into());
+        let (_, read) = c2pa_of(&garbled, None);
+        let c2pa = read.record.c2pa.unwrap();
+        assert_eq!(c2pa.state, C2paState::Invalid);
+        assert_eq!(
+            c2pa.reason.as_deref(),
+            Some("the store is not standard base64")
         );
     }
 

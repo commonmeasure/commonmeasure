@@ -665,7 +665,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "commonmeasure-cli"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anstream",
  "anstyle",
@@ -686,6 +686,7 @@ dependencies = [
  "getrandom 0.3.4",
  "jsonschema",
  "libc",
+ "rcgen",
  "ring",
  "serde",
  "serde_json",
@@ -696,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-console"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -719,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-harness"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "base64",
  "blind-rsa-signatures",
@@ -751,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-http"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "flate2",
@@ -764,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-inference"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -776,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-relay"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "base64",
@@ -798,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-runtime"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "base64",
  "c2pa",
@@ -810,6 +811,7 @@ dependencies = [
  "commonmeasure-types",
  "ed25519-dalek",
  "libc",
+ "rcgen",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -822,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-supply"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -836,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-types"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2980,6 +2982,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4521,6 +4536,15 @@ name = "xml-no-std"
 version = "0.8.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd223bc94c615fc02bf2f4bbc22a4a9bfe489c2add3ec10b1038df3aca44cac7"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "yoke"

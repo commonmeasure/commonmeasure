@@ -561,6 +561,7 @@ pub fn enrol(home: &std::path::Path, hub: &str, origin: &str, published: &mut Di
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     };
     record.store(home).expect("store the enrolment record");
 

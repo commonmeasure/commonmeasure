@@ -182,7 +182,13 @@ HTML text extractor and a context optimiser at the transform stage. The
 fidelity verifier and judge run after inference and the output provenance
 labeller on the answer. The integrity checker decides how a reply is
 displayed against a verified signed release; the mediated `context_show`
-tool calls it against a release the session's `context_fetch` delivered. The extractor runs on every
+tool calls it against a release the session's `context_fetch` delivered. An
+operator may configure a manifest-bound model stage over supervised stdio;
+its process completes within each display invocation and the record keeps
+filtered hello, answers, bye usage and egress hashes. Network origins are
+declared, not confined; the source policy must admit the exact processor
+and provider before launch (`docs/contracts/processor.md` §Sidecar).
+The extractor runs on every
 mediated fetch that received a body, before the admit screens, so the
 screens rule on the text the agent would read; its record carries the hash
 of the bytes the origin served beside the hash of the extracted text, and

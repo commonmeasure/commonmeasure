@@ -309,6 +309,7 @@ fn enrol(
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     }
     .store(home)
     .unwrap();

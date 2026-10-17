@@ -79,6 +79,7 @@ fn signed(mode: &str, paragraphs: &[&str]) -> Release {
         passages,
         markers,
         released_at: "2026-10-13T00:00:00Z".into(),
+        usage: None,
     };
     sign(text, signed)
 }
@@ -92,6 +93,7 @@ fn sign(text: String, signed: Signed) -> Release {
             signature: engine.encode(key.sign(&signed_message(&signed)).to_bytes()),
             signer_public_key: engine.encode(key.verifying_key().as_bytes()),
             signature_scheme: SCHEME.into(),
+            c2pa: None,
             signed,
         },
     }

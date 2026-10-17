@@ -6,6 +6,29 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.15 (17 October 2026)
+
+The edge can now hand each `context_show` display to a checker it supervises as a sidecar, and can sign a C2PA provenance manifest for each display it renders. Nothing an operator runs today changes: no sidecar runs unless `COMMONMEASURE_CHECKER` names one, and every sidecar's manifest, protocol, declared network and credential are checked before it is started. A receiver sees no new event. The one change that matters to an edge whose home is shared across releases is the next paragraph.
+
+`enrolment.json` gains a member, `refusal_sequence`, once the hub has refused the edge's ingest key with a `401`. Releases before 0.4.15 refuse to load a record that carries it, so on an edge whose key the hub has refused, a process of an earlier release that shares the home fails to load `enrolment.json`, with the generic invalid-record error (the file, then the category, line and column of the fault, no member named), until it is started on the new binary. Restart such processes after updating; `commonmeasure update` lists them.
+
+### Added
+
+- An optional manifest-bound checker for `context_show`, supervised over stdio with offline `uv`, script and manifest digests, scrubbed environment, whole-process-group timeouts and fail-closed model confirmation. Network checkers require an exact `processor_egress` source-policy term; their origins are declared, not confined. The local record keeps filtered hello, answers, bye usage, thresholds and egress hashes; the edge copies no input text or key, but script declarations are bounded rather than inspected. `context_status.checker` reports the last recorded outcome without starting a child, and `commonmeasure sidecar check <manifest>` checks the protocol with one synthetic case. The deterministic example is not an inference model ([processor](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/processor.md#sidecar)).
+
+- A guide for sidecar authors, `docs/extensions/authoring.md`, walks the committed example at `sidecars/example/`: the manifest, the hello, reply and bye messages and their bounds, the `processor_egress` policy term a network checker needs, and `commonmeasure sidecar check` as the author's own test ([authoring](https://github.com/commonmeasure/commonmeasure/blob/main/docs/extensions/authoring.md)).
+
+- Each display `context_show` renders gets one C2PA manifest, signed with the certificate in `COMMONMEASURE_PROVENANCE_CERTIFICATE` and `COMMONMEASURE_PROVENANCE_KEY` and kept beside the session log: the release as its ingredient by content hash, with the release's own C2PA manifest where it sent one that verifies, the release's terms and the most restrictive statement derived from them, a data hash over the display text, and no identity for the reader. A release may now state structured usage terms and carry its own C2PA manifest. `commonmeasure inspect` prints each display, and `commonmeasure provenance <session>.ndjson` reads each display's manifest back ([display provenance](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/display-provenance.md)). The same release fetched again under another `Content-Usage` header or other terms is held as its own delivery, and a display signs the terms of the fetch it names; a content hash that matches more than one delivery is refused. A display's manifest is never written over one already there. `--require-trusted` fails a display without a manifest. A trust-anchors file named in `COMMONMEASURE_PROVENANCE_TRUST_ANCHORS` that cannot be read is recorded as a gap naming it, never as no anchors configured.
+
+### Changed
+
+- Sidecar hello identities and numeric arrays now have tighter length and nesting bounds. Missing or refused `model` or `family` fails hello with `sidecar_hello_invalid` and `sidecar_output_dropped`; refused `device` values and arrays are omitted with `sidecar_output_dropped` and the batch still runs. The contracts state that bounded script declarations can encode text and require operator review ([processor](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/processor.md#calibration-and-the-no-text-boundary)).
+
+### Fixed
+
+- A `connect` whose directory-proof upload the hub refuses with a `401`, and whose following standing check the hub answers in the same millisecond, no longer exits 3 with the first policy synchronisation unauthenticated. A clean standing answer withdraws a `401` the edge had recorded before it asked, and keeps one recorded after, ordered by the record rather than by the clock. While an update settles, a `401` recorded by a process of an earlier release is kept by an answer whose request went out before it and withdrawn by one whose asker had read it ([enrolment](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/enrolment.md#standing-and-revocation)).
+- Two writers on one session log no longer give two records the same `seq`: a record's `seq` is its line, counted under the append lock at each append.
+
 ## 0.4.14 (15 October 2026)
 
 The edge now reads a page served as a signed release, checks a reply against it before the reader sees it, and can present an anonymous pass where a source asks for one. Nothing an operator runs today changes: the new behaviour applies only to sources that serve a signed release, to agents that call the new `context_show` tool, and to hosts whose terms name an Anchor. A receiver sees no new event: a display and a pass refill stay in the local record, and a crossing made with a pass is never relayed.

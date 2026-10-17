@@ -32,6 +32,7 @@ Use:
 
 Integrate:
 
+- [Write a sidecar checker](extensions/authoring.md): script, manifest, lifecycle checks and source-record evidence.
 - [People Inc content](integrate/peopleinc.md): configure article search and
   named-URL retrieval, with billing and verification limits.
 - [`docs/integrate/host.md`](integrate/host.md): connect an agent host to an

@@ -1,0 +1,26 @@
+{
+  "protocol": "commonmeasure-sidecar/1",
+  "name": "fixed-probabilities",
+  "version": "0.1.0",
+  "stage": "verify",
+  "capability": "display-integrity-model",
+  "artefact": {
+    "path": "fixed_probabilities.py",
+    "sha256": "fde91e9a9d599b93ba74cd4131a6028885113029f38201f6fb8c21356e685bcf"
+  },
+  "runtime": {
+    "command": [
+      "uv",
+      "run",
+      "--script"
+    ]
+  },
+  "model": true,
+  "network": false,
+  "determinism": "deterministic",
+  "timeout_seconds": 10,
+  "questions": [
+    "supported",
+    "contradicts"
+  ]
+}

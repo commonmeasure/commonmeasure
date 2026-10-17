@@ -11,7 +11,9 @@ This contract is licensed under CC-BY-4.0 (`docs/contracts/LICENSE`).
 A **processor** is a replaceable unit of work around a ContextJob
 ([`docs/GLOSSARY.md`](../GLOSSARY.md) has the one-line version). A processor never receives
 authority it did not declare. Each declares stage, inputs, outputs,
-permissions, failure policy, determinism and evidence type.
+permissions, failure policy, determinism and evidence type. The first sidecar
+runtime admits declared egress but does not confine sockets or filesystem
+access; its limits are stated in §Sidecar.
 
 Three things in this system are easy to confuse and are not the same. The
 distinction is defined once, in this section.
@@ -61,7 +63,11 @@ Every processor declares:
   machine code; the rule digest is what a reader needs to re-derive an
   invocation, and behaviour cannot change without the rule digest changing.
   A sidecar or remote processor, which arrives as a separate artefact,
-  declares an artefact digest as well;
+  declares an artefact digest as well. A stdio sidecar's `implementation`
+  carries `kind: "sidecar"`, `artefact_digest` (script bytes),
+  `manifest_digest` (canonical manifest JSON), `runtime: "uv run --script --offline"`
+  and `confinement: "declared"`. Its configuration digest covers the display
+  rules, sidecar identity, thresholds, temperature and calibration identity;
 - supported stage and capability name;
 - network, filesystem, model, credential and content permissions;
 - whether it can see raw content, prompts or responses;
@@ -113,6 +119,209 @@ The Rust runtime supports three implementations behind the same contract:
 Sidecars receive one scoped invocation, not unrestricted evidence access. Remote
 processors receive only fields permitted by egress policy.
 
+## Sidecar
+
+`commonmeasure-sidecar/1` is the supervised stdio boundary for the optional
+`display-integrity-model` verify stage. Other capabilities, remote HTTP
+processors and confined runtimes are not provided by this version.
+
+### Declaration and activation
+
+Set `COMMONMEASURE_CHECKER=<path to sidecar.json>` in the environment that
+starts the stdio edge. Configuration is read at each `context_show`; an
+unset variable leaves the deterministic path and its records unchanged.
+The hosted edge does not activate sidecars.
+
+A standalone script and a manifest beside it form one artefact:
+
+```json
+{
+  "protocol": "commonmeasure-sidecar/1",
+  "name": "fixed-probabilities",
+  "version": "0.1.0",
+  "stage": "verify",
+  "capability": "display-integrity-model",
+  "artefact": {"path": "fixed_probabilities.py", "sha256": "<64 lowercase hex digits>"},
+  "runtime": {"command": ["uv", "run", "--script"]},
+  "model": true,
+  "network": false,
+  "determinism": "deterministic",
+  "timeout_seconds": 10,
+  "questions": ["supported", "contradicts"]
+}
+```
+
+The committed, runnable example is
+`sidecars/example/sidecar.json`.
+Its probabilities are keyed by the sentence's hash and establish protocol
+behaviour only; they do not measure support or contradiction. Model checker
+scripts and evaluation results belong to their extension, outside the edge.
+
+All manifest members above are required; unknown members are refused.
+Names and versions are non-empty identifiers of at most 160 ASCII letters,
+digits or `_./:~+-`. The artefact path contains only normal relative path
+components, with no absolute path or `..`. The edge hashes the script's
+bytes before launch and executes a temporary snapshot of those verified
+bytes, not a later reopening of the path. A mismatch is
+`artefact_digest_mismatch` and starts nothing. Only the protocol, stage,
+capability, `model: true` and runtime prefix above are admitted; another
+protocol or runtime is refused as `sidecar_protocol_unsupported` or
+`sidecar_runtime_unsupported`. Dependencies and other imported files are
+not pinned by the script digest; a script must be standalone apart from its
+cached runtime dependencies.
+
+`determinism` is `deterministic`, `seeded` or `non_deterministic`, as the
+author declares. `timeout_seconds` is finite, positive and at most 86400.
+`questions` is `["supported"]` or `["supported", "contradicts"]` in that
+order. Hello must promise exactly that list. Missing a promised probability
+invalidates the whole item's model answers, never just its contradiction
+answer while retaining a successful support answer.
+
+Instead of `false`, `network` may be:
+
+```json
+{"provider": "openrouter", "origins": ["https://openrouter.ai"], "credential_env": "OPENROUTER_API_KEY"}
+```
+
+Origins are HTTP(S) origins only, without credentials, path, query or
+fragment. `credential_env` names one uppercase environment variable, never
+its value. It cannot name a launch-control variable (`PATH`, `HOME`,
+`TMPDIR`, `LANG`, `ENV`, `BASH_ENV`, or a `UV_`, `PYTHON`, `LD_` or
+`DYLD_` variable). Network manifests require the exact effective source
+policy constraint
+`{"kind":"processor_egress","processor":"<name>","provider":"<provider>"}`.
+An absent term, a term for another processor/provider, or an unset/empty
+credential refuses the stage before launch in every policy mode. Search and
+fetch permissions neither grant nor inherit this permission.
+
+**The network boundary is declared, not confined.** `network: false` and
+`network.origins` are author declarations, carried in the record and
+`context_status.checker` with `confinement: "declared"`. The controls are
+the artefact digest, the explicit egress term, the scrubbed environment and
+the record. This runtime does not sandbox sockets, filesystem access or
+`HOME`; a namespace plus a loopback broker would require a later protocol
+version. Do not treat the manifest as evidence of origin confinement.
+
+### Messages and supervision
+
+Each message is one UTF-8 JSON object followed by a newline. No banners or
+other stdout are allowed. Stderr is discarded, including uv diagnostics,
+so it cannot echo licensed text into the server log.
+
+1. The child writes `{"hello":{"model":"<id>","family":"<maker>","device":"cpu","questions":["supported","contradicts"]}}`
+   once ready. `endpoint` may replace `device`. Model and family are
+   required identifiers within the [bounds below](#calibration-and-the-no-text-boundary);
+   other measurements pass that filter. Anything else before hello, an exit
+   or a hello timeout fails the stage.
+2. The edge sends `{"id":"item-0","passage":"…","summary":"…"}` for each
+   scoped case. These are the passage text and one sentence only: no markers,
+   source-policy file, session log or rest of the reply. It writes the batch
+   before consuming replies; a separate bounded reader drains stdout so
+   pipe backpressure does not deadlock a valid batch. Replies come in the
+   same order with the same ids:
+   `{"id":"item-0","p_supported":0.98,"p_contradicts":0.01,"latency_ms":12,"detail":{}}`.
+   Probabilities must be finite and in [0,1]; latency is a non-negative
+   integer. An item error is `{"id":"item-0","error":"provider_unavailable"}`,
+   with optional latency/detail. The edge never records the script's error
+   string; it uses the fixed reason `sidecar_item_error`.
+3. The edge closes stdin after the batch. The child writes
+   `{"bye":{"requests":1,"attempts":1,"input_tokens":23}}` and exits zero.
+   Missing bye, extra stdout or non-zero exit invalidates the batch,
+   including any probabilities already received.
+
+One process completes per invocation: hello, batch, EOF, bye and exit are
+all inside that invocation before its append-only record is written. There
+is no persistent child and no later rewriting of usage. No process starts
+for quote-only replies or where no scoped model cases exist.
+
+The launcher is `uv run --script --offline --no-config <snapshot>` in a
+temporary directory. The environment is cleared except `PATH`, `HOME`,
+`TMPDIR`, `LANG`, `UV_CACHE_DIR` and the declared credential variable.
+Uv therefore fetches no dependency or interpreter. Run
+`uv run --script <script>` once by hand to warm its cache before using a
+checker with dependencies. An uncached dependency fails as
+`sidecar_start_failed`; its uv message is never quoted.
+
+The manifest timeout applies separately to hello and to the complete batch,
+including writing, bye and exit. `COMMONMEASURE_CHECKER_TIMEOUT_SECONDS`
+may shorten either deadline, never lengthen it. A timeout kills the whole
+process group created for this invocation and reaps the direct child. The
+runtime is unavailable where process-group supervision is not supported.
+The limits also enforce 1024 cases, 1 MiB per stdout line and 8 MiB total
+stdout. Protocol, launch, timeout and item faults yield not-applicable model
+answers in all modes: no model confirmation or model contradiction count.
+The unchanged display rule labels unconfirmed sentences under `labelled`
+and withholds them under `strict`; deterministic confirmations still stand.
+
+### Calibration and the no-text boundary
+
+Set `COMMONMEASURE_CHECKER_SUMMARY=<evaluation summary>` and optionally
+`COMMONMEASURE_CHECKER_TARGET` (default 0.05). The edge reads
+`checkers[manifest.name].per_set.all.temperature` and the threshold in
+`by_target` at that target. Missing/invalid values refuse the model stage.
+Alternatively set `COMMONMEASURE_CHECKER_THRESHOLD` in [0,1]; the record
+labels it `uncalibrated` and uses temperature 1. The raw contradiction
+threshold is `COMMONMEASURE_CHECKER_CONTRADICTION_THRESHOLD` (default 0.9).
+The edge has no host chat-model identity for a same-family comparison.
+
+Every answer's reason comes from the edge's fixed vocabulary. Detail,
+hello measurements and bye usage drop unknown member names and admit only
+numeric/null members `p_raw`, `chunks`, `prompt_tokens`,
+`completion_tokens`, `input_tokens`, `output_tokens`, `latency_ms`,
+`threshold`, `temperature`,
+`contradiction_threshold`, `attempts`, `requests`, `errors`,
+`peak_memory_mb`, `peak_memory_bytes`, `tokens` and `probability_sum`;
+`p_per_chunk` is a numeric array. `bounded_letters` admits only A/B/C.
+`decisions` is an array filtered by the same rules, with no nested
+`decisions` member. Both `p_per_chunk` and `decisions` admit at most
+`chunks` elements when the same object reports `chunks` as a non-negative
+integer, otherwise at most 64; an over-long array is dropped whole.
+`probabilities` is a numeric probability map with keys `supports`,
+`absent`, `contradicts` or A/B/C. Any dropped member adds
+`sidecar_output_dropped`, without quoting its name or value.
+
+Hello additionally admits `model` and `family` of at most 64 bytes from
+`[A-Za-z0-9_./:~+-]`, neither starting with `/`, `~` or `.`, and
+`device` of at most 32 bytes from that set without `/` or `~`; all
+three must be non-empty. These bounds do not change the manifest's
+160-byte identifier limit. A missing or refused `model` or `family` fails
+hello with `sidecar_hello_invalid` and `sidecar_output_dropped`; the model
+stage is not applicable. A refused `device` is omitted with
+`sidecar_output_dropped` and the batch still runs. Hello also admits the
+validated questions and only the parsed origin of an endpoint.
+
+Hello `model`, `family`, `device` and the endpoint origin are the
+script's declarations. Identity values are recorded as given within the
+character-set and length bounds above; the endpoint is reduced to its
+parsed origin. The allow-list and bounds stop cooperative echoes and cap
+what a misbehaving script can carry. They do not protect against a pinned script encoding text in
+identifiers or numbers; that boundary depends on the artefact digest and
+the operator's review of the script. The filtered hello, bye, thresholds,
+calibration identity and timings stay in `detail.model`; per-item answers
+stay in `detail.items`. Network egress evidence and its digest scope are defined in
+[session evidence](session-evidence.md#sidecar-model-evidence).
+
+### Checking an extension
+
+Write a standalone script with a PEP 723 header (`requires-python` and
+`dependencies`) and the messages above. Write its manifest and fill
+`artefact.sha256` with `sha256sum <script>`. From the directory whose
+source policy should apply, run:
+
+```sh
+commonmeasure sidecar check sidecars/example/sidecar.json
+COMMONMEASURE_CHECKER=sidecars/example/sidecar.json COMMONMEASURE_CHECKER_THRESHOLD=0.9 commonmeasure mcp --host pi
+```
+
+`sidecar check` verifies the manifest, admits any network declaration under
+the effective policy, runs one fixed synthetic case and prints the filtered
+manifest, answers, hello and bye. It needs no calibration threshold and
+exits non-zero with named lifecycle gaps on a protocol fault or prohibited
+output that the no-text filter dropped. It never
+starts a paid call merely because a credential exists. Inspect the session
+with `commonmeasure inspect <session>`; `context_status.checker` reports
+configuration and the last recorded outcome without starting a child.
+
 ## Status
 
 The in-process implementation exists: `crates/commonmeasure-runtime/src/processor.rs`
@@ -135,7 +344,10 @@ verifier runs on every batch answer, the fidelity judge only in batch runs
 whose suite declares `fidelity_judge`, and the output provenance labeller
 only in batch runs whose suite declares `output_provenance`. The integrity
 checker runs where a caller displays a reply against a verified release;
-no command or tool calls it yet.
+the stdio `context_show` tool invokes it. Its optional model stage uses the
+manifest-bound sidecar above, tested through the real stdio server and a
+loopback System One-shaped origin. This establishes protocol and policy
+behaviour, not live model accuracy or calibration.
 
 - **`pii-detector` (admit).** Pattern rules over a source's text before it can
   reach a model. A finding is recorded in the invocation and carried on the
@@ -191,7 +403,14 @@ no command or tool calls it yet.
   markers, never the text. Verified means the holder of the named key
   signed this text and these fields: no key is pinned or looked up for the
   source, so it does not establish who signed, and it says nothing about
-  the accuracy of the terms or passages.
+  the accuracy of the terms or passages. A sidecar may carry the source's
+  own C2PA manifest store (`c2pa`, outside the signed fields); the verifier
+  reads it offline against the text, under
+  `COMMONMEASURE_PROVENANCE_TRUST_ANCHORS` where set, and records its state
+  (`absent`, `invalid`, `untrusted`, `trusted`), the binding, the signer
+  and each identity, never text. That state neither admits nor refuses the
+  release ([display provenance](display-provenance.md) §The release's own
+  manifest).
 - **`html-text-extractor` version 2 (transform).** The readable text of a mediated
   fetch. A response whose content type is `text/html` or
   `application/xhtml+xml` is decoded as UTF-8 and reduced to its text:
@@ -285,9 +504,10 @@ no command or tool calls it yet.
   identifier the reply supplied that the release does not sign by its
   SHA-256. Reasons name no sentence, quotation or speaker. Hashes are
   `sha256:<hex>`, as in the other records. The rendered text is returned
-  to the caller beside the record, never in it. No
-  model stage is installed: a paraphrase is never confirmed and nothing is
-  withheld for contradicting the source, which the record states. A
+  to the caller beside the record, never in it. With a configured sidecar,
+  the model may confirm a paraphrase at its calibrated or explicitly
+  uncalibrated threshold, or withhold a contradiction at the raw
+  contradiction threshold. Without one, only deterministic stages run. A
   release whose signature failed or is missing is not displayed: the
   invocation abstains with an `evidence_missing` gap. The record belongs
   in the local evidence log and is not projected to any receiver;
@@ -320,7 +540,12 @@ no command or tool calls it yet.
   both variables, the manifest that would have been signed stays in the
   record, and the answer stands unlabelled. No trust list is configured, so
   a well-formed signature reads as valid but untrusted, and the record says
-  so (`demo/provenance/README.md`).
+  so (`demo/provenance/README.md`). A second entry point signs one manifest
+  per display `context_show` renders, under its own configuration digest:
+  the release as an `inputTo` ingredient, the terms carried and derived, no
+  `cawg.identity`, a data hash over the display text, the store written as
+  a sidecar beside the session log and nothing embedded
+  ([display provenance](display-provenance.md)).
 
 ### Independent output verification
 

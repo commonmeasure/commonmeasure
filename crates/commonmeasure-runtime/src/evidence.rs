@@ -36,8 +36,18 @@ struct PendingGap {
 /// An append-only NDJSON evidence log.
 pub struct EvidenceLog {
     path: PathBuf,
-    sequence: u64,
+    /// How far this writer has counted the file: the byte length it last
+    /// saw under the append lock and the newlines before it. Another
+    /// writer's appends are the bytes past it, counted at the next append.
+    counted: Counted,
     pending_gap: Option<PendingGap>,
+}
+
+/// The newlines in the first `end` bytes of a log.
+#[derive(Debug, Clone, Copy, Default)]
+struct Counted {
+    end: u64,
+    newlines: u64,
 }
 
 impl EvidenceLog {
@@ -51,7 +61,7 @@ impl EvidenceLog {
         File::create_new(path)?;
         Ok(Self {
             path: path.to_path_buf(),
-            sequence: 0,
+            counted: Counted::default(),
             pending_gap: None,
         })
     }
@@ -60,38 +70,34 @@ impl EvidenceLog {
     ///
     /// A harness session is not a run: it spans many processes, because each
     /// hook invocation is its own short-lived command, and each one appends to
-    /// the same session's log. The sequence resumes from what is already there
-    /// so numbering stays monotonic across those processes.
-    ///
-    /// Two hooks can fire close together. Each append holds the log's
-    /// exclusive append lock for its one fsynced `write_all`
-    /// ([`Self::append`]), so appends never interleave. Sequence numbers can
-    /// collide under concurrency where positions cannot, because a process
-    /// counts the lines once, here; a reader orders by position and treats
-    /// `seq` as a hint.
+    /// the same session's log, and a session can have several servers at
+    /// once. A record's `seq` is its line number in the file, counted under
+    /// the append lock at each append ([`Self::append`]), so two writers on
+    /// one log never give two records the same `seq` and a record can be
+    /// named by it.
     ///
     /// A path that exists but is not a regular file (a directory, a FIFO) is
-    /// refused before it is opened, and the first read error ends the count:
+    /// refused before it is opened, and the first read error ends a count:
     /// opening a directory succeeds on some platforms, and a reader that
     /// skipped its errors would retry the same failed read without end.
     pub fn open_append(path: &Path) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let sequence = match fs::metadata(path) {
-            Ok(metadata) if metadata.is_file() => count_lines(File::open(path)?)?,
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => {}
             Ok(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("{} is not a regular file", path.display()),
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
-        };
+        }
         Ok(Self {
             path: path.to_path_buf(),
-            sequence,
+            counted: Counted::default(),
             pending_gap: None,
         })
     }
@@ -128,9 +134,21 @@ impl EvidenceLog {
         let created = !self.path.exists();
         let mut file = scan::open_for_append(&self.path, true)?;
         scan::lock_within(&file, scan::Lock::Exclusive, &self.path)?;
-        let mut sequence = self.sequence;
+        let length = file.metadata()?.len();
+        // Counted on from where this writer last saw the file, so only
+        // another writer's appends are read. A file shorter than that was
+        // replaced, and is counted afresh.
+        let from = if length < self.counted.end {
+            Counted::default()
+        } else {
+            self.counted
+        };
+        let newlines = from.newlines + count_newlines(&mut file, from.end, length)?;
+        let torn = scan::torn_tail(&mut file)?;
+        // The line number of the last line, a torn one included.
+        let mut sequence = newlines + u64::from(torn.is_some());
         let mut bytes = Vec::new();
-        if let Some(torn) = scan::torn_tail(&mut file)? {
+        if let Some(torn) = torn {
             sequence += 1;
             bytes.push(b'\n');
             push_line(&mut bytes, &torn_gap_record(sequence, torn, &file))?;
@@ -153,7 +171,10 @@ impl EvidenceLog {
         if created {
             sync_parent(&self.path)?;
         }
-        self.sequence = sequence;
+        self.counted = Counted {
+            end: length + bytes.len() as u64,
+            newlines: newlines + bytes.iter().filter(|byte| **byte == b'\n').count() as u64,
+        };
         Ok(sequence)
     }
 
@@ -312,6 +333,23 @@ fn count_lines(source: impl std::io::Read) -> std::io::Result<u64> {
         }
         count += 1;
     }
+}
+
+/// The newlines in bytes `from..to` of `file`, stopping at the first read
+/// error. The caller holds the append lock.
+fn count_newlines(file: &mut File, from: u64, to: u64) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(from))?;
+    let mut remaining = to - from;
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut count = 0;
+    while remaining > 0 {
+        let size = remaining.min(chunk.len() as u64) as usize;
+        file.read_exact(&mut chunk[..size])?;
+        count += chunk[..size].iter().filter(|byte| **byte == b'\n').count() as u64;
+        remaining -= size as u64;
+    }
+    Ok(count)
 }
 
 /// Make a new directory entry durable by syncing the directory that holds it.
@@ -513,5 +551,47 @@ mod tests {
             .err()
             .expect("a directory is refused");
         assert!(error.to_string().contains("not a regular file"), "{error}");
+    }
+
+    #[test]
+    fn two_writers_on_one_log_never_share_a_seq() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("session.ndjson");
+        let mut first = EvidenceLog::open_append(&path).unwrap();
+        let mut second = EvidenceLog::open_append(&path).unwrap();
+        let mut seqs = Vec::new();
+        for round in 0..3 {
+            seqs.push(first.append("a", json!({"round": round})).unwrap());
+            seqs.push(second.append("b", json!({"round": round})).unwrap());
+            seqs.push(second.append("b", json!({"round": round})).unwrap());
+        }
+        assert_eq!(seqs, (1..=9).collect::<Vec<_>>());
+        let records = EvidenceLog::read(&path).unwrap();
+        for (line, record) in records.iter().enumerate() {
+            assert_eq!(record["seq"], json!(line + 1), "{record}");
+        }
+    }
+
+    #[test]
+    fn a_torn_line_another_writer_left_is_counted_before_the_gap() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("session.ndjson");
+        let mut writer = EvidenceLog::open_append(&path).unwrap();
+        assert_eq!(writer.append("a", json!({})).unwrap(), 1);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"{\"seq\":2,\"event\":\"cut")
+            .unwrap();
+        assert_eq!(writer.append("b", json!({})).unwrap(), 4);
+        let lines: Vec<Value> = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        assert_eq!(lines[1]["event"], "evidence_gap");
+        assert_eq!(lines[1]["seq"], 3);
+        assert_eq!(lines[2]["seq"], 4);
     }
 }

@@ -18,11 +18,18 @@
 use std::collections::{HashSet, VecDeque};
 
 use commonmeasure_runtime::processor::integrity::{Block, Rendered};
+use commonmeasure_runtime::processor::provenance::{
+    DeclaredMining, DisplayIngredient, Grade, IngredientTerms, Permission, Reporting,
+    SourceManifest, Usage,
+};
 use commonmeasure_runtime::processor::release::Read;
 use commonmeasure_types::canonical::canonical_digest;
 use commonmeasure_types::display::{Counts, Item, Reply};
-use commonmeasure_types::release::VerificationState;
+use commonmeasure_types::release::{C2paState, UsageTerm, VerificationState};
 use serde_json::{Value, json};
+
+use crate::declarations::{Category, Effective};
+use crate::discovery::Declarations;
 
 /// The releases one server holds for display, newest last, counted by
 /// release identity. A release past this many is let go, and a display
@@ -49,32 +56,121 @@ pub struct Held {
     pub url: String,
     /// The acquisition handles of the fetches that delivered this release.
     pub acquisition_ids: Vec<String>,
+    /// What the crossing that delivered it recorded of the source's
+    /// declarations and the operator's terms.
+    pub declared: Declared,
     /// What makes two deliveries the same release ([`Identity`]).
     identity: Identity,
 }
 
-/// Two deliveries are one release only where everything the display reads
-/// from them is the same: the text, the sidecar as signed and served, the
-/// verification state and the URL the checker's record names. The text
-/// alone is not enough: the same words under another display mode, other
-/// passages or markers, or another signature display differently, and a
-/// handle keeps the release its fetch delivered.
+/// What a crossing recorded of the source's declarations and the operator's
+/// terms for the host, kept with a held release for the terms its display's
+/// manifest carries (`docs/contracts/display-provenance.md` §Terms).
+#[derive(Debug, Clone, Default)]
+pub struct Declared {
+    /// The effective answer per category, the RSL licences read and the
+    /// `Content-Usage` header, as the crossing recorded them.
+    pub summary: Value,
+    /// The operator's terms reference for the host and whether it requires
+    /// reporting. Never the institution identifiers or the Anchor.
+    pub host_policy_terms: Option<Value>,
+    /// AI input as the declarations state it; `None` where none does.
+    pub ai_input: Option<Permission>,
+    /// Training as the declarations state it; `None` where none does.
+    pub ai_training: Option<Permission>,
+    /// Whether an RSL licence or the operator's terms require reporting.
+    pub reporting_required: bool,
+    /// Every reporting endpoint an RSL licence names.
+    pub reporting_destinations: Vec<String>,
+}
+
+impl Declared {
+    /// The canonical digest of everything here, which the display's
+    /// ingredient terms are built from.
+    fn digest(&self) -> String {
+        canonical_digest(&json!({
+            "summary": self.summary,
+            "host_policy_terms": self.host_policy_terms,
+            "ai_input": self.ai_input,
+            "ai_training": self.ai_training,
+            "reporting_required": self.reporting_required,
+            "reporting_destinations": self.reporting_destinations,
+        }))
+    }
+
+    /// What `declarations` say, as the display's ingredient terms read them.
+    pub fn of(declarations: &Declarations) -> Self {
+        let stated = |category: Category| match declarations.effective.get(&category) {
+            Some(Effective::Allow) => Some(Permission::Allow),
+            Some(Effective::Disallow) => Some(Permission::Disallow),
+            Some(Effective::Unknown) | None => None,
+        };
+        let reporting: Vec<_> = declarations
+            .licences
+            .iter()
+            .filter_map(|licence| licence.terms.as_ref())
+            .flat_map(|terms| terms.reporting.iter())
+            .collect();
+        let host_requires = declarations
+            .terms
+            .as_ref()
+            .is_some_and(|terms| terms.requires_reporting);
+        let mut destinations: Vec<String> = Vec::new();
+        for endpoint in reporting.iter().filter_map(|r| r.endpoint.as_ref()) {
+            if !destinations.contains(endpoint) {
+                destinations.push(endpoint.clone());
+            }
+        }
+        Self {
+            summary: json!({
+                "effective": declarations.effective,
+                "licences": declarations
+                    .licences
+                    .iter()
+                    .map(|licence| licence.url.as_str())
+                    .collect::<Vec<_>>(),
+                "content_usage": declarations.content_usage_header,
+            }),
+            host_policy_terms: declarations.terms.as_ref().map(|terms| {
+                json!({
+                    "reference": terms.reference,
+                    "requires_reporting": terms.requires_reporting,
+                })
+            }),
+            ai_input: stated(Category::AiInput),
+            ai_training: stated(Category::TrainAi),
+            reporting_required: !reporting.is_empty() || host_requires,
+            reporting_destinations: destinations,
+        }
+    }
+}
+
+/// Two deliveries are one held delivery only where everything the display
+/// reads from them is the same: the text, the sidecar as signed and served,
+/// the verification state, the URL the checker's record names, and the
+/// declarations and host terms the crossing recorded. The text alone is not
+/// enough: the same words under another display mode, other passages or
+/// markers, or another signature display differently; the same release
+/// fetched under another `Content-Usage` header or other terms is signed
+/// under those terms; and a handle keeps the delivery its fetch made.
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
     content_hash: String,
     sidecar_digest: String,
     verification: VerificationState,
     url: String,
+    declared_digest: String,
 }
 
 impl Identity {
-    fn of(read: &Read, url: &str) -> Self {
+    fn of(read: &Read, url: &str, declared: &Declared) -> Self {
         let sidecar = serde_json::to_value(&read.release.sidecar).expect("a sidecar serialises");
         Self {
             content_hash: read.content_hash.clone(),
             sidecar_digest: canonical_digest(&sidecar),
             verification: read.record.verification,
             url: url.to_owned(),
+            declared_digest: declared.digest(),
         }
     }
 }
@@ -89,12 +185,20 @@ pub struct Delivered {
 }
 
 impl Delivered {
-    /// Hold a delivered release. The same release fetched again is held
-    /// once, under every handle that delivered it; a different release with
-    /// the same text is held beside it, and no handle ever moves from the
-    /// release its fetch delivered.
-    pub fn hold_release(&mut self, read: Read, url: &str, acquisition_id: Option<String>) {
-        let identity = Identity::of(&read, url);
+    /// Hold a delivered release. The same release fetched again under the
+    /// same declarations and terms is held once, under every handle that
+    /// delivered it; a different release with the same text, or the same
+    /// release under other declarations or terms, is held beside it, and no
+    /// handle ever moves from the delivery its fetch made or takes another
+    /// delivery's terms.
+    pub fn hold_release(
+        &mut self,
+        read: Read,
+        url: &str,
+        acquisition_id: Option<String>,
+        declared: Declared,
+    ) {
+        let identity = Identity::of(&read, url, &declared);
         let held = match self
             .releases
             .iter()
@@ -109,6 +213,7 @@ impl Delivered {
                 read,
                 url: url.to_owned(),
                 acquisition_ids: acquisition_id.into_iter().collect(),
+                declared,
                 identity,
             },
         };
@@ -136,7 +241,8 @@ impl Delivered {
     /// why there is none to display against. A handle names the one release
     /// its fetch delivered. A content hash names a release only while one
     /// held release has that text; where several do, the hash is refused as
-    /// ambiguous rather than one of them chosen.
+    /// ambiguous rather than one of them chosen, and nothing is displayed
+    /// or signed for it.
     pub fn release(&self, key: &str) -> Result<&Held, String> {
         if let Some(held) = self
             .releases
@@ -159,10 +265,11 @@ impl Delivered {
                     .flat_map(|held| held.acquisition_ids.iter().map(String::as_str))
                     .collect();
                 let mut refusal = format!(
-                    "refused: this server holds {} different signed releases with that \
-                     content_hash (the same text under another sidecar, signature or URL), so \
-                     the hash does not say which to display against; name the release by the \
-                     acquisition_id its context_fetch returned",
+                    "refused: this server holds {} different deliveries of a signed release \
+                     with that content_hash (the same text under another sidecar, signature or \
+                     URL, or fetched under other declarations or terms), so the hash does not \
+                     say which to display against or whose terms to sign; name the release by \
+                     the acquisition_id its context_fetch returned",
                     several.len()
                 );
                 if !handles.is_empty() {
@@ -364,12 +471,22 @@ pub fn plain(held: &Held, rendered: &Rendered) -> String {
 }
 
 /// The `display_rendered` record: the integrity checker's record by its
-/// `seq`, the release by hash and handle, each item's outcome and the
-/// counts. No sentence, passage text or reason.
-pub fn record(held: &Held, rendered: &Rendered, processor_record: u64) -> Value {
+/// `seq`, the output-provenance record by its `seq` where one was written,
+/// the hash of the display text the manifest binds, the release by hash and
+/// handle, each item's outcome and the counts. No sentence, passage text or
+/// reason.
+pub fn record(
+    held: &Held,
+    rendered: &Rendered,
+    processor_record: u64,
+    provenance_record: Option<u64>,
+    display_text_sha256: &str,
+) -> Value {
     json!({
         "tool": "context_show",
         "processor_record": processor_record,
+        "provenance_record": provenance_record,
+        "display_text_sha256": display_text_sha256,
         "release": {
             "content_hash": held.read.content_hash,
             "acquisition_ids": held.acquisition_ids,
@@ -377,6 +494,86 @@ pub fn record(held: &Held, rendered: &Rendered, processor_record: u64) -> Value 
         "display_mode": rendered.display_mode,
         "outcomes": rendered.blocks.iter().map(|b| b.outcome).collect::<Vec<_>>(),
         "counts": counts(&rendered.counts),
+    })
+}
+
+/// The held release as a display manifest's ingredient: by URL, content
+/// hash, grade and sidecar digest, with the terms it was admitted under and
+/// its own C2PA store where the verifier found one that verifies. A
+/// `context_fetch` delivery is always a mediated crossing.
+pub fn ingredient(held: &Held, trust_anchors: Option<&str>) -> DisplayIngredient {
+    let signed = &held.read.release.sidecar.signed;
+    let permission = |term: UsageTerm| match term {
+        UsageTerm::Allow => Permission::Allow,
+        UsageTerm::Disallow => Permission::Disallow,
+    };
+    let usage = signed.usage.as_ref();
+    let mut destinations: Vec<String> = usage
+        .and_then(|usage| usage.reporting.as_ref())
+        .and_then(|reporting| reporting.destination.clone())
+        .into_iter()
+        .collect();
+    for destination in &held.declared.reporting_destinations {
+        if !destinations.contains(destination) {
+            destinations.push(destination.clone());
+        }
+    }
+    let terms = IngredientTerms {
+        licence: signed.licence.clone(),
+        source_terms: json!({"usage": signed.usage, "terms": signed.terms}),
+        declarations: held.declared.summary.clone(),
+        host_policy_terms: held.declared.host_policy_terms.clone(),
+        usage: Usage {
+            ai_input: Permission::stated([
+                usage.map(|usage| permission(usage.ai_input)),
+                held.declared.ai_input,
+            ]),
+            onward_commercial_product: Permission::stated([
+                usage.map(|usage| permission(usage.onward_commercial_product))
+            ]),
+            reporting: Reporting {
+                required: usage
+                    .and_then(|usage| usage.reporting.as_ref())
+                    .is_some_and(|reporting| reporting.required)
+                    || held.declared.reporting_required,
+                destinations,
+            },
+        },
+        mining: DeclaredMining {
+            ai_training: Permission::stated([held.declared.ai_training]),
+            ai_generative_training: Permission::stated([held.declared.ai_training]),
+            data_mining: Permission::Unknown,
+        },
+    };
+    DisplayIngredient {
+        reference: held.url.clone(),
+        content_hash: held.read.content_hash.clone(),
+        grade: Grade::Mediated,
+        sidecar_digest: held.identity.sidecar_digest.clone(),
+        source_manifest: source_manifest(held, trust_anchors),
+        terms,
+    }
+}
+
+/// The release's own C2PA store, where the verifier recorded one that
+/// verifies, with the reader's validation results for it.
+fn source_manifest(held: &Held, trust_anchors: Option<&str>) -> Option<SourceManifest> {
+    use base64::Engine as _;
+    use commonmeasure_runtime::processor::provenance::read_store_with_trust;
+    let recorded = held.read.record.c2pa.as_ref()?;
+    let state = match recorded.state {
+        C2paState::Invalid => return None,
+        C2paState::Untrusted => "untrusted",
+        C2paState::Trusted => "trusted",
+    };
+    let store = base64::engine::general_purpose::STANDARD
+        .decode(held.read.release.sidecar.c2pa.as_deref()?)
+        .ok()?;
+    let reading = read_store_with_trust(&store, &held.read.release.text, trust_anchors).ok()?;
+    Some(SourceManifest {
+        store,
+        state: state.to_owned(),
+        validation_results: reading.validation_results(),
     })
 }
 

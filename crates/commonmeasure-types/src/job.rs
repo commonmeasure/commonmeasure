@@ -52,6 +52,12 @@ pub enum Objective {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Constraint {
+    /// Admit this named processor's declared egress to this provider. This
+    /// grants no search or fetch permission and applies in every mode.
+    ProcessorEgress {
+        processor: String,
+        provider: String,
+    },
     AllowedProvider {
         provider: String,
     },

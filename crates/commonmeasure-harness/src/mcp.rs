@@ -1951,12 +1951,22 @@ impl McpServer {
         // text. A body that does not read as a release is unavailable, never
         // plain text.
         let (text, hash, retrieved_hash, basis, release) = if served_as_release {
-            let (invocation, outcome) = commonmeasure_runtime::processor::release::invoke(
-                self.policy.mode(),
-                &final_url,
-                &response.body,
-                response.coded.as_ref().map(|coded| coded.bytes.as_slice()),
-            );
+            let trust_anchors =
+                commonmeasure_runtime::processor::provenance::trust_anchors_from_environment();
+            let (mut invocation, outcome) =
+                commonmeasure_runtime::processor::release::invoke_with_trust(
+                    self.policy.mode(),
+                    &final_url,
+                    &response.body,
+                    response.coded.as_ref().map(|coded| coded.bytes.as_slice()),
+                    trust_anchors.as_ref().ok().and_then(Option::as_deref),
+                );
+            if let Err(reason) = &trust_anchors {
+                commonmeasure_runtime::processor::provenance::trust_anchors_unavailable(
+                    &mut invocation,
+                    reason,
+                );
+            }
             let _ = self.session.record_processor(invocation.to_value());
             let retrieved_hash = commonmeasure_types::canonical::sha256_digest(
                 response
@@ -2279,6 +2289,7 @@ impl McpServer {
         facts.licence = licence.clone();
         let summary = declarations_summary(&declarations, url);
         declarations.backoff = pacing.backoff_events();
+        let declared = crate::display::Declared::of(&declarations);
         facts.declarations = Some(declarations);
         facts.named_by = named_by;
         facts.content_telemetry_id = content_telemetry_id;
@@ -2292,7 +2303,9 @@ impl McpServer {
         })?;
         let handle = acquisition_id.map(|id| id.to_string());
         match held_release {
-            Some(read) => self.delivered.hold_release(read, &final_url, handle),
+            Some(read) => self
+                .delivered
+                .hold_release(read, &final_url, handle, declared),
             None => self.delivered.note_other(&hash, handle.as_deref()),
         }
         // Compared only for a later part: a first part after a change is a
@@ -4485,8 +4498,21 @@ impl McpServer {
             .into_string()
         })?;
         let held = self.delivered.release(&key)?;
-        let (invocation, rendered) =
-            commonmeasure_runtime::processor::integrity::invoke(&held.read, &held.url, &reply);
+        let configured = self
+            .pace
+            .names_the_edge()
+            .then(|| {
+                commonmeasure_runtime::processor::integrity::configured_model(
+                    self.policy.constraints(),
+                )
+            })
+            .flatten();
+        let (invocation, rendered) = match configured {
+            Some(model) => model.invoke(&held.read, &held.url, &reply),
+            None => {
+                commonmeasure_runtime::processor::integrity::invoke(&held.read, &held.url, &reply)
+            }
+        };
         let processor_record = self.session.record_processor(invocation.to_value());
         let Some(rendered) = rendered else {
             return Err(agent_text![
@@ -4499,13 +4525,31 @@ impl McpServer {
             ]
             .into_string());
         };
-        let recorded = processor_record.and_then(|seq| {
-            let mut record = crate::display::record(held, &rendered, seq);
+        let Ok(processor_record) = processor_record else {
+            return Err(agent_text![
+                "unavailable: the display could not be recorded in ",
+                self.record_named(),
+                ", so it is not returned; the next call tries again."
+            ]
+            .into_string());
+        };
+        let text = crate::display::plain(held, &rendered);
+        let display_text_sha256 =
+            commonmeasure_runtime::processor::provenance::display_text_sha256(&text);
+        let provenance = display_provenance(&mut self.session, held, &text, processor_record);
+        let recorded = {
+            let mut record = crate::display::record(
+                held,
+                &rendered,
+                processor_record,
+                provenance.record,
+                &display_text_sha256,
+            );
             record["session_id"] = json!(self.session.session_id());
             record["host"] = json!(self.host);
             record["cwd"] = json!(self.cwd);
             self.session.record_display(record)
-        });
+        };
         if recorded.is_err() {
             return Err(agent_text![
                 "unavailable: the display could not be recorded in ",
@@ -4514,8 +4558,8 @@ impl McpServer {
             ]
             .into_string());
         }
-        let text = crate::display::plain(held, &rendered);
         let mut payload = crate::display::payload(held, &rendered);
+        payload["provenance"] = provenance.payload;
         payload["recorded_in"] = json!(self.record_named());
         Ok((text, payload))
     }
@@ -4585,11 +4629,29 @@ impl McpServer {
         }
         let mut credentials = credentials_payload(&self.credentials, released.as_ref());
         credentials["path"] = json!(self.path_named(&self.credentials.path));
+        let last = SessionLog::read(self.session.path())
+            .ok()
+            .and_then(|records| {
+                records
+                    .into_iter()
+                    .rev()
+                    .find(|r| r["payload"]["processor"]["name"] == "integrity-checker")
+                    .map(|r| r["payload"]["detail"]["model"].clone())
+            });
+        let checker = if self.pace.names_the_edge() {
+            commonmeasure_runtime::processor::integrity::sidecar::status(
+                self.policy.constraints(),
+                last.as_ref(),
+            )
+        } else {
+            json!({"configured": false, "gap": "sidecar_stdio_only"})
+        };
         json!({
             "session_id": self.session.session_id(),
             "cwd": self.cwd,
             "host": self.host,
             "client": self.client,
+            "checker": checker,
             "evidence": self.record_named(),
             "tools": self.served.tools,
             "policy": policy,
@@ -6531,6 +6593,128 @@ pub const SUPPLIER_FIELDS: &[&str] = &[
     "/results/*/title",
     "/results/*/text",
 ];
+
+/// Sign the display's C2PA manifest and write the store beside the
+/// session log (`docs/contracts/display-provenance.md`), recording the
+/// output-provenance invocation. The display stands either way: without
+/// a usable certificate, or where the store cannot be written, the
+/// record abstains with the gap and no sidecar is left.
+fn display_provenance(
+    session: &mut SessionLog,
+    held: &crate::display::Held,
+    text: &str,
+    processor_record: u64,
+) -> DisplayProvenance {
+    use commonmeasure_runtime::processor::provenance;
+    let configured_anchors = provenance::trust_anchors_from_environment();
+    let trust_anchors = configured_anchors.as_ref().ok().and_then(Option::as_deref);
+    let ingredients = [crate::display::ingredient(held, trust_anchors)];
+    let signing = provenance::SigningIdentity::from_environment();
+    let log = session.path().to_path_buf();
+    let directory = log.with_extension("displays");
+    let directory_name = directory
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // Named by the integrity checker's seq, which the display's record
+    // names too: the provenance record is written before
+    // `display_rendered`, whose own seq is not known until it is. A seq is
+    // the record's line in the log, never shared by two writers.
+    let reference = format!("{directory_name}/{processor_record}.c2pa");
+    let display_reference = format!(
+        "{}#processor_invoked/{processor_record}",
+        log.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    let input = provenance::DisplayInput {
+        text,
+        display_reference: &display_reference,
+        ingredients: &ingredients,
+        signing: &signing,
+        manifest_reference: &reference,
+        trust_anchors,
+    };
+    let (mut invocation, store) = provenance::invoke_display(&input);
+    if let Err(reason) = &configured_anchors {
+        provenance::trust_anchors_unavailable(&mut invocation, reason);
+    }
+    let path = directory.join(format!("{processor_record}.c2pa"));
+    let written = store
+        .as_ref()
+        .map(|store| write_sidecar(&directory, &path, store));
+    if let Some(Err(error)) = &written {
+        invocation = provenance::display_unwritten(invocation, &reference, error);
+    }
+    let mut value = invocation.to_value();
+    let state = value["detail"]["validation"]["state"].clone();
+    let record = session.record_processor(value.take()).ok();
+    let written = matches!(written, Some(Ok(())));
+    if record.is_none() && written {
+        // A sidecar no record names is not left behind.
+        let _ = std::fs::remove_file(&path);
+    }
+    let payload = match (record, store) {
+        (Some(record), Some(store)) if written => json!({
+            "record": record,
+            "manifest": {
+                "reference": reference,
+                "sha256": commonmeasure_types::canonical::sha256_digest(&store),
+                "bytes": store.len(),
+            },
+            "validation": {"state": state},
+        }),
+        (record, _) => json!({
+            "record": record,
+            "manifest": null,
+            "validation": {"state": "unavailable"},
+        }),
+    };
+    DisplayProvenance { record, payload }
+}
+
+/// What a display's provenance step left: the output-provenance record's
+/// `seq`, where it was written, and the payload's `provenance` member.
+struct DisplayProvenance {
+    record: Option<u64>,
+    payload: Value,
+}
+
+/// Write a display's manifest store at `path`, creating the session's
+/// displays directory where it is missing. Written whole to a temporary
+/// file of its own and linked into place, so a reader never finds part of
+/// a store, two writers on one session never share the temporary file, and
+/// a store already at `path` is never replaced: the link fails, and the
+/// caller records the display without a manifest.
+fn write_sidecar(
+    directory: &std::path::Path,
+    path: &std::path::Path,
+    store: &[u8],
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    let partial = directory.join(format!(
+        ".{}.{}.partial",
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut file = std::fs::File::create_new(&partial)?;
+    let written = std::io::Write::write_all(&mut file, store).and_then(|()| file.sync_all());
+    drop(file);
+    let installed = written.and_then(|()| std::fs::hard_link(&partial, path));
+    let _ = std::fs::remove_file(&partial);
+    installed.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            std::io::Error::new(
+                error.kind(),
+                "a manifest store is already there and is not replaced",
+            )
+        } else {
+            error
+        }
+    })
+}
 
 /// A display's result: the payload as text, first as in every tool result,
 /// then the plain rendering, and the payload as `structuredContent` where
@@ -9196,6 +9380,7 @@ endpoint="https://telemetry.example.com/v1/events"><![CDATA[{"conformance_level"
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         }
         .store(home)
         .expect("store the enrolment record");

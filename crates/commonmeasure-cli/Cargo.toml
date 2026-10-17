@@ -52,6 +52,9 @@ ed25519-dalek.workspace = true
 # so the reader is exercised on a real manifest store.
 c2pa.workspace = true
 c2pa-text.workspace = true
+# The display provenance test signs a release's own C2PA store as a source
+# would, under a certificate generated per run; no publisher key is committed.
+rcgen.workspace = true
 
 # `service` names the user's launchd domain, gui/<uid>.
 [target.'cfg(unix)'.dependencies]

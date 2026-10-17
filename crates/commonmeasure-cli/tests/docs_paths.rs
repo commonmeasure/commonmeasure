@@ -39,6 +39,7 @@ const ROOTS: &[&str] = &[
     "design-tokens/",
     "plugin/",
     "schema/",
+    "sidecars/",
     "console/",
     "conformance/",
 ];

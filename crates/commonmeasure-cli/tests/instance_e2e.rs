@@ -447,6 +447,7 @@ fn a_closure_the_hub_never_received_prints_closure_null() {
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     }
     .store(home.path())
     .unwrap();

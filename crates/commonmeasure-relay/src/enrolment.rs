@@ -387,6 +387,7 @@ fn store_enrolment(
         revoked_at: None,
         revocation: None,
         revocation_learnt_at: None,
+        refusal_sequence: 0,
     };
     record.store(home).map_err(|error| anyhow::anyhow!(error))?;
     drop(identity_lock);
@@ -927,9 +928,9 @@ fn standing(home: &Path, api_key: Option<&str>) -> Result<Option<(Standing, Opti
             None,
         )));
     };
-    // Before the request: an answer withdraws only a refusal learnt before
-    // it was asked for.
-    let asked_at = Utc::now();
+    // The record as read before the request: an answer withdraws only a
+    // refusal recorded before it was asked for.
+    let observed = record.observe_refusal();
     let response = match status(&record.hub, api_key, commonmeasure_http::CLIENT_TIMEOUT) {
         Ok(response) => response,
         Err(reason) => {
@@ -987,7 +988,7 @@ fn standing(home: &Path, api_key: Option<&str>) -> Result<Option<(Standing, Opti
         }
         _ => {
             record
-                .withdraw_refusal(home, asked_at)
+                .withdraw_refusal(home, &observed)
                 .map_err(|reason| anyhow::anyhow!(reason))?;
             Ok(Some((Standing::Enrolled { key_id }, Some(answer))))
         }
@@ -1957,6 +1958,7 @@ mod tests {
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         }
         .store(home.path())
         .unwrap();

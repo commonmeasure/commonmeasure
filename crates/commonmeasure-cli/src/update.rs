@@ -1687,7 +1687,10 @@ mod tests {
             shell: wrapper(
                 &home,
                 "rewrite",
-                "printf '#!/bin/sh\\necho \"commonmeasure 0.0.1\"\\n' > \"$target\"; \
+                // Read the installer to its end first, as a real shell would:
+                // exiting with it unread breaks the pipe under the writer,
+                // which then reports an uncertain outcome instead.
+                "cat >/dev/null; printf '#!/bin/sh\\necho \"commonmeasure 0.0.1\"\\n' > \"$target\"; \
                  chmod 755 \"$target\"; false",
                 "",
             ),

@@ -2,6 +2,27 @@
   "contract": "source-policy.md",
   "source_name": "policy.json",
   "validation": [
+    {
+      "name": "processor egress preserves the exact processor and provider identity",
+      "policy": {"constraints": [{"kind": "processor_egress", "processor": "systemone-choice", "provider": "openrouter"}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "processor_egress", "processor": "systemone-choice", "provider": "openrouter"}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "processor egress without a processor is refused",
+      "policy": {"constraints": [{"kind": "processor_egress", "provider": "openrouter"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "processor egress without a provider is refused",
+      "policy": {"constraints": [{"kind": "processor_egress", "processor": "systemone-choice"}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
     {"name": "supplier source permission preserves its adapter identity", "policy": {"constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}},
     {
       "name": "an empty document is the observe policy",

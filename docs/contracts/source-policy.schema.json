@@ -68,6 +68,26 @@
         {
           "type": "object",
           "properties": {
+            "processor": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "processor_egress"
+            }
+          },
+          "required": [
+            "kind",
+            "processor",
+            "provider"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "provider": {
               "type": "string"
             },

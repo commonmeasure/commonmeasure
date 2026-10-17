@@ -69,9 +69,15 @@ edge is managed) and `edge_identity`, written at open, before any crossing
 (`crates/commonmeasure-cli/src/mcp_session.rs`).
 
 One file per session, opened for append. A session spans many short-lived hook
-processes, so `seq` resumes from what is already in the file. Under concurrent
-hooks two records can share a `seq`; a reader orders by position and treats
-`seq` as a hint. Every append holds the log's exclusive advisory lock
+processes, and can have several servers at once. A record's `seq` is its line
+in the file, counting from one: each append counts, under the lock, the lines
+other writers appended since its own last append, so two writers never give
+two records one `seq`, and a record names another by `seq` (a display names
+its `integrity-checker` and `output-provenance` records so). Logs written by
+0.4.14 and earlier counted once per process and can hold two records under
+one `seq` where writers overlapped; a reader that resolves a `seq` and finds
+more than one record reports it as ambiguous rather than choosing one. Every
+append holds the log's exclusive advisory lock
 (`flock(2)`) from reading the file's last byte to the end of its one fsynced
 write, so appends never interleave, and a record cut short by a writer that
 died is marked by the next append (§Reading a log). A write failure is
@@ -156,7 +162,7 @@ in [`docs/contracts/host-integration.md`](host-integration.md) §2.
 | `crossing_mediated` | the agent's fetch or search routed through the MCP server | Common Measure carried this, under policy |
 | `crossing_refused` | the same | policy refused this before it could enter the agent's context |
 | `processor_invoked` | the same | one processor invocation ([`docs/contracts/processor.md`](processor.md)), recorded beside the crossing it judged |
-| `display_rendered` | the agent's `context_show` call through the MCP server | a reply was displayed against a signed release this session delivered ([host integration](host-integration.md) §Displaying a reply against a release): `tool`, `processor_record` (the `seq` of the `integrity-checker` record just before it), `release` (`content_hash` and `acquisition_ids`), `display_mode`, `outcomes` (one per item, in order), `counts` (`names`, `vector`, `status`), `session_id`, `host` and `cwd`. No sentence, passage text, reason or reply-supplied identifier. Never a crossing and never projected |
+| `display_rendered` | the agent's `context_show` call through the MCP server | a reply was displayed against a signed release this session delivered ([host integration](host-integration.md) §Displaying a reply against a release): `tool`, `processor_record` (the `seq` of the `integrity-checker` record the display was rendered from), `provenance_record` (the `seq` of the `output-provenance` record for the display's C2PA manifest, written just before this one; null where it could not be written), `display_text_sha256` (SHA-256 of the NFC-normalised display text the manifest binds), `release` (`content_hash` and `acquisition_ids`), `display_mode`, `outcomes` (one per item, in order), `counts` (`names`, `vector`, `status`), `session_id`, `host` and `cwd`. No sentence, passage text, reason or reply-supplied identifier. The manifest store is a sidecar, `<session>.displays/<n>.c2pa` beside the log ([display provenance](display-provenance.md)). Never a crossing and never projected, and neither is the `output-provenance` record |
 | `passes_refilled` | nothing; `commonmeasure passes refill <host>` writes it | one refill of anonymous passes from the Anchor the host's terms name, under the product decision "Anonymous access profile" ([source policy §Terms](source-policy.md#terms)): `anchor` (its origin), `origin_info` (the source hosts the passes may be spent at), `requested`, `obtained`, `held` (the passes the wallet holds for that host afterwards), `discarded` (the passes, for any host, dropped because they were issued under a key other than the one the Anchor's directory lists: after a rotation they verify nowhere that follows it, and a source's challenge naming the new key is never answered with one), `key_id` (the lowercase hex SHA-256 of the Anchor's token key, which each pass carries), `stopped` (`null`; or the Anchor's refusal as it stated it, `status`, `retry_after` as sent and `stated`, its body as JSON where it is JSON and otherwise text, cut at 2 KiB, with any echo of the credential replaced by `[credential]`; or `failed` with the reason), `session_id` and `timestamp`. A pass says only that the Anchor found the agent meets a policy the Anchor publishes; it identifies neither the operator, the reader nor the session. The record carries no pass, no blinded request and no credential. The passes are kept in `<home>/passes/<anchor>.json`, owner-only, beside the Anchor's key; a stolen wallet file yields the passes in it, each spendable once at the hosts it names while the Anchor's key stands, and neither an identity nor the credential. Never a crossing, never cleared for egress and never projected |
 | `prompt_sources` | a hook at prompt submission carrying the prompt text (Claude Code: `UserPromptSubmit`) | which URLs the prompt named, as hashes, and the statements pasted material carried; no prompt text |
 | `manifest_resolved` | nothing; the MCP server writes it after a mediated fetch | what Content Telemetry discovery established for the host: the URLs probed, the status, the cache decision, and the manifest's facts or the rejection; never a crossing |
@@ -269,6 +275,76 @@ one fixed sentence and `url` names the hop that was refused. No policy setting
 lifts it. A `robots.txt` or licence probe to such an authority is not sent,
 and the declarations record says why. A `robots.txt` that redirects to it is
 unreachable (§Source declarations).
+
+## Sidecar model evidence
+
+The optional integrity model stage uses the supervised protocol in
+[processor §Sidecar](processor.md#sidecar). Its `processor_invoked` record
+is complete before append: one process has said hello, answered the batch,
+said bye and exited, or the supervisor has stopped it with a named fault.
+Nothing rewrites an earlier record with shutdown usage.
+
+When configured, `processor` carries the full configured manifest: the
+integrity rule's configuration digest, sidecar declaration, script and
+canonical manifest digests, `implementation.kind: "sidecar"`,
+`confinement: "declared"`, permissions and enforced limits. Filesystem
+permission is true because the runtime loads a local script and cached
+dependencies without filesystem confinement; model permission is true;
+network and credential permissions are true only for a network declaration.
+The invocation's assurance is `declared`: its model probabilities are the
+sidecar's statements, even though deterministic stages still compute over
+observed bytes. With no checker configured, the existing deterministic
+record is unchanged.
+
+`detail.model` contains:
+
+- `manifest`: the configured processor manifest, including the original
+  sidecar declaration and its implementation identity;
+- `questions`, `threshold`, `temperature`, `contradiction_threshold`;
+- `calibration`: `uncalibrated` for an explicit threshold, or `calibrated`
+  with the named summary's byte digest and false-pass target;
+- `hello` and `bye`: filtered identity, measurements and usage, null where
+  not received; missing usage remains unknown, never zero;
+- `outcome`: `completed`, `failed` or `not_run` (no scoped model cases);
+  `gaps`: fixed diagnostics, also carried in the invocation's gaps;
+- `timings`: hello and total wall-clock milliseconds where the stage ran;
+- `egress`, only for a network manifest: `provider`, `origins`,
+  `confinement: "declared"`, `admitting_term`, `admitted`, the filtered
+  hello's `model`, `question_text_sha256`, `threshold`, `requests`
+  (request, passage and sentence SHA-256 values), input `case_count`,
+  filtered bye `usage` and an explicitly unknown `cost`. A permitted stage
+  carries `sidecar_cost_unknown`; no charge is inferred from tokens.
+
+Request hashes cover canonical JSON of exactly `id`, `passage` and
+`summary`. The input case count and hashes describe scoped candidate
+requests even when admission refused or launch failed; they are not proof
+of remote receipt. Only the sidecar's bye reports remote request/attempt
+counts. The question digest covers this exact UTF-8 text, with no newline:
+
+```text
+supported: the passage supports everything in the sentence; contradicts: the passage states otherwise on a claim in the sentence
+```
+
+It identifies the edge's question definitions, not a private model prompt
+inside an extension. Origins are declarations, not evidence of socket
+confinement. The admitting term is the exact matching effective
+`processor_egress` constraint; it grants no other acquisition permission.
+
+Per-item answers remain in `detail.items[].answers`, with the edge's fixed
+reason strings, raw support probability in `detail.p_raw`, temperature and
+scoped passage ids. A probability is absent on failure, never a successful
+fallback. Before serialisation the sidecar output passes the numeric/enum
+allow-list in [processor §Calibration and the no-text boundary](processor.md#calibration-and-the-no-text-boundary).
+Disallowed keys and values are dropped with `sidecar_output_dropped`, without
+recording their names or values. Stderr is discarded. The edge copies no
+sentence, passage, provider error body or credential value into this
+evidence or the server log. Hello identity values and the endpoint origin
+are the script's declarations: they are bounded as the processor contract
+specifies, not inspected for encoded text or credentials. The filter stops
+cooperative echoes, not a pinned script encoding text in identifiers or
+numbers; the artefact digest and the operator's review cover that boundary.
+This private record, including its egress evidence, is never projected by
+the relay.
 
 ## Crossing
 
@@ -458,9 +534,15 @@ after reading. It holds `media_type`; `verification`, which is `verified`,
 `failed` or `missing` as the `release-verifier` established it ([processor](processor.md#status));
 `reason` where it is not `verified`; and `sidecar`, the release's sidecar
 whole: the signed fields (source, title, revision, URL, licence,
-attribution, terms, display mode, `text_sha256`, passages and markers as
-byte spans of the text, release time), the signature, the signer's public
-key and the scheme. The text itself is never recorded: `content_hash` is
+attribution, terms, the structured `usage` block where the release states
+one, display mode, `text_sha256`, passages and markers as byte spans of the
+text, release time), the signature, the signer's public key, the scheme and,
+where the source sent one, its own C2PA manifest store (`c2pa`). Where the
+sidecar carries a store, `c2pa` beside `sidecar` holds what reading it
+offline against the text established: `state` (`invalid`, `untrusted` or
+`trusted`), the binding, the signer and each `cawg.identity` summarised,
+never text ([display provenance](display-provenance.md) §The release's own
+manifest). The text itself is never recorded: `content_hash` is
 its hash, `retrieved_hash` the hash of the body served, and `delivered`
 the part handed over. The stdio server that delivered a release keeps its
 text and sidecar in process memory for `context_show` (the last 16, cleared

@@ -21,6 +21,15 @@ anyone reading or building the code. [DOCUMENTATION.md](DOCUMENTATION.md)
 sets how the pages under `docs/` are written so the website can publish
 them, and [RELEASING.md](RELEASING.md) how a release is cut.
 
+## Sidecar checks
+
+On Unix, the sidecar integration tests require `uv` on `PATH` and a locally
+available Python 3.11 or later. The supervised launcher always uses
+`--offline`; the example and fault scripts have no third-party dependencies.
+These tests exercise the real stdio boundary and a loopback HTTP origin,
+not a live model. Other platforms report process-group supervision as
+unavailable and do not run these integration tests.
+
 ## Recorded fixtures (optional, for maintainers)
 
 Some tests read recorded fixtures that this repository does not carry:

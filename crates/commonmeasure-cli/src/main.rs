@@ -117,7 +117,18 @@ enum PolicyAction {
 }
 
 #[derive(Subcommand)]
+enum SidecarAction {
+    /// Verify a manifest and run one synthetic case through its stdio protocol.
+    Check { manifest: PathBuf },
+}
+
+#[derive(Subcommand)]
 enum Command {
+    /// Check a supervised processor without starting a host session.
+    Sidecar {
+        #[command(subcommand)]
+        action: SidecarAction,
+    },
     /// Associate sessions with saved artifacts and verify portable snapshots offline.
     Artifact(artifact::Artifact),
     /// Run a small, reproducible SimpleQA benchmark through governed search,
@@ -456,14 +467,26 @@ enum Command {
     /// With --run, the source record the run's summary implies is re-derived
     /// and compared with the label's field by field; a difference is
     /// reported and the command fails.
+    ///
+    /// Given a session log (`<session>.ndjson`), reads each rendered
+    /// display's manifest from its sidecar instead and prints the claim, the
+    /// signer, the ingredients, the terms and the derived statement, citing
+    /// the records by `<path>:<line>`. A sidecar that is missing, does not
+    /// hash to its record or does not verify fails the command.
     Provenance {
         /// A labelled output: a `provenance/<plan>.txt` from a run, or the
-        /// same text pasted into any file.
+        /// same text pasted into any file; or a session log, `.ndjson`.
         file: PathBuf,
         /// A run directory whose `summary.json` the label's source record is
         /// checked against.
         #[arg(long)]
         run: Option<PathBuf>,
+        /// With a session log: the display text the host kept. The display
+        /// whose recorded text hash it matches has its binding re-verified;
+        /// without it, each binding is reported as verified when the
+        /// manifest was written and not re-verified now.
+        #[arg(long)]
+        text: Option<PathBuf>,
         /// Local PEM trust anchors for claim and CAWG identity verification.
         /// No trust list is downloaded; the report records the bundle's hash.
         #[arg(long)]
@@ -647,6 +670,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse_from(arguments);
     let palette = report::Palette::for_stdout(cli.color);
     let result = match cli.command {
+        Command::Sidecar {
+            action: SidecarAction::Check { manifest },
+        } => check_sidecar(&manifest),
         Command::Benchmark(args) => benchmark::run(args),
         Command::Enrol(args) => enrol::run(args),
         Command::Consent(args) => consent::run(args),
@@ -745,14 +771,34 @@ fn main() -> ExitCode {
         Command::Provenance {
             file,
             run,
+            text,
             trust_anchors,
             require_trusted,
-        } => provenance_report(
-            &file,
-            run.as_deref(),
-            trust_anchors.as_deref(),
-            require_trusted,
-        ),
+        } => {
+            let session = file
+                .extension()
+                .is_some_and(|extension| extension == "ndjson");
+            match (session, run, text) {
+                (true, Some(_), _) => {
+                    Err("--run applies to a labelled output, not a session log".to_owned())
+                }
+                (true, None, text) => session_provenance_report(
+                    &file,
+                    text.as_deref(),
+                    trust_anchors.as_deref(),
+                    require_trusted,
+                ),
+                (false, _, Some(_)) => {
+                    Err("--text applies to a session log (.ndjson) only".to_owned())
+                }
+                (false, run, None) => provenance_report(
+                    &file,
+                    run.as_deref(),
+                    trust_anchors.as_deref(),
+                    require_trusted,
+                ),
+            }
+        }
         Command::Console(args) => console::run(args, palette),
         Command::Serve {
             listen,
@@ -922,6 +968,225 @@ fn provenance_report(
             run.map(|run| run.display().to_string()).unwrap_or_default(),
             differences.join("; ")
         ))
+    }
+}
+
+/// Each rendered display's manifest in a session log, read back from its
+/// sidecar with the C2PA reader (`docs/contracts/display-provenance.md`).
+/// The sidecar is located and checked by the output-provenance record that
+/// `display_rendered` names, and every statement cites the record's line.
+fn session_provenance_report(
+    log: &Path,
+    text: Option<&Path>,
+    trust_anchors: Option<&Path>,
+    require_trusted: bool,
+) -> Result<(), String> {
+    use commonmeasure_runtime::processor::provenance;
+    use serde_json::{Value, json};
+    let contents = std::fs::read_to_string(log)
+        .map_err(|error| format!("cannot read {}: {error}", log.display()))?;
+    let records: Vec<Value> = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .map_err(|error| format!("{}: {error}", log.display()))?;
+    let trust_pem = trust_anchors
+        .map(|path| {
+            std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read trust anchors {}: {error}", path.display()))
+        })
+        .transpose()?;
+    let kept = text
+        .map(|path| {
+            std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))
+        })
+        .transpose()?;
+    let kept_hash = kept.as_deref().map(provenance::display_text_sha256);
+    let directory = log.parent().unwrap_or(Path::new("."));
+    let cite = |index: usize| format!("{}:{}", log.display(), index + 1);
+    let mut failures = Vec::new();
+    let mut displays = Vec::new();
+    let mut text_matched = false;
+    for (line, record) in records.iter().enumerate() {
+        if record["event"] != "display_rendered" {
+            continue;
+        }
+        let display = &record["payload"];
+        let mut entry = json!({
+            "display": {
+                "record": cite(line),
+                "seq": record["seq"],
+                "display_mode": display["display_mode"],
+                "release": display["release"]["content_hash"],
+                "display_text_sha256": display["display_text_sha256"],
+            },
+        });
+        let named = &display["provenance_record"];
+        // A log written before a record's seq was its line can hold two
+        // records under one seq; a display is never read against the
+        // first that happens to match.
+        let matching: Vec<usize> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                !named.is_null()
+                    && record["seq"] == *named
+                    && record["event"] == "processor_invoked"
+                    && record["payload"]["processor"]["name"] == provenance::NAME
+            })
+            .map(|(at, _)| at)
+            .collect();
+        let at = match matching.as_slice() {
+            [at] => *at,
+            [] => {
+                if require_trusted {
+                    failures.push(format!("the display at {} has no manifest", cite(line)));
+                }
+                entry["manifest"] = json!({"state": "none recorded"});
+                displays.push(entry);
+                continue;
+            }
+            several => {
+                let cited: Vec<String> = several.iter().map(|at| cite(*at)).collect();
+                failures.push(format!(
+                    "the display at {} names seq {named}, which {} output-provenance records \
+                     share ({}); its manifest is not read",
+                    cite(line),
+                    several.len(),
+                    cited.join(", ")
+                ));
+                entry["manifest"] = json!({"state": "ambiguous", "records": cited});
+                displays.push(entry);
+                continue;
+            }
+        };
+        let invocation = &records[at]["payload"];
+        let Some(output) = invocation["outputs"][0].as_object() else {
+            if require_trusted {
+                failures.push(format!(
+                    "the display at {} has no manifest; see {}",
+                    cite(line),
+                    cite(at)
+                ));
+            }
+            entry["manifest"] = json!({
+                "state": "unavailable",
+                "record": cite(at),
+                "gaps": invocation["gaps"],
+            });
+            displays.push(entry);
+            continue;
+        };
+        let reference = output["reference"].as_str().unwrap_or_default();
+        let path = directory.join(reference);
+        let store = match std::fs::read(&path) {
+            Ok(store) => store,
+            Err(error) => {
+                failures.push(format!("{reference}, named at {}: {error}", cite(at)));
+                entry["manifest"] =
+                    json!({"reference": reference, "record": cite(at), "state": "missing"});
+                displays.push(entry);
+                continue;
+            }
+        };
+        let sha256 = commonmeasure_types::canonical::sha256_digest(&store);
+        if output["content_hash"] != sha256 {
+            failures.push(format!(
+                "{reference} does not hash to the record at {}",
+                cite(at)
+            ));
+        }
+        let binds = kept_hash.is_some() && display["display_text_sha256"] == json!(kept_hash);
+        text_matched |= binds;
+        let read = match kept.as_deref().filter(|_| binds) {
+            Some(kept) => provenance::read_store_with_trust(&store, kept, trust_pem.as_deref()),
+            None => provenance::read_store_unbound(&store, trust_pem.as_deref()),
+        };
+        let reading = match read {
+            Ok(reading) => reading,
+            Err(error) => {
+                failures.push(format!("{reference}: {error}"));
+                entry["manifest"] = json!({
+                    "reference": reference,
+                    "record": cite(at),
+                    "sha256": sha256,
+                    "matches_record": output["content_hash"] == sha256,
+                    "state": "unreadable",
+                    "reason": error.to_string(),
+                });
+                displays.push(entry);
+                continue;
+            }
+        };
+        let state = reading.validation["state"].clone();
+        if state == "invalid" {
+            failures.push(format!("{reference} does not verify"));
+        }
+        if require_trusted && reading.validation["trusted"] != true {
+            failures.push(format!(
+                "{reference} is not trusted under the supplied anchors"
+            ));
+        }
+        let active = reading.active();
+        entry["manifest"] = json!({
+            "reference": reference,
+            "record": cite(at),
+            "sha256": sha256,
+            "matches_record": output["content_hash"] == sha256,
+            "bytes": store.len(),
+            "label": reading.manifest_label,
+            "claim": {
+                "title": active["title"],
+                "claim_generator_info": active["claim_generator_info"],
+            },
+            "signer": reading.signature,
+            "ingredients": active["ingredients"].as_array().into_iter().flatten().map(|ingredient| json!({
+                "title": ingredient["title"],
+                "format": ingredient["format"],
+                "relationship": ingredient["relationship"],
+                "instance_id": ingredient["instance_id"],
+                "description": ingredient["description"],
+                "metadata": ingredient["metadata"],
+                "carries_source_manifest": !ingredient["active_manifest"].is_null(),
+            })).collect::<Vec<_>>(),
+            "actions": reading.assertion("c2pa.actions.v2"),
+            "identity": reading.assertion("cawg.identity"),
+            "training_mining": reading.assertion(provenance::TRAINING_MINING_LABEL),
+            "terms": reading.assertion(provenance::TERMS_LABEL),
+            "validation": reading.validation,
+            "binding": if binds {
+                json!({"re_verified": true, "text": text.map(|path| path.display().to_string())})
+            } else {
+                json!({
+                    "re_verified": false,
+                    "at_write_time": invocation["detail"]["validation"]["state"],
+                    "record": cite(at),
+                })
+            },
+        });
+        displays.push(entry);
+    }
+    let report = json!({"session": log.display().to_string(), "displays": displays});
+    let mut out = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
+    out.push('\n');
+    write_stdout(&out)?;
+    if require_trusted && displays.is_empty() {
+        failures.push(format!("{} records no display", log.display()));
+    }
+    if kept_hash.is_some() && !text_matched {
+        failures.push(format!(
+            "no display in {} was rendered as the text in {}",
+            log.display(),
+            text.map(|path| path.display().to_string())
+                .unwrap_or_default()
+        ));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -3361,6 +3626,29 @@ fn stale_note(stale_since: &serde_json::Value) -> String {
             format!(" (stale since {since}: the hub has not renewed it; the policy stays in force)")
         })
         .unwrap_or_default()
+}
+
+/// Exercise the production sidecar supervisor under the current directory's
+/// effective source policy; diagnostics never quote child output.
+fn check_sidecar(manifest: &Path) -> Result<(), String> {
+    let home = home_dir().map_err(|_| "sidecar_policy_unavailable".to_owned())?;
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.display().to_string());
+    let policy = SessionPolicy::load(&home, cwd.as_deref())
+        .map_err(|_| "sidecar_policy_unavailable".to_owned())?;
+    let result =
+        commonmeasure_runtime::processor::integrity::sidecar::check(manifest, policy.constraints());
+    let (report, ok) = match result {
+        Ok(v) => (v, true),
+        Err(v) => (v, false),
+    };
+    write_stdout(&format!("{report}\n"))?;
+    if ok {
+        Ok(())
+    } else {
+        Err("sidecar_check_failed: see the named lifecycle gaps".to_owned())
+    }
 }
 
 /// The canonical pre-image and its digest, for the reviewer recomputing an

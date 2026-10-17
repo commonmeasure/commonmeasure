@@ -25,8 +25,8 @@
 //! The deterministic stages read the whole release text. A model stage reads
 //! only the passages a sentence cites and their neighbours; an own sentence
 //! is put to it against the passages the reply as a whole cites, or the lead.
-//! No model stage is installed in this build: the processor runs the
-//! deterministic stages only and its record says so.
+//! An operator may configure a supervised sidecar model stage; without it
+//! the processor runs the deterministic stages only.
 //!
 //! The invocation record keeps no text of the reply or the release. A
 //! sentence is recorded by its SHA-256 and length, the release's words by
@@ -44,6 +44,8 @@
 
 mod attribution;
 mod keep_intact;
+pub mod sidecar;
+pub use sidecar::configured_model;
 mod verbatim;
 mod words;
 
@@ -213,13 +215,17 @@ pub(crate) struct Case {
 }
 
 /// A model stage behind the display rule. The supervised model checker
-/// implements it; no build installs one yet, so [`invoke`] runs without.
+/// implements it; [`invoke`] remains the deterministic-only entry point.
 pub(crate) trait ModelChecker {
     /// The stage's name as its answers record it in `basis`.
     fn name(&self) -> String;
     /// What the stage declares about itself, for the record.
     fn manifest(&self) -> Value;
     fn questions(&self) -> Vec<Question>;
+    /// Completed invocation evidence, available only after `check_many`.
+    fn evidence(&self) -> Value {
+        json!({})
+    }
     /// Answers for each case, in the cases' order. A case the stage could
     /// not answer carries answers with no probability and the reason.
     ///
@@ -1099,7 +1105,7 @@ fn render(release: &Release, reply: &Reply, mut model: Option<Model<'_>>) -> (Re
         (attribution::NAME.to_owned(), Question::RightPersonQuoted),
         (keep_intact::NAME.to_owned(), Question::CutsKeptPassage),
     ];
-    let record = json!({
+    let mut record = json!({
         "verification": VerificationState::Verified,
         "display_mode_requested": signed.display_mode,
         "display_mode": mode,
@@ -1119,6 +1125,13 @@ fn render(release: &Release, reply: &Reply, mut model: Option<Model<'_>>) -> (Re
         "count_names": Counts::NAMES,
         "counts_vector": counts.as_vec(),
     });
+    if let Some(model) = &model
+        && let Some(evidence) = model.checker.evidence().as_object()
+    {
+        for (key, value) in evidence {
+            record["model"][key] = value.clone();
+        }
+    }
     (
         Rendered {
             display_mode: mode,

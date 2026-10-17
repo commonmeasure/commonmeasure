@@ -306,6 +306,7 @@ payload is also `structuredContent`. The payload carries:
 | `display_mode` | `labelled` or `strict`, the mode applied |
 | `blocks` | one per item, in order: `outcome`, `label`, `text` (the words shown, empty for a refused quote), `reason`, and where the words are the release's, `passage` and `span` (byte offsets into the release text); a confirmed sentence carries `sources`, each a `passage` and its `text` |
 | `counts` | `names`, `vector` in [display counts](display-counts.md) order, and `status`, `working_rule` |
+| `provenance` | the display's C2PA manifest: `record` (the `seq` of its `output-provenance` record), `manifest` (`reference`, the sidecar beside the session log, `sha256` and `bytes`; null where none was written) and `validation` (`state`: `trusted`, `valid`, `invalid` or `unavailable`) ([display provenance](display-provenance.md)) |
 | `recorded_in` | the session record holding the display |
 
 Every block's text is the release's own words, except a sentence of the
@@ -314,6 +315,17 @@ article", and, under `labelled` only, `shown_own` and `shown_unconfirmed`,
 labelled "not from the article". A passage id the reply supplied that the
 release did not sign is not returned. The display carries no title,
 attribution, URL or terms of the release, and no markup.
+
+Each display gets one C2PA manifest, bound to the plain text by a data hash
+and kept as a sidecar beside the session log; its bytes are never in the
+tool result. Its ingredient is the release by content hash, grade and
+sidecar digest, carrying the release's own C2PA manifest where it sent one
+that verifies; its assertions carry each release's terms and the statement
+derived for the display. The manifest names no one: the reader adds no
+identity to it, and neither does the operator. Without a signing
+certificate (`COMMONMEASURE_PROVENANCE_CERTIFICATE` and
+`COMMONMEASURE_PROVENANCE_KEY`) the display is returned with `manifest`
+null and the state `unavailable` ([display provenance](display-provenance.md)).
 
 A `release` that names nothing this server delivered, a delivery that was
 not served as a signed release, a release this server has let go, a
@@ -331,11 +343,16 @@ To display against a release, the stdio server keeps the text and sidecar
 of each signed release its `context_fetch` delivered, in the server
 process's memory:
 
-- **Identity.** A release is its text, its sidecar as served, its
-  verification state and its URL. A fetch that delivers the same release
-  again adds its `acquisition_id` to it; a fetch of the same text under any
-  other sidecar, signature or URL holds a second release beside the first.
-  No handle moves from the release its fetch delivered.
+- **Identity.** A held delivery is the release's text, its sidecar as
+  served, its verification state, its URL, and the declarations and host
+  terms its crossing recorded. A fetch that delivers the same release under
+  the same declarations and terms adds its `acquisition_id` to it; a fetch
+  of the same text under any other sidecar, signature or URL, or under
+  another `Content-Usage` header or other terms, holds a second delivery
+  beside the first. No handle moves from the delivery its fetch made, and a
+  display signs the terms of the delivery it names
+  ([display provenance](display-provenance.md)). A `content_hash` that
+  matches more than one held delivery is refused as ambiguous.
 - **Count.** The server holds the last 16 releases by identity. Delivering
   a 17th lets the oldest go; a display against it is refused until it is
   fetched again.
@@ -344,6 +361,35 @@ process's memory:
   the sidecar only ([session evidence](session-evidence.md#crossing)
   `release`). A restarted server, even with the same home and session id,
   and any other server or session cannot display against them.
+
+### Optional checker on the stdio path
+
+An operator may set `COMMONMEASURE_CHECKER=<sidecar.json>` and either a
+named evaluation summary or an explicit threshold. `context_show` then
+uses one supervised process per scoped model invocation, completing hello,
+answers, bye and exit before appending the integrity record. Configuration,
+calibration, failures and the no-text boundary are
+[processor §Sidecar](processor.md#sidecar). Without the variable, display
+behaviour and records are unchanged. Hosted tools do not activate it.
+
+`context_status.checker` spawns nothing. It reports `configured`,
+`manifest_path`, implementation digests, declared `network` and
+`confinement: "declared"`, credential variable name and `set`/`unset`
+state, the last matching recorded `hello` (model/family), `last_outcome`,
+`reachable` and `gap`. Reachability is null before an invocation, false
+on a current configuration/admission fault or last failed invocation, and
+true after a completed invocation of the same manifest. It is historical
+transport evidence, not a fresh network probe or a model-quality claim.
+An unset checker reports `{"configured":false}`; the hosted surface adds
+`gap: "sidecar_stdio_only"`.
+
+`commonmeasure sidecar check <manifest>` verifies and exercises one fixed
+synthetic case without a host session. It prints filtered protocol evidence
+and exits non-zero on a fault. A network manifest still requires the exact
+`processor_egress` term from the effective source policy for the current
+directory and the declared credential variable; a key alone starts nothing.
+Warm dependency caches by hand before the offline supervised launch
+([processor](processor.md#checking-an-extension)).
 
 ### Text from the source in a result
 

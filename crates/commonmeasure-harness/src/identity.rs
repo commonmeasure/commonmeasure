@@ -1584,6 +1584,7 @@ mod tests {
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         };
         record.store(home.path()).expect("store");
         assert!(
@@ -1629,6 +1630,7 @@ mod tests {
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         };
         record.store(home.path()).expect("store");
         let identity = Identity::load(home.path()).expect("load");
@@ -1668,12 +1670,10 @@ mod tests {
 
         // A refusal lasts only while the record says so: a withdrawn 401 and
         // a read that failed once leave the same identity signing again.
+        let observed = record.observe_refusal();
         assert!(
             record
-                .withdraw_refusal(
-                    home.path(),
-                    chrono::Utc::now() + chrono::Duration::seconds(1)
-                )
+                .withdraw_refusal(home.path(), &observed)
                 .expect("store")
         );
         assert!(attempts(signer).iter().all(Result::is_ok));
@@ -1692,12 +1692,10 @@ mod tests {
         record
             .record_revocation(home.path(), "2026-09-25T09:00:00Z", "owner")
             .expect("store");
+        let observed = record.observe_refusal();
         assert!(
             !record
-                .withdraw_refusal(
-                    home.path(),
-                    chrono::Utc::now() + chrono::Duration::seconds(1)
-                )
+                .withdraw_refusal(home.path(), &observed)
                 .expect("store")
         );
         learnt("revoked by the owner after this session loaded it");
@@ -1735,6 +1733,7 @@ mod tests {
             revoked_at: None,
             revocation: None,
             revocation_learnt_at: None,
+            refusal_sequence: 0,
         }
         .store(home.path())
         .expect("store");

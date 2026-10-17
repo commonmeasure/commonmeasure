@@ -104,6 +104,7 @@ required.
 {"kind": "maximum_latency_ms", "milliseconds": 30000}
 {"kind": "allowed_provider", "provider": "exa"}
 {"kind": "denied_provider", "provider": "exa"}
+{"kind": "processor_egress", "processor": "systemone-choice", "provider": "openrouter"}
 {"kind": "access_rule", "host": "*.example.com", "action": "refuse"}
 ```
 
@@ -113,6 +114,15 @@ supplier-native metadata cannot claim it. Direct fetches and observed sources
 do not inherit this permission. Explicit host denials, ordered access rules,
 provider eligibility and required licences still apply. This rule supplies no
 licence or cost evidence.
+
+`processor_egress` admits only the named processor's declared crossing to
+that provider ([processor](processor.md#sidecar)). Both strings match
+exactly. It grants no search or fetch permission and is independent of
+`allowed_provider`. Without the matching term a network sidecar starts
+nothing, even in `observe` or `prefer`, and a credential alone grants
+nothing. This is permission for declared egress, not socket confinement;
+the record names the admitting term and declared origins. Scope and
+principal replacement of the constraints list applies as for other kinds.
 
 Every kind but one is a set, and the order of its entries means nothing.
 `access_rule` is the exception. Access rules are read in the order written

@@ -705,7 +705,16 @@ impl Run {
         let mut child = command.spawn().expect("the command starts");
         if let Some(bytes) = stdin {
             let mut pipe = child.stdin.take().unwrap();
-            pipe.write_all(bytes).unwrap();
+            // A run that refuses its arguments exits before it reads standard
+            // input, so the write can meet a closed pipe; its status and
+            // output are still collected and asserted below. Any other write
+            // error fails the test.
+            match pipe.write_all(bytes) {
+                Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+                    panic!("write the run's standard input: {error}")
+                }
+                _ => {}
+            }
         }
         let mut stdout = child.stdout.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();

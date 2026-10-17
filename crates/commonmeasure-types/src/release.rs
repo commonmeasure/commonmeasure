@@ -9,6 +9,13 @@
 //! attribution, and carries an Ed25519 signature over the text's hash and the
 //! sidecar's signed fields ([`signed_message`]). Verification lives with the
 //! processor that performs it (`commonmeasure_runtime::processor::release`).
+//!
+//! Two optional additions are read where a release carries them: a
+//! structured [`Usage`] block among the signed fields, beside the free-text
+//! terms, and a C2PA manifest store in the sidecar ([`Sidecar::c2pa`]),
+//! signed by the source with its own certificate and bound to the text. A
+//! release without them reads, verifies and signs exactly as before
+//! (`docs/contracts/display-provenance.md`).
 
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +78,47 @@ pub struct Signed {
     pub passages: Vec<Passage>,
     pub markers: Vec<KeptSpan>,
     pub released_at: String,
+    /// What the source allows of the text in words a reader can rule on,
+    /// beside the free-text `terms`. Absent in a release that states none,
+    /// and then absent from the canonical form the signature covers, so a
+    /// release signed before the field existed verifies unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
+}
+
+/// A source's statement of use, named in RSL 1.0 terms where RSL has the
+/// word (`docs/contracts/display-provenance.md` §Terms).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Usage {
+    /// The text as input to a model: grounding, summaries, answers. RSL
+    /// `ai-input`.
+    pub ai_input: UsageTerm,
+    /// The text, or a product derived from it, as part of a new product
+    /// sold onwards. RSL names commercial use as a user type; there is no
+    /// usage token for it.
+    pub onward_commercial_product: UsageTerm,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting: Option<UsageReporting>,
+}
+
+/// One term of a [`Usage`] block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageTerm {
+    Allow,
+    Disallow,
+}
+
+/// Whether the source requires use of the text to be reported, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsageReporting {
+    pub required: bool,
+    /// The reporting destination the source names: a URL or its own
+    /// reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
 }
 
 /// The signed fields and the signature over them.
@@ -86,6 +134,13 @@ pub struct Sidecar {
     #[serde(default)]
     pub signer_public_key: String,
     pub signature_scheme: String,
+    /// A C2PA manifest store, standard base64, whose hard binding is
+    /// `c2pa.hash.data` over the NFC-normalised text, signed by the source
+    /// with its own certificate. Outside the Ed25519-signed fields: the
+    /// manifest carries its own signature, and a release whose store does
+    /// not verify is still the release its Ed25519 signature admits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c2pa: Option<String>,
 }
 
 /// A release as served: the text and its sidecar.
@@ -121,6 +176,69 @@ pub struct ReleaseRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub sidecar: Sidecar,
+    /// What reading the sidecar's C2PA store established, where the
+    /// sidecar carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c2pa: Option<C2paRecord>,
+}
+
+/// What a C2PA store a release carries was found to be, read offline
+/// against the release text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum C2paState {
+    /// The store does not decode, parse or verify against the text.
+    Invalid,
+    /// The signature and the binding verify; the signer chains to no
+    /// configured trust anchor.
+    Untrusted,
+    /// The signature and the binding verify and the signer chains to a
+    /// configured trust anchor.
+    Trusted,
+}
+
+/// The C2PA reading of a release's store as the crossing record keeps it:
+/// the state, the binding and who signed, never any text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct C2paRecord {
+    pub state: C2paState,
+    /// Why the store is `invalid`, in the reader's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// SHA-256 of the decoded store bytes, `sha256:<hex>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_label: Option<String>,
+    /// Whether the store's data hash matches the NFC text, and whether
+    /// that text is the text `text_sha256` names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<C2paBinding>,
+    /// The claim signer's certificate subject and issuer, as the reader
+    /// reports them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer: Option<serde_json::Value>,
+    /// Each `cawg.identity` assertion, summarised: the credential kind and
+    /// the subject it names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identities: Vec<serde_json::Value>,
+    /// The `cawg.training-mining` assertion as the source signed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_mining: Option<serde_json::Value>,
+    /// Every validation status code the reader reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statuses: Vec<String>,
+    pub verifier: String,
+}
+
+/// The binding of a release's C2PA store to its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct C2paBinding {
+    /// The data hash matches the NFC-normalised release text.
+    pub matches: bool,
+    /// The NFC-normalised text is byte for byte the text `text_sha256`
+    /// names, so the binding and the Ed25519 signature are over one text.
+    pub same_text_as_signed: bool,
 }
 
 fn default_display_mode() -> String {
