@@ -271,6 +271,78 @@ fn a_release_that_does_not_verify_is_refused_by_strict_and_carried_by_observe() 
     );
 }
 
+/// A `release_signer` term in the source policy reaches the verifier on the
+/// fetch path: the recorded release's key anchored to the loopback host is
+/// delivered under `strict` with the anchoring on the crossing; another key
+/// anchored there refuses it, and the crossing says the key was not
+/// anchored without naming the term's keys.
+#[test]
+fn a_release_signer_term_in_the_policy_anchors_the_recorded_key() {
+    let body = recorded_body();
+    let release: Value = serde_json::from_slice(&body).unwrap();
+    let recorded_key = release["sidecar"]["signer_public_key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let other_key = "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o=";
+    assert_ne!(recorded_key, other_key);
+    let site = origin(body, recorded_content_type());
+    let url = format!("{}/article", site.url());
+    let fetch_under = |key: &str| {
+        let home = tempfile::tempdir().expect("tempdir");
+        write_policy(
+            home.path(),
+            &json!({
+                "policy_mode": "strict",
+                "allow_private_hosts": true,
+                "constraints": [{"kind": "release_signer", "host": "127.0.0.1", "keys": [key]}],
+            })
+            .to_string(),
+        );
+        let responses = converse(
+            home.path(),
+            &[],
+            &[call("context_fetch", json!({"url": url}))],
+        );
+        (home, responses.into_iter().next().expect("a response"))
+    };
+
+    let (home, response) = fetch_under(&recorded_key);
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert!(payload(&response)["breach"].is_null());
+    let anchored = json!({"applied": "policy", "host": "127.0.0.1", "key_anchored": true});
+    let crossing = &crossings(home.path())[0];
+    assert_eq!(crossing["event"], "crossing_mediated");
+    assert_eq!(crossing["payload"]["release"]["verification"], "verified");
+    assert_eq!(crossing["payload"]["release"]["anchoring"], anchored);
+    let verifier = &verifier_records(home.path())[0]["payload"];
+    assert_eq!(verifier["detail"]["anchoring"], anchored);
+
+    let (home, response) = fetch_under(other_key);
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let error = payload(&response)["error"].as_str().unwrap().to_owned();
+    assert!(
+        error.contains("not one the source policy anchors to this host"),
+        "{error}"
+    );
+    let crossing = &crossings(home.path())[0];
+    assert_eq!(crossing["event"], "crossing_refused");
+    assert_eq!(crossing["payload"]["release"]["verification"], "verified");
+    assert_eq!(
+        crossing["payload"]["release"]["anchoring"],
+        json!({"applied": "policy", "host": "127.0.0.1", "key_anchored": false})
+    );
+    assert_eq!(
+        verifier_records(home.path())[0]["payload"]["decision"],
+        "refuse"
+    );
+    let log = std::fs::read_to_string(home.path().join("sessions/test-session.ndjson")).unwrap();
+    assert!(
+        !log.contains(other_key),
+        "the record never carries the term's keys"
+    );
+}
+
 /// A body served under the release media type that does not read as a
 /// release is unavailable with the gap named, in every mode, and never
 /// delivered as plain text.

@@ -665,7 +665,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "commonmeasure-cli"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "anstream",
  "anstyle",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-console"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-harness"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "base64",
  "blind-rsa-signatures",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-http"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "flate2",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-inference"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-relay"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "anyhow",
  "base64",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-runtime"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "base64",
  "c2pa",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-supply"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
  "commonmeasure-http",
  "commonmeasure-types",
@@ -838,8 +838,9 @@ dependencies = [
 
 [[package]]
 name = "commonmeasure-types"
-version = "0.4.15"
+version = "0.4.16"
 dependencies = [
+ "base64",
  "chrono",
  "chrono-tz",
  "ryu",
@@ -2736,9 +2737,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.241"
+version = "2.1.243"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7319b480e204d67e759cad7886178335d26324c7c8573c126cc9dfa7350d064"
+checksum = "6600966e937eeb6e279d7d5a35b9c61ca720f4a5ab6c950a3b921ca4881e0054"
 dependencies = [
  "psl-types",
 ]

@@ -163,7 +163,7 @@ The pre-image is the result of that resolution and nothing else:
 | `schema` | `contextops-policy-identity/v3` |
 | `resolver` | the resolver version, `2` |
 | `mode` | the effective policy mode |
-| `constraints` | the effective set-semantics constraints (every kind but `access_rule`), each as its canonical object with hosts normalised the way admission normalises them, sorted by canonical text, duplicates removed |
+| `constraints` | the effective constraints of every kind but `access_rule`, each as its canonical object with hosts normalised the way admission normalises them, sorted by canonical text, duplicates removed; a `release_signer` term carries its keys sorted with duplicates removed, and its `position` among the `release_signer` terms in declaration order, because the first matching term decides |
 | `access_rules` | the effective access rules in declaration order, each with its `position`, because the first matching rule decides and their order is the policy |
 | `allow_private_hosts` | the effective value |
 | `record_internal_prefixes` | sorted, duplicates removed |
@@ -180,7 +180,9 @@ Left out on purpose: the policy file's path, the asserted principal label,
 the authenticated subject id, the working directory, and every scope the
 resolution did not match. Editing a scope a session is not in therefore
 leaves that session's identity unchanged; reordering a file's set
-constraints is not drift, and reordering its access rules is.
+constraints is not drift, and reordering its access rules or its
+`release_signer` terms is. A `release_signer` term moves no digest of a
+policy without one, so the kind did not move `schema`.
 
 The identity is `sha256:` and the hex sha256 of the canonical JSON of the
 pre-image. A reviewer recomputes it with a canonical serialiser and sha256

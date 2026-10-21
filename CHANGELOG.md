@@ -6,6 +6,28 @@ Versions follow [Semantic Versioning](https://semver.org/); before 1.0.0 a
 minor version may break compatibility. `RELEASING.md` §Release notes says how
 a section is written.
 
+## 0.4.16 (19 October 2026)
+
+A signed release's publisher key can now be anchored to the host that serves it, through a `release_signer` term in the source policy, and a release's own C2PA manifest is recorded as verifying only when its data hash binds the whole release text. Nothing an operator runs today changes: without a `release_signer` term, verification reads as it did and the record keeps naming the key as unanchored, and records written by earlier releases load unchanged. The other lines bound what a sidecar can report, tidy its supervision, keep a display's assurance word honest when the model stage did not run, give a second server on a session its handles, and state the `seq` guarantee's limit across an update window.
+
+### Added
+
+- A source-policy constraint, `release_signer`, anchors the Ed25519 keys a source signs its releases with to a host pattern: `{"kind": "release_signer", "host": "*.news.example", "keys": ["<base64 public key>"]}`, with more than one key during a rotation. The first term matching the host a signed release was served from applies; a release that verifies under a key it does not name is a breach, refused under `strict` and carried with the breach recorded under `observe` and `prefer`. The crossing's `release` record and the verifier's record carry `anchoring`, the term's host pattern and whether the key was anchored, or `none` where no term matched; never the keys. Without a term, a verified release still establishes only that the key the sidecar names signed it ([source policy](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/source-policy.md#constraints)).
+
+### Changed
+
+- A sidecar's `p_per_chunk`, `bounded_letters` and `decisions` arrays each admit at most 4096 elements whatever the script reports as `chunks`, and `bounded_letters` is now bounded by `chunks` as the other two are. A hello `endpoint` that is not a URL with an origin is omitted with `sidecar_output_dropped`; it used to be dropped without a gap ([processor](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/processor.md#calibration-and-the-no-text-boundary)).
+
+### Fixed
+
+- A release's own C2PA manifest whose data hash excludes any part of the release text is recorded `invalid`, with `binding.matches` false and the excluded ranges' count and summed length in `binding.coverage`, and a display does not carry it with its ingredient. Such a manifest used to read as `untrusted` or `trusted` and travel with the display although it did not bind the whole text ([display provenance](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/display-provenance.md#the-releases-own-manifest)).
+- `context_status` reads the session log for the checker's last outcome only when `COMMONMEASURE_CHECKER` names a checker whose manifest loads. It used to read the whole log on every call, so its cost grew with the session even on an edge that runs no checker.
+- When a sidecar exits, any process it left in its group is killed before the sidecar is reaped. The edge used to signal the group after reaping it, when the group's id could in principle already belong to an unrelated process ([processor](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/processor.md#messages-and-supervision)).
+- A network checker whose launch fails no longer records `sidecar_cost_unknown`: the gap is recorded only once the child has started, since one that never started made no call ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#sidecar-model-evidence)).
+- A display whose configured model stage did not run, because the reply was quotes only or had no sentence for the model to check, keeps the deterministic record's assurance, `observed`. It used to be recorded `declared` whenever a checker was configured, the same as a display the checker had answered ([display counts](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/display-counts.md)).
+- A second server on a session another server has already opted into host observations returns an `acquisition_id` from `context_fetch`, which its `context_show` accepts. It used to read the opt-in only when it opened the log, so a server opened before the other one opted in returned no handle for the rest of the session ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#acquisition-handles)).
+- The session-evidence contract, the display-provenance contract and the fail policy state that a unique `seq` is guaranteed only among writers of 0.4.15 or later: a process of 0.4.14 or earlier still writing to a session during an update window can give a new record a `seq` another writer used, and readers report such a `seq` as ambiguous. The fail policy said concurrent hooks could share a `seq` without qualification ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#where)).
+
 ## 0.4.15 (17 October 2026)
 
 The edge can now hand each `context_show` display to a checker it supervises as a sidecar, and can sign a C2PA provenance manifest for each display it renders. Nothing an operator runs today changes: no sidecar runs unless `COMMONMEASURE_CHECKER` names one, and every sidecar's manifest, protocol, declared network and credential are checked before it is started. A receiver sees no new event. The one change that matters to an edge whose home is shared across releases is the next paragraph.
@@ -27,7 +49,7 @@ The edge can now hand each `context_show` display to a checker it supervises as 
 ### Fixed
 
 - A `connect` whose directory-proof upload the hub refuses with a `401`, and whose following standing check the hub answers in the same millisecond, no longer exits 3 with the first policy synchronisation unauthenticated. A clean standing answer withdraws a `401` the edge had recorded before it asked, and keeps one recorded after, ordered by the record rather than by the clock. While an update settles, a `401` recorded by a process of an earlier release is kept by an answer whose request went out before it and withdrawn by one whose asker had read it ([enrolment](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/enrolment.md#standing-and-revocation)).
-- Two writers on one session log no longer give two records the same `seq`: a record's `seq` is its line, counted under the append lock at each append.
+- Two writers of this release on one session log no longer give two records the same `seq`: a record's `seq` is its line, counted under the append lock at each append. A process of an earlier release still writing to the session beside them can, until it is restarted on the new binary; `commonmeasure provenance` and `commonmeasure inspect` report a `seq` that names two records as ambiguous ([session evidence](https://github.com/commonmeasure/commonmeasure/blob/main/docs/contracts/session-evidence.md#where)).
 
 ## 0.4.14 (15 October 2026)
 

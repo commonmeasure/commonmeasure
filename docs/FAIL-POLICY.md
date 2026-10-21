@@ -86,8 +86,13 @@ file, because a log holding two runs describes neither.
 
 A session's log is the opposite and for the same reason. A session spans many
 short-lived hook processes, so its log is opened for append and `seq` resumes
-from what is there. Concurrent hooks can share a `seq`; a reader orders by
-position.
+from what is there. A record's `seq` is its line: each writer of 0.4.15 or
+later counts other writers' lines under the append lock, so concurrent
+writers of those releases never share a `seq`. A process of 0.4.14 or
+earlier beside them still can, and a reader that resolves a `seq` to more
+than one record reports it as ambiguous rather than choosing one; a reader
+that only orders records uses their position
+([session evidence](contracts/session-evidence.md) §Where).
 
 - `a_second_run_cannot_append_to_a_first_runs_log`
   (`crates/commonmeasure-runtime/tests/evidence_integrity.rs`)

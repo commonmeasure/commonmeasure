@@ -105,6 +105,7 @@ required.
 {"kind": "allowed_provider", "provider": "exa"}
 {"kind": "denied_provider", "provider": "exa"}
 {"kind": "processor_egress", "processor": "systemone-choice", "provider": "openrouter"}
+{"kind": "release_signer", "host": "*.news.example", "keys": ["6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="]}
 {"kind": "access_rule", "host": "*.example.com", "action": "refuse"}
 ```
 
@@ -124,10 +125,31 @@ nothing. This is permission for declared egress, not socket confinement;
 the record names the admitting term and declared origins. Scope and
 principal replacement of the constraints list applies as for other kinds.
 
-Every kind but one is a set, and the order of its entries means nothing.
-`access_rule` is the exception. Access rules are read in the order written
-and the first whose `host` matches the source's host decides; a later rule
-for the same host is never reached.
+`release_signer` anchors the Ed25519 keys a source signs its releases with
+to the hosts `host` matches, a host pattern as for `access_rule`. `keys` is
+a non-empty list of public keys, each 32 bytes in standard base64 with
+padding, the encoding a release sidecar uses for `signer_public_key`; the
+list is a set. To rotate a key, add the new one beside the old and remove
+the old once the source has stopped signing with it. The
+[`release-verifier`](processor.md#status) reads these terms for each signed
+release a mediated fetch receives: the first term whose `host` matches the
+host the release was served from applies, and a release that verifies under
+a key the term does not name is a breach, refused under `strict` and
+carried with the breach recorded under `observe` and `prefer`. With no
+matching term the verifier checks only the signature, and the record says no
+anchoring applied. The term grants and refuses no crossing by itself, and
+admission does not read it. It names the source's publication key only;
+the issuer of an anonymous pass a fetch presents is a different identity,
+and this term neither names nor checks it. A key that is not a point on the
+curve is accepted and anchors nothing, since no signature verifies under
+it. Scope and principal replacement of the constraints list applies as for
+other kinds.
+
+Every kind but two is a set, and the order of its entries means nothing.
+`access_rule` and `release_signer` are the exceptions. Each is read in the
+order written among the terms of its own kind, and the first whose `host`
+matches the source's host decides; a later term of that kind for the same
+host is never reached.
 
 ```json
 {
@@ -389,7 +411,8 @@ first fault.
 **Structure.** The document must parse into the fields above: no unknown
 field where §Fields says one refuses, every required member present, every
 value of its type, a known mode, a known constraint kind, a known action, a
-host pattern that names a host. The refusal is `<file> is not a valid
+host pattern that names a host, and a `release_signer` term with at least
+one key, each 32 bytes in standard base64. The refusal is `<file> is not a valid
 policy: ` followed by the parser's message, whose wording is not part of
 this contract.
 
@@ -487,7 +510,8 @@ from the types the loader parses with and printed by
 what the binary prints.
 
 The schema decides structure and nothing after it. It accepts a host pattern
-with a misplaced wildcard, which the parser refuses, and it accepts every
+with a misplaced wildcard and a `release_signer` key that is not 32 bytes in
+standard base64, which the parser refuses, and it accepts every
 document refused by a check in §What the loader refuses. A document the
 schema accepts is therefore not a document the loader accepts; the vectors
 record the schema's verdict and the loader's separately, and the difference

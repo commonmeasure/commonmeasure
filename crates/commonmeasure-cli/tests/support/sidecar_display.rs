@@ -110,6 +110,7 @@ fn sidecar_example_confirms_and_withholds_with_a_completed_record() {
     assert_eq!(model["calibration"]["state"], "uncalibrated");
     assert_eq!(record["processor"]["implementation"]["kind"], "sidecar");
     assert_eq!(record["processor"]["permissions"]["network"], false);
+    assert_eq!(record["assurance"], "declared");
     assert_eq!(
         record["detail"]["items"][0]["answers"][4]["reason"],
         "sidecar_probability_reported"
@@ -572,10 +573,11 @@ print(json.dumps({{'bye': {{'requests': requests, 'input_tokens': requests * 23}
     let mut edge = configured(home.path(), &path, &extra);
     invoke(&mut edge, &site);
     assert_eq!(requests.load(Ordering::SeqCst), 0);
+    let refused = invocation(home.path());
+    assert!(refused.to_string().contains("processor_egress_refused"));
     assert!(
-        invocation(home.path())
-            .to_string()
-            .contains("processor_egress_refused")
+        !model_gaps(&refused).contains(&"sidecar_cost_unknown".to_owned()),
+        "{refused}"
     );
     drop(edge);
     for mode in ["observe", "prefer", "strict"] {
@@ -614,6 +616,7 @@ print(json.dumps({{'bye': {{'requests': requests, 'input_tokens': requests * 23}
             .starts_with("sha256:")
     );
     assert_eq!(egress["model"], "fixture/1");
+    assert!(model_gaps(&record).contains(&"sidecar_cost_unknown".to_owned()));
     let status = payload(&edge.ask(call("context_status", json!({}))));
     assert_eq!(status["checker"]["credential"]["state"], "set");
     assert_eq!(requests.load(Ordering::SeqCst), 2, "status makes no call");
@@ -642,6 +645,46 @@ print(json.dumps({{'bye': {{'requests': requests, 'input_tokens': requests * 23}
     ] {
         assert!(!report.contains(absent), "{report}");
     }
+}
+
+fn model_gaps(record: &Value) -> Vec<String> {
+    record["detail"]["model"]["gaps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{record}"))
+        .iter()
+        .map(|gap| gap.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn sidecar_network_launch_failure_records_no_unknown_cost() {
+    let home = tempfile::tempdir().unwrap();
+    // No `uv` on this PATH, so the admitted child is never started.
+    let empty = tempfile::tempdir().unwrap();
+    let path = manifest(
+        home.path(),
+        &format!("import json\n{HELLO}"),
+        5.0,
+        json!({"provider": "loopback", "origins": ["http://127.0.0.1:9"], "credential_env": "FIXTURE_KEY"}),
+    );
+    write_policy(home.path(), &json!({"allow_private_hosts": true, "constraints": [{"kind": "processor_egress", "processor": "fixture", "provider": "loopback"}]}).to_string());
+    let mut edge = configured_under_policy(
+        home.path(),
+        &path,
+        &[
+            ("FIXTURE_KEY", Path::new("synthetic-key")),
+            ("PATH", empty.path()),
+        ],
+    );
+    let display = invoke(&mut edge, &labelled_origin());
+    assert_eq!(
+        outcomes(&display),
+        ["shown_unconfirmed", "shown_unconfirmed"],
+        "{display}"
+    );
+    let record = invocation(home.path());
+    assert_eq!(record["detail"]["model"]["egress"]["admitted"], true);
+    assert_eq!(model_gaps(&record), ["sidecar_start_failed"], "{record}");
 }
 
 #[test]
@@ -753,6 +796,31 @@ fn sidecar_uncached_dependencies_fail_offline_before_running_the_script() {
             .contains("commonmeasure-nonexistent-sidecar-dependency"),
         "uv's stderr is discarded"
     );
+}
+
+#[test]
+fn sidecar_not_run_keeps_the_deterministic_assurance() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = home.path().join("started");
+    let path = manifest(
+        home.path(),
+        &format!("open({marker:?}, 'w').write('started')\n"),
+        10.0,
+        json!(false),
+    );
+    let mut edge = configured(home.path(), &path, &[]);
+    let site = labelled_origin();
+    let fetched = edge.fetch(&format!("{}/article", site.url()));
+    let answer = edge.show(
+        fetched["content_hash"].as_str().unwrap(),
+        json!([{"kind": "quote", "passage": "p0"}]),
+    );
+    assert_eq!(answer["result"]["isError"], false, "{answer}");
+    assert!(!marker.exists(), "a quote-only reply starts no process");
+    let record = invocation(home.path());
+    assert_eq!(record["detail"]["model"]["outcome"], "not_run", "{record}");
+    assert_eq!(record["processor"]["implementation"]["kind"], "sidecar");
+    assert_eq!(record["assurance"], "observed");
 }
 
 #[test]

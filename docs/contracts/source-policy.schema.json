@@ -302,6 +302,30 @@
               ]
             }
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "host": {
+              "$ref": "#/$defs/HostPattern"
+            },
+            "keys": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SignerKey"
+              },
+              "minItems": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "release_signer"
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "keys"
+          ]
         }
       ]
     },
@@ -324,6 +348,9 @@
       ]
     },
     "HostPattern": {
+      "type": "string"
+    },
+    "SignerKey": {
       "type": "string"
     },
     "PolicyScope": {

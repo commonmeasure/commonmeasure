@@ -180,6 +180,32 @@ pub struct ReleaseRecord {
     /// sidecar carries one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c2pa: Option<C2paRecord>,
+    /// Whether the operator anchored a signer key to the host that served
+    /// the release, and whether the sidecar's key is one of them. A record
+    /// written before anchoring existed reads as `none`, which it was.
+    #[serde(default)]
+    pub anchoring: Anchoring,
+}
+
+/// Which anchoring of the signer key applied to a release, as the crossing
+/// record keeps it: the term's host pattern and the result, never the keys
+/// the term names.
+///
+/// This is about the source's publication key alone. Who issued a pass the
+/// fetch presented is a different identity and is never named here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "applied", rename_all = "snake_case")]
+pub enum Anchoring {
+    /// A `release_signer` term of the source policy matched the host.
+    Policy {
+        /// The term's host pattern, as the loader writes it.
+        host: String,
+        /// Whether the sidecar's signer key is one the term names.
+        key_anchored: bool,
+    },
+    /// No term matched: nothing pins the key for this source.
+    #[default]
+    None,
 }
 
 /// What a C2PA store a release carries was found to be, read offline
@@ -210,8 +236,8 @@ pub struct C2paRecord {
     pub manifest_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest_label: Option<String>,
-    /// Whether the store's data hash matches the NFC text, and whether
-    /// that text is the text `text_sha256` names.
+    /// Whether the store's data hash binds the whole NFC text and matches
+    /// it, and whether that text is the text `text_sha256` names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<C2paBinding>,
     /// The claim signer's certificate subject and issuer, as the reader
@@ -234,11 +260,28 @@ pub struct C2paRecord {
 /// The binding of a release's C2PA store to its text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct C2paBinding {
-    /// The data hash matches the NFC-normalised release text.
+    /// The data hash binds the whole NFC-normalised release text, with no
+    /// exclusion, and matches it.
     pub matches: bool,
     /// The NFC-normalised text is byte for byte the text `text_sha256`
     /// names, so the binding and the Ed25519 signature are over one text.
     pub same_text_as_signed: bool,
+    /// Where the data hash excludes any of the text, what it leaves out.
+    /// Absent where it excludes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<C2paCoverage>,
+}
+
+/// The part of a release's text a store's data hash excludes: a store that
+/// does not bind the whole text, recorded by count and length, never the
+/// text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct C2paCoverage {
+    /// The number of exclusion ranges across the `c2pa.hash.data`
+    /// assertions.
+    pub excluded_ranges: usize,
+    /// Their declared lengths in bytes, summed.
+    pub excluded_bytes: u64,
 }
 
 fn default_display_mode() -> String {

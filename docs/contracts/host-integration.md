@@ -125,7 +125,10 @@ implements it.
 - **Opt-in.** The plugin's `.mcp.json` and `install claude` start the server
   with `mcp --host claude-code --host-observations`. The server records
   `observations_started` before its first crossing, so each admitted
-  `context_fetch` returns an `acquisition_id` in its payload.
+  `context_fetch` returns an `acquisition_id` in its payload. A second
+  server on the same session adopts the opt-in another server recorded
+  and returns handles as well
+  ([session evidence §Acquisition handles](session-evidence.md#acquisition-handles)).
 - **When.** The `Stop` hook reads the transcript at the end of each turn,
   once the transcript holds the turn's final answer, and submits to every
   MCP log its host process started that opted in for

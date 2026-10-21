@@ -806,6 +806,22 @@ impl SessionLog {
         self.host_observations
     }
 
+    /// Adopt an opt-in another writer recorded after this log was opened, so
+    /// every server on the session mints acquisition handles alike. The
+    /// opt-in is read once at open; a second server opened before the first
+    /// recorded it would otherwise withhold handles for the whole session,
+    /// since the log cannot be opted in again once it holds a crossing.
+    pub fn adopt_observations(&mut self) -> std::io::Result<bool> {
+        if !self.host_observations {
+            self.host_observations = match std::fs::File::open(&self.path) {
+                Ok(file) => opted_in(file)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error),
+            };
+        }
+        Ok(self.host_observations)
+    }
+
     /// Append one record, carrying the `instance` reference when a
     /// registration is retained for this session
     /// (`docs/contracts/session-evidence.md` §Where). The retained record is

@@ -21,6 +21,9 @@ const PROTOCOL: &str = "commonmeasure-sidecar/1";
 const MAX_LINE: u64 = 1024 * 1024;
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 const MAX_CASES: usize = 1024;
+// The script reports its own `chunks`, so it cannot be the only bound on
+// the arrays sized by it. No real batch splits a passage this finely.
+const MAX_CHUNKS: u64 = 4096;
 const ENVIRONMENT: &[&str] = &["PATH", "HOME", "TMPDIR", "LANG", "UV_CACHE_DIR"];
 // These are the questions the edge asks, not an attestation to a script's
 // private prompt. The digest in the egress record has exactly this scope.
@@ -368,7 +371,11 @@ impl ConfiguredModel {
             "Model probabilities are the sidecar's declarations, not proof of truth or calibration.",
             "Network origins and filesystem access are declared, not confined; dependencies are not digest-pinned by this protocol.",
         ]);
-        invocation = invocation.declared();
+        // A stage that never ran stated nothing, so the findings are the
+        // deterministic path's own observations.
+        if self.checker.evidence["outcome"] != "not_run" {
+            invocation = invocation.declared();
+        }
         for gap in self.checker.evidence["gaps"]
             .as_array()
             .into_iter()
@@ -390,7 +397,9 @@ impl ConfiguredModel {
 
 /// Inspect configuration and the last recorded invocation without spawning
 /// a process. `reachable: null` means no successful invocation is known.
-pub fn status(constraints: &[Constraint], last: Option<&Value>) -> Value {
+/// `last` supplies the last recorded invocation; it is called only when a
+/// checker is configured and its manifest prepared.
+pub fn status(constraints: &[Constraint], last: impl FnOnce() -> Option<Value>) -> Value {
     let Some(configured) = configured_model(constraints) else {
         return json!({"configured": false});
     };
@@ -403,8 +412,10 @@ pub fn status(constraints: &[Constraint], last: Option<&Value>) -> Value {
             status["credential"] = p.network.as_ref().map(|n| json!({"variable": n.credential_env,
                 "state": if std::env::var_os(&n.credential_env).is_some_and(|v| !v.is_empty()) { "set" } else { "unset" }
             })).unwrap_or(Value::Null);
-            let last =
-                last.filter(|l| l["manifest"]["implementation"] == p.identity["implementation"]);
+            let last = last();
+            let last = last
+                .as_ref()
+                .filter(|l| l["manifest"]["implementation"] == p.identity["implementation"]);
             status["last_outcome"] = last.map(|l| l["outcome"].clone()).unwrap_or(Value::Null);
             status["hello"] = last.map(|l| l["hello"].clone()).unwrap_or(Value::Null);
             let gap = p.admitted().err();
@@ -460,9 +471,18 @@ impl ModelChecker for SidecarChecker {
         let mut hello = Value::Null;
         let mut bye = Value::Null;
         let mut hello_ms = None;
+        let mut launched = false;
         let result = self.prepared.as_ref().map_err(|f| *f).and_then(|p| {
             p.admitted()?;
-            run(p, cases, &mut hello, &mut bye, &mut hello_ms, &mut gaps)
+            run(
+                p,
+                cases,
+                &mut hello,
+                &mut bye,
+                &mut hello_ms,
+                &mut launched,
+                &mut gaps,
+            )
         });
         let failed = result.is_err();
         let questions = self.questions();
@@ -501,11 +521,9 @@ impl ModelChecker for SidecarChecker {
                 }).collect()
             }
         };
-        if self
-            .prepared
-            .as_ref()
-            .is_ok_and(|p| p.network.is_some() && p.admitted().is_ok())
-        {
+        // Only a child that started can have made a call to the declared
+        // origins; one that never launched cost nothing.
+        if launched && self.prepared.as_ref().is_ok_and(|p| p.network.is_some()) {
             gaps.push("sidecar_cost_unknown");
         }
         gaps.sort_unstable();
@@ -574,7 +592,11 @@ fn filter_detail_level(v: &Value, gaps: &mut Vec<&'static str>, decisions: bool)
         }
         return json!({});
     };
-    let array_limit = map.get("chunks").and_then(Value::as_u64).unwrap_or(64);
+    let array_limit = map
+        .get("chunks")
+        .and_then(Value::as_u64)
+        .unwrap_or(64)
+        .min(MAX_CHUNKS);
     let mut out = serde_json::Map::new();
     for (key, value) in map {
         let allowed = match key.as_str() {
@@ -599,8 +621,9 @@ fn filter_detail_level(v: &Value, gaps: &mut Vec<&'static str>, decisions: bool)
                 .as_array()
                 .is_some_and(|a| a.len() as u64 <= array_limit && a.iter().all(Value::is_number)),
             "bounded_letters" => value.as_array().is_some_and(|a| {
-                a.iter()
-                    .all(|x| matches!(x.as_str(), Some("A" | "B" | "C")))
+                a.len() as u64 <= array_limit
+                    && a.iter()
+                        .all(|x| matches!(x.as_str(), Some("A" | "B" | "C")))
             }),
             "probabilities" => value.as_object().is_some_and(|m| {
                 m.iter().all(|(k, v)| {
@@ -666,22 +689,91 @@ fn filter_hello(v: &Value, gaps: &mut Vec<&'static str>) -> Value {
     }
     result["questions"] = v["questions"].clone();
     // Endpoint paths and queries are neither identity nor safe evidence.
-    if let Some(endpoint) = v["endpoint"].as_str().and_then(|s| url::Url::parse(s).ok()) {
-        result["endpoint_origin"] = json!(endpoint.origin().ascii_serialization());
+    if let Some(endpoint) = v.get("endpoint") {
+        let origin = endpoint
+            .as_str()
+            .and_then(|s| url::Url::parse(s).ok())
+            .map(|url| url.origin())
+            .filter(url::Origin::is_tuple);
+        if let Some(origin) = origin {
+            result["endpoint_origin"] = json!(origin.ascii_serialization());
+        } else {
+            gaps.push("sidecar_output_dropped");
+        }
     }
     result
 }
 
-struct Group(Child);
+/// The child's process group, created by `process_group(0)`. The group id
+/// is the leader's pid, which stays ours only until the leader is reaped, so
+/// the group is never signalled after that.
+struct Group {
+    child: Child,
+    reaped: bool,
+}
+
+impl Group {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            reaped: false,
+        }
+    }
+
+    /// The leader's exit status once it has exited. Any member it left
+    /// behind is killed while the exited leader is still unreaped, then the
+    /// leader is reaped.
+    fn try_finish(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        #[cfg(unix)]
+        {
+            // SAFETY: an all-zero siginfo_t is a valid out-parameter.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: waits on our own child; WNOWAIT leaves it unreaped.
+            let waited = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.child.id() as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if waited != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: waitid filled info, or left it zeroed under WNOHANG.
+            if unsafe { info.si_pid() } == 0 {
+                return Ok(None);
+            }
+            // SAFETY: the exited leader is unreaped, so its pid is still
+            // this group's id.
+            unsafe {
+                libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL);
+            }
+            let status = self.child.wait()?;
+            self.reaped = true;
+            Ok(Some(status))
+        }
+        #[cfg(not(unix))]
+        {
+            let status = self.child.try_wait()?;
+            self.reaped = status.is_some();
+            Ok(status)
+        }
+    }
+}
+
 impl Drop for Group {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        // SAFETY: this group was created by process_group(0) for our child.
-        unsafe {
-            libc::killpg(self.0.id() as libc::pid_t, libc::SIGKILL);
+        if self.reaped {
+            return;
         }
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        #[cfg(unix)]
+        // SAFETY: the leader is unreaped, so its pid is still this group's id.
+        unsafe {
+            libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL);
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -702,6 +794,7 @@ fn run(
     hello: &mut Value,
     bye: &mut Value,
     hello_ms: &mut Option<u128>,
+    launched: &mut bool,
     gaps: &mut Vec<&'static str>,
 ) -> Result<Vec<Value>> {
     if cases.len() > MAX_CASES {
@@ -732,7 +825,7 @@ fn run(
         command.process_group(0);
     }
     let started = Instant::now();
-    let mut group = Group(
+    let mut group = Group::new(
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -742,8 +835,9 @@ fn run(
             .spawn()
             .map_err(|_| "sidecar_start_failed")?,
     );
-    let mut input = group.0.stdin.take().ok_or("sidecar_start_failed")?;
-    let output = group.0.stdout.take().ok_or("sidecar_start_failed")?;
+    *launched = true;
+    let mut input = group.child.stdin.take().ok_or("sidecar_start_failed")?;
+    let output = group.child.stdout.take().ok_or("sidecar_start_failed")?;
     let (tx, rx) = mpsc::channel();
     let max_lines = cases.len() + 3;
     std::thread::spawn(move || {
@@ -843,7 +937,7 @@ fn run(
         Ok(_) => return Err("sidecar_protocol_extra_output"),
     }
     loop {
-        if let Some(exit) = group.0.try_wait().map_err(|_| "sidecar_exit_failed")? {
+        if let Some(exit) = group.try_finish().map_err(|_| "sidecar_exit_failed")? {
             if !exit.success() {
                 return Err("sidecar_exit_failed");
             }
@@ -939,12 +1033,12 @@ mod output_filter_tests {
     }
 
     #[test]
-    fn numeric_arrays_use_the_same_objects_integer_chunk_bound_or_default() {
-        for key in ["p_per_chunk", "decisions"] {
-            let element = if key == "decisions" {
-                json!({"p_raw": 0.5})
-            } else {
-                json!(0.5)
+    fn arrays_use_the_same_objects_integer_chunk_bound_or_default_under_the_ceiling() {
+        for key in ["p_per_chunk", "decisions", "bounded_letters"] {
+            let element = match key {
+                "decisions" => json!({"p_raw": 0.5}),
+                "bounded_letters" => json!("A"),
+                _ => json!(0.5),
             };
             for chunks in [
                 None,
@@ -953,10 +1047,17 @@ mod output_filter_tests {
                 Some(Value::Null),
                 Some(json!(0)),
                 Some(json!(2)),
+                Some(json!(4096)),
+                Some(json!(4097)),
+                Some(json!(1_000_000)),
                 Some(json!(u64::MAX)),
             ] {
-                let limit = chunks.as_ref().and_then(Value::as_u64).unwrap_or(64);
-                for length in [0, 1, 2, 3, 64, 65] {
+                let limit = chunks
+                    .as_ref()
+                    .and_then(Value::as_u64)
+                    .unwrap_or(64)
+                    .min(4096);
+                for length in [0, 1, 2, 3, 64, 65, 4096, 4097] {
                     let mut value = json!({key: vec![element.clone(); length]});
                     if let Some(chunks) = &chunks {
                         value["chunks"] = chunks.clone();
@@ -983,5 +1084,95 @@ mod output_filter_tests {
         );
         assert!(filtered["decisions"][0].get("p_per_chunk").is_none());
         assert_eq!(gaps, ["sidecar_output_dropped"]);
+    }
+
+    #[test]
+    fn status_without_a_configured_checker_reads_no_record() {
+        // The test inherits the caller's environment; a configured checker
+        // there is outside this test's scope.
+        if std::env::var_os("COMMONMEASURE_CHECKER").is_some() {
+            return;
+        }
+        let status = status(&[], || panic!("the record was read"));
+        assert_eq!(status, json!({"configured": false}));
+    }
+
+    #[test]
+    fn hello_endpoint_keeps_only_a_tuple_origin_and_records_a_dropped_one() {
+        let mut gaps = Vec::new();
+        let filtered = filter_hello(
+            &json!({"endpoint": "https://api.example:8443/v1/score?key=x"}),
+            &mut gaps,
+        );
+        assert_eq!(filtered["endpoint_origin"], "https://api.example:8443");
+        assert!(filtered.get("endpoint").is_none());
+        assert!(gaps.is_empty());
+        for endpoint in [
+            json!("not a url"),
+            json!("data:text/plain,hello"),
+            json!(42),
+            json!(["https://api.example"]),
+            Value::Null,
+        ] {
+            let mut gaps = Vec::new();
+            let filtered = filter_hello(&json!({"endpoint": endpoint}), &mut gaps);
+            assert!(filtered.get("endpoint_origin").is_none());
+            assert!(filtered.get("endpoint").is_none());
+            assert_eq!(gaps, ["sidecar_output_dropped"]);
+        }
+        let mut gaps = Vec::new();
+        assert!(
+            filter_hello(&json!({}), &mut gaps)
+                .get("endpoint_origin")
+                .is_none()
+        );
+        assert!(gaps.is_empty());
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod group_tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+
+    fn alive(pid: &str) -> bool {
+        // A killed member may linger as a zombie until its new parent reaps it.
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit(')')
+                .next()
+                .is_some_and(|s| !s.starts_with(" Z"))
+        })
+    }
+
+    #[test]
+    fn an_exited_leader_is_reaped_after_its_remaining_members_are_killed() {
+        let mut group = Group::new(
+            Command::new("sh")
+                .args(["-c", "sleep 30 & echo $!"])
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut member = String::new();
+        BufReader::new(group.child.stdout.take().unwrap())
+            .read_line(&mut member)
+            .unwrap();
+        let member = member.trim().to_owned();
+        assert!(alive(&member));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = group.try_finish().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the leader did not exit");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(status.success());
+        assert!(group.reaped);
+        while alive(&member) {
+            assert!(Instant::now() < deadline, "the member outlived its leader");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }

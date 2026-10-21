@@ -25,9 +25,9 @@ pub use evidence::{AssuranceBasis, Decision, DecisionRecord, EvidenceError, Gap,
 pub use finding::{Finding, Standing};
 pub use job::{
     AccessAction, Constraint, ContextJob, EvidenceRequirement, HostPattern, JobError,
-    MAX_PAGE_READINGS, Objective, PolicyMode, TooManyReadings, canonical_url, matching_pattern,
-    matching_target, matching_target_readings, matching_url, matching_url_readings,
-    normalised_host,
+    MAX_PAGE_READINGS, Objective, PolicyMode, SignerKey, TooManyReadings, canonical_url,
+    matching_pattern, matching_target, matching_target_readings, matching_url,
+    matching_url_readings, normalised_host, release_signer_for,
 };
 pub use money::Money;
 pub use plan::{ModelPlan, PlanError, ProviderCapability, ProviderRef, SupplyPlan, SupplyStep};

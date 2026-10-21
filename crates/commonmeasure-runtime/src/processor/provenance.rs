@@ -1259,6 +1259,51 @@ pub fn sign_source_store(
     training_mining: Option<&TrainingMining>,
     material: &SigningMaterial,
 ) -> Result<Vec<u8>, String> {
+    let text: String = text.nfc().collect();
+    sign_store(
+        &source_definition(title, training_mining),
+        &text,
+        material,
+        Some(&SOURCE_IDENTITY),
+        None,
+        &[],
+    )
+}
+
+/// A source store as [`sign_source_store`] writes it, except that its data
+/// hash excludes the `(start, length)` byte ranges of the NFC text, given in
+/// order and apart, and hashes the rest: a store that verifies without
+/// binding the whole text, as a non-conforming source could sign one.
+#[cfg(test)]
+pub(crate) fn sign_source_store_excluding(
+    title: &str,
+    text: &str,
+    excluded: &[(usize, usize)],
+    material: &SigningMaterial,
+) -> Result<Vec<u8>, String> {
+    let text: String = text.nfc().collect();
+    let mut binding = DataHash::new(DATA_HASH_NAME, "sha256");
+    let mut bound = Vec::new();
+    let mut at = 0;
+    for &(start, length) in excluded {
+        binding.add_exclusion(HashRange::new(start as u64, length as u64));
+        bound.extend_from_slice(&text.as_bytes()[at..start]);
+        at = start + length;
+    }
+    bound.extend_from_slice(&text.as_bytes()[at..]);
+    binding.set_hash(sha2_digest(&bound));
+    sign_bound(
+        &source_definition(title, None),
+        binding,
+        material,
+        Some(&SOURCE_IDENTITY),
+        &[],
+    )
+}
+
+/// The definition of a source's own store: a `c2pa.created` action and the
+/// source's `cawg.training-mining` where it declares one.
+fn source_definition(title: &str, training_mining: Option<&TrainingMining>) -> Value {
     let mut assertions = vec![json!({
         "label": "c2pa.actions",
         "data": {"actions": [{
@@ -1269,23 +1314,11 @@ pub fn sign_source_store(
     if let Some(training) = training_mining {
         assertions.push(json!({"label": TRAINING_MINING_LABEL, "data": training.assertion()}));
     }
-    let definition = json!({
+    json!({
         "title": title,
         "format": TEXT_FORMAT,
         "assertions": assertions,
-    });
-    let text: String = text.nfc().collect();
-    sign_store(
-        &definition,
-        &text,
-        material,
-        Some(&IdentityRoles {
-            referenced: &["c2pa.actions"],
-            roles: &[PUBLISHER_ROLE],
-        }),
-        None,
-        &[],
-    )
+    })
 }
 
 /// SHA-256 of the NFC-normalised display text, `sha256:<hex>`: what the
@@ -1382,6 +1415,13 @@ struct IdentityRoles<'a> {
     roles: &'a [&'a str],
 }
 
+/// A source's identity on its own store: the source, as publisher, over
+/// the actions.
+const SOURCE_IDENTITY: IdentityRoles<'static> = IdentityRoles {
+    referenced: &["c2pa.actions"],
+    roles: &[PUBLISHER_ROLE],
+};
+
 /// The batch path's identity: the operator, as producer, over the actions
 /// and the source record.
 const OPERATOR_IDENTITY: IdentityRoles<'static> = IdentityRoles {
@@ -1445,6 +1485,23 @@ fn sign_store(
     appended: Option<usize>,
     resources: &[(String, Vec<u8>)],
 ) -> Result<Vec<u8>, String> {
+    let mut binding = DataHash::new(DATA_HASH_NAME, "sha256");
+    if let Some(appended) = appended {
+        binding.add_exclusion(HashRange::new(text.len() as u64, appended as u64));
+    }
+    binding.set_hash(sha2_digest(text.as_bytes()));
+    sign_bound(definition, binding, material, identity, resources)
+}
+
+/// Sign `definition` into a raw C2PA manifest store with `binding` as its
+/// hard binding.
+fn sign_bound(
+    definition: &Value,
+    binding: DataHash,
+    material: &SigningMaterial,
+    identity: Option<&IdentityRoles>,
+    resources: &[(String, Vec<u8>)],
+) -> Result<Vec<u8>, String> {
     let signer = match identity {
         Some(identity) => c2pa::create_signer::from_x509_identity(
             bounded_signer(material)?,
@@ -1464,11 +1521,6 @@ fn sign_store(
             .add_resource(identifier, Cursor::new(bytes.clone()))
             .map_err(|error| format!("resource {identifier}: {error}"))?;
     }
-    let mut binding = DataHash::new(DATA_HASH_NAME, "sha256");
-    if let Some(appended) = appended {
-        binding.add_exclusion(HashRange::new(text.len() as u64, appended as u64));
-    }
-    binding.set_hash(sha2_digest(text.as_bytes()));
     builder
         .add_assertion(c2pa::assertions::labels::DATA_HASH, &binding)
         .map_err(|error| format!("data hash: {error}"))?;
@@ -1602,6 +1654,13 @@ pub struct StoreReading {
     pub signature: Value,
     /// The SDK's whole view of the manifest store.
     pub manifest: Value,
+    /// Every exclusion of the active manifest's `c2pa.hash.data`
+    /// assertions, `(start, length)` in bytes of the asset, in order; `None`
+    /// where the SDK's detailed report could not be read. The SDK hashes
+    /// with these exclusions and does not require that they leave the whole
+    /// text bound, so a reader that needs full coverage checks them.
+    #[serde(skip)]
+    pub data_hash_exclusions: Option<Vec<(u64, u64)>>,
 }
 
 impl StoreReading {
@@ -1755,6 +1814,7 @@ fn read_manifest(
         .ok_or_else(|| ReadBackError::Manifest("no active manifest".to_owned()))?
         .to_owned();
     let signature = view["manifests"][&label]["signature_info"].clone();
+    let data_hash_exclusions = data_hash_exclusions(&reader, &label);
 
     let statuses: Vec<Value> = reader
         .validation_status()
@@ -1810,7 +1870,33 @@ fn read_manifest(
         }),
         signature,
         manifest: view,
+        data_hash_exclusions,
     })
+}
+
+/// The exclusions of the manifest `label`'s `c2pa.hash.data` assertions,
+/// read from the SDK's detailed report, which keeps the assertion store as
+/// signed; the plain view leaves hard bindings out. `None` where the report
+/// or any range in it does not read.
+fn data_hash_exclusions(reader: &Reader, label: &str) -> Option<Vec<(u64, u64)>> {
+    let report: Value = serde_json::from_str(&reader.detailed_json_checked().ok()?).ok()?;
+    let data_hash = c2pa::assertions::labels::DATA_HASH;
+    report["manifests"][label]["assertion_store"]
+        .as_object()?
+        .iter()
+        // A second assertion under one label carries an instance suffix.
+        .filter(|(key, _)| {
+            key.strip_prefix(data_hash)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("__"))
+        })
+        .flat_map(|(_, assertion)| {
+            assertion["exclusions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .map(|range| Some((range["start"].as_u64()?, range["length"].as_u64()?)))
+        .collect()
 }
 
 /// A `cawg.identity` assertion as the reader reports it, summarised: the
@@ -2470,6 +2556,7 @@ mod tests {
             reading.assertions("cawg.identity").is_empty(),
             "no identity"
         );
+        assert_eq!(reading.data_hash_exclusions, Some(vec![]), "the whole text");
         let ingredient = &reading.active()["ingredients"][0];
         assert_eq!(
             ingredient["instance_id"],

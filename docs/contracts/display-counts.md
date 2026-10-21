@@ -39,6 +39,13 @@ text, which its configuration digest covers.
 The counts say what the display rule did. A `shown_confirmed` count says a
 check passed, not that the sentence was true.
 
+The integrity checker's record states whose word the outcomes rest on. Its
+assurance is `observed` where the deterministic rule decided every item,
+including under a configured model stage that had no case to ask about
+(its outcome `not_run`), and `declared` where a model stage ran or was
+attempted, since its probabilities are the sidecar's statements
+([session evidence](session-evidence.md#sidecar-model-evidence)).
+
 The counts carry outcomes only: no sentence, passage, probability or
 reader. The integrity checker's record holds each question's verdict and
 probability beside the outcome, names each sentence by its hash and the

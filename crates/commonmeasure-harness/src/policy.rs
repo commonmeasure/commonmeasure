@@ -1709,6 +1709,14 @@ fn canonical_constraint(constraint: &Constraint) -> Value {
         Constraint::DeniedSourceHost { host } => json!({
             "kind": "denied_source_host", "host": normalised_host(host),
         }),
+        // The keys are a set; the term's position among its kind is kept by
+        // the caller, since the first matching term decides.
+        Constraint::ReleaseSigner { host, keys } => {
+            let mut keys = keys.clone();
+            keys.sort();
+            keys.dedup();
+            json!({"kind": "release_signer", "host": host, "keys": keys})
+        }
         other => serde_json::to_value(other).unwrap_or(Value::Null),
     }
 }
@@ -1724,7 +1732,10 @@ impl SessionPolicy {
     /// drift. Access rules are the exception: the first matching rule
     /// decides, so their order is the policy, and they are carried in
     /// declaration order with their position (`access_rules`), apart from
-    /// the sorted set (`constraints`). The operator's terms references are
+    /// the sorted set (`constraints`). `release_signer` terms are read first
+    /// match too; each carries its `position` among them inside the sorted
+    /// set, so a reorder moves the identity and a policy without one hashes
+    /// as it did. The operator's terms references are
     /// carried too, with hosts normalised the way `terms_for` matches them. The source path,
     /// and the authenticated subject id are left out: they describe the
     /// machine and the process, not the policy. A scope that did not match
@@ -1736,7 +1747,14 @@ impl SessionPolicy {
             .constraints
             .iter()
             .filter(|constraint| !matches!(constraint, Constraint::AccessRule { .. }))
-            .map(|constraint| canonical_json(&canonical_constraint(constraint)))
+            .scan(0, |signers, constraint| {
+                let mut canonical = canonical_constraint(constraint);
+                if matches!(constraint, Constraint::ReleaseSigner { .. }) {
+                    canonical["position"] = json!(*signers);
+                    *signers += 1;
+                }
+                Some(canonical_json(&canonical))
+            })
             .collect();
         constraints.sort();
         constraints.dedup();
@@ -3299,6 +3317,47 @@ mod tests {
             first.canonical()["constraints"].as_array().unwrap().len(),
             2
         );
+    }
+
+    /// The first matching `release_signer` term decides, so reordering the
+    /// terms is drift; the keys inside one are a set, so reordering them is
+    /// not.
+    #[test]
+    fn reordering_release_signer_terms_moves_the_identity_and_reordering_keys_does_not() {
+        const SEVEN: &str = "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=";
+        const EIGHT: &str = "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o=";
+        let written = |first: &str, second: &str, keys: [&str; 2]| {
+            policy(&format!(
+                r#"{{"constraints":[
+                    {{"kind":"release_signer","host":"{first}","keys":["{}","{}"]}},
+                    {{"kind":"denied_source_host","host":"tracker.example"}},
+                    {{"kind":"release_signer","host":"{second}","keys":["{SEVEN}"]}}]}}"#,
+                keys[0], keys[1]
+            ))
+        };
+        let first = written("news.example", "*.example", [SEVEN, EIGHT]);
+        assert_eq!(
+            first.identity(),
+            written("news.example", "*.example", [EIGHT, SEVEN]).identity()
+        );
+        assert_ne!(
+            first.identity(),
+            written("*.example", "news.example", [SEVEN, EIGHT]).identity()
+        );
+        let canonical = first.canonical();
+        let signers: Vec<&Value> = canonical["constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|term| term["kind"] == "release_signer")
+            .collect();
+        assert_eq!(signers.len(), 2);
+        let news = signers
+            .iter()
+            .find(|term| term["host"] == "news.example")
+            .unwrap();
+        assert_eq!(news["position"], 0);
+        assert_eq!(news["keys"], json!([EIGHT, SEVEN]), "sorted");
     }
 
     /// The principal and its basis are part of what was resolved: the same

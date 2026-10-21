@@ -79,9 +79,13 @@ the display text:
 
 `<n>` is the `seq` of the `integrity-checker` record the display was
 rendered from, which `display_rendered` names as `processor_record`. A
-`seq` is the record's line in the log, counted under the append lock, so
-two servers on one session never write two records, or two stores, under
-one `<n>` ([session evidence](session-evidence.md) §Where). The store is
+`seq` is the record's line in the log, counted under the append lock by
+every writer of 0.4.15 or later, so two such servers on one session never
+write two records, or two stores, under one `<n>`. A process of 0.4.14 or
+earlier still writing to the session can reuse a `seq`
+([session evidence](session-evidence.md) §Where); it writes no store, but
+its record can make the `<n>` a display names ambiguous, which the readers
+below report rather than resolve. The store is
 written whole to a temporary file of its own in the same directory and
 linked into place, so a reader never finds part of one and two writers
 never share a temporary file. A store already at the name is never
@@ -178,22 +182,45 @@ carry its own C2PA manifest store in its sidecar, outside the
 Ed25519-signed fields:
 
 - `sidecar.c2pa`: a standard base64 C2PA manifest store whose hard binding
-  is `c2pa.hash.data` over the NFC-normalised release text, signed by the
-  source with its own certificate, with the source's `cawg.identity`
-  (X.509) and, where it declares one, its `cawg.training-mining`.
+  is `c2pa.hash.data` over the whole NFC-normalised release text, with no
+  exclusion, signed by the source with its own certificate, with the
+  source's `cawg.identity` (X.509) and, where it declares one, its
+  `cawg.training-mining`. The store is carried beside the text, so its
+  binding has no wrapper to exclude.
 
 The release verifier reads the store offline against the release text,
 under the operator's trust anchors where configured, and records on the
 crossing's `release` record `c2pa`: `state` (`invalid`, `untrusted` or
 `trusted`), `reason` where `invalid`, `manifest_sha256`, `manifest_label`,
-`binding` (`matches`, whether the data hash matches the text, and
-`same_text_as_signed`, whether that text is the one `text_sha256` names),
+`binding` (`matches`, whether the data hash binds the whole text and
+matches it; `same_text_as_signed`, whether that text is the one
+`text_sha256` names; and, where the data hash excludes any range,
+`coverage`: `excluded_ranges`, the number of ranges, and `excluded_bytes`,
+their declared lengths summed),
 `signer` (common name, issuer, algorithm), `identities` (each
 `cawg.identity` summarised: credential kind, roles, subject, issuer and
 serial), `training_mining` as the source signed it, `statuses` and
 `verifier`. The verifier's own record says `absent` where the sidecar
 carries no store; the crossing's `release` then has no `c2pa`. No text is
 recorded.
+
+The C2PA reader checks a data hash over whatever its exclusions leave and
+does not require that they leave the whole text bound, so the verifier
+reads the exclusions of every `c2pa.hash.data` assertion in the store's
+active manifest itself. A store with any exclusion is `invalid`, whatever
+the reader reports, with a `reason` that names partial coverage,
+`binding.matches` false and `binding.coverage` set. A store whose
+exclusions cannot be read is `invalid` with a reason that says so. A store
+with no `c2pa.hash.data` reports `claim.hardBindings.missing`, and its
+`binding.matches` is false. A display's own manifest is not a release's
+store and is not read under this rule.
+
+The crossing's `release` record also carries `anchoring`, whether a
+`release_signer` term of the source policy anchored the signer key to the
+host that served the release ([processor](processor.md#status)
+`release-verifier`). That term is about the source's Ed25519 publication
+key; neither it nor the C2PA signer above is the issuer of an anonymous
+pass the fetch presented, and no release record names that issuer.
 
 The C2PA state neither admits nor refuses the release: the Ed25519
 signature does. A release whose store is `invalid` is still the verified
@@ -319,7 +346,8 @@ it onwards, cannot be stated in a standard assertion.
   manifest (none recorded, or the record abstained) fails the command, as
   does a log that records no display.
 - Both commands resolve a display's records by the `seq` it names, among
-  records of the processor it names. In a log written before a record's
-  `seq` was its line, two writers could leave two records under one `seq`;
-  such a display is reported as ambiguous with both citations, its
-  manifest is not read, and `provenance` fails.
+  records of the processor it names. Where a process of 0.4.14 or earlier
+  wrote to the log, in an old log or beside a later writer during an
+  update window, two records can share a `seq`; such a display is reported
+  as ambiguous with both citations, its manifest is not read, and
+  `provenance` fails.

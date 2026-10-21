@@ -13,7 +13,8 @@
 //! which binaries of different versions sharing one operator home all read.
 //! The record keeps the shape every released binary reads until a 401
 //! refusal is recorded with a [`EnrolmentRecord::refusal_sequence`]; after
-//! that a binary that does not know the member fails to load it until it is
+//! that a binary that does not know the member fails to load it, with the
+//! generic invalid-record error that names no member or value, until it is
 //! started again on one that does.
 
 use std::path::{Path, PathBuf};
@@ -976,6 +977,29 @@ mod tests {
         stored["revocation"] = "hub: refused".into();
         stored["revocation_learnt_at"] = learnt_at.into();
         std::fs::write(&path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
+    }
+
+    /// What a binary that does not know a member meets: the record a later
+    /// release wrote, as `refusal_sequence` is to 0.4.14. Its loader fails
+    /// with the generic invalid-record error, naming neither the member nor
+    /// its value.
+    #[test]
+    fn a_record_with_an_unknown_member_fails_to_load_without_naming_it() {
+        let home = tempfile::tempdir().unwrap();
+        record().store(home.path()).unwrap();
+        let path = EnrolmentRecord::path(home.path());
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        stored["future_member_PLANTED"] = "ak_PLANTED".into();
+        std::fs::write(&path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
+        let error = EnrolmentRecord::load(home.path()).unwrap_err();
+        let prefix = format!(
+            "{} is not a valid enrolment record: a data error at line ",
+            path.display()
+        );
+        assert!(error.starts_with(&prefix), "{error}");
+        assert!(error.contains(", column "), "{error}");
+        assert!(!error.contains("PLANTED"), "{error}");
     }
 
     fn at(text: &str) -> DateTime<Utc> {

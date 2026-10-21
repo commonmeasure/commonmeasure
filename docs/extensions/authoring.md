@@ -39,9 +39,10 @@ strings are script declarations that can enter the record. Use non-empty
 hello `model` and `family` identifiers of at most 64 bytes from
 `[A-Za-z0-9_./:~+-]`, not starting with `/`, `~` or `.`, and a
 `device` of at most 32 bytes from that set without `/` or `~`;
-`p_per_chunk` and `decisions` allow at most the same object's
-non-negative integer `chunks` elements (otherwise 64), with no nested
-`decisions`. Never put a path, credential or earlier input in identity
+`p_per_chunk`, `bounded_letters` and `decisions` allow at most the same
+object's non-negative integer `chunks` elements (otherwise 64) and never
+more than 4096, with no nested `decisions`. Give `endpoint`, if you send
+one, as a URL; only its origin is kept, and anything else is dropped. Never put a path, credential or earlier input in identity
 strings. A missing or refused `model` or `family` fails hello with
 `sidecar_hello_invalid` and `sidecar_output_dropped`; a refused `device`
 is omitted with `sidecar_output_dropped` and the batch still runs.

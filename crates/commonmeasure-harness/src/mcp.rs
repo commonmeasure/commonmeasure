@@ -760,6 +760,10 @@ impl McpServer {
                 self.negotiated_protocol,
             );
         }
+        // Another server on this session may have opted it in since this
+        // one opened the log. A log that cannot be read here fails the
+        // opt-in below, which reads it too.
+        let _ = self.session.adopt_observations();
         // Before the first crossing, so every admitted fetch carries a
         // handle. A log that already holds a crossing cannot opt in, and
         // keeps the semantics it was recorded under; a failed append fails
@@ -1959,6 +1963,7 @@ impl McpServer {
                     &final_url,
                     &response.body,
                     response.coded.as_ref().map(|coded| coded.bytes.as_slice()),
+                    self.policy.constraints(),
                     trust_anchors.as_ref().ok().and_then(Option::as_deref),
                 );
             if let Err(reason) = &trust_anchors {
@@ -4629,19 +4634,23 @@ impl McpServer {
         }
         let mut credentials = credentials_payload(&self.credentials, released.as_ref());
         credentials["path"] = json!(self.path_named(&self.credentials.path));
-        let last = SessionLog::read(self.session.path())
-            .ok()
-            .and_then(|records| {
-                records
-                    .into_iter()
-                    .rev()
-                    .find(|r| r["payload"]["processor"]["name"] == "integrity-checker")
-                    .map(|r| r["payload"]["detail"]["model"].clone())
-            });
+        // Read only once a checker is configured: the log grows with the
+        // session, and most edges run none.
+        let last = || {
+            SessionLog::read(self.session.path())
+                .ok()
+                .and_then(|records| {
+                    records
+                        .into_iter()
+                        .rev()
+                        .find(|r| r["payload"]["processor"]["name"] == "integrity-checker")
+                        .map(|r| r["payload"]["detail"]["model"].clone())
+                })
+        };
         let checker = if self.pace.names_the_edge() {
             commonmeasure_runtime::processor::integrity::sidecar::status(
                 self.policy.constraints(),
-                last.as_ref(),
+                last,
             )
         } else {
             json!({"configured": false, "gap": "sidecar_stdio_only"})

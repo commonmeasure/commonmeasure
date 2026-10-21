@@ -798,27 +798,69 @@ fn publisher() -> (
     (material, root.pem())
 }
 
-/// The recorded release with a structured usage block (the owner's example:
-/// AI input allowed, an onward commercial product not) and, where `text`
-/// is given, a C2PA store the publisher signed over that text.
-fn release_with_store(
+/// The publisher's own C2PA store over `text`, as a source writes it.
+fn source_store(
     publisher: &commonmeasure_runtime::processor::provenance::SigningMaterial,
-    text: Option<&str>,
+    text: &str,
 ) -> Vec<u8> {
-    use base64::Engine as _;
     use commonmeasure_runtime::processor::provenance::{TrainingMining, Use, sign_source_store};
-    let store = text.map(|text| {
-        let declared = TrainingMining {
-            ai_inference: Use::Allowed,
-            ai_training: Use::NotAllowed,
-            ai_generative_training: Use::NotAllowed,
-            data_mining: Use::NotAllowed,
-            constraint_info: None,
-        };
-        let store = sign_source_store("Harbour release", text, Some(&declared), publisher)
-            .expect("the publisher signs");
-        base64::engine::general_purpose::STANDARD.encode(store)
-    });
+    let declared = TrainingMining {
+        ai_inference: Use::Allowed,
+        ai_training: Use::NotAllowed,
+        ai_generative_training: Use::NotAllowed,
+        data_mining: Use::NotAllowed,
+        constraint_info: None,
+    };
+    sign_source_store("Harbour release", text, Some(&declared), publisher)
+        .expect("the publisher signs")
+}
+
+/// A store the publisher signed whose data hash excludes the first
+/// `excluded` bytes of `text` and hashes the rest: it verifies, and does not
+/// bind the whole text.
+fn excluding_store(
+    publisher: &commonmeasure_runtime::processor::provenance::SigningMaterial,
+    text: &str,
+    excluded: usize,
+) -> Vec<u8> {
+    use c2pa::assertions::DataHash;
+    use sha2::{Digest, Sha256};
+    let signer = c2pa::create_signer::from_keys(
+        &publisher.certificate_chain,
+        &publisher.private_key,
+        c2pa::SigningAlg::Es256,
+        None,
+    )
+    .unwrap();
+    let context = c2pa::Context::new().with_signer(signer).into_shared();
+    let mut builder = c2pa::Builder::from_shared_context(&context)
+        .with_definition(
+            json!({
+                "title": "Harbour release",
+                "format": "text/plain",
+                "assertions": [{"label": "c2pa.actions", "data": {"actions": [{
+                    "action": "c2pa.created",
+                    "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCreation"
+                }]}}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+    let mut binding = DataHash::new("partial text binding", "sha256");
+    binding.add_exclusion(c2pa::HashRange::new(0, excluded as u64));
+    binding.set_hash(Sha256::digest(&text.as_bytes()[excluded..]).to_vec());
+    builder
+        .add_assertion(c2pa::assertions::labels::DATA_HASH, &binding)
+        .unwrap();
+    builder.sign_embeddable("application/c2pa").unwrap()
+}
+
+/// The recorded release with a structured usage block (the owner's example:
+/// AI input allowed, an onward commercial product not) and, where given,
+/// `store` as its own C2PA store.
+fn release_with_store(store: Option<Vec<u8>>) -> Vec<u8> {
+    use base64::Engine as _;
+    let store = store.map(|store| base64::engine::general_purpose::STANDARD.encode(store));
     resigned_body(|release| {
         release["sidecar"]["signed"]["usage"] = json!({
             "ai_input": "allow",
@@ -857,8 +899,7 @@ fn a_display_s_manifest_is_signed_written_beside_the_log_and_read_back() {
     use commonmeasure_runtime::processor::provenance::{
         TERMS_LABEL, read_store_unbound, read_store_with_trust,
     };
-    let (publisher, _) = publisher();
-    let site = origin(release_with_store(&publisher, None));
+    let site = origin(release_with_store(None));
     let home = tempfile::tempdir().expect("tempdir");
     let identity = demonstration_identity(home.path());
     let environment: Vec<(&str, &Path)> = identity
@@ -1095,18 +1136,31 @@ fn a_display_s_manifest_is_signed_written_beside_the_log_and_read_back() {
 /// A release carrying its own C2PA store, signed by its publisher with a
 /// `cawg.identity`: the release verifier records the store `trusted` under
 /// the publisher's root with the identity on the crossing, and the display's
-/// ingredient carries the store. A store bound to another text leaves the
-/// release verified with the store `invalid`, and the ingredient carries
-/// none.
+/// ingredient carries the store. A store bound to another text, or one whose
+/// data hash excludes part of the text, leaves the release verified with the
+/// store `invalid`, and the ingredient carries none.
 #[test]
 fn a_release_s_own_manifest_travels_with_its_ingredient_and_an_invalid_one_does_not() {
-    use commonmeasure_runtime::processor::provenance::read_store_unbound;
+    use commonmeasure_runtime::processor::provenance::{read_store_unbound, read_store_with_trust};
     let (publisher, publisher_root) = publisher();
-    for (case, signed_over) in [
-        ("valid", recorded_text()),
-        ("invalid", "Another text altogether.".to_owned()),
+    let text = recorded_text();
+    let partial = excluding_store(&publisher, &text, 64);
+    // On its own the SDK reads the partial store as trusted and matching.
+    assert_eq!(
+        read_store_with_trust(&partial, &text, Some(&publisher_root))
+            .unwrap()
+            .validation["state"],
+        "trusted"
+    );
+    for (case, store) in [
+        ("valid", source_store(&publisher, &text)),
+        (
+            "invalid",
+            source_store(&publisher, "Another text altogether."),
+        ),
+        ("partial", partial),
     ] {
-        let site = origin(release_with_store(&publisher, Some(&signed_over)));
+        let site = origin(release_with_store(Some(store)));
         let home = tempfile::tempdir().expect("tempdir");
         let identity = demonstration_identity(home.path());
         // The edge trusts the publisher's root as well as the claim signer's.
@@ -1165,7 +1219,17 @@ fn a_release_s_own_manifest_travels_with_its_ingredient_and_an_invalid_one_does_
             assert!(reading.assertions("cawg.identity").is_empty());
         } else {
             assert_eq!(c2pa["state"], "invalid", "{c2pa}");
+            assert_eq!(c2pa["binding"]["matches"], false, "{c2pa}");
             assert!(ingredient["active_manifest"].is_null(), "{ingredient}");
+        }
+        if case == "partial" {
+            assert_eq!(
+                c2pa["binding"]["coverage"],
+                json!({"excluded_ranges": 1, "excluded_bytes": 64}),
+                "{c2pa}"
+            );
+        } else {
+            assert!(c2pa["binding"].get("coverage").is_none(), "{c2pa}");
         }
         let ndjson =
             std::fs::read_to_string(home.path().join("sessions/test-session.ndjson")).unwrap();
@@ -1333,18 +1397,21 @@ fn two_servers_on_one_session_keep_their_own_manifests() {
         &["--host-observations"],
         &environment,
     );
-    // Each server holds the one delivery it fetched, so its content hash
-    // names it; the second server on a session is not given a handle.
+    // Both servers opened the log before the first opted it in; the second
+    // adopts that opt-in and mints handles as the first does.
     let a_fetched = a.fetch(&url);
     let b_fetched = b.fetch(&url);
+    let a_handle = a_fetched["acquisition_id"].as_str().expect("a handle");
+    let b_handle = b_fetched["acquisition_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the second server returns a handle: {b_fetched}"));
+    assert_ne!(a_handle, b_handle);
     let a_display = payload(&a.show(
         a_fetched["content_hash"].as_str().unwrap(),
         json!([{"kind": "quote", "passage": "p2"}]),
     ));
-    let b_display = payload(&b.show(
-        b_fetched["content_hash"].as_str().unwrap(),
-        json!([{"kind": "quote", "passage": "p0"}]),
-    ));
+    let b_display = payload(&b.show(b_handle, json!([{"kind": "quote", "passage": "p0"}])));
+    assert_eq!(b_display["release"]["acquisition_ids"], json!([b_handle]));
     drop(a);
     drop(b);
 

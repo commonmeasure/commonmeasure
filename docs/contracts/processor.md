@@ -245,7 +245,9 @@ checker with dependencies. An uncached dependency fails as
 The manifest timeout applies separately to hello and to the complete batch,
 including writing, bye and exit. `COMMONMEASURE_CHECKER_TIMEOUT_SECONDS`
 may shorten either deadline, never lengthen it. A timeout kills the whole
-process group created for this invocation and reaps the direct child. The
+process group created for this invocation and reaps the direct child. When
+the child exits, anything it left in its group is killed before the child
+is reaped, so the group is never signalled once its id could be reused. The
 runtime is unavailable where process-group supervision is not supported.
 The limits also enforce 1024 cases, 1 MiB per stdout line and 8 MiB total
 stdout. Protocol, launch, timeout and item faults yield not-applicable model
@@ -271,11 +273,12 @@ numeric/null members `p_raw`, `chunks`, `prompt_tokens`,
 `threshold`, `temperature`,
 `contradiction_threshold`, `attempts`, `requests`, `errors`,
 `peak_memory_mb`, `peak_memory_bytes`, `tokens` and `probability_sum`;
-`p_per_chunk` is a numeric array. `bounded_letters` admits only A/B/C.
-`decisions` is an array filtered by the same rules, with no nested
-`decisions` member. Both `p_per_chunk` and `decisions` admit at most
-`chunks` elements when the same object reports `chunks` as a non-negative
-integer, otherwise at most 64; an over-long array is dropped whole.
+`p_per_chunk` is a numeric array. `bounded_letters` is an array of only
+A/B/C. `decisions` is an array filtered by the same rules, with no nested
+`decisions` member. `p_per_chunk`, `bounded_letters` and `decisions` each
+admit at most `chunks` elements when the same object reports `chunks` as a
+non-negative integer, otherwise at most 64, and never more than 4096
+whatever `chunks` reports; an over-long array is dropped whole.
 `probabilities` is a numeric probability map with keys `supports`,
 `absent`, `contradicts` or A/B/C. Any dropped member adds
 `sidecar_output_dropped`, without quoting its name or value.
@@ -288,14 +291,18 @@ three must be non-empty. These bounds do not change the manifest's
 hello with `sidecar_hello_invalid` and `sidecar_output_dropped`; the model
 stage is not applicable. A refused `device` is omitted with
 `sidecar_output_dropped` and the batch still runs. Hello also admits the
-validated questions and only the parsed origin of an endpoint.
+validated questions and only the parsed origin of an endpoint; an
+`endpoint` that is not a string URL with a scheme, host and port origin
+is omitted with `sidecar_output_dropped`.
 
 Hello `model`, `family`, `device` and the endpoint origin are the
 script's declarations. Identity values are recorded as given within the
 character-set and length bounds above; the endpoint is reduced to its
 parsed origin. The allow-list and bounds stop cooperative echoes and cap
-what a misbehaving script can carry. They do not protect against a pinned script encoding text in
-identifiers or numbers; that boundary depends on the artefact digest and
+how much a misbehaving script can put in one record: each identity string
+by its length, each array by 4096 elements, and the whole of its stdout by
+the line and output limits. They do not protect against a pinned script
+encoding text in identifiers, letters or numbers within those caps; that boundary depends on the artefact digest and
 the operator's review of the script. The filtered hello, bye, thresholds,
 calibration identity and timings stay in `detail.model`; per-item answers
 stay in `detail.items`. Network egress evidence and its digest scope are defined in
@@ -401,9 +408,27 @@ behaviour, not live model accuracy or calibration.
   injection screen then rule on that text. The record carries the state,
   the signer's key, the text's signed hash and the counts of passages and
   markers, never the text. Verified means the holder of the named key
-  signed this text and these fields: no key is pinned or looked up for the
-  source, so it does not establish who signed, and it says nothing about
-  the accuracy of the terms or passages. A sidecar may carry the source's
+  signed this text and these fields, and it says nothing about the
+  accuracy of the terms or passages. The verifier then looks up the host
+  the release was served from among the effective policy's
+  `release_signer` terms ([source policy](source-policy.md#constraints)),
+  first match deciding. With a matching term, the signer key is anchored
+  where it is one of the keys the term names; a release that verifies
+  under a key outside them is a breach under the same discipline as
+  `failed`, and a release that does not verify keeps its own breach.
+  The record and the crossing's `release` carry `anchoring`:
+  `{"applied": "policy", "host": "<the term's host pattern>",
+  "key_anchored": true|false}`, or `{"applied": "none"}` with no matching
+  term, never the keys the term names. An anchored key establishes that
+  the operator anchored this key to this host, not who holds it or how the
+  operator came to trust it; with no term, nothing pins or looks up a key
+  for the source and verified does not establish who signed. Each record's
+  blind spots say which applied. Anchoring is about the source's
+  publication key only: the issuer of an anonymous pass a fetch presents
+  is a different identity, which the term does not name and the record of
+  anchoring never carries. A binding published through Common Measure's
+  Anchor, which would name a source's key without an operator writing it,
+  is designed separately and not built. A sidecar may carry the source's
   own C2PA manifest store (`c2pa`, outside the signed fields); the verifier
   reads it offline against the text, under
   `COMMONMEASURE_PROVENANCE_TRUST_ANCHORS` where set, and records its state

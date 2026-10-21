@@ -18,8 +18,13 @@
 //!
 //! Verification uses the key the sidecar names. It establishes that the
 //! holder of that key signed this text and these fields; it does not
-//! establish who holds the key. That is a blind spot, stated below and in
-//! every record.
+//! establish who holds the key. Where the source policy has a
+//! `release_signer` term for the host that served the release, the key is
+//! then checked against the keys the operator anchored there: a key outside
+//! them is a breach under the same discipline, and a key inside them closes
+//! the blind spot to "the operator anchored this key to this host", which is
+//! still not who holds it. Where no term matches, the blind spot stays whole.
+//! Either way it is stated below and in every record.
 //!
 //! A sidecar may also carry a C2PA manifest store the source signed with its
 //! own certificate ([`commonmeasure_types::release::Sidecar::c2pa`]). It is
@@ -34,10 +39,12 @@ use base64::Engine as _;
 use chrono::Utc;
 use commonmeasure_types::canonical::sha256_digest;
 use commonmeasure_types::release::{
-    C2paBinding, C2paRecord, C2paState, MEDIA_TYPE, Release, ReleaseRecord, SCHEME,
-    VerificationState, signed_message,
+    Anchoring, C2paBinding, C2paCoverage, C2paRecord, C2paState, MEDIA_TYPE, Release,
+    ReleaseRecord, SCHEME, VerificationState, signed_message,
 };
-use commonmeasure_types::{Decision, Gap, GapReason, PolicyMode};
+use commonmeasure_types::{
+    Constraint, Decision, Gap, GapReason, PolicyMode, SignerKey, release_signer_for,
+};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::json;
 
@@ -72,14 +79,24 @@ Ed25519 signature does not verify under that key over text_sha256, a newline and
 signature R of small order, or a non-canonical S, fails.\n\
 verdicts: verified admits; failed and missing are a breach under the shared mode discipline, \
 strict refuses and observe and prefer record and carry.\n\
+anchoring: the host of the URL the release was served from, lower-case with trailing dots \
+removed, is looked up among the source policy's release_signer terms in declaration order, \
+and the first whose host pattern matches applies. Where one applies, the signer key is \
+anchored where its standard base64 decodes to the 32 bytes of a key the term names; a \
+verified release whose key is not anchored is a breach under the shared mode discipline. \
+The record names the term's host pattern and whether the key is anchored, never the keys \
+the term names; where no term applies it says none.\n\
 c2pa: where the sidecar carries c2pa, it is decoded from standard base64 and read with the \
 C2PA SDK reader against the NFC-normalised text, offline, with the configured trust anchors \
 where any are supplied; the state is invalid where it does not decode, parse or verify, \
 untrusted where it verifies and its signer chains to no supplied anchor, trusted where it \
-does. The record carries the state, the store's hash, whether the data hash matches the text \
-and whether that text is the one text_sha256 names, the claim signer, each cawg.identity \
-summarised, the source's cawg.training-mining and the status codes. The state neither \
-admits nor refuses the release.\n";
+does. A store whose c2pa.hash.data assertions exclude any range is invalid whatever the \
+reader reports and its binding does not match; a store whose exclusions cannot be read is \
+invalid. The record carries the state, the store's hash, whether the data hash binds the \
+whole text and matches it, the number of excluded ranges and their summed length where there \
+are any, whether that text is the one text_sha256 names, the claim signer, each \
+cawg.identity summarised, the source's cawg.training-mining and the status codes. The state \
+neither admits nor refuses the release.\n";
 
 static MANIFEST: LazyLock<ProcessorManifest> = LazyLock::new(|| ProcessorManifest {
     name: NAME,
@@ -106,10 +123,19 @@ pub fn manifest() -> &'static ProcessorManifest {
     &MANIFEST
 }
 
+/// The first blind spot where no `release_signer` term applies.
+const UNANCHORED: &str = "The signature is verified under the key the sidecar names. Verified \
+     means the holder of that key signed this text and these fields; it does not establish who \
+     holds the key, since no release_signer term of the source policy matches this host and no \
+     key is pinned or looked up for the source.";
+
+/// The first blind spot where a `release_signer` term applies.
+const ANCHORED: &str = "The signature is verified under the key the sidecar names, and that \
+     key is checked against the keys a release_signer term of the source policy anchors to \
+     this host. An anchored key establishes that the operator anchored this key to this host; \
+     it does not establish who holds the key or how the operator came to trust it.";
+
 const BLIND_SPOTS: &[&str] = &[
-    "The signature is verified under the key the sidecar names. Verified means the holder \
-     of that key signed this text and these fields; it does not establish who holds the \
-     key, since no key is pinned or looked up for the source.",
     "The release format is a working format that Common Measure reads and does not define; \
      a release in another format or under another media type is not recognised and is \
      treated as any other body.",
@@ -144,7 +170,8 @@ pub enum Outcome {
     },
 }
 
-/// Read and verify a body served under the release media type.
+/// Read and verify a body served under the release media type, with no
+/// `release_signer` terms and no C2PA trust anchors.
 ///
 /// `coded` is the content coding and the coded bytes where the origin served
 /// the body under one; the input hash is over the bytes as served.
@@ -154,16 +181,20 @@ pub fn invoke(
     body: &[u8],
     coded: Option<&[u8]>,
 ) -> (Invocation, Outcome) {
-    invoke_with_trust(mode, reference, body, coded, None)
+    invoke_with_trust(mode, reference, body, coded, &[], None)
 }
 
-/// [`invoke`], reading a C2PA store the sidecar carries against
-/// `trust_anchors`, a PEM bundle the operator supplied, where there is one.
+/// [`invoke`], checking the signer key against the `release_signer` terms in
+/// `constraints`, the effective source policy's, and reading a C2PA store the
+/// sidecar carries against `trust_anchors`, a PEM bundle the operator
+/// supplied, where there is one. `reference` is the URL the release was
+/// served from; its host selects the term.
 pub fn invoke_with_trust(
     mode: PolicyMode,
     reference: &str,
     body: &[u8],
     coded: Option<&[u8]>,
+    constraints: &[Constraint],
     trust_anchors: Option<&str>,
 ) -> (Invocation, Outcome) {
     let started_at = Utc::now();
@@ -192,6 +223,8 @@ pub fn invoke_with_trust(
                 Vec::new(),
                 json!({ "media_type": MEDIA_TYPE, "read": false, "reason": reason }),
                 vec![gap],
+                // Nothing was verified or anchored, so neither key sentence
+                // applies.
                 BLIND_SPOTS.to_vec(),
             );
             return (invocation, Outcome::Unreadable { reason });
@@ -199,7 +232,34 @@ pub fn invoke_with_trust(
     };
 
     let (state, failure) = verify(&release);
+    let anchoring = anchoring(reference, &release, constraints);
+    let unanchored = matches!(
+        anchoring,
+        Anchoring::Policy {
+            key_anchored: false,
+            ..
+        }
+    );
     let ruling = match failure {
+        // A key the operator did not anchor is ruled on only once the
+        // signature verified: a failed or missing one is already the breach,
+        // and its reason is the one the agent and the record need.
+        None if unanchored => {
+            let said = "The release's signer key is not one the source policy anchors to this host";
+            Ruling::breach(
+                mode,
+                format!("{said}."),
+                agent_text![said, "."],
+                Gap::new(
+                    GapReason::PolicyRefused,
+                    format!(
+                        "{reference} is a signed release that verified under a key the \
+                         release_signer term for its host does not name. The sidecar and the \
+                         anchoring are on the crossing record."
+                    ),
+                ),
+            )
+        }
         None => Ruling::Allowed,
         Some(reason) => {
             let said = match state {
@@ -254,10 +314,11 @@ pub fn invoke_with_trust(
             "markers": release.sidecar.signed.markers.len(),
             "display_mode": release.sidecar.signed.display_mode,
             "c2pa": c2pa.as_ref().map_or_else(|| json!({"state": "absent"}), |c2pa| json!(c2pa)),
+            "anchoring": anchoring,
             "text_recorded": false,
         }),
         ruling.gap().cloned().into_iter().collect(),
-        BLIND_SPOTS.to_vec(),
+        blind_spots(&anchoring),
     );
     let record = ReleaseRecord {
         media_type: MEDIA_TYPE.to_owned(),
@@ -265,6 +326,7 @@ pub fn invoke_with_trust(
         reason: failure.map(str::to_owned),
         sidecar: release.sidecar.clone(),
         c2pa,
+        anchoring,
     };
     (
         invocation,
@@ -275,6 +337,37 @@ pub fn invoke_with_trust(
             content_hash,
         })),
     )
+}
+
+fn blind_spots(anchoring: &Anchoring) -> Vec<&'static str> {
+    let first = match anchoring {
+        Anchoring::Policy { .. } => ANCHORED,
+        Anchoring::None => UNANCHORED,
+    };
+    std::iter::once(first)
+        .chain(BLIND_SPOTS.iter().copied())
+        .collect()
+}
+
+/// Which `release_signer` term applies to the host `reference` names, and
+/// whether the sidecar's key is one it anchors. A key that does not decode
+/// is not anchored, whatever verification made of it.
+fn anchoring(reference: &str, release: &Release, constraints: &[Constraint]) -> Anchoring {
+    let host = url::Url::parse(reference)
+        .ok()
+        .and_then(|url| {
+            url.host_str()
+                .map(|host| host.trim_end_matches('.').to_owned())
+        })
+        .unwrap_or_default();
+    let Some((pattern, keys)) = release_signer_for(constraints, &host) else {
+        return Anchoring::None;
+    };
+    let named = SignerKey::parse(&release.sidecar.signer_public_key).ok();
+    Anchoring::Policy {
+        host: pattern.as_written(),
+        key_anchored: named.is_some_and(|named| keys.contains(&named)),
+    }
 }
 
 fn state_named(state: VerificationState) -> &'static str {
@@ -322,16 +415,45 @@ fn read_c2pa(release: &Release, trust_anchors: Option<&str>) -> Option<C2paRecor
     if record.state == C2paState::Invalid {
         record.reason = Some("the manifest does not verify against the release text".to_owned());
     }
+    // The SDK checks the digest over whatever the exclusions leave; a
+    // release's store is a sidecar and binds the whole text, so any
+    // exclusion leaves part of the text unbound however the digest reads.
+    let coverage = reading.data_hash_exclusions.as_ref().map(|exclusions| {
+        (!exclusions.is_empty()).then(|| C2paCoverage {
+            excluded_ranges: exclusions.len(),
+            excluded_bytes: exclusions
+                .iter()
+                .fold(0, |total: u64, (_, length)| total.saturating_add(*length)),
+        })
+    });
+    match &coverage {
+        None => {
+            record.state = C2paState::Invalid;
+            record.reason =
+                Some("the data hash's exclusions cannot be read from the store".to_owned());
+        }
+        Some(Some(partial)) => {
+            record.state = C2paState::Invalid;
+            record.reason = Some(format!(
+                "partial coverage: the data hash excludes {} range(s), {} byte(s) declared, so \
+                 it does not bind the whole release text",
+                partial.excluded_ranges, partial.excluded_bytes
+            ));
+        }
+        Some(None) => {}
+    }
     let normalised: String =
         unicode_normalization::UnicodeNormalization::nfc(release.text.as_str()).collect();
     record.binding = Some(C2paBinding {
-        matches: !record.statuses.iter().any(|code| {
-            code.starts_with("assertion.dataHash") || code == "claim.hardBindings.missing"
-        }),
+        matches: coverage == Some(None)
+            && !record.statuses.iter().any(|code| {
+                code.starts_with("assertion.dataHash") || code == "claim.hardBindings.missing"
+            }),
         same_text_as_signed: format!(
             "{:x}",
             <sha2::Sha256 as sha2::Digest>::digest(normalised.as_bytes())
         ) == release.sidecar.signed.text_sha256,
+        coverage: coverage.flatten(),
     });
     record.manifest_label = Some(reading.manifest_label.clone());
     record.signer = Some(json!({
@@ -444,6 +566,11 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
 
     fn signed_release() -> Release {
+        signed_release_by(7)
+    }
+
+    /// A release signed with the key whose seed is `seed` repeated.
+    fn signed_release_by(seed: u8) -> Release {
         let text = "The lead paragraph.\n\nThe mayor said: \"We accept it.\"".to_owned();
         let second = text.find("The mayor").unwrap();
         let quote = text.find('"').unwrap();
@@ -481,7 +608,7 @@ mod tests {
             released_at: "2026-10-13T00:00:00Z".into(),
             usage: None,
         };
-        let key = SigningKey::from_bytes(&[7; 32]);
+        let key = SigningKey::from_bytes(&[seed; 32]);
         let engine = base64::engine::general_purpose::STANDARD;
         Release {
             text,
@@ -592,6 +719,7 @@ mod tests {
             "https://source.example/a",
             &body(release),
             None,
+            &[],
             anchors,
         ) {
             (invocation, Outcome::Read(read)) => {
@@ -619,7 +747,8 @@ mod tests {
             c2pa.binding,
             Some(C2paBinding {
                 matches: true,
-                same_text_as_signed: true
+                same_text_as_signed: true,
+                coverage: None,
             })
         );
         assert_eq!(c2pa.identities.len(), 1);
@@ -650,6 +779,77 @@ mod tests {
             c2pa.reason.as_deref(),
             Some("the store is not standard base64")
         );
+    }
+
+    /// The SDK hashes what a data hash's exclusions leave and reads such a
+    /// store as verifying, trusted under the publisher's root; a release's
+    /// store must bind the whole text, so it is invalid, says how much it
+    /// leaves out, and the release still verifies on its Ed25519 signature.
+    #[test]
+    fn a_store_whose_data_hash_excludes_any_of_the_text_is_invalid() {
+        use super::super::provenance::{read_store_with_trust, sign_source_store_excluding};
+        let (publisher, root) = super::super::provenance::test_publisher();
+        let plain = signed_release();
+        let whole = plain.text.len();
+        let mayor = plain.text.find("The mayor").unwrap();
+        for (excluded, bytes) in [(vec![(mayor, 9)], 9), (vec![(0, whole)], whole as u64)] {
+            let store = sign_source_store_excluding(
+                &plain.sidecar.signed.url,
+                &plain.text,
+                &excluded,
+                &publisher,
+            )
+            .unwrap();
+            let reading = read_store_with_trust(&store, &plain.text, Some(&root)).unwrap();
+            assert_eq!(
+                reading.validation["state"], "trusted",
+                "{}",
+                reading.validation
+            );
+            assert_eq!(
+                reading.data_hash_exclusions,
+                Some(
+                    excluded
+                        .iter()
+                        .map(|&(start, length)| (start as u64, length as u64))
+                        .collect()
+                )
+            );
+
+            let mut release = plain.clone();
+            release.sidecar.c2pa = Some(base64::engine::general_purpose::STANDARD.encode(store));
+            let (detail, read) = c2pa_of(&release, Some(&root));
+            assert_eq!(read.record.verification, VerificationState::Verified);
+            assert_eq!(read.ruling, Ruling::Allowed);
+            let c2pa = read.record.c2pa.unwrap();
+            assert_eq!(c2pa.state, C2paState::Invalid, "{detail}");
+            assert_eq!(
+                c2pa.binding,
+                Some(C2paBinding {
+                    matches: false,
+                    same_text_as_signed: true,
+                    coverage: Some(C2paCoverage {
+                        excluded_ranges: 1,
+                        excluded_bytes: bytes,
+                    }),
+                })
+            );
+            assert!(
+                c2pa.reason
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("partial coverage"),
+                "{detail}"
+            );
+            assert_eq!(detail["state"], "invalid");
+            assert_eq!(
+                detail["binding"]["coverage"],
+                json!({"excluded_ranges": 1, "excluded_bytes": bytes})
+            );
+            for sentence in ["The lead paragraph", "The mayor said", "We accept it"] {
+                assert!(!detail.to_string().contains(sentence), "no text: {detail}");
+            }
+        }
     }
 
     #[test]
@@ -824,6 +1024,199 @@ mod tests {
                 assert_eq!(record["gaps"][0]["reason"], "capability_unavailable");
             }
         }
+    }
+
+    /// The public key whose seed is `seed` repeated, as a sidecar names it.
+    fn public_key(seed: u8) -> String {
+        base64::engine::general_purpose::STANDARD.encode(
+            SigningKey::from_bytes(&[seed; 32])
+                .verifying_key()
+                .as_bytes(),
+        )
+    }
+
+    fn release_signer(host: &str, seeds: &[u8]) -> Constraint {
+        let keys: Vec<String> = seeds.iter().map(|seed| public_key(*seed)).collect();
+        serde_json::from_value(json!({"kind": "release_signer", "host": host, "keys": keys}))
+            .unwrap()
+    }
+
+    fn anchored_outcome(
+        mode: PolicyMode,
+        release: &Release,
+        constraints: &[Constraint],
+    ) -> (serde_json::Value, Box<Read>) {
+        match invoke_with_trust(
+            mode,
+            "https://news.source.example/a",
+            &body(release),
+            None,
+            constraints,
+            None,
+        ) {
+            (invocation, Outcome::Read(read)) => (invocation.to_value(), read),
+            (_, Outcome::Unreadable { reason }) => panic!("unreadable: {reason}"),
+        }
+    }
+
+    const MODES: [PolicyMode; 3] = [PolicyMode::Strict, PolicyMode::Prefer, PolicyMode::Observe];
+
+    #[test]
+    fn a_key_the_operator_anchored_to_the_host_verifies_anchored_in_every_mode() {
+        let release = signed_release();
+        let terms = [release_signer("*.source.example", &[7])];
+        for mode in MODES {
+            let (record, read) = anchored_outcome(mode, &release, &terms);
+            assert_eq!(read.record.verification, VerificationState::Verified);
+            assert_eq!(read.ruling, Ruling::Allowed, "{mode:?}");
+            assert_eq!(
+                read.record.anchoring,
+                Anchoring::Policy {
+                    host: "*.source.example".into(),
+                    key_anchored: true,
+                }
+            );
+            assert_eq!(record["decision"], "admit");
+            assert_eq!(
+                record["detail"]["anchoring"],
+                json!({"applied": "policy", "host": "*.source.example", "key_anchored": true})
+            );
+            let blind_spots = record["blind_spots"].to_string();
+            assert!(blind_spots.contains("the operator anchored this key to this host"));
+            assert!(!blind_spots.contains("no release_signer term"));
+        }
+    }
+
+    // Catches: a sidecar that names its own key passing as the source's
+    // where the operator anchored another key to the host.
+    #[test]
+    fn a_key_the_operator_did_not_anchor_is_a_breach_and_only_strict_refuses() {
+        let release = signed_release();
+        let terms = [release_signer("news.source.example", &[8])];
+        for (mode, refused) in [
+            (PolicyMode::Strict, true),
+            (PolicyMode::Prefer, false),
+            (PolicyMode::Observe, false),
+        ] {
+            let (record, read) = anchored_outcome(mode, &release, &terms);
+            assert_eq!(read.record.verification, VerificationState::Verified);
+            assert!(read.record.reason.is_none(), "the signature verified");
+            assert_eq!(
+                read.record.anchoring,
+                Anchoring::Policy {
+                    host: "news.source.example".into(),
+                    key_anchored: false,
+                }
+            );
+            assert_eq!(read.ruling.is_refusal(), refused, "{mode:?}");
+            assert_eq!(
+                read.ruling.reason(),
+                Some("The release's signer key is not one the source policy anchors to this host."),
+                "{mode:?}: a breach either way"
+            );
+            let decision = if refused { "refuse" } else { "admit" };
+            assert_eq!(record["decision"], decision);
+            assert_eq!(record["gaps"][0]["reason"], "policy_refused");
+            assert_eq!(
+                record["detail"]["anchoring"],
+                json!({"applied": "policy", "host": "news.source.example", "key_anchored": false})
+            );
+            let kept = record.to_string() + &serde_json::to_string(&read.record).unwrap();
+            assert!(
+                !kept.contains(&public_key(8)),
+                "the record never carries the term's keys"
+            );
+        }
+    }
+
+    /// A signature that fails is the breach the record names, whatever the
+    /// anchoring says.
+    #[test]
+    fn a_failed_signature_under_an_unanchored_key_is_named_as_the_failure() {
+        let mut release = signed_release();
+        release.text = release.text.replace("lead", "LEAD");
+        let terms = [release_signer("news.source.example", &[8])];
+        let (_, read) = anchored_outcome(PolicyMode::Strict, &release, &terms);
+        assert_eq!(read.record.verification, VerificationState::Failed);
+        assert!(read.ruling.is_refusal());
+        assert!(
+            read.ruling
+                .reason()
+                .unwrap()
+                .starts_with("The release's signature did not verify")
+        );
+        assert!(matches!(
+            read.record.anchoring,
+            Anchoring::Policy {
+                key_anchored: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn with_no_term_for_the_host_verified_stands_and_the_blind_spot_is_named() {
+        let release = signed_release();
+        for terms in [vec![], vec![release_signer("other.example", &[8])]] {
+            for mode in MODES {
+                let (record, read) = anchored_outcome(mode, &release, &terms);
+                assert_eq!(read.record.verification, VerificationState::Verified);
+                assert_eq!(read.ruling, Ruling::Allowed);
+                assert_eq!(read.record.anchoring, Anchoring::None);
+                assert_eq!(record["detail"]["anchoring"], json!({"applied": "none"}));
+                assert!(
+                    record["blind_spots"]
+                        .to_string()
+                        .contains("no release_signer term of the source policy matches this host")
+                );
+            }
+        }
+        // A record written before anchoring existed reads as none.
+        let (_, read) = anchored_outcome(PolicyMode::Strict, &release, &[]);
+        let mut written = serde_json::to_value(&read.record).unwrap();
+        written.as_object_mut().unwrap().remove("anchoring");
+        let earlier: ReleaseRecord = serde_json::from_value(written).unwrap();
+        assert_eq!(earlier.anchoring, Anchoring::None);
+    }
+
+    #[test]
+    fn during_a_rotation_either_anchored_key_verifies() {
+        let terms = [release_signer("news.source.example", &[7, 8])];
+        for seed in [7, 8] {
+            let (_, read) = anchored_outcome(PolicyMode::Strict, &signed_release_by(seed), &terms);
+            assert_eq!(read.record.verification, VerificationState::Verified);
+            assert_eq!(read.ruling, Ruling::Allowed, "key {seed}");
+            assert!(matches!(
+                read.record.anchoring,
+                Anchoring::Policy {
+                    key_anchored: true,
+                    ..
+                }
+            ));
+        }
+        let (_, read) = anchored_outcome(PolicyMode::Strict, &signed_release_by(9), &terms);
+        assert!(read.ruling.is_refusal(), "a key outside the set");
+    }
+
+    // Catches: a later, broader term overriding the first one that matches.
+    #[test]
+    fn the_first_matching_term_decides() {
+        let release = signed_release();
+        let terms = [
+            release_signer("news.source.example", &[8]),
+            release_signer("*.source.example", &[7]),
+        ];
+        let (_, read) = anchored_outcome(PolicyMode::Strict, &release, &terms);
+        assert_eq!(
+            read.record.anchoring,
+            Anchoring::Policy {
+                host: "news.source.example".into(),
+                key_anchored: false,
+            }
+        );
+        assert!(read.ruling.is_refusal());
+        let (_, read) = anchored_outcome(PolicyMode::Strict, &release, &[terms[1].clone()]);
+        assert_eq!(read.ruling, Ruling::Allowed);
     }
 
     #[test]

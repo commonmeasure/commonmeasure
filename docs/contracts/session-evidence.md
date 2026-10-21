@@ -70,14 +70,25 @@ edge is managed) and `edge_identity`, written at open, before any crossing
 
 One file per session, opened for append. A session spans many short-lived hook
 processes, and can have several servers at once. A record's `seq` is its line
-in the file, counting from one: each append counts, under the lock, the lines
-other writers appended since its own last append, so two writers never give
-two records one `seq`, and a record names another by `seq` (a display names
-its `integrity-checker` and `output-provenance` records so). Logs written by
-0.4.14 and earlier counted once per process and can hold two records under
-one `seq` where writers overlapped; a reader that resolves a `seq` and finds
-more than one record reports it as ambiguous rather than choosing one. Every
-append holds the log's exclusive advisory lock
+in the file, counting from one: a writer of 0.4.15 or later counts, under the
+lock, the lines other writers appended since its own last append, so two such
+writers never give two records one `seq`, and a record names another by `seq`
+(a display names its `integrity-checker` and `output-provenance` records so).
+
+That guarantee covers only writers that count this way. A process of 0.4.14
+or earlier counts once per process from what the file held when it opened
+it, and no other writer can correct its counter. Logs it wrote can hold two
+records under one `seq` where writers overlapped, and while such a process
+still writes to a session beside a writer of 0.4.15 or later, as during an
+update window before it is restarted, it can give a new record a `seq`
+another writer has already used. The record shape is the same either way.
+A reader that resolves a `seq` and finds more than one record of the
+processor it names reports it as ambiguous rather than choosing one:
+`commonmeasure provenance` fails, and `commonmeasure inspect` reports the
+ambiguity and names no record ([display provenance](display-provenance.md#reading-a-displays-manifest-back)).
+A reader that only orders records uses their position in the file.
+
+Every append holds the log's exclusive advisory lock
 (`flock(2)`) from reading the file's last byte to the end of its one fsynced
 write, so appends never interleave, and a record cut short by a writer that
 died is marked by the next append (§Reading a log). A write failure is
@@ -291,9 +302,13 @@ canonical manifest digests, `implementation.kind: "sidecar"`,
 permission is true because the runtime loads a local script and cached
 dependencies without filesystem confinement; model permission is true;
 network and credential permissions are true only for a network declaration.
-The invocation's assurance is `declared`: its model probabilities are the
-sidecar's statements, even though deterministic stages still compute over
-observed bytes. With no checker configured, the existing deterministic
+The invocation's assurance is `declared` once the model stage ran or was
+attempted (`detail.model.outcome` `completed` or `failed`): its model
+probabilities are the sidecar's statements, even though deterministic
+stages still compute over observed bytes. Where the stage's outcome is
+`not_run` (no scoped model cases, such as a quote-only reply), no sidecar
+statement reached the record and the assurance stays `observed`, as on the
+deterministic path. With no checker configured, the existing deterministic
 record is unchanged.
 
 `detail.model` contains:
@@ -313,7 +328,9 @@ record is unchanged.
   hello's `model`, `question_text_sha256`, `threshold`, `requests`
   (request, passage and sentence SHA-256 values), input `case_count`,
   filtered bye `usage` and an explicitly unknown `cost`. A permitted stage
-  carries `sidecar_cost_unknown`; no charge is inferred from tokens.
+  whose child started carries `sidecar_cost_unknown`; no charge is
+  inferred from tokens. A stage refused at admission or whose launch
+  failed made no call and carries no such gap.
 
 Request hashes cover canonical JSON of exactly `id`, `passage` and
 `summary`. The input case count and hashes describe scoped candidate
@@ -532,7 +549,11 @@ release (`application/x.signed-release+json`, a working format that Common
 Measure reads and does not define) and read as one, delivered or refused
 after reading. It holds `media_type`; `verification`, which is `verified`,
 `failed` or `missing` as the `release-verifier` established it ([processor](processor.md#status));
-`reason` where it is not `verified`; and `sidecar`, the release's sidecar
+`reason` where it is not `verified`; `anchoring`, which is
+`{"applied": "policy", "host", "key_anchored"}` where a `release_signer`
+term of the source policy matched the host that served the release, and
+`{"applied": "none"}` otherwise, never the term's keys
+([processor](processor.md#status)); and `sidecar`, the release's sidecar
 whole: the signed fields (source, title, revision, URL, licence,
 attribution, terms, the structured `usage` block where the release states
 one, display mode, `text_sha256`, passages and markers as byte spans of the
@@ -547,7 +568,8 @@ its hash, `retrieved_hash` the hash of the body served, and `delivered`
 the part handed over. The stdio server that delivered a release keeps its
 text and sidecar in process memory for `context_show` (the last 16, cleared
 at exit, never written; [host integration](host-integration.md)
-§Releases held for display); that is not part of the source record. A `failed` or `missing` state is also a breach:
+§Releases held for display); that is not part of the source record. A `failed` or `missing` state is also a breach,
+as is a verified release whose `anchoring` has `key_anchored` false:
 `strict` refuses the crossing, and `observe` and `prefer` carry it with
 the sentence in `breach`. A body served under that media type that does
 not read as a release, a body that starts like a PDF among them, is
@@ -744,6 +766,12 @@ It parses only a line whose bytes hold the event name `observations_started`,
 which the writer never escapes, so opening a session that never opted in parses
 nothing. Opening writes nothing; the first append marks a torn final line
 (§Reading a log).
+
+The opt-in belongs to the session, whichever process recorded it. A stdio
+server reads the log for it again before its first record, so a server that
+opened the log before another server on the session opted it in (two
+servers during an update window, for example) mints acquisition handles
+from its first crossing as the other does.
 
 Observation validation reads the durable file by the strict rule of §Reading a
 log and returns unavailable on a line that does not parse and is not a marked
@@ -2533,8 +2561,8 @@ installer's mode under umask 000 in `crates/commonmeasure-cli/tests/installer.rs
 After a mediated fetch succeeds, the server resolves the host's Content
 Telemetry discovery manifest (`/.well-known/content-telemetry.json`,
 standard section 8) and writes a `manifest_resolved` record; the crossing
-carries the record's `seq` as `manifest_record`. Concurrent writers can reuse
-sequence numbers. The console displays manifest details only for a unique
+carries the record's `seq` as `manifest_record`. A writer of 0.4.14 or
+earlier beside another writer can reuse a sequence number (§Where). The console displays manifest details only for a unique
 preceding reference with the crossing's host; missing, foreign or ambiguous
 references are labelled unavailable or ambiguous
 (`crates/commonmeasure-harness/src/manifest.rs`,

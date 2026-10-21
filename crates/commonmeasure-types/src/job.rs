@@ -39,12 +39,13 @@ pub enum Objective {
 
 /// A hard constraint. Hard constraints filter before anything is scored.
 ///
-/// Every kind but one has set semantics: the list of denied hosts is a set,
-/// and its order means nothing. `access_rule` is the exception. Access rules
-/// are read in declaration order and the first whose pattern matches the
-/// source's host decides; a later rule for the same host is never reached.
-/// Order among access rules is therefore part of the policy, and an editor
-/// that reorders them changes what is enforced.
+/// Every kind but two has set semantics: the list of denied hosts is a set,
+/// and its order means nothing. `access_rule` and `release_signer` are the
+/// exceptions. Each is read in declaration order among the terms of its own
+/// kind, and the first whose pattern matches the source's host decides; a
+/// later term of that kind for the same host is never reached. Order among
+/// them is therefore part of the policy, and an editor that reorders them
+/// changes what is enforced.
 ///
 /// An internally tagged enum cannot carry `deny_unknown_fields`, but every
 /// variant's payload is mandatory, so a misspelled key already fails as the
@@ -96,6 +97,102 @@ pub enum Constraint {
         #[serde(flatten)]
         action: AccessAction,
     },
+    /// The Ed25519 keys the operator anchors to the hosts `host` matches as
+    /// the keys their signed releases are signed with. The release verifier
+    /// checks a release's signer key against the first such term whose
+    /// pattern matches the host that served it. More than one key covers a
+    /// rotation. This is the source's publication key and has nothing to do
+    /// with who issues an anonymous pass.
+    ReleaseSigner {
+        host: HostPattern,
+        #[serde(deserialize_with = "non_empty_keys")]
+        #[schemars(length(min = 1))]
+        keys: Vec<SignerKey>,
+    },
+}
+
+/// A `release_signer` term's keys, refused when there are none: a term that
+/// anchors no key would refuse every release from its hosts for a reason
+/// the operator never wrote.
+fn non_empty_keys<'de, D>(deserializer: D) -> Result<Vec<SignerKey>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let keys = Vec::<SignerKey>::deserialize(deserializer)?;
+    if keys.is_empty() {
+        return Err(serde::de::Error::custom(
+            "a release_signer term must name at least one key",
+        ));
+    }
+    Ok(keys)
+}
+
+/// An Ed25519 public key as a `release_signer` term names it: 32 bytes,
+/// written in standard base64 with padding, the encoding a release sidecar
+/// uses for `signer_public_key`. Anything else is refused when it is read.
+/// Two spellings of one key cannot both decode, since the decoder refuses
+/// non-canonical trailing bits, so comparing the bytes compares the keys.
+///
+/// Whether the bytes are a point on the curve is not checked here: a key
+/// that is not one verifies no signature, so it anchors nothing.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(try_from = "String", into = "String")]
+#[schemars(with = "String")]
+pub struct SignerKey([u8; 32]);
+
+impl SignerKey {
+    /// Parse a key as an operator or a sidecar wrote it.
+    pub fn parse(written: &str) -> Result<Self, String> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(written)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .map(Self)
+            .ok_or_else(|| {
+                format!(
+                    "release_signer key {written:?} is not an Ed25519 public key: 32 bytes in \
+                     standard base64"
+                )
+            })
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SignerKey {
+    type Error = String;
+
+    fn try_from(written: String) -> Result<Self, Self::Error> {
+        Self::parse(&written)
+    }
+}
+
+impl From<SignerKey> for String {
+    fn from(key: SignerKey) -> Self {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(key.0)
+    }
+}
+
+/// The first `release_signer` term in `constraints` whose pattern matches
+/// `host`, which must be in the normalised form the envelope carries, with
+/// the keys it anchors. First match wins, as among access rules.
+pub fn release_signer_for<'a>(
+    constraints: &'a [Constraint],
+    host: &str,
+) -> Option<(&'a HostPattern, &'a [SignerKey])> {
+    constraints.iter().find_map(|constraint| match constraint {
+        Constraint::ReleaseSigner {
+            host: pattern,
+            keys,
+        } if pattern.matches(host) => Some((pattern, keys.as_slice())),
+        _ => None,
+    })
 }
 
 /// What an access rule does to the sources its pattern matches.

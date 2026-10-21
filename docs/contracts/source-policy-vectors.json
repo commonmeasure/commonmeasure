@@ -23,6 +23,27 @@
       "accepted": false,
       "check": "structure"
     },
+    {
+      "name": "a release signer anchors two keys to a host pattern during a rotation",
+      "policy": {"constraints": [{"kind": "release_signer", "host": "*.News.Example", "keys": ["6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=", "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o="]}]},
+      "schema_valid": true,
+      "accepted": true,
+      "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "release_signer", "host": "*.news.example", "keys": ["6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=", "E5j2LG0aRXxRumpLXz29L2n8qTIWIY3ImX5Ba9F9k8o="]}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}
+    },
+    {
+      "name": "a release signer key that is not 32 bytes of standard base64 is refused",
+      "policy": {"constraints": [{"kind": "release_signer", "host": "news.example", "keys": ["6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"]}]},
+      "schema_valid": true,
+      "accepted": false,
+      "check": "structure"
+    },
+    {
+      "name": "a release signer naming no key is refused",
+      "policy": {"constraints": [{"kind": "release_signer", "host": "news.example", "keys": []}]},
+      "schema_valid": false,
+      "accepted": false,
+      "check": "structure"
+    },
     {"name": "supplier source permission preserves its adapter identity", "policy": {"constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}]}, "schema_valid": true, "accepted": true, "loader_form": {"policy_mode": "observe", "constraints": [{"kind": "allowed_source_provider", "provider": "ozone"}], "scopes": [], "allow_private_hosts": false, "record_internal_prefixes": []}},
     {
       "name": "an empty document is the observe policy",
